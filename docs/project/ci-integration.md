@@ -1,7 +1,7 @@
 # dsh-work 持续集成基线
 
 版本：V0.1
-状态：本地质量门禁已启用；托管 Provider 待 D-11 确认
+状态：GitHub 已确认，仓库工作流已建立；首次托管运行待绑定远程仓库后验证
 
 ## 1. 唯一必跑命令
 
@@ -21,12 +21,12 @@ pnpm ci:check
 
 ## 2. Provider 接入要求
 
-确认 GitHub、GitLab 或企业平台后，流水线必须满足：
+GitHub Actions 工作流位于 `.github/workflows/ci.yml`，必须满足：
 
 - 使用仓库 `packageManager` 指定的 pnpm 版本和兼容 Node.js LTS；
 - 使用锁文件安装，不自动修改 `pnpm-lock.yaml`；
 - 对合并请求和主分支推送运行 `pnpm ci:check`；
-- 主分支禁止绕过必需检查，至少一名非提交者评审；
+- 远程仓库建立后，将 `M0 quality gate` 设为 `main` 分支必需检查；个人项目不强制非提交者评审；
 - 不把模型、SSO、连接器或数据库密钥放入仓库和构建日志；
 - 构建产物与源码 Commit、流水线编号建立关联；
 - 依赖真实外部服务的测试放在受控集成环境，不降低基础门禁稳定性。
@@ -46,4 +46,5 @@ pnpm ci:check
 
 - 2026-08-29：本地 `pnpm ci:check` 首次完整通过；
 - 构建存在前端入口包超过 500 kB 的非阻塞警告，记录为性能优化项，不影响 M0 契约与功能基线；
-- D-11 未确认前不提交某一 Provider 专属流水线文件，避免形成错误的托管假设。
+- 2026-08-29：项目 Owner 确认使用 GitHub，已加入 `.github/workflows/ci.yml`；
+- 首次托管运行必须在远程仓库创建并推送后补充 URL 或运行编号，此项不阻塞 M0 基线冻结。

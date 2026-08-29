@@ -5,6 +5,7 @@ const root = resolve(import.meta.dirname, '..')
 const failures = []
 
 const requiredFiles = [
+  '.github/workflows/ci.yml',
   'dsh-work MVP 实施方案与计划.md',
   '前端原型评审说明.md',
   'docs/baselines/m0-prototype-baseline.md',
@@ -104,6 +105,11 @@ for (const forbidden of ['每名员工默认拥有个人 Workspace', '个人 Wor
 const implementationPlan = read('dsh-work MVP 实施方案与计划.md')
 for (const required of ['M0 实施基线冻结', 'M1 Runtime 技术 POC', 'D-01', 'Mock 替换顺序', 'MVP 必测业务用例']) {
   if (!implementationPlan.includes(required)) failures.push(`实施计划缺少：${required}`)
+}
+
+const githubCi = read('.github/workflows/ci.yml')
+for (const required of ['actions/checkout@v6', 'pnpm/setup@v2', 'pnpm install --frozen-lockfile', 'pnpm ci:check']) {
+  if (!githubCi.includes(required)) failures.push(`GitHub CI 缺少：${required}`)
 }
 
 if (failures.length) {
