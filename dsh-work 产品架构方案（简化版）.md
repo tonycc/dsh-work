@@ -2,8 +2,8 @@
 
 **项目名称：** dsh-work
 **产品名称：** dsh-work
-**方案版本：** V1.8
-**方案日期：** 2026-08-29
+**方案版本：** V1.9
+**方案日期：** 2026-08-30
 **前端技术栈：** Vue 3 + TypeScript + Vite + Element Plus
 **Agent Runtime：** DeepSeek Harness（DSH，可替换）
 **MVP 部署：** 公司内网 Mac mini
@@ -115,7 +115,7 @@ dsh-work 是企业员工统一使用 AI Agent、企业知识、业务数据和�
 | 03 | Agent Hub | 模块化单体内部模块 | AI Hub AI Governance + dsh-work Workspace/Session | Agent、Skill、Prompt、Connector、Model 治理迁入；Workspace/Session 保留 |
 | 04 | 任务与编排中心 | Run 模块 + PostgreSQL 状态表 | dsh-work 应用内 Run、Scheduler、Worker Manager；外部队列按需 | 审批策略与审批人迁入；Run、Attempt、审批实例和事件保留 |
 | 05 | Runtime Adapter | 单体内部模块 | dsh-work 应用内 Runtime Adapter | 不迁入 AI Hub，不独立为业务服务 |
-| 06 | DSH Worker Pool | 每个 Run 启动 DSH 子进程 | 本机或多主机独立 Worker 进程池；Kubernetes 可选 | DSH 执行面，不迁入 AI Hub，也不属于业务微服务 |
+| 06 | DSH Worker Pool | 每个 Attempt 启动 DSH 子进程 | 本机或多主机独立 Worker 进程池；Kubernetes 可选 | DSH 执行面，不迁入 AI Hub，也不属于业务微服务 |
 | 07 | 企业 Model Gateway | 单体内部模块、一个 Provider | AI Hub 模型治理 + dsh-work 应用内 Model Gateway 模块 | 模型目录、策略、配额迁入；实时代理与路由保留应用内 |
 | 08 | 企业 Connector Gateway | 单体内部模块、3～5 个只读 Tool | AI Hub Connector 治理 + dsh-work 应用内 Connector Gateway 模块 | Registry、Schema、风险和凭据引用迁入；Tool 执行保留应用内 |
 | 09 | Artifact Service | 单体模块 + 本地目录/NAS | dsh-work 应用内 Artifact 模块 + NAS/对象存储适配器 | 保留应用内模块，只向 AI Hub 上报治理摘要 |
@@ -514,7 +514,7 @@ sequenceDiagram
 - Artifact 由平台管理版本和下载权限；
 - AI Hub 只发布治理配置和 Manifest，不参与每一步模型或 Tool 调用；
 - Model Gateway、Connector Gateway 和 Artifact Service 默认运行在 `dsh-work-app` 中，不运行在 AI Hub 核心 API 进程中；
-- 一 Run 一 Worker 进程；采用 Kubernetes 时可映射为一 Run 一 Pod，但 Kubernetes 非必需；
+- 一 Attempt 一 Worker 进程；采用 Kubernetes 时可映射为一 Attempt 一 Pod，但 Kubernetes 非必需；
 - 高风险写操作必须通过审批和二次确认；
 - DSH 可替换，业务对象和 API 不随 DSH 变化。
 
@@ -606,7 +606,7 @@ MVP 只有两个核心应用运行体：一个自建的 `dsh-work-app`，以及�
 | 03 Agent Hub | 本地 GovernancePort + PostgreSQL；YAML/Git 只维护预置种子与 Bundle | 治理迁入 AI Hub；Workspace/Session 保留 dsh-work |
 | 04 任务与编排中心 | Run 模块 + PostgreSQL 状态表 | 审批策略迁入 AI Hub；Run、Scheduler 和 Worker Manager 保持应用内模块，外部队列按需 |
 | 05 Runtime Adapter | 应用内进程管理模块 | 保持 dsh-work 应用内模块 |
-| 06 DSH Worker Pool | 每个 Run 启动 DSH 子进程 | 本机或多主机 Worker 进程池；Kubernetes 可选 |
+| 06 DSH Worker Pool | 每个 Attempt 启动 DSH 子进程 | 本机或多主机 Worker 进程池；Kubernetes 可选 |
 | 07 企业 Model Gateway | 应用内模块、一个 Provider | 模型治理迁入 AI Hub；实时代理和路由保持应用内模块 |
 | 08 企业 Connector Gateway | 应用内统一 Tool 调用管线；Tool 与 Connector 由实施团队通过代码或受控配置预置 | Connector 治理迁入 AI Hub；Tool 执行保持应用内模块 |
 | 09 Artifact Service | 应用内模块 + 本地目录/NAS | 保持应用内模块，存储适配器可切换到对象存储 |
@@ -714,7 +714,7 @@ MVP 资源基线：
 - PostgreSQL；
 - 本地目录或 NAS；
 - 一个模型 Provider；
-- 一 Run 一 DSH Worker 子进程。
+- 一 Attempt 一 DSH Worker 子进程。
 
 退出条件：
 
@@ -828,7 +828,7 @@ flowchart LR
         A1[dsh-work-app<br/>Vue + Node 模块化单体]
         A2[PostgreSQL 应用内调度]
         A3[本地文件 / NAS]
-        A4[一 Run 一 DSH 子进程]
+        A4[一 Attempt 一 DSH 子进程]
     end
 
     subgraph PROD[生产化：仍为模块化单体]
@@ -877,7 +877,9 @@ flowchart LR
 | 业务部署单元 | 一个 `dsh-work-app` 业务部署单元，可运行多个相同实例 |
 | 员工入口 | 一个 dsh-work Assistant |
 | 运行模型 | Session 包含多个 Run；Run 包含多个 Attempt |
-| Worker 隔离 | 默认一 Run 一 DSH Worker 进程；本机或多主机进程池均可 |
+| Worker 隔离 | 默认一 Attempt 一 DSH Worker 进程；本机或多主机进程池均可 |
+| DSH 程序化协议 | Runtime Adapter 使用 ACP JSON-RPC stdio；Headless CLI 仅用于诊断，不作为产品事件协议 |
+| DSH 事件边界 | ACP 提供已提交 assistant 消息、取消和权限通道；Tool、Token、模型延迟由正式 observer/telemetry 投影补齐 |
 | Model | MVP 一个 Provider；调用统一经过应用内 Model Gateway 模块 |
 | 企业 Tool | 只允许类型化只读 Tool；调用统一经过应用内 Connector Gateway 模块 |
 | 一期 Tool/Connector 扩展 | 仅由实施团队通过代码、受控配置和部署流程预置；不提供管理后台自定义 Tool 注册、Schema 编辑、API/MCP/数据库 Connector 接入或连接参数编辑 |
@@ -931,3 +933,4 @@ MVP 架构验收：
 | V1.6 | 2026-08-28 | 增加员工工作台、管理后台、双 API 门面、模块化单体和独立 DSH 执行面的第一性原理架构规范，并固化原型实施基线 |
 | V1.7 | 2026-08-29 | 明确一期 Tool 与 Connector 仅由实施团队预置，管理后台只保留目录、权限、启停、状态和健康检查能力 |
 | V1.8 | 2026-08-29 | 标记原型确认后的实施阶段，引用独立 MVP 实施方案与计划并明确其排期和验收职责 |
+| V1.9 | 2026-08-30 | 根据 M1 POC 固化 DSH ACP stdio 接入、Attempt 级进程隔离及 observer/telemetry 事件边界 |

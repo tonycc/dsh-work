@@ -7,6 +7,7 @@
     "dev": "node --experimental-strip-types src/main.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:runtime": "node --experimental-strip-types --test src/modules/runtime/runtime-adapter.test.ts",
     "start": "node dist/main.js"
   },
   "devDependencies": {

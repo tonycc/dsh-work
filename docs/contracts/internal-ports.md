@@ -1,7 +1,7 @@
-# dsh-work 内部端口契约（M0 基线）
+# dsh-work 内部端口契约
 
-版本：V0.1
-状态：待 M1 技术 POC 校验
+版本：V0.2
+状态：M1 第一阶段 POC 已校验；真实模型、Tool 和 Artifact 仍待验证
 原则：两个前端只调用各自 BFF；控制面通过端口访问 Runtime、模型、工具、成果和治理能力。
 
 ## 1. 端口总览
@@ -27,9 +27,12 @@ type StartRunResult = {
 }
 
 interface AgentRuntimePort {
-  start(manifest: RuntimeManifest, signal?: AbortSignal): Promise<StartRunResult>
+  execute(manifest: RuntimeManifest): Promise<RuntimeExecutionHandle>
+  subscribe(runId: string, listener: RuntimeEventListener): () => void
   cancel(runId: string, requestedBy: string): Promise<{ accepted: boolean }>
-  getStatus(runId: string): Promise<RunStatus>
+  status(runId: string): RuntimeExecutionSnapshot | undefined
+  health(): Promise<RuntimeHealth>
+  close(): Promise<void>
 }
 
 interface RunEventStorePort {
@@ -65,16 +68,20 @@ interface GovernancePort {
 - `RuntimeManifest` 在执行开始后不可变，Agent 后续修改不影响已启动 Run。
 - 开始 Run 必须带 `idempotencyKey`；相同员工、Session 和键只能产生一个 Run。
 - 调用链全程携带 `trace_id`，审计记录主体、动作、对象、结果和请求来源。
-- 超时由调用端传入并受平台上限约束；取消通过 `AbortSignal` 和显式 `cancel` 双通道传播。
+- 超时由 Manifest 传入并受平台上限约束；取消先通过 ACP `session/cancel` 传播，宽限期后回收 Attempt 子进程。
 - 端口不得传递企业 SSO Cookie、模型密钥或连接器凭据；只传短期授权引用。
 - 对员工展示的事件必须符合 `run-event.schema.json`，隐藏推理不得持久化或返回前端。
 
-## 4. M1 必须验证的问题
+## 4. M1 验证结果
 
-1. deepseek-harness 是否提供稳定的嵌入/子进程接口来接收 Manifest，并输出结构化事件。
-2. 取消是否能可靠终止模型流、工具调用和子进程，且不会遗留沙箱资源。
-3. Runtime 崩溃后，事件序号和 Run 状态能否由控制面一致恢复。
-4. Skill、工具描述与文件挂载能否以不可变版本进入执行环境。
-5. 并发执行时，Session 上下文、工作目录和凭据引用是否严格隔离。
+| 问题 | 当前结论 |
+|---|---|
+| 稳定程序化接口 | 采用 DSH ACP JSON-RPC stdio；Headless CLI 最终文本不作为产品协议 |
+| 结构化事件 | ACP 支持提交后的 assistant 消息、取消和权限；Tool、Token 与原始增量需要 observer/telemetry 投影 |
+| 取消与超时 | Mock ACP 自动化测试通过；真实模型和真实 Tool 运行中验证待 D-02/D-05 |
+| 进程与目录隔离 | 每 Attempt 独立进程和目录的并发测试通过 |
+| Manifest | canonical JSON、SHA-256 和 Attempt 快照已实现 |
+| 崩溃恢复 | Adapter 可形成失败终态；PostgreSQL 事件恢复在 M2-M3 实现 |
+| Skill、Tool、文件 | 版本引用进入 Manifest；真实挂载和调用仍待 M1 后续验证 |
 
-M1 若无法满足以上约束，应调整 Adapter 或隔离进程，不得让员工 BFF 直接依赖 DSH CLI 文本输出。
+员工 BFF 不得直接依赖 DSH CLI、ACP 或 DSH Session；所有调用继续经过 `AgentRuntimePort`。

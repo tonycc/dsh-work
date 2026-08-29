@@ -11,8 +11,11 @@
     "dev:all": "pnpm --parallel --filter @dsh-work/server --filter @dsh-work/workbench-web --filter @dsh-work/admin-web dev",
     "build": "pnpm --filter './apps/*' --filter @dsh-work/server build",
     "typecheck": "pnpm --filter './apps/*' --filter @dsh-work/server typecheck",
+    "test:m1": "pnpm --filter @dsh-work/server test:runtime",
+    "probe:m1": "node --experimental-strip-types scripts/probe-dsh-acp.ts",
     "verify:m0": "node scripts/verify-m0.mjs",
-    "ci:check": "pnpm verify:m0 && pnpm typecheck && pnpm lint && pnpm build",
+    "verify:m1": "node scripts/verify-m1.mjs",
+    "ci:check": "pnpm verify:m0 && pnpm verify:m1 && pnpm typecheck && pnpm test:m1 && pnpm lint && pnpm build",
     "check:architecture": "node scripts/check-architecture.mjs",
     "validate:ui": "pnpm --filter @dsh-work/admin-web --filter @dsh-work/workbench-web validate:ui",
     "lint": "pnpm check:architecture && pnpm validate:ui && eslint apps packages server scripts --max-warnings=0"

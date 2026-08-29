@@ -1,7 +1,7 @@
 # dsh-work MVP 实施方案与计划
 
 **项目名称：** dsh-work
-**计划版本：** V1.1
+**计划版本：** V1.2
 **计划日期：** 2026-08-29
 **计划状态：** 原型已确认，进入 MVP 实施准备
 **计划周期：** T0 起 10～12 周完成 MVP 上线准备，部门试点另安排 2～4 周
@@ -176,11 +176,11 @@ M0 退出检查：
 | ID | 工作项 | 主要交付和完成定义 | 依赖 | 主责 | 估算 |
 |---|---|---|---|---|---:|
 | M1-01 | 固定 DSH 版本 | 记录仓库、Commit、构建方式、运行依赖、许可和回滚版本 | D-01 | Runtime | 1 人日 |
-| M1-02 | Headless Worker 冒烟 | 命令行输入一条任务，输出结构化事件和最终结果 | M1-01、D-02 | Runtime、AI | 2 人日 |
-| M1-03 | Runtime Adapter 骨架 | 实现 `execute/subscribe/cancel/status/close/health` 契约 | M0-04、M1-02 | Runtime | 4 人日 |
+| M1-02 | ACP Worker 冒烟 | 通过 ACP stdio 创建 Session、提交任务、接收已提交消息并取消；Headless CLI 只作诊断 | M1-01、D-02 | Runtime、AI | 2 人日 |
+| M1-03 | Runtime Adapter 骨架 | 实现 `execute/subscribe/cancel/status/close/health` 契约并隔离 ACP | M0-04、M1-02 | Runtime | 4 人日 |
 | M1-04 | Manifest 编译 | Run、用户、Workspace、Agent Version、Skill、Tool、数据范围和挂载点生成不可变 Manifest 与 SHA-256 | M0-05 | Runtime、后端 | 3 人日 |
 | M1-05 | Worker 生命周期 | 每 Attempt 独立目录和子进程；启动、退出、异常、清理和资源回收可观测 | M1-03 | Runtime | 4 人日 |
-| M1-06 | 标准事件转换 | 将 DSH 原始事件转换为标准 Run Event，过滤内部思维链和敏感参数 | M1-03 | Runtime、后端 | 3 人日 |
+| M1-06 | 标准事件转换 | 将 ACP 已提交消息和生命周期转换为标准 Run Event；通过 observer/telemetry 补充 Tool、Token 和模型延迟，过滤隐藏推理和敏感参数 | M1-03 | Runtime、后端 | 3 人日 |
 | M1-07 | 取消、超时和重试 | 用户取消能终止 Worker；超时产生终态；重试创建新 Attempt | M1-05、M1-06 | Runtime、后端 | 3 人日 |
 | M1-08 | 模型链路 | DSH 只能通过 Model Gateway 调用一个批准模型并记录 Token、延迟和错误 | D-02、M1-03 | AI、后端 | 3 人日 |
 | M1-09 | Tool 链路 | 先接模拟 Tool，再接至少一个真实只读 Tool；权限、超时和审计可验证 | D-05、M1-03 | AI、后端 | 4 人日 |
@@ -550,7 +550,7 @@ Runtime 契约测试
 4. 建立 CI，确保 `pnpm typecheck`、`pnpm validate:ui`、`pnpm lint`、`pnpm build` 持续通过；
 5. 建立 OpenAPI、数据库迁移和自动化测试目录；
 6. 创建 M1 DSH POC 分支或任务流；
-7. 固定 DSH 版本并完成 Headless Worker 冒烟；
+7. 固定 DSH 版本并完成 ACP Worker 冒烟；Headless CLI 仅保留诊断用途；
 8. 以 `RuntimeAdapter.execute → Run Event → SSE → 员工工作台` 为第一条真实开发链路；
 9. 每周演示真实链路，不以管理页面数量作为进度判断；
 10. M1 通过后再全面展开 PostgreSQL 和业务功能实施。
@@ -561,5 +561,6 @@ Runtime 契约测试
 
 | 版本 | 日期 | 说明 |
 |---|---|---|
+| V1.2 | 2026-08-30 | 根据 M1 POC 将 DSH 程序化入口确定为 ACP stdio，并记录 Tool/Token 需要 observer/telemetry 投影 |
 | V1.1 | 2026-08-29 | 调整为个人项目单一 Owner 治理；确认 DSH 与 GitHub；M0 评审和测试基线通过 |
 | V1.0 | 2026-08-29 | 基于已确认原型、产品方案和架构方案，形成可排期、分工、实施和验收的 MVP 执行基线 |
