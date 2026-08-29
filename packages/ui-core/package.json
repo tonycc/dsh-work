@@ -1,0 +1,15 @@
+{
+  "name": "@dsh-work/ui-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./base.css": "./src/styles/base.css"
+  },
+  "peerDependencies": {
+    "@element-plus/icons-vue": "^2.3.2",
+    "element-plus": "^2.10.7",
+    "vue": "^3.5.22"
+  }
+}

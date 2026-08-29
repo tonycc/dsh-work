@@ -1,0 +1,219 @@
+<script setup lang="ts">
+import { ref, watch } from 'vue'
+import {
+  ArrowRight,
+  ChatDotRound,
+  Cpu,
+  DataAnalysis,
+  FolderOpened,
+  Grid,
+  Key,
+  Menu,
+  Monitor,
+  PieChart,
+  Tickets,
+  Tools,
+  User,
+} from '@element-plus/icons-vue'
+
+import { AppLogo } from '@dsh-work/ui-core'
+
+type AdminRole = 'platform_admin' | 'auditor'
+
+const props = withDefaults(
+  defineProps<{
+    currentPath: string
+    routeTitle: string
+    userName: string
+    avatarText: string
+    role: AdminRole
+    roleLabel: string
+    environmentLabel?: string
+  }>(),
+  { environmentLabel: '原型接口' },
+)
+
+const emit = defineEmits<{
+  navigate: [path: string]
+  openWorkbench: []
+  switchRole: [role: AdminRole]
+}>()
+const mobileOpen = ref(false)
+const collapsedGroups = ref<Record<string, boolean>>({})
+
+const navigationGroups = [
+  {
+    label: '概览',
+    items: [{ label: '运营概览', path: '/overview', icon: DataAnalysis }],
+  },
+  {
+    label: 'Agent 治理',
+    items: [
+      { label: 'Agent 管理', path: '/agents', icon: Grid },
+      { label: 'Skill 与工具', path: '/capabilities', icon: Tools },
+    ],
+  },
+  {
+    label: '运行治理',
+    items: [
+      { label: 'Session 列表', path: '/sessions', icon: ChatDotRound },
+      { label: '模型用量', path: '/model-usage', icon: PieChart },
+    ],
+  },
+  {
+    label: '组织与权限',
+    items: [
+      { label: '工作空间', path: '/workspaces', icon: FolderOpened },
+      { label: '成员管理', path: '/members', icon: User },
+      { label: '权限与数据范围', path: '/permissions', icon: Key },
+    ],
+  },
+  {
+    label: '安全与运维',
+    items: [
+      { label: 'Runtimes', path: '/runtimes', icon: Cpu },
+      { label: '审计记录', path: '/audit', icon: Tickets },
+      { label: '系统健康', path: '/health', icon: Monitor },
+    ],
+  },
+]
+
+function toggleGroup(label: string) {
+  collapsedGroups.value = {
+    ...collapsedGroups.value,
+    [label]: !collapsedGroups.value[label],
+  }
+}
+
+function navigate(path: string) {
+  mobileOpen.value = false
+  emit('navigate', path)
+}
+
+function onRoleCommand(command: string | number | object) {
+  const value = String(command)
+  if (value === 'workbench') emit('openWorkbench')
+  if (value.startsWith('role:')) {
+    emit('switchRole', value.replace('role:', '') as AdminRole)
+  }
+}
+
+watch(
+  () => props.currentPath,
+  () => {
+    mobileOpen.value = false
+  },
+)
+</script>
+
+<template>
+  <div class="admin-shell">
+    <button v-if="mobileOpen" class="sidebar-scrim" type="button" aria-label="关闭导航" @click="mobileOpen = false"></button>
+    <aside class="admin-sidebar" :class="{ 'admin-sidebar--mobile-open': mobileOpen }">
+      <div class="admin-sidebar__logo">
+        <AppLogo dark />
+        <span class="brand-context">管理平台</span>
+      </div>
+      <nav class="admin-sidebar__nav" aria-label="管理后台主导航">
+        <section v-for="group in navigationGroups" :key="group.label" class="admin-nav-group">
+          <button
+            class="admin-nav-group__label"
+            type="button"
+            :aria-expanded="!collapsedGroups[group.label]"
+            @click="toggleGroup(group.label)"
+          >
+            <span>{{ group.label }}</span>
+            <el-icon :class="{ 'is-open': !collapsedGroups[group.label] }"><ArrowRight /></el-icon>
+          </button>
+          <div v-show="!collapsedGroups[group.label]" class="admin-nav-group__items">
+            <button
+              v-for="item in group.items"
+              :key="item.path"
+              class="admin-nav-item"
+              :class="{ 'admin-nav-item--active': currentPath.startsWith(item.path) }"
+              type="button"
+              @click="navigate(item.path)"
+            >
+              <el-icon><component :is="item.icon" /></el-icon>
+              <span>{{ item.label }}</span>
+            </button>
+          </div>
+        </section>
+      </nav>
+    </aside>
+
+    <div class="admin-shell__body">
+      <header class="admin-topbar">
+        <div class="admin-topbar__context">
+          <el-button class="mobile-menu" text :icon="Menu" aria-label="打开导航" @click="mobileOpen = true" />
+          <strong>{{ routeTitle }}</strong>
+        </div>
+        <div class="admin-topbar__actions">
+          <span class="environment-status"><i></i>{{ environmentLabel }}</span>
+          <el-dropdown trigger="click" placement="bottom-end" @command="onRoleCommand">
+            <button class="header-user-button" type="button">
+              <span class="header-user-button__avatar">{{ avatarText }}</span>
+              <span class="header-user-button__copy"><strong>{{ userName }}</strong><small>{{ roleLabel }}</small></span>
+              <span class="header-user-button__chevron" aria-hidden="true">⌄</span>
+            </button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <div class="role-menu__heading">管理角色预览</div>
+                <el-dropdown-item command="role:platform_admin"><el-icon><User /></el-icon>平台管理员</el-dropdown-item>
+                <el-dropdown-item command="role:auditor"><el-icon><User /></el-icon>安全审计员</el-dropdown-item>
+                <el-dropdown-item divided command="workbench"><el-icon><Grid /></el-icon>返回员工工作台</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </div>
+      </header>
+      <main class="admin-main"><slot /></main>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.admin-shell { min-height: 100vh; background: var(--color-bg-page); }
+.admin-sidebar { position: fixed; z-index: 30; inset: 0 auto 0 0; display: flex; width: var(--dsh-sidebar-width); flex-direction: column; overflow: hidden; border-right: 1px solid var(--color-border); background: var(--color-bg-base); }
+.admin-sidebar__logo { display: flex; min-height: 68px; align-items: center; justify-content: space-between; gap: 10px; padding: 15px 18px; border-bottom: 1px solid var(--color-bg-subtle); }
+.admin-sidebar__logo :deep(.logo__text strong) { font-size: var(--font-size-header); }
+.admin-sidebar__logo :deep(.logo__text span) { font-size: var(--font-size-micro); }
+.brand-context { flex: 0 0 auto; padding: 3px 7px; border: 1px solid var(--color-border); border-radius: var(--radius-tag); color: var(--color-text-muted); font-size: var(--font-size-badge); }
+.admin-sidebar__nav { min-height: 0; flex: 1; padding: 12px 0; overflow: auto; }
+.admin-nav-group { margin-bottom: 4px; }
+.admin-nav-group__label { display: flex; width: 100%; align-items: center; justify-content: space-between; padding: 8px 20px 4px; border: 0; color: var(--color-text-muted); background: transparent; cursor: pointer; font-size: var(--font-size-badge); font-weight: var(--font-weight-title); letter-spacing: .04em; text-transform: uppercase; }
+.admin-nav-group__label:hover { color: var(--color-text-secondary); }
+.admin-nav-group__label:focus-visible, .admin-nav-item:focus-visible, .header-user-button:focus-visible { outline: 2px solid var(--color-primary); outline-offset: -2px; }
+.admin-nav-group__label .el-icon { transition: transform 150ms ease; }
+.admin-nav-group__label .el-icon.is-open { transform: rotate(90deg); }
+.admin-nav-group__items { padding-top: 2px; }
+.admin-nav-item { display: flex; width: calc(100% - 16px); min-height: 38px; align-items: center; gap: 10px; margin: 1px 8px; padding: 8px 12px; border: 0; border-radius: var(--radius-tag); color: var(--color-text-secondary); background: transparent; cursor: pointer; font-size: var(--font-size-body); text-align: left; transition: color 100ms ease, background 100ms ease; }
+.admin-nav-item:hover { color: var(--color-text-primary); background: var(--color-bg-subtle); }
+.admin-nav-item--active { color: var(--color-primary); background: var(--color-primary-light); font-weight: var(--font-weight-badge); }
+.admin-nav-item .el-icon { width: 18px; flex: 0 0 auto; font-size: var(--font-size-header); }
+.admin-shell__body { min-width: 0; min-height: 100vh; margin-left: var(--dsh-sidebar-width); }
+.admin-topbar { position: sticky; z-index: 20; top: 0; display: flex; min-height: var(--dsh-topbar-height); align-items: center; justify-content: space-between; gap: 18px; padding: 0 20px; border-bottom: 1px solid var(--color-border); background: var(--color-bg-base); }
+.admin-topbar__context, .admin-topbar__actions { display: flex; align-items: center; gap: 10px; }
+.admin-topbar__context strong { color: var(--color-text-heading); font-size: var(--font-size-header); font-weight: var(--font-weight-heading); }
+.environment-status { display: inline-flex; align-items: center; gap: 6px; color: var(--color-text-muted); font-size: var(--font-size-badge); }
+.environment-status i { width: 6px; height: 6px; border-radius: 50%; background: var(--color-success); }
+.header-user-button { display: flex; min-width: 0; align-items: center; gap: 8px; padding: 3px 7px; border: 0; border-radius: var(--radius-tag); color: var(--color-text-primary); background: transparent; cursor: pointer; text-align: left; }
+.header-user-button:hover { background: var(--color-bg-subtle); }
+.header-user-button__avatar { display: grid; width: 28px; height: 28px; flex: 0 0 auto; place-items: center; border-radius: 50%; color: var(--color-text-primary); background: var(--color-bg-subtle); font-size: var(--font-size-caption); font-weight: var(--font-weight-title); }
+.header-user-button__copy { display: flex; min-width: 0; flex-direction: column; }
+.header-user-button__copy strong { max-width: 120px; overflow: hidden; font-size: var(--font-size-body); font-weight: var(--font-weight-badge); text-overflow: ellipsis; white-space: nowrap; }
+.header-user-button__copy small { margin-top: 1px; color: var(--color-text-muted); font-size: var(--font-size-micro); }
+.header-user-button__chevron { color: var(--color-text-muted); font-size: var(--font-size-caption); }
+.admin-main { min-height: calc(100vh - var(--dsh-topbar-height)); padding: 10px 14px 18px; background: var(--color-bg-page); }
+.mobile-menu { display: none; }
+.sidebar-scrim { position: fixed; z-index: 25; inset: 0; display: none; border: 0; background: rgb(5 12 24 / 52%); }
+:global(.role-menu__heading) { padding: 8px 16px 6px; color: var(--color-text-muted); font-size: var(--font-size-badge); font-weight: var(--font-weight-title); }
+@media (max-width: 820px) {
+  .admin-sidebar { transform: translateX(-100%); box-shadow: 16px 0 40px rgb(5 12 24 / 14%); transition: transform 180ms ease; }
+  .admin-sidebar--mobile-open { transform: translateX(0); }
+  .sidebar-scrim { display: block; }
+  .admin-shell__body { margin-left: 0; }
+  .mobile-menu { display: inline-flex; }
+  .admin-topbar { padding: 0 16px; }
+}
+</style>

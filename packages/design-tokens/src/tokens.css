@@ -1,0 +1,47 @@
+/* dsh-work shared design tokens: consumed by both frontend applications. */
+:root {
+  --dsh-color-brand: #3564e8;
+  --dsh-color-brand-dark: #2447aa;
+  --dsh-color-brand-soft: #edf2ff;
+  --dsh-color-ink: #172033;
+  --dsh-color-text: #344054;
+  --dsh-color-muted: #667085;
+  --dsh-color-subtle: #98a2b3;
+  --dsh-color-border: #e4e8ef;
+  --dsh-color-border-strong: #d0d5dd;
+  --dsh-color-canvas: #f3f5f8;
+  --dsh-color-panel: #ffffff;
+  --dsh-color-sidebar: #111a2c;
+  --dsh-color-sidebar-soft: #19243a;
+  --dsh-color-success: #16825d;
+  --dsh-color-success-soft: #eaf8f2;
+  --dsh-color-warning: #b54708;
+  --dsh-color-warning-soft: #fff4e5;
+  --dsh-color-danger: #c4323f;
+  --dsh-color-danger-soft: #fff0f1;
+  --dsh-color-info: #3b6ed8;
+  --dsh-shadow-panel: 0 1px 2px rgb(16 24 40 / 4%), 0 8px 28px rgb(16 24 40 / 5%);
+  --dsh-font-size-micro: 11px;
+  --dsh-font-size-badge: 12px;
+  --dsh-font-size-caption: 13px;
+  --dsh-font-size-body: 14px;
+  --dsh-font-size-title: 15px;
+  --dsh-font-size-subheading: 16px;
+  --dsh-font-size-section: 18px;
+  --dsh-font-size-header: 20px;
+  --dsh-font-size-heading: 22px;
+  --dsh-font-size-page-title: 26px;
+  --dsh-font-size-metric: 30px;
+  --dsh-font-size-hero: clamp(30px, 2.65vw, 38px);
+  --dsh-radius-sm: 8px;
+  --dsh-radius-md: 12px;
+  --dsh-radius-lg: 16px;
+  --dsh-sidebar-width: 252px;
+  --dsh-topbar-height: 68px;
+  --el-color-primary: var(--dsh-color-brand);
+  --el-border-radius-base: 8px;
+  --el-border-color: var(--dsh-color-border);
+  --el-text-color-primary: var(--dsh-color-ink);
+  --el-text-color-regular: var(--dsh-color-text);
+  --el-font-size-base: 14px;
+}

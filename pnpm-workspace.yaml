@@ -1,0 +1,8 @@
+packages:
+  - apps/*
+  - packages/*
+  - server
+
+confirmModulesPurge: false
+allowBuilds:
+  esbuild: true

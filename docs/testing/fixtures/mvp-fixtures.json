@@ -1,0 +1,115 @@
+{
+  "fixtureVersion": "0.1.0",
+  "synthetic": true,
+  "tenant": {
+    "id": "tenant-demo",
+    "name": "示例制造集团"
+  },
+  "roles": [
+    { "id": "role-employee", "code": "employee", "name": "普通员工", "permissions": ["workbench.use", "session.own.read", "artifact.allowed.read"] },
+    { "id": "role-manager", "code": "manager", "name": "部门经理", "permissions": ["workbench.use", "workspace.manage", "artifact.workspace.read"] },
+    { "id": "role-admin", "code": "enterprise_admin", "name": "企业管理员", "permissions": ["admin.use", "agent.manage", "skill.manage", "workspace.manage", "runtime.manage"] },
+    { "id": "role-auditor", "code": "auditor", "name": "审计员", "permissions": ["admin.use", "session.governance.read", "usage.read", "audit.read"] }
+  ],
+  "users": [
+    { "id": "usr-linlan", "externalSubject": "sso-demo-10086", "displayName": "林岚", "department": "华东供应链", "roleIds": ["role-employee"], "dataScopes": ["region:east", "domain:supply-chain"] },
+    { "id": "usr-zhouheng", "externalSubject": "sso-demo-10021", "displayName": "周衡", "department": "华东供应链", "roleIds": ["role-manager"], "dataScopes": ["region:east", "domain:supply-chain"] },
+    { "id": "usr-chenmo", "externalSubject": "sso-demo-00008", "displayName": "陈默", "department": "数字化中心", "roleIds": ["role-admin"], "dataScopes": ["governance:enterprise"] },
+    { "id": "usr-xuning", "externalSubject": "sso-demo-00019", "displayName": "许宁", "department": "审计部", "roleIds": ["role-auditor"], "dataScopes": ["governance:audit"] },
+    { "id": "usr-zhaoning", "externalSubject": "sso-demo-10218", "displayName": "赵宁", "department": "华南采购", "roleIds": ["role-employee"], "dataScopes": ["region:south", "domain:purchasing"] }
+  ],
+  "workspaces": [
+    {
+      "id": "ws-supply-analysis",
+      "name": "供应链经营分析",
+      "description": "整理订单、库存与生产数据并形成团队成果。",
+      "type": "team",
+      "createdBy": "usr-zhouheng",
+      "members": [
+        { "userId": "usr-zhouheng", "role": "owner" },
+        { "userId": "usr-linlan", "role": "member" }
+      ]
+    },
+    {
+      "id": "ws-quality-improvement",
+      "name": "质量改进协作",
+      "description": "质量问题分析与改进闭环。",
+      "type": "team",
+      "createdBy": "usr-chenmo",
+      "members": [
+        { "userId": "usr-chenmo", "role": "owner" },
+        { "userId": "usr-zhouheng", "role": "viewer" }
+      ]
+    }
+  ],
+  "businessRecords": [
+    {
+      "id": "order-SO20260821001",
+      "recordType": "sales_order",
+      "recordNo": "SO20260821001",
+      "scope": "region:east",
+      "status": "缺料风险",
+      "updatedAt": "2026-08-29T09:15:00+08:00",
+      "attributes": { "customer": "客户甲", "product": "工业控制器 A1", "quantity": 1200, "promisedDate": "2026-09-08" }
+    },
+    {
+      "id": "work-order-MO20260826007",
+      "recordType": "manufacturing_order",
+      "recordNo": "MO20260826007",
+      "scope": "region:east",
+      "status": "待料",
+      "updatedAt": "2026-08-29T08:40:00+08:00",
+      "attributes": { "salesOrderNo": "SO20260821001", "completionRate": 0.62 }
+    },
+    {
+      "id": "inventory-MAT-IC-2048",
+      "recordType": "inventory",
+      "recordNo": "MAT-IC-2048",
+      "scope": "region:east",
+      "status": "低于安全库存",
+      "updatedAt": "2026-08-29T08:30:00+08:00",
+      "attributes": { "onHand": 380, "allocated": 320, "safetyStock": 200, "unit": "件" }
+    },
+    {
+      "id": "purchase-PO20260822019",
+      "recordType": "purchase_order",
+      "recordNo": "PO20260822019",
+      "scope": "region:south",
+      "status": "运输中",
+      "updatedAt": "2026-08-29T07:55:00+08:00",
+      "attributes": { "supplier": "供应商乙", "quantity": 500, "expectedDate": "2026-09-02" }
+    }
+  ],
+  "knowledgeDocuments": [
+    { "id": "knowledge-supply-exception-v32", "title": "供应链异常管理办法 V3.2", "scope": "domain:supply-chain", "version": "3.2", "effectiveDate": "2026-06-01" },
+    { "id": "knowledge-inventory-policy-v21", "title": "库存安全水位管理规范 V2.1", "scope": "domain:supply-chain", "version": "2.1", "effectiveDate": "2026-03-15" }
+  ],
+  "files": [
+    {
+      "id": "file-production-plan",
+      "workspaceId": "ws-supply-analysis",
+      "originalName": "八月生产计划.xlsx",
+      "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "sizeBytes": 284160,
+      "sha256": "2f6f76c81011e12fbd5a103c4d3bd37a6b1f8a2ef769de5e85b82a1449fc7c0c",
+      "scanStatus": "clean",
+      "uploadedBy": "usr-linlan"
+    },
+    {
+      "id": "file-shortage-analysis-v1",
+      "workspaceId": "ws-supply-analysis",
+      "originalName": "八月缺料风险分析.md",
+      "mimeType": "text/markdown",
+      "sizeBytes": 18342,
+      "sha256": "0a1e0c5fe6e04faf945ae26ada0efebf9bf2e64f9994c915946c16f7269a0e78",
+      "scanStatus": "clean",
+      "uploadedBy": "usr-linlan"
+    }
+  ],
+  "accessExpectations": [
+    { "subjectId": "usr-linlan", "objectId": "ws-supply-analysis", "action": "read", "allowed": true },
+    { "subjectId": "usr-zhaoning", "objectId": "ws-supply-analysis", "action": "read", "allowed": false },
+    { "subjectId": "usr-xuning", "objectId": "runtime-config", "action": "update", "allowed": false },
+    { "subjectId": "usr-chenmo", "objectId": "runtime-config", "action": "update", "allowed": true }
+  ]
+}

@@ -1,0 +1,123 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "dsh-work 管理平台 API",
+    "version": "0.1.0-m0",
+    "description": "MVP 管理面契约基线。所有写操作需要角色权限并写入审计事件。"
+  },
+  "servers": [{ "url": "/api/admin/v1" }],
+  "security": [{ "adminSession": [] }],
+  "paths": {
+    "/session": { "get": { "operationId": "getAdminSession", "summary": "获取管理员身份、角色和权限", "responses": { "200": { "$ref": "#/components/responses/Ok" } } } },
+    "/agents": {
+      "get": { "operationId": "listAgents", "summary": "查询 Agent", "responses": { "200": { "$ref": "#/components/responses/Ok" } } },
+      "post": {
+        "operationId": "createAgent",
+        "summary": "创建 Agent；创建者自动成为负责人",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AgentInput" } } } },
+        "responses": { "201": { "$ref": "#/components/responses/Ok" }, "422": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/agents/{agentId}": {
+      "parameters": [{ "$ref": "#/components/parameters/AgentId" }],
+      "get": { "operationId": "getAgent", "summary": "获取 Agent 配置和版本", "responses": { "200": { "$ref": "#/components/responses/Ok" } } },
+      "patch": { "operationId": "updateAgent", "summary": "更新 Agent 并生成待测试版本", "requestBody": { "$ref": "#/components/requestBodies/Agent" }, "responses": { "200": { "$ref": "#/components/responses/Ok" } } }
+    },
+    "/agents/{agentId}/test-runs": {
+      "parameters": [{ "$ref": "#/components/parameters/AgentId" }],
+      "post": { "operationId": "testAgent", "summary": "使用 Mock 或受控 Runtime 测试 Agent", "responses": { "202": { "$ref": "#/components/responses/Ok" } } }
+    },
+    "/agents/{agentId}/publish": {
+      "parameters": [{ "$ref": "#/components/parameters/AgentId" }],
+      "post": { "operationId": "publishAgent", "summary": "校验并发布 Agent 版本", "responses": { "200": { "$ref": "#/components/responses/Ok" }, "409": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/skills": {
+      "get": { "operationId": "listSkills", "summary": "查询 Skill", "responses": { "200": { "$ref": "#/components/responses/Ok" } } },
+      "post": { "operationId": "createSkill", "summary": "创建 Skill，标识由系统自动生成", "responses": { "201": { "$ref": "#/components/responses/Ok" } } }
+    },
+    "/tools": {
+      "get": { "operationId": "listTools", "summary": "查询平台预置工具；一期只读", "responses": { "200": { "$ref": "#/components/responses/Ok" } } }
+    },
+    "/connectors": {
+      "get": { "operationId": "listConnectors", "summary": "查询平台预置连接器；一期只读", "responses": { "200": { "$ref": "#/components/responses/Ok" } } }
+    },
+    "/runtimes": {
+      "get": { "operationId": "listRuntimes", "summary": "查询 Runtime 实例和健康状态", "responses": { "200": { "$ref": "#/components/responses/Ok" } } }
+    },
+    "/runtimes/configuration": {
+      "get": { "operationId": "getRuntimeConfiguration", "summary": "获取 Runtime 池配置", "responses": { "200": { "$ref": "#/components/responses/Ok" } } },
+      "patch": { "operationId": "updateRuntimeConfiguration", "summary": "更新并发、超时、沙箱与资源上限", "responses": { "200": { "$ref": "#/components/responses/Ok" } } }
+    },
+    "/sessions": {
+      "get": { "operationId": "listSessions", "summary": "按治理条件查询 Session 摘要，不建设独立全量消息浏览器", "responses": { "200": { "$ref": "#/components/responses/Ok" } } }
+    },
+    "/sessions/{sessionId}": {
+      "parameters": [{ "$ref": "#/components/parameters/SessionId" }],
+      "get": { "operationId": "getSessionGovernanceView", "summary": "按权限查看 Session 运行、用量和审计摘要", "responses": { "200": { "$ref": "#/components/responses/Ok" }, "403": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/workspaces": {
+      "get": { "operationId": "listWorkspaces", "summary": "查询团队工作空间", "responses": { "200": { "$ref": "#/components/responses/Ok" } } },
+      "post": { "operationId": "createWorkspace", "summary": "创建团队工作空间", "responses": { "201": { "$ref": "#/components/responses/Ok" } } }
+    },
+    "/workspaces/{workspaceId}/members": {
+      "parameters": [{ "$ref": "#/components/parameters/WorkspaceId" }],
+      "get": { "operationId": "listWorkspaceMembers", "summary": "查询工作空间成员和角色", "responses": { "200": { "$ref": "#/components/responses/Ok" } } },
+      "put": { "operationId": "replaceWorkspaceMembers", "summary": "变更成员与角色", "responses": { "200": { "$ref": "#/components/responses/Ok" } } }
+    },
+    "/roles": { "get": { "operationId": "listRoles", "summary": "查询平台角色和权限", "responses": { "200": { "$ref": "#/components/responses/Ok" } } } },
+    "/model-usage": { "get": { "operationId": "getModelUsage", "summary": "查询 Token、延迟和费用汇总", "responses": { "200": { "$ref": "#/components/responses/Ok" } } } },
+    "/audit-events": { "get": { "operationId": "listAuditEvents", "summary": "查询管理写操作和敏感访问审计", "responses": { "200": { "$ref": "#/components/responses/Ok" } } } },
+    "/health": { "get": { "operationId": "getPlatformHealth", "summary": "查询控制面、Runtime、模型和存储健康度", "responses": { "200": { "$ref": "#/components/responses/Ok" } } } }
+  },
+  "components": {
+    "securitySchemes": { "adminSession": { "type": "apiKey", "in": "cookie", "name": "dsh_work_admin_session" } },
+    "parameters": {
+      "AgentId": { "name": "agentId", "in": "path", "required": true, "schema": { "type": "string" } },
+      "SessionId": { "name": "sessionId", "in": "path", "required": true, "schema": { "type": "string" } },
+      "WorkspaceId": { "name": "workspaceId", "in": "path", "required": true, "schema": { "type": "string" } }
+    },
+    "requestBodies": {
+      "Agent": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AgentInput" } } } }
+    },
+    "responses": {
+      "Ok": { "description": "成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Envelope" } } } },
+      "Error": { "description": "失败", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } }
+    },
+    "schemas": {
+      "AgentInput": {
+        "type": "object",
+        "required": ["name", "description", "systemPrompt", "visibleRoleIds", "dataScopes"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "description": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "welcomeMessage": { "type": ["string", "null"], "maxLength": 500 },
+          "systemPrompt": { "type": "string", "minLength": 1, "maxLength": 20000 },
+          "skillIds": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+          "toolIds": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+          "visibleRoleIds": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+          "dataScopes": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+        },
+        "additionalProperties": false
+      },
+      "Envelope": {
+        "type": "object",
+        "required": ["data", "meta"],
+        "properties": { "data": {}, "meta": { "$ref": "#/components/schemas/Meta" } }
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "required": ["error", "meta"],
+        "properties": {
+          "error": { "type": "object", "required": ["code", "message"], "properties": { "code": { "type": "string" }, "message": { "type": "string" } } },
+          "meta": { "$ref": "#/components/schemas/Meta" }
+        }
+      },
+      "Meta": {
+        "type": "object",
+        "required": ["requestId", "timestamp"],
+        "properties": { "requestId": { "type": "string" }, "timestamp": { "type": "string", "format": "date-time" }, "nextCursor": { "type": ["string", "null"] } }
+      }
+    }
+  },
+  "x-contract-status": "m0-review"
+}

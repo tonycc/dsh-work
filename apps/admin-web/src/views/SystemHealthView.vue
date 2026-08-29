@@ -1,0 +1,129 @@
+<script setup lang="ts">
+import { computed, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
+import { Connection, Cpu, DataBoard, Files, Refresh, Service } from '@element-plus/icons-vue'
+
+import { StatusTag } from '@dsh-work/ui-core'
+import { useContentStore } from '@/stores/content'
+
+const contentStore = useContentStore()
+const healthyCount = computed(() => contentStore.health.filter((item) => item.status === 'healthy').length)
+const offlineCount = computed(() => contentStore.health.filter((item) => item.status === 'offline').length)
+
+const icons = {
+  'health-app': Service,
+  'health-worker': Cpu,
+  'health-model': Connection,
+  'health-connector': Connection,
+  'health-postgres': DataBoard,
+  'health-storage': Files,
+} as const
+
+async function refresh() {
+  await contentStore.load(true)
+  ElMessage.success('已通过管理端接口刷新原型状态')
+}
+
+onMounted(() => contentStore.load())
+</script>
+
+<template>
+  <div class="ops-page health-page">
+    <el-alert v-if="contentStore.error" :title="contentStore.error" type="error" show-icon @close="contentStore.error = ''" />
+
+    <section class="content-panel filter-panel">
+      <div class="filter-bar">
+        <p class="page-note">查看模块化单体、DSH 执行进程池和外部依赖的运行状态。各卡片是逻辑或进程边界，不代表业务微服务。</p>
+        <el-button class="refresh-button" :icon="Refresh" :loading="contentStore.loading" data-action="refresh-health" @click="refresh">立即刷新</el-button>
+      </div>
+    </section>
+
+    <section class="health-summary content-panel">
+      <div class="health-summary__status"><span><i></i></span><div><strong>原型接口正常，生产依赖尚未接入</strong><p>{{ healthyCount }} / {{ contentStore.health.length }} 个组件可用，{{ offlineCount }} 个组件未配置或未连接</p></div></div>
+      <dl><div><dt>应用版本</dt><dd>dsh-work 0.1.0 原型版</dd></div><div><dt>部署形态</dt><dd>双接口门面 + Node.js 模块化单体</dd></div><div><dt>环境</dt><dd>本地原型（真实网络接口）</dd></div><div><dt>持久化</dt><dd>内存原型 · 重启丢失</dd></div></dl>
+    </section>
+
+    <section v-loading="contentStore.loading" class="health-grid">
+      <el-empty v-if="!contentStore.loading && !contentStore.health.length" description="暂无组件健康数据" />
+      <template v-else>
+        <article v-for="component in contentStore.health" :key="component.id" class="health-card content-panel" :class="`health-card--${component.status}`">
+          <div class="health-card__top"><span class="health-card__icon"><el-icon><component :is="icons[component.id as keyof typeof icons] ?? Service" /></el-icon></span><StatusTag :status="component.status" dot /></div>
+          <h2>{{ component.name }}</h2>
+          <p>{{ component.message }}</p>
+          <dl><div><dt>{{ component.id === 'health-worker' ? '容量' : '响应延迟' }}</dt><dd>{{ component.latency }}</dd></div><div><dt>近 30 天可用性</dt><dd>{{ component.availability }}</dd></div></dl>
+          <footer><span>{{ component.category === 'application' ? 'dsh-work 应用' : component.category === 'runtime' ? '独立执行进程' : '外部/共享依赖' }}</span><small>{{ component.checkedAt }}</small></footer>
+        </article>
+      </template>
+    </section>
+
+    <section class="health-bottom-grid">
+      <div class="content-panel content-panel--flush incident-panel">
+        <div class="panel-header"><div><h2 class="panel-title">接入状态</h2><p class="panel-subtitle">当前原型边界与后续实施项</p></div></div>
+        <div class="incident-list">
+          <article><span class="incident-list__time">当前</span><i class="is-success"></i><div><strong>员工端接口与管理端接口已拆分</strong><p>两个前端使用独立数据传输对象、客户端和状态层访问 Node.js 服务端。</p></div><StatusTag status="success" label="已完成" /></article>
+          <article><span class="incident-list__time">待办</span><i class="is-warning"></i><div><strong>DSH 执行进程与模型网关待接入</strong><p>当前对话执行过程仍由前端原型模拟，不代表真实 Agent 运行。</p></div><StatusTag status="offline" label="未接入" /></article>
+          <article><span class="incident-list__time">待办</span><i class="is-warning"></i><div><strong>PostgreSQL 与对象存储待配置</strong><p>当前数据来自服务端内存仓储，进程重启后不会保留写入。</p></div><StatusTag status="offline" label="未配置" /></article>
+        </div>
+      </div>
+
+      <aside class="content-panel content-panel--flush boundary-panel">
+        <div class="panel-header"><div><h2 class="panel-title">运行边界</h2><p class="panel-subtitle">原型与生产架构决策一致</p></div></div>
+        <div class="boundary-diagram">
+          <div class="boundary-node boundary-node--app"><strong>员工端 / 管理端接口</strong><span>Node.js 模块化单体</span><small>独立门面，共享内部业务模块</small></div>
+          <span class="boundary-arrow">→</span>
+          <div class="boundary-node boundary-node--worker"><strong>DSH 执行进程</strong><span>独立进程池</span><small>目标边界 · 当前尚未接入</small></div>
+        </div>
+        <p class="boundary-note">当前先保持一个模块化单体；DSH 执行进程只按运行隔离需要独立部署。模型、连接器、成果和治理模块不因领域名称而拆成微服务。</p>
+      </aside>
+    </section>
+  </div>
+</template>
+
+<style scoped>
+.refresh-button { margin-left: auto; }
+.health-summary { display: flex; align-items: center; justify-content: space-between; gap: 30px; padding: 18px 20px; }
+.health-summary__status { display: flex; align-items: center; gap: 13px; }
+.health-summary__status > span { display: grid; width: 44px; height: 44px; place-items: center; border-radius: 50%; background: var(--color-success-light); }
+.health-summary__status i { width: 16px; height: 16px; border: 4px solid var(--color-success); border-radius: 50%; }
+.health-summary__status strong { color: var(--color-success-strong); font-size: var(--font-size-title); }
+.health-summary__status p { margin: 5px 0 0; color: var(--color-text-secondary); font-size: var(--font-size-badge); }
+.health-summary > dl { display: flex; align-items: center; gap: 0; margin: 0; }
+.health-summary > dl div { display: flex; min-width: 150px; flex-direction: column; padding: 0 18px; border-left: 1px solid var(--color-border); }
+.health-summary dt { color: var(--color-text-muted); font-size: var(--font-size-badge); }
+.health-summary dd { margin: 4px 0 0; color: var(--color-text-primary); font-size: var(--font-size-caption); font-weight: var(--font-weight-badge); }
+.health-grid { display: grid; min-height: 160px; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.health-grid > .el-empty { grid-column: 1 / -1; }
+.health-card { position: relative; overflow: hidden; padding: 17px; }
+.health-card::before { position: absolute; top: 0; right: 0; left: 0; height: 3px; background: var(--color-success); content: ''; }
+.health-card--warning::before { background: var(--color-warning); }
+.health-card--offline::before { background: var(--color-danger); }
+.health-card__top { display: flex; align-items: center; justify-content: space-between; }
+.health-card__icon { display: grid; width: 36px; height: 36px; place-items: center; border-radius: var(--radius-button); color: var(--color-primary); background: var(--color-primary-light); font-size: var(--font-size-header); }
+.health-card h2 { margin: 15px 0 0; color: var(--color-text-heading); font-size: var(--font-size-title); }
+.health-card > p { min-height: 31px; margin: 6px 0 0; color: var(--color-text-secondary); font-size: var(--font-size-badge); line-height: 1.55; }
+.health-card dl { display: grid; grid-template-columns: repeat(2, 1fr); margin: 15px 0 0; padding: 11px 0; border-top: 1px solid var(--color-border); border-bottom: 1px solid var(--color-border); }
+.health-card dl div { display: flex; flex-direction: column; }
+.health-card dt { color: var(--color-text-muted); font-size: var(--font-size-badge); }
+.health-card dd { margin: 4px 0 0; color: var(--color-text-primary); font-size: var(--font-size-caption); font-weight: var(--font-weight-title); }
+.health-card footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 12px; color: var(--color-text-secondary); font-size: var(--font-size-badge); }
+.health-card footer small { color: var(--color-text-muted); font-size: var(--font-size-badge); }
+.health-bottom-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(360px, 0.75fr); gap: 14px; }
+.incident-list article { display: grid; grid-template-columns: 42px 8px minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 66px; padding: 9px 18px; border-bottom: 1px solid var(--color-border); }
+.incident-list article:last-child { border-bottom: 0; }
+.incident-list__time { color: var(--color-text-muted); font-size: var(--font-size-badge); }
+.incident-list i { width: 7px; height: 7px; border-radius: 50%; background: var(--color-success); }
+.incident-list i.is-warning { background: var(--color-warning); box-shadow: 0 0 0 4px var(--color-warning-light); }
+.incident-list strong { color: var(--color-text-heading); font-size: var(--font-size-caption); }
+.incident-list p { margin: 4px 0 0; color: var(--color-text-secondary); font-size: var(--font-size-badge); }
+.boundary-diagram { display: grid; grid-template-columns: 1fr 22px 1fr; align-items: center; gap: 7px; padding: 23px 18px 15px; }
+.boundary-node { display: flex; min-height: 104px; flex-direction: column; align-items: center; justify-content: center; padding: 12px; border: 1px solid var(--color-border); border-radius: var(--radius-card); color: var(--color-primary); background: var(--color-primary-light); text-align: center; }
+.boundary-node--worker { color: var(--color-success-strong); background: var(--color-success-light); }
+.boundary-node strong { font-size: var(--font-size-caption); }
+.boundary-node span { margin-top: 5px; font-size: var(--font-size-badge); }
+.boundary-node small { margin-top: 8px; color: var(--color-text-muted); font-size: var(--font-size-badge); }
+.boundary-arrow { color: var(--color-text-muted); text-align: center; }
+.boundary-note { margin: 0 18px 18px; padding: 10px; border-radius: var(--radius-button); color: var(--color-text-secondary); background: var(--color-bg-subtle); font-size: var(--font-size-badge); line-height: 1.6; }
+@media (max-width: 1180px) { .health-summary { align-items: flex-start; flex-direction: column; } .health-summary > dl { width: 100%; } .health-summary > dl div:first-child { padding-left: 0; border-left: 0; } }
+@media (max-width: 960px) { .health-grid { grid-template-columns: repeat(2, 1fr); } .health-bottom-grid { grid-template-columns: 1fr; } }
+@media (max-width: 640px) { .health-grid { grid-template-columns: 1fr; } .health-summary > dl { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; } .health-summary > dl div { min-width: 0; padding: 0; border-left: 0; } }
+</style>

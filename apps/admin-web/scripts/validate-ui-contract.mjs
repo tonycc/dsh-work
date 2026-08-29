@@ -1,0 +1,174 @@
+import { readFileSync, readdirSync } from 'node:fs'
+import { resolve } from 'node:path'
+
+const root = resolve(import.meta.dirname, '..')
+const failures = []
+
+function read(path) {
+  try {
+    return readFileSync(resolve(root, path), 'utf8')
+  } catch {
+    failures.push(`${path} 文件不存在`)
+    return ''
+  }
+}
+
+function requireFragments(path, fragments) {
+  const content = read(path)
+  for (const fragment of fragments) {
+    if (!content.includes(fragment)) failures.push(`${path} 缺少：${fragment}`)
+  }
+}
+
+function forbidFragments(path, fragments) {
+  const content = read(path)
+  for (const fragment of fragments) {
+    if (content.includes(fragment)) failures.push(`${path} 不应包含：${fragment}`)
+  }
+}
+
+requireFragments('src/styles.css', [
+  '--color-bg-page',
+  '--color-text-heading',
+  '--spacing-section',
+  '.ops-page',
+  '.content-panel',
+  '.filter-panel',
+  '.filter-bar',
+  '.status-tabs',
+  '.metric-grid',
+  '.data-table',
+])
+
+requireFragments('../../packages/admin-components/src/AdminShell.vue', [
+  'admin-sidebar',
+  'admin-topbar',
+  'navigationGroups',
+  '运营概览',
+  'Agent 治理',
+  '组织与权限',
+  '成员管理',
+  '模型用量',
+  '运行治理',
+  'Runtimes',
+  'Session 列表',
+  '工作空间',
+  '安全与运维',
+  '返回员工工作台',
+])
+
+const adminShell = read('../../packages/admin-components/src/AdminShell.vue')
+const securityGroupIndex = adminShell.indexOf("label: '安全与运维'")
+const runtimeNavigationIndex = adminShell.indexOf("label: 'Runtimes'")
+const auditNavigationIndex = adminShell.indexOf("label: '审计记录'")
+if (!(securityGroupIndex < runtimeNavigationIndex && runtimeNavigationIndex < auditNavigationIndex)) {
+  failures.push('Runtimes 必须位于安全与运维导航组中')
+}
+
+requireFragments('src/router/index.ts', [
+  "meta: { title: '运营概览'",
+  "meta: { title: 'Agent 管理'",
+  "meta: { title: 'Skill 与工具'",
+  "meta: { title: '模型用量'",
+  "meta: { title: 'Runtimes'",
+  "meta: { title: 'Session 列表'",
+  "meta: { title: '工作空间'",
+  "meta: { title: '成员管理'",
+  "meta: { title: '权限与数据范围'",
+  "meta: { title: '审计记录'",
+  "meta: { title: '系统健康'",
+])
+
+const businessViews = [
+  'AdminOverviewView.vue',
+  'AgentManagementView.vue',
+  'CapabilityManagementView.vue',
+  'ModelUsageView.vue',
+  'MemberManagementView.vue',
+  'PermissionManagementView.vue',
+  'AuditView.vue',
+  'SystemHealthView.vue',
+  'RuntimeManagementView.vue',
+  'SessionManagementView.vue',
+  'WorkspaceManagementView.vue',
+]
+
+const listViews = [
+  'AgentManagementView.vue',
+  'CapabilityManagementView.vue',
+  'ModelUsageView.vue',
+  'MemberManagementView.vue',
+  'PermissionManagementView.vue',
+  'AuditView.vue',
+  'RuntimeManagementView.vue',
+  'SessionManagementView.vue',
+  'WorkspaceManagementView.vue',
+]
+
+for (const name of businessViews) {
+  requireFragments(`src/views/${name}`, ['ops-page', 'contentStore.error'])
+}
+
+for (const name of listViews) {
+  requireFragments(`src/views/${name}`, ['filter-panel', 'class="data-table"', 'v-loading', 'empty-text='])
+}
+
+requireFragments('src/views/AgentManagementView.vue', ['data-action="view-agent"', 'data-action="publish-agent"'])
+requireFragments('src/components/SkillEditorDialog.vue', ['标识由系统自动生成'])
+forbidFragments('src/components/SkillEditorDialog.vue', ['label="Skill 标识"', 'prop="id"'])
+requireFragments('src/views/CapabilityManagementView.vue', [
+  'data-action="view-skill"',
+  'data-action="view-tool"',
+  'data-action="view-connector"',
+  '工具目录',
+  '连接器状态',
+  '一期由实施团队预置',
+  '一期由实施团队配置',
+])
+forbidFragments('src/views/CapabilityManagementView.vue', [
+  'data-action="edit-tool"',
+  'data-action="edit-connector"',
+  'data-action="create-tools"',
+  'data-action="create-connectors"',
+])
+requireFragments('src/views/MemberManagementView.vue', ['data-action="view-member"'])
+requireFragments('src/views/ModelUsageView.vue', ['data-action="view-model-usage"'])
+requireFragments('src/views/PermissionManagementView.vue', ['data-action="configure-role"', 'data-action="configure-tool-permission"'])
+requireFragments('src/views/AuditView.vue', ['data-action="view-audit"'])
+requireFragments('src/views/SystemHealthView.vue', ['data-action="refresh-health"'])
+requireFragments('src/views/RuntimeManagementView.vue', [
+  'data-action="view-runtime"',
+  'data-action="check-runtime"',
+  'data-action="configure-runtime"',
+  'data-action="save-runtime-configuration"',
+  '最大并发 Worker 数',
+  '单次执行超时时间',
+  '调度状态',
+])
+requireFragments('src/views/SessionManagementView.vue', ['data-action="view-session"', 'data-action="view-session-audit"'])
+requireFragments('src/views/WorkspaceManagementView.vue', ['data-action="view-workspace"'])
+
+const viewDirectory = resolve(root, 'src/views')
+const viewFiles = readdirSync(viewDirectory).filter((name) => name.endsWith('.vue'))
+const forbiddenPatterns = [
+  { pattern: /<table\b/i, reason: '不得使用原生 table' },
+  { pattern: /class="[^"]*page-container/, reason: '不得继续使用旧 page-container 页面骨架' },
+  { pattern: /class="[^"]*page-header/, reason: '页面标题由应用壳层承载' },
+  { pattern: /<h1\b/i, reason: '页面标题不得在内容区重复渲染' },
+  { pattern: /#[0-9a-f]{3,8}\b/i, reason: '页面局部样式不得硬编码色值' },
+]
+
+for (const name of viewFiles) {
+  const content = read(`src/views/${name}`)
+  for (const { pattern, reason } of forbiddenPatterns) {
+    if (pattern.test(content)) failures.push(`src/views/${name}：${reason}`)
+  }
+}
+
+if (failures.length) {
+  console.error('管理端 UI 契约验证失败：')
+  for (const failure of failures) console.error(`- ${failure}`)
+  process.exit(1)
+}
+
+console.log('管理端 UI 契约验证通过。')

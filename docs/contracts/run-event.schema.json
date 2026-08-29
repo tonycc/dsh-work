@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dsh-work.local/schemas/run-event.schema.json",
+  "title": "dsh-work Run Event",
+  "description": "Runtime Adapter 写入事件存储并通过 SSE 对外投影的安全事件。不得包含模型隐藏推理、密钥或未经脱敏的工具参数。",
+  "type": "object",
+  "required": ["event_id", "run_id", "attempt_id", "sequence", "event_type", "occurred_at", "display_message", "safe_metadata", "trace_id"],
+  "properties": {
+    "event_id": { "type": "string" },
+    "run_id": { "type": "string" },
+    "attempt_id": { "type": "string" },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "event_type": {
+      "enum": [
+        "run.queued",
+        "run.started",
+        "assistant.delta",
+        "assistant.completed",
+        "tool.requested",
+        "tool.started",
+        "tool.completed",
+        "approval.required",
+        "approval.resolved",
+        "artifact.created",
+        "run.cancel_requested",
+        "run.cancelled",
+        "run.failed",
+        "run.completed"
+      ]
+    },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "display_message": { "type": ["string", "null"], "maxLength": 20000 },
+    "safe_metadata": { "type": "object", "additionalProperties": true },
+    "trace_id": { "type": "string" },
+    "parent_event_id": { "type": ["string", "null"] }
+  },
+  "additionalProperties": false
+}

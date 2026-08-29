@@ -1,0 +1,238 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "dsh-work 员工工作台 API",
+    "version": "0.1.0-m0",
+    "description": "MVP 契约基线。员工工作台与管理后台 API 独立，均不直接调用 Runtime。"
+  },
+  "servers": [{ "url": "/api/workbench/v1" }],
+  "security": [{ "enterpriseSession": [] }],
+  "paths": {
+    "/session": {
+      "get": {
+        "operationId": "getCurrentSession",
+        "summary": "获取当前员工身份与权限上下文",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" }, "401": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/workspaces": {
+      "get": {
+        "operationId": "listMyWorkspaces",
+        "summary": "查询当前员工加入的团队工作空间",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/workspaces/{workspaceId}": {
+      "parameters": [{ "$ref": "#/components/parameters/WorkspaceId" }],
+      "get": {
+        "operationId": "getWorkspace",
+        "summary": "获取工作空间详情、成员摘要和能力范围",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" }, "404": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/workspaces/{workspaceId}/files": {
+      "parameters": [{ "$ref": "#/components/parameters/WorkspaceId" }],
+      "post": {
+        "operationId": "uploadWorkspaceFile",
+        "summary": "上传工作空间共享文件",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["file"],
+                "properties": { "file": { "type": "string", "format": "binary" } }
+              }
+            }
+          }
+        },
+        "responses": { "201": { "$ref": "#/components/responses/Ok" }, "413": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/sessions": {
+      "get": {
+        "operationId": "listMySessions",
+        "summary": "按工作空间或关键字查询当前员工可见对话",
+        "parameters": [
+          { "name": "workspaceId", "in": "query", "schema": { "type": ["string", "null"] } },
+          { "name": "cursor", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      },
+      "post": {
+        "operationId": "createSession",
+        "summary": "创建对话；workspaceId 为空时创建独立对话",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "workspaceId": { "type": ["string", "null"] },
+                  "agentId": { "type": ["string", "null"] },
+                  "title": { "type": ["string", "null"], "maxLength": 120 }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "201": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/sessions/{sessionId}": {
+      "parameters": [{ "$ref": "#/components/parameters/SessionId" }],
+      "get": {
+        "operationId": "getSession",
+        "summary": "获取对话、消息与运行摘要",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" }, "404": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/sessions/{sessionId}/runs": {
+      "parameters": [{ "$ref": "#/components/parameters/SessionId" }],
+      "post": {
+        "operationId": "startRun",
+        "summary": "提交消息并启动一次 Run",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["message", "idempotencyKey"],
+                "properties": {
+                  "message": { "type": "string", "minLength": 1, "maxLength": 20000 },
+                  "fileIds": { "type": "array", "items": { "type": "string" }, "maxItems": 20 },
+                  "idempotencyKey": { "type": "string", "minLength": 8, "maxLength": 128 }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "202": { "$ref": "#/components/responses/Ok" }, "409": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/runs/{runId}": {
+      "parameters": [{ "$ref": "#/components/parameters/RunId" }],
+      "get": {
+        "operationId": "getRun",
+        "summary": "获取 Run 当前状态",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" }, "404": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/runs/{runId}/events": {
+      "parameters": [
+        { "$ref": "#/components/parameters/RunId" },
+        { "name": "Last-Event-ID", "in": "header", "schema": { "type": "string" } }
+      ],
+      "get": {
+        "operationId": "streamRunEvents",
+        "summary": "通过 SSE 订阅可安全展示的 Run 事件",
+        "responses": {
+          "200": {
+            "description": "SSE 事件流；事件结构见 run-event.schema.json",
+            "content": { "text/event-stream": { "schema": { "type": "string" } } }
+          }
+        }
+      }
+    },
+    "/runs/{runId}/cancel": {
+      "parameters": [{ "$ref": "#/components/parameters/RunId" }],
+      "post": {
+        "operationId": "cancelRun",
+        "summary": "取消正在执行或排队中的 Run",
+        "responses": { "202": { "$ref": "#/components/responses/Ok" }, "409": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/runs/{runId}/retry": {
+      "parameters": [{ "$ref": "#/components/parameters/RunId" }],
+      "post": {
+        "operationId": "retryRun",
+        "summary": "基于原输入创建新的 Run Attempt",
+        "responses": { "202": { "$ref": "#/components/responses/Ok" }, "409": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/artifacts": {
+      "get": {
+        "operationId": "listArtifacts",
+        "summary": "查询当前员工可见成果",
+        "parameters": [
+          { "name": "workspaceId", "in": "query", "schema": { "type": ["string", "null"] } },
+          { "name": "sessionId", "in": "query", "schema": { "type": ["string", "null"] } }
+        ],
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
+    "/artifacts/{artifactId}/versions/{versionId}/download": {
+      "parameters": [
+        { "name": "artifactId", "in": "path", "required": true, "schema": { "type": "string" } },
+        { "name": "versionId", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "get": {
+        "operationId": "downloadArtifactVersion",
+        "summary": "鉴权后下载指定成果版本",
+        "responses": {
+          "200": { "description": "文件内容", "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } } },
+          "403": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "enterpriseSession": { "type": "apiKey", "in": "cookie", "name": "dsh_work_session" }
+    },
+    "parameters": {
+      "WorkspaceId": { "name": "workspaceId", "in": "path", "required": true, "schema": { "type": "string" } },
+      "SessionId": { "name": "sessionId", "in": "path", "required": true, "schema": { "type": "string" } },
+      "RunId": { "name": "runId", "in": "path", "required": true, "schema": { "type": "string" } }
+    },
+    "responses": {
+      "Ok": {
+        "description": "成功",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Envelope" } } }
+      },
+      "Error": {
+        "description": "失败",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } }
+      }
+    },
+    "schemas": {
+      "Envelope": {
+        "type": "object",
+        "required": ["data", "meta"],
+        "properties": {
+          "data": {},
+          "meta": { "$ref": "#/components/schemas/Meta" }
+        }
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "required": ["error", "meta"],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": ["code", "message"],
+            "properties": {
+              "code": { "type": "string" },
+              "message": { "type": "string" },
+              "details": { "type": ["object", "null"], "additionalProperties": true }
+            }
+          },
+          "meta": { "$ref": "#/components/schemas/Meta" }
+        }
+      },
+      "Meta": {
+        "type": "object",
+        "required": ["requestId", "timestamp"],
+        "properties": {
+          "requestId": { "type": "string" },
+          "timestamp": { "type": "string", "format": "date-time" },
+          "nextCursor": { "type": ["string", "null"] }
+        }
+      }
+    }
+  },
+  "x-contract-status": "m0-review"
+}

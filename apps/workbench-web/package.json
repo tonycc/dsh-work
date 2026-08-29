@@ -1,0 +1,37 @@
+{
+  "name": "@dsh-work/workbench-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vue-tsc -b && vite build",
+    "typecheck": "vue-tsc -b",
+    "lint": "eslint . --max-warnings=0",
+    "validate:ui": "node scripts/validate-ui-contract.mjs",
+    "preview": "vite preview --host 0.0.0.0"
+  },
+  "dependencies": {
+    "@dsh-work/design-tokens": "workspace:*",
+    "@dsh-work/ui-core": "workspace:*",
+    "@dsh-work/workbench-components": "workspace:*",
+    "@element-plus/icons-vue": "^2.3.2",
+    "element-plus": "^2.10.7",
+    "pinia": "^3.0.3",
+    "vue": "^3.5.22",
+    "vue-router": "^4.6.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.37.0",
+    "@types/node": "^24.7.2",
+    "@vitejs/plugin-vue": "^6.0.1",
+    "eslint": "^9.37.0",
+    "eslint-plugin-vue": "^10.5.1",
+    "globals": "^16.4.0",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.46.1",
+    "vite": "^7.1.10",
+    "vue-eslint-parser": "^10.2.0",
+    "vue-tsc": "^3.1.1"
+  }
+}

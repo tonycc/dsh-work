@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dsh-work.local/schemas/runtime-manifest.schema.json",
+  "title": "dsh-work Runtime Manifest",
+  "description": "控制面下发给 DSH Runtime Adapter 的一次不可变执行快照。",
+  "type": "object",
+  "required": [
+    "manifest_version",
+    "run_id",
+    "attempt_id",
+    "session_id",
+    "workspace_id",
+    "agent_version_id",
+    "user_context",
+    "permission_policy",
+    "skills",
+    "tools",
+    "data_scopes",
+    "input",
+    "limits",
+    "created_at"
+  ],
+  "properties": {
+    "manifest_version": { "const": "1.0" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "attempt_id": { "type": "string", "minLength": 1 },
+    "session_id": { "type": "string", "minLength": 1 },
+    "workspace_id": { "type": ["string", "null"], "description": "独立对话为 null；团队工作空间对话为对应 ID。" },
+    "agent_version_id": { "type": ["string", "null"], "description": "直接使用平台默认助手时可为 null。" },
+    "user_context": {
+      "type": "object",
+      "required": ["user_id", "tenant_id", "role_ids"],
+      "properties": {
+        "user_id": { "type": "string" },
+        "tenant_id": { "type": "string" },
+        "role_ids": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+      },
+      "additionalProperties": false
+    },
+    "permission_policy": {
+      "type": "object",
+      "required": ["approval_mode", "network_policy", "write_policy"],
+      "properties": {
+        "approval_mode": { "enum": ["always", "risk_based", "never"] },
+        "network_policy": { "enum": ["deny", "allowlist"] },
+        "write_policy": { "enum": ["deny", "workspace_only", "approved_targets"] }
+      },
+      "additionalProperties": false
+    },
+    "skills": { "type": "array", "items": { "$ref": "#/$defs/capabilityRef" }, "uniqueItems": true },
+    "tools": { "type": "array", "items": { "$ref": "#/$defs/capabilityRef" }, "uniqueItems": true },
+    "data_scopes": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "model_route_id": { "type": ["string", "null"], "description": "由平台模型网关按企业策略选择，不属于 Agent 创建表单。" },
+    "input": {
+      "type": "object",
+      "required": ["message", "file_mounts"],
+      "properties": {
+        "message": { "type": "string", "minLength": 1 },
+        "file_mounts": { "type": "array", "items": { "$ref": "#/$defs/fileMount" } }
+      },
+      "additionalProperties": false
+    },
+    "limits": {
+      "type": "object",
+      "required": ["timeout_seconds", "max_output_bytes", "max_tool_calls"],
+      "properties": {
+        "timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 3600 },
+        "max_output_bytes": { "type": "integer", "minimum": 1024 },
+        "max_tool_calls": { "type": "integer", "minimum": 0, "maximum": 1000 }
+      },
+      "additionalProperties": false
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "trace_id": { "type": "string" }
+  },
+  "$defs": {
+    "capabilityRef": {
+      "type": "object",
+      "required": ["id", "version"],
+      "properties": { "id": { "type": "string" }, "version": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "fileMount": {
+      "type": "object",
+      "required": ["file_id", "mount_path", "access"],
+      "properties": {
+        "file_id": { "type": "string" },
+        "mount_path": { "type": "string", "pattern": "^/workspace/input/" },
+        "access": { "const": "read_only" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
