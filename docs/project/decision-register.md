@@ -18,16 +18,17 @@
 | A-07 | Agent 创建不配置模型策略；模型由平台级 Model Gateway 管理 | 已确认 | 项目 Owner | Agent 配置保持简化 |
 | A-08 | Runtimes 位于安全与运维 | 已确认 | 项目 Owner | 健康状态与调度状态分离 |
 | A-09 | Mac mini 为 MVP 首期部署目标 | 已确认 | 项目 Owner | Kubernetes 不是一期依赖 |
+| A-10 | 不 Fork DSH；固定 Commit 并通过 ACP、权威 Session Log 和 Session Telemetry 集成 | 已确认 | 项目 Owner | dsh-work 维护 Adapter 和脱敏投影，不修改 DSH 核心 |
 
 ## 2. 启动外部决策
 
 | 编号 | 决策事项 | 当前结论/候选 | 状态 | 责任角色 | 截止时间 | 阻塞影响 |
 |---|---|---|---|---|---|---|
 | D-01 | DSH 仓库、版本和入口 | 已确认使用本地安装 `/Users/max/projects/deepseek-harness`；版本 `0.1.1-rc.2`；Commit `b150a551b8d465e31e418e1b2eaf5e79bbb7d28e`；程序化入口 `pnpm run demo:acp`，Headless CLI 仅作诊断 | 已确认 | 项目 Owner | 2026-08-29 | 真实 DSH ACP 协议探针通过；模型和 Tool 仍由 D-02/D-05 控制 |
-| D-02 | 模型 Provider 和预算 | M1 继承当前 DSH ACP 默认模型配置：`deepseek-official / deepseek-v4-pro`，公共 API Base URL，Thinking 开启、`reasoningEffort=max`，DSH 默认上下文和输出上限；dsh-work 不在 Agent 或 Runtime Manifest 中复制模型参数。POC 仅使用合成数据，正式企业数据出口仍由 D-09 控制 | 已确认 | 项目 Owner | 2026-08-30 | 模型选择不再阻塞；本机尚未配置 `DEEPSEEK_API_KEY`，真实模型验证需先提供凭据 |
+| D-02 | 模型 Provider 和预算 | M1 继承当前 DSH ACP 默认模型配置：`deepseek-official / deepseek-v4-pro`，公共 API Base URL，Thinking 开启、`reasoningEffort=max`，DSH 默认上下文和输出上限；dsh-work 不在 Agent 或 Runtime Manifest 中复制模型参数。POC 仅使用合成数据，正式企业数据出口仍由 D-09 控制 | 已确认 | 项目 Owner | 2026-08-30 | DSH 受管凭据真实 ACP 调用已通过；生产 Provider 治理和密钥存储在 Model Gateway 实施时收敛 |
 | D-03 | 企业身份 | SSO、LDAP 或受控内部账号待确定 | 待确定 | 项目 Owner | M2 身份接入前 | 阻塞真实授权，不阻塞 M0 |
 | D-04 | 试点部门 | 原型使用供应链合成场景，正式试点待确定 | 待确定 | 项目 Owner | M6 数据准备前 | 阻塞正式 UAT，不阻塞 M0 |
-| D-05 | 首批 Tool | 候选为知识查询、订单、工单、库存和采购到货，真实接口待确定 | 待确定 | 项目 Owner | M1 Tool 链路前 | Mock 可先验证协议，真实 Connector 后续接入 |
+| D-05 | 首批 Tool | M1 使用 DSH 内置文件读取 Tool 验证真实只读闭环、workspace sandbox 和权威日志审计；一期企业 Tool 仍从知识查询、订单、工单、库存和采购到货中按真实接口就绪情况预置，不开放自定义 Tool | M1 POC 已确认 | 项目 Owner | 2026-08-30 | M1 Tool Gate 不再阻塞；首个企业 Connector 仍在业务接入阶段确定 |
 | D-06 | 企业知识来源 | 知识库 API、文档目录、版本和权限口径待确定 | 待确定 | 项目 Owner | M4 知识场景前 | 阻塞真实知识验收，不阻塞 M0 |
 | D-07 | Artifact 存储 | 本地目录或 NAS、保留期和容量待确定 | 待确定 | 项目 Owner | M2 文件表实施前 | 阻塞持久化方案，不阻塞 M0 |
 | D-08 | Mac mini 环境 | 固定 IP、域名、证书、网络和 UPS 待确定 | 待确定 | 项目 Owner | M5 部署前 | 阻塞预生产部署，不阻塞 M0 |

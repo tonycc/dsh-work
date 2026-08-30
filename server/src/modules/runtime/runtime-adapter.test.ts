@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, it } from 'node:test'
 import { DshAcpRuntimeAdapter } from './dsh-acp-runtime-adapter.ts'
+import { createManagedDshAcpProcessConfiguration } from './dsh-acp-process-configuration.ts'
 import { compileRuntimeManifest } from './manifest-compiler.ts'
 import type { RuntimeEvent, RuntimeManifest } from './runtime-types.ts'
 
@@ -34,6 +35,24 @@ describe('Runtime Manifest compiler', () => {
 })
 
 describe('DSH ACP Runtime Adapter', () => {
+  it('mounts DSH managed credentials without copying a secret into process config', () => {
+    const configuration = createManagedDshAcpProcessConfiguration({
+      dshRepository: '/opt/deepseek-harness',
+      projectRoot: '/opt/dsh-work',
+    })
+
+    assert.equal(configuration.cwd, '/opt/deepseek-harness')
+    assert.equal(configuration.env?.['DEEPSEEK_API_KEY'], undefined)
+    assert.ok(configuration.args.includes('/opt/dsh-work/server/config/dsh/acp-managed-credentials.cordis.yml'))
+  })
+
+  it('rejects a DSH repository outside the pinned sibling checkout', () => {
+    assert.throws(() => createManagedDshAcpProcessConfiguration({
+      dshRepository: '/tmp/deepseek-harness',
+      projectRoot: '/opt/dsh-work',
+    }), /pinned sibling checkout/)
+  })
+
   it('creates an isolated Attempt and emits ordered safe completion events', async () => {
     const adapter = await createAdapter()
     const input = manifest('run-complete', 'attempt-1')

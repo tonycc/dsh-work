@@ -1,5 +1,7 @@
 export { AcpJsonRpcClient, AcpProtocolError } from './acp-json-rpc-client.ts'
 export { canonicalJson, sha256 } from './canonical-json.ts'
 export { DshAcpRuntimeAdapter } from './dsh-acp-runtime-adapter.ts'
+export { createManagedDshAcpProcessConfiguration } from './dsh-acp-process-configuration.ts'
+export type { ManagedDshAcpProcessOptions } from './dsh-acp-process-configuration.ts'
 export { compileRuntimeManifest } from './manifest-compiler.ts'
 export type * from './runtime-types.ts'

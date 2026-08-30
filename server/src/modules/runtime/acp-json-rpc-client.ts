@@ -111,6 +111,11 @@ export class AcpJsonRpcClient {
     return new AcpJsonRpcClient(configuration, handlers)
   }
 
+  /** Operating-system process id for resource observation of this ACP worker. */
+  get pid(): number | undefined {
+    return this.process.pid
+  }
+
   async initialize(): Promise<Record<string, unknown>> {
     const result = await this.request('initialize', {
       protocolVersion: 1,

@@ -1,7 +1,7 @@
 # dsh-work 内部端口契约
 
 版本：V0.2
-状态：M1 第一阶段 POC 已校验；真实模型、Tool 和 Artifact 仍待验证
+状态：M1 ACP、真实模型、Tool、Token、Artifact、取消和并发 POC 已校验；正式 Repository、SSE 和 Telemetry 投影在后续阶段实现
 原则：两个前端只调用各自 BFF；控制面通过端口访问 Runtime、模型、工具、成果和治理能力。
 
 ## 1. 端口总览
@@ -78,7 +78,7 @@ interface GovernancePort {
 |---|---|
 | 稳定程序化接口 | 采用 DSH ACP JSON-RPC stdio；Headless CLI 最终文本不作为产品协议 |
 | 结构化事件 | ACP 支持提交后的 assistant 消息、取消和权限；Tool、Token 与原始增量需要 observer/telemetry 投影 |
-| 取消与超时 | Mock ACP 自动化测试通过；D-02 模型配置已确认，真实模型运行待凭据；真实 Tool 运行待 D-05 |
+| 取消与超时 | Mock 超时和真实模型 ACP 取消均通过；真实取消约 255ms 收敛为 `cancelled` |
 | 进程与目录隔离 | 每 Attempt 独立进程和目录的并发测试通过 |
 | Manifest | canonical JSON、SHA-256 和 Attempt 快照已实现 |
 | 崩溃恢复 | Adapter 可形成失败终态；PostgreSQL 事件恢复在 M2-M3 实现 |

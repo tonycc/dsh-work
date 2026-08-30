@@ -8,9 +8,14 @@ const requiredFiles = [
   'docs/project/m1-exit-checklist.md',
   'server/src/modules/runtime/acp-json-rpc-client.ts',
   'server/src/modules/runtime/dsh-acp-runtime-adapter.ts',
+  'server/src/modules/runtime/dsh-acp-process-configuration.ts',
+  'server/config/dsh/acp-managed-credentials.cordis.yml',
   'server/src/modules/runtime/manifest-compiler.ts',
   'server/src/modules/runtime/runtime-adapter.test.ts',
   'scripts/probe-dsh-acp.ts',
+  'scripts/probe-dsh-acp-real.ts',
+  'scripts/probe-dsh-acp-cancel.ts',
+  'scripts/probe-dsh-acp-concurrency.ts',
 ]
 
 for (const file of requiredFiles) {
@@ -18,12 +23,12 @@ for (const file of requiredFiles) {
 }
 
 const packageJson = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'))
-for (const script of ['test:m1', 'probe:m1']) {
+for (const script of ['test:m1', 'probe:m1', 'probe:m1:real', 'probe:m1:tool', 'probe:m1:artifact', 'probe:m1:cancel', 'probe:m1:concurrency']) {
   if (typeof packageJson.scripts?.[script] !== 'string') failures.push(`package.json 缺少 ${script}`)
 }
 
 const poc = readFileSync(resolve(root, 'docs/poc/m1-runtime-poc.md'), 'utf8')
-for (const fragment of ['ACP JSON-RPC stdio', 'realModelPromptExecuted', '当前不需要 Fork DSH', 'M1 剩余项目']) {
+for (const fragment of ['ACP JSON-RPC stdio', 'realModelPromptExecuted', '最终决定不 Fork DSH', 'M1 工作项结论']) {
   if (!poc.includes(fragment)) failures.push(`M1 POC 记录缺少：${fragment}`)
 }
 
