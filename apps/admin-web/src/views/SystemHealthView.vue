@@ -21,7 +21,7 @@ const icons = {
 
 async function refresh() {
   await contentStore.load(true)
-  ElMessage.success('已通过管理端接口刷新原型状态')
+  ElMessage.success('已通过管理端接口刷新实时状态')
 }
 
 onMounted(() => contentStore.load())
@@ -39,8 +39,8 @@ onMounted(() => contentStore.load())
     </section>
 
     <section class="health-summary content-panel">
-      <div class="health-summary__status"><span><i></i></span><div><strong>原型接口正常，生产依赖尚未接入</strong><p>{{ healthyCount }} / {{ contentStore.health.length }} 个组件可用，{{ offlineCount }} 个组件未配置或未连接</p></div></div>
-      <dl><div><dt>应用版本</dt><dd>dsh-work 0.1.0 原型版</dd></div><div><dt>部署形态</dt><dd>双接口门面 + Node.js 模块化单体</dd></div><div><dt>环境</dt><dd>本地原型（真实网络接口）</dd></div><div><dt>持久化</dt><dd>内存原型 · 重启丢失</dd></div></dl>
+      <div class="health-summary__status"><span><i></i></span><div><strong>MVP 核心服务运行正常</strong><p>{{ healthyCount }} / {{ contentStore.health.length }} 个组件可用，{{ offlineCount }} 个组件未配置或未连接</p></div></div>
+      <dl><div><dt>应用版本</dt><dd>dsh-work 0.3.0 MVP</dd></div><div><dt>部署形态</dt><dd>双接口门面 + Node.js 模块化单体</dd></div><div><dt>环境</dt><dd>本地 MVP 实施环境</dd></div><div><dt>持久化</dt><dd>PostgreSQL + 本地 Artifact Adapter</dd></div></dl>
     </section>
 
     <section v-loading="contentStore.loading" class="health-grid">
@@ -58,16 +58,16 @@ onMounted(() => contentStore.load())
 
     <section class="health-bottom-grid">
       <div class="content-panel content-panel--flush incident-panel">
-        <div class="panel-header"><div><h2 class="panel-title">接入状态</h2><p class="panel-subtitle">当前原型边界与后续实施项</p></div></div>
+        <div class="panel-header"><div><h2 class="panel-title">接入状态</h2><p class="panel-subtitle">当前 MVP 边界与后续实施项</p></div></div>
         <div class="incident-list">
           <article><span class="incident-list__time">当前</span><i class="is-success"></i><div><strong>员工端接口与管理端接口已拆分</strong><p>两个前端使用独立数据传输对象、客户端和状态层访问 Node.js 服务端。</p></div><StatusTag status="success" label="已完成" /></article>
-          <article><span class="incident-list__time">待办</span><i class="is-warning"></i><div><strong>DSH 执行进程与模型网关待接入</strong><p>当前对话执行过程仍由前端原型模拟，不代表真实 Agent 运行。</p></div><StatusTag status="offline" label="未接入" /></article>
+          <article><span class="incident-list__time">已接入</span><i></i><div><strong>DSH Runtime 与默认模型路由已接入</strong><p>员工对话由 PostgreSQL 编排并通过 ACP stdio 调用真实 DSH Runtime。</p></div><StatusTag status="healthy" label="正常" /></article>
           <article><span class="incident-list__time">待办</span><i class="is-warning"></i><div><strong>PostgreSQL 与对象存储待配置</strong><p>当前数据来自服务端内存仓储，进程重启后不会保留写入。</p></div><StatusTag status="offline" label="未配置" /></article>
         </div>
       </div>
 
       <aside class="content-panel content-panel--flush boundary-panel">
-        <div class="panel-header"><div><h2 class="panel-title">运行边界</h2><p class="panel-subtitle">原型与生产架构决策一致</p></div></div>
+        <div class="panel-header"><div><h2 class="panel-title">运行边界</h2><p class="panel-subtitle">MVP 与生产架构决策一致</p></div></div>
         <div class="boundary-diagram">
           <div class="boundary-node boundary-node--app"><strong>员工端 / 管理端接口</strong><span>Node.js 模块化单体</span><small>独立门面，共享内部业务模块</small></div>
           <span class="boundary-arrow">→</span>

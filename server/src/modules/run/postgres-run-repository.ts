@@ -53,6 +53,7 @@ interface EventRow {
   safeMetadata: JsonObject
   traceId: string
   occurredAt: Date
+  streamPosition: string | number
 }
 
 export class PostgresRunRepository implements RunRepository {
@@ -98,20 +99,31 @@ export class PostgresRunRepository implements RunRepository {
     return row ? mapRun(row) : null
   }
 
+  async getAttempt(tenantId: string, attemptId: string) {
+    const [row] = await this.database<AttemptRow[]>`
+      select id, tenant_id as "tenantId", run_id as "runId", attempt_no as "attemptNo",
+             runtime_id as "runtimeId", manifest, manifest_sha256 as "manifestSha256",
+             model_route_snapshot as "modelRouteSnapshot", status, started_at as "startedAt",
+             ended_at as "endedAt", error_code as "errorCode", created_at as "createdAt"
+        from run_attempts where tenant_id = ${tenantId} and id = ${attemptId}
+    `
+    return row ? mapAttempt(row) : null
+  }
+
   async createAttempt(input: CreateAttemptInput): Promise<RunAttemptRecord> {
     return this.database.begin(async (transaction) => {
       const [run] = await transaction<{ status: RunState }[]>`
         select status from runs where tenant_id = ${input.tenantId} and id = ${input.runId} for update
       `
       if (!run) throw new Error(`Run 不存在：${input.runId}`)
-      if (!['queued', 'failed'].includes(run.status)) {
+      if (!['queued', 'failed', 'cancelled'].includes(run.status)) {
         throw new Error(`Run 当前状态不能创建 Attempt：${run.status}`)
       }
       const [counter] = await transaction<{ next: number }[]>`
         select coalesce(max(attempt_no), 0)::integer + 1 as next
           from run_attempts where tenant_id = ${input.tenantId} and run_id = ${input.runId}
       `
-      const attemptId = `attempt-${randomUUID()}`
+      const attemptId = input.attemptId ?? `attempt-${randomUUID()}`
       const [created] = await transaction<AttemptRow[]>`
         insert into run_attempts (
           id, tenant_id, run_id, attempt_no, runtime_id, manifest, manifest_sha256,
@@ -156,6 +168,32 @@ export class PostgresRunRepository implements RunRepository {
       `
       if (!updated) throw new Error(`Run 状态更新失败：${runId}`)
       return mapRun(updated)
+    })
+  }
+
+  async claimAttempt(tenantId: string, attemptId: string, runtimeId: string): Promise<boolean> {
+    return this.database.begin(async (transaction) => {
+      const [runtime] = await transaction<{ capacity: number; schedulingStatus: string }[]>`
+        select capacity, scheduling_status as "schedulingStatus"
+          from runtimes where tenant_id = ${tenantId} and id = ${runtimeId} for update
+      `
+      if (!runtime || runtime.schedulingStatus !== 'accepting') return false
+      const [usage] = await transaction<{ active: number }[]>`
+        select count(*)::integer as active from run_attempts
+         where tenant_id = ${tenantId} and runtime_id = ${runtimeId} and status = 'running'
+      `
+      if ((usage?.active ?? 0) >= runtime.capacity) return false
+      const [attempt] = await transaction<{ runId: string }[]>`
+        update run_attempts set status = 'running', started_at = coalesce(started_at, now())
+         where tenant_id = ${tenantId} and id = ${attemptId} and status = 'queued'
+         returning run_id as "runId"
+      `
+      if (!attempt) return false
+      await transaction`
+        update runs set status = 'running', updated_at = now()
+         where tenant_id = ${tenantId} and id = ${attempt.runId} and status = 'queued'
+      `
+      return true
     })
   }
 
@@ -206,13 +244,15 @@ export class PostgresRunRepository implements RunRepository {
       on conflict (id) do nothing
       returning id, tenant_id as "tenantId", run_id as "runId", attempt_id as "attemptId",
                 sequence, event_type as "eventType", display_message as "displayMessage",
-                safe_metadata as "safeMetadata", trace_id as "traceId", occurred_at as "occurredAt"
+                safe_metadata as "safeMetadata", trace_id as "traceId", occurred_at as "occurredAt",
+                stream_position as "streamPosition"
     `
     if (created) return mapEvent(created)
     const [existing] = await this.database<EventRow[]>`
       select id, tenant_id as "tenantId", run_id as "runId", attempt_id as "attemptId",
              sequence, event_type as "eventType", display_message as "displayMessage",
-             safe_metadata as "safeMetadata", trace_id as "traceId", occurred_at as "occurredAt"
+             safe_metadata as "safeMetadata", trace_id as "traceId", occurred_at as "occurredAt",
+             stream_position as "streamPosition"
         from run_events where tenant_id = ${event.tenantId} and id = ${event.id}
     `
     if (!existing) throw new Error(`Run Event 幂等查询失败：${event.id}`)
@@ -226,10 +266,30 @@ export class PostgresRunRepository implements RunRepository {
     const rows = await this.database<EventRow[]>`
       select id, tenant_id as "tenantId", run_id as "runId", attempt_id as "attemptId",
              sequence, event_type as "eventType", display_message as "displayMessage",
-             safe_metadata as "safeMetadata", trace_id as "traceId", occurred_at as "occurredAt"
+             safe_metadata as "safeMetadata", trace_id as "traceId", occurred_at as "occurredAt",
+             stream_position as "streamPosition"
         from run_events
        where tenant_id = ${tenantId} and run_id = ${runId} and sequence > ${afterSequence}
        order by sequence asc
+    `
+    return rows.map(mapEvent)
+  }
+
+  async readEventsAfterEvent(tenantId: string, runId: string, afterEventId?: string) {
+    const rows = await this.database<EventRow[]>`
+      with cursor as (
+        select stream_position
+          from run_events
+         where tenant_id = ${tenantId} and run_id = ${runId} and id = ${afterEventId ?? ''}
+      )
+      select id, tenant_id as "tenantId", run_id as "runId", attempt_id as "attemptId",
+             sequence, event_type as "eventType", display_message as "displayMessage",
+             safe_metadata as "safeMetadata", trace_id as "traceId", occurred_at as "occurredAt",
+             stream_position as "streamPosition"
+        from run_events
+       where tenant_id = ${tenantId} and run_id = ${runId}
+         and stream_position > coalesce((select stream_position from cursor), 0)
+       order by stream_position asc
     `
     return rows.map(mapEvent)
   }
@@ -249,5 +309,10 @@ function mapAttempt(row: AttemptRow): RunAttemptRecord {
 }
 
 function mapEvent(row: EventRow): StoredRunEvent {
-  return { ...row, sequence: Number(row.sequence), occurredAt: row.occurredAt.toISOString() }
+  return {
+    ...row,
+    sequence: Number(row.sequence),
+    streamPosition: Number(row.streamPosition),
+    occurredAt: row.occurredAt.toISOString(),
+  }
 }

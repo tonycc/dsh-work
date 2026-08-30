@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import {
   ArrowRight,
   Close,
@@ -158,14 +159,18 @@ function openActivity() {
   else void router.push('/workspaces')
 }
 
-function submitTask(payload: { prompt: string; files: string[]; workspaceId: string }) {
-  const task = taskStore.createTask(
-    payload.prompt,
-    payload.files,
-    payload.workspaceId,
-    props.workspaceLocked ? props.workspaceName : undefined,
-  )
-  void router.push(`/conversations/${task.id}`)
+async function submitTask(payload: { prompt: string; files: string[]; workspaceId: string }) {
+  try {
+    const task = await taskStore.createTask(
+      payload.prompt,
+      payload.files,
+      payload.workspaceId,
+      props.workspaceLocked ? props.workspaceName : undefined,
+    )
+    await router.push(`/conversations/${task.id}`)
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '创建对话失败')
+  }
 }
 
 defineExpose({ useWorkspaceFile })
@@ -258,7 +263,7 @@ defineExpose({ useWorkspaceFile })
         />
 
         <footer class="workbench-trust">
-          <span><i></i> 原型接口已连接</span>
+          <span><i></i> PostgreSQL 与 DSH Runtime 已连接</span>
           <span>支持 PDF、DOCX、XLSX、CSV，单文件不超过 20 MB</span>
           <span>⌘ + 回车键发送</span>
         </footer>

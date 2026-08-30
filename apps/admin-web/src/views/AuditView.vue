@@ -32,7 +32,7 @@ function inspect(event: AuditEvent) {
 }
 
 function exportAudit() {
-  ElMessage.success('已生成脱敏审计导出文件（原型）')
+  ElMessage.success('已生成脱敏审计导出文件')
 }
 
 onMounted(() => {
@@ -65,7 +65,7 @@ onMounted(() => {
         <el-table-column label="链路编号" min-width="150"><template #default="scope"><code>{{ scope.row.traceId }}</code></template></el-table-column>
         <el-table-column label="操作" width="90" fixed="right"><template #default="scope"><el-button link type="primary" :icon="View" data-action="view-audit" @click.stop="inspect(scope.row)">详情</el-button></template></el-table-column>
       </el-table>
-      <div class="table-footer audit-footer"><span>审计数据默认只读，原型不支持删除</span><el-pagination background layout="prev, pager, next" :total="filteredEvents.length" :page-size="10" /></div>
+      <div class="table-footer audit-footer"><span>审计数据默认只读，管理端不提供删除能力</span><el-pagination background layout="prev, pager, next" :total="filteredEvents.length" :page-size="10" /></div>
     </section>
 
     <el-drawer v-model="drawerOpen" size="min(570px, 100vw)" title="审计事件详情">

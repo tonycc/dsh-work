@@ -42,6 +42,7 @@ export interface StoredRunEvent {
   safeMetadata: JsonObject
   traceId: string
   occurredAt: string
+  streamPosition?: number
 }
 
 export interface CreateRunInput {
@@ -52,6 +53,7 @@ export interface CreateRunInput {
 }
 
 export interface CreateAttemptInput {
+  attemptId?: string
   tenantId: string
   runId: string
   runtimeId?: string

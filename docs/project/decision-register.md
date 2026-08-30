@@ -42,7 +42,7 @@
 | D-11 | 代码托管与 CI Provider | GitHub；仓库内使用 `.github/workflows/ci.yml` 执行 `pnpm ci:check` | 已确认 | 项目 Owner | 2026-08-29 |
 | D-12 | PostgreSQL 访问与迁移工具 | 使用 `postgres.js` 轻量驱动、显式 SQL Repository 和顺序 SQL 迁移；不引入领域 Active Record | 已确认 | 项目 Owner | 2026-08-30 |
 | D-13 | 自动化测试框架 | 前端建议 Vitest，E2E 建议 Playwright；服务端选择 Node Test 或 Vitest 后统一 | 待确定 | 项目 Owner | M1 自动化测试前 |
-| D-14 | SSE 续传策略 | 建议使用稳定 event_id 和 `Last-Event-ID`，终态可从 PostgreSQL 重放 | 待确定 | 项目 Owner | M3 开始前 |
+| D-14 | SSE 续传策略 | 使用稳定 `event_id` 和 `Last-Event-ID`；PostgreSQL `stream_position` 负责全 Run 排序，终态和重试事件均可重放 | 已确认 | 项目 Owner | 2026-08-30 |
 | D-15 | Provider 与模型密钥治理 | dsh-work 管理 Provider、模型路由、密钥引用和状态；密钥正文由 `SecretStorePort` 后端保管。MVP 当前继续使用 DSH Credentials Provider，数据库/API/日志不保存或回显密钥；未来可迁移系统钥匙串、企业 Secret Manager 或 Model Gateway | 已确认 | 项目 Owner | 2026-08-30 |
 
 ## 4. D-01 实施注意事项

@@ -12,6 +12,10 @@ export const useContentStore = defineStore('workbench-content', () => {
 
   async function load() {
     if (initialized.value) return
+    await refresh()
+  }
+
+  async function refresh() {
     loading.value = true
     try {
       const [workspaceData, artifactData] = await Promise.all([
@@ -26,27 +30,31 @@ export const useContentStore = defineStore('workbench-content', () => {
     }
   }
 
-  function createTeamWorkspace(input: {
+  async function createTeamWorkspace(input: {
     name: string
     description: string
     owningTeam: string
     creator: string
   }) {
-    const workspace: Workspace = {
-      id: `ws-${Date.now()}`,
+    void input.owningTeam
+    void input.creator
+    const workspace = await workbenchApi.createWorkspace({
       name: input.name,
       description: input.description || '团队共享的对话、文件与成果协作空间。',
-      type: 'team',
-      memberCount: 1,
-      sessionCount: 0,
-      artifactCount: 0,
-      updatedAt: '刚刚',
-      owner: input.owningTeam,
-      members: [input.creator],
-      files: [],
-    }
+    })
     workspaces.value.unshift(workspace)
     return workspace
+  }
+
+  async function uploadWorkspaceFile(workspaceId: string, file: File) {
+    const uploaded = await workbenchApi.uploadWorkspaceFile(workspaceId, file)
+    const workspace = workspaces.value.find((item) => item.id === workspaceId)
+    if (workspace) workspace.files.unshift(uploaded)
+    return uploaded
+  }
+
+  async function refreshArtifacts() {
+    artifacts.value = await workbenchApi.getArtifacts()
   }
 
   return {
@@ -55,6 +63,9 @@ export const useContentStore = defineStore('workbench-content', () => {
     loading,
     initialized,
     load,
+    refresh,
     createTeamWorkspace,
+    uploadWorkspaceFile,
+    refreshArtifacts,
   }
 })

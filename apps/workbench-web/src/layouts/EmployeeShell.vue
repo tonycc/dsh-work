@@ -128,7 +128,7 @@ onMounted(() => {
         <div class="environment-status">
           <span class="environment-status__dot"></span>
           <span>最小可行产品演示环境</span>
-          <span>原型接口</span>
+          <span>真实运行链路</span>
         </div>
         <el-dropdown trigger="click" placement="top-start" @command="onRoleCommand">
           <button class="profile-button" type="button" aria-label="打开用户中心">

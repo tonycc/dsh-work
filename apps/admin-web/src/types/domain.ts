@@ -376,9 +376,9 @@ export interface ModelRoute {
 
 export interface PlatformStatus {
   architecture: 'node-modular-monolith'
-  persistence: 'prototype-memory' | 'postgres-foundation'
+  persistence: 'prototype-memory' | 'postgres-foundation' | 'postgres'
   sso: 'mock'
-  dshRuntime: 'not-connected' | 'poc-validated'
-  database: 'not-configured' | Record<string, unknown>
-  artifactStorage: 'not-configured'
+  dshRuntime: 'not-connected' | 'poc-validated' | 'connected'
+  database: 'not-configured' | 'configured' | Record<string, unknown>
+  artifactStorage: 'not-configured' | 'local-mvp'
 }

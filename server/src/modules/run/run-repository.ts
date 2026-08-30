@@ -11,7 +11,9 @@ import type {
 export interface RunRepository {
   createRun(input: CreateRunInput): Promise<RunRecord>
   getRun(tenantId: string, runId: string): Promise<RunRecord | null>
+  getAttempt(tenantId: string, attemptId: string): Promise<RunAttemptRecord | null>
   createAttempt(input: CreateAttemptInput): Promise<RunAttemptRecord>
+  claimAttempt(tenantId: string, attemptId: string, runtimeId: string): Promise<boolean>
   transitionRun(tenantId: string, runId: string, to: RunState): Promise<RunRecord>
   transitionAttempt(
     tenantId: string,
@@ -21,4 +23,5 @@ export interface RunRepository {
   ): Promise<RunAttemptRecord>
   appendEvent(event: StoredRunEvent): Promise<StoredRunEvent>
   readEvents(tenantId: string, runId: string, afterSequence?: number): Promise<StoredRunEvent[]>
+  readEventsAfterEvent(tenantId: string, runId: string, afterEventId?: string): Promise<StoredRunEvent[]>
 }

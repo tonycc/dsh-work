@@ -1,7 +1,7 @@
 import type { AttemptState, RunState } from './run-types.ts'
 
 const transitions: Readonly<Record<RunState, readonly RunState[]>> = {
-  queued: ['running', 'cancelled'],
+  queued: ['running', 'cancel_requested', 'failed', 'cancelled'],
   running: ['cancel_requested', 'succeeded', 'failed', 'cancelled'],
   cancel_requested: ['cancelled', 'failed'],
   succeeded: [],

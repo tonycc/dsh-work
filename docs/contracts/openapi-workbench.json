@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "dsh-work 员工工作台 API",
-    "version": "0.1.0-m0",
-    "description": "MVP 契约基线。员工工作台与管理后台 API 独立，均不直接调用 Runtime。"
+    "version": "0.3.0-m3",
+    "description": "M3 契约基线。员工工作台通过独立 API 使用 PostgreSQL 编排、DSH Runtime、SSE、工作空间文件和 Artifact。"
   },
   "servers": [{ "url": "/api/workbench/v1" }],
   "security": [{ "enterpriseSession": [] }],

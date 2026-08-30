@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "dsh-work 管理平台 API",
-    "version": "0.2.0-m2",
-    "description": "MVP 管理面契约基线。所有写操作需要角色权限并写入审计事件。"
+    "version": "0.3.0-m3",
+    "description": "M3 管理面契约基线。Runtime、Session、工作空间、模型用量、审计和健康使用真实 PostgreSQL 投影。"
   },
   "servers": [{ "url": "/api/admin/v1" }],
   "security": [{ "adminSession": [] }],

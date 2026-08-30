@@ -4,6 +4,7 @@ dist/
 apps/*/dist/
 *.tsbuildinfo
 *.log
+.runtime/
 .env
 .env.*
 !.env.example

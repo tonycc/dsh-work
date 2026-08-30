@@ -6,6 +6,7 @@ import { Download, Files, Search } from '@element-plus/icons-vue'
 import { ArtifactCard } from '@dsh-work/ui-core'
 import { useContentStore } from '@/stores/content'
 import type { Artifact } from '@/types/domain'
+import { workbenchApi } from '@/api/client'
 
 const contentStore = useContentStore()
 const query = ref('')
@@ -28,17 +29,14 @@ function preview(item: Artifact) {
 }
 
 function download(item: Artifact) {
-  const blob = new Blob([`dsh-work 原型成果\n\n${item.name}\n${item.summary}`], { type: 'text/plain;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = `${item.name}-原型.txt`
+  anchor.href = workbenchApi.artifactDownloadUrl(item.id, item.version)
+  anchor.download = item.name
   anchor.click()
-  URL.revokeObjectURL(url)
-  ElMessage.success('已下载原型示例文件')
+  ElMessage.success('已开始下载真实成果文件')
 }
 
-onMounted(() => contentStore.load())
+onMounted(() => contentStore.refresh())
 </script>
 
 <template>
@@ -53,8 +51,8 @@ onMounted(() => contentStore.load())
     <section class="artifact-overview panel">
       <div class="artifact-overview__icon"><el-icon><Files /></el-icon></div>
       <div><strong>{{ contentStore.artifacts.length }}</strong><span>成果文件</span></div>
-      <div><strong>4</strong><span>本周新增</span></div>
-      <div><strong>3.1 MB</strong><span>本周生成</span></div>
+      <div><strong>{{ contentStore.artifacts.length }}</strong><span>当前已发布</span></div>
+      <div><strong>实时</strong><span>PostgreSQL 索引</span></div>
       <p>成果继承工作空间权限，下载行为会进入审计记录。</p>
     </section>
 
@@ -100,11 +98,11 @@ onMounted(() => contentStore.load())
           </dl>
           <div class="artifact-preview__lines"><i v-for="n in 7" :key="n"></i></div>
         </div>
-        <p class="artifact-preview__note">原型仅展示文件元数据和预览占位，未包含真实企业数据。</p>
+        <p class="artifact-preview__note">预览展示成果元数据；下载文件保留来源 Run 和不可覆盖版本。</p>
       </div>
       <template #footer>
         <el-button @click="previewOpen = false">关闭</el-button>
-        <el-button v-if="previewArtifact" type="primary" :icon="Download" @click="download(previewArtifact)">下载示例</el-button>
+        <el-button v-if="previewArtifact" type="primary" :icon="Download" @click="download(previewArtifact)">下载成果</el-button>
       </template>
     </el-dialog>
   </div>

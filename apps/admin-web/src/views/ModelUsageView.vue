@@ -66,7 +66,7 @@ onMounted(() => contentStore.load())
     <section class="metric-grid">
       <article class="metric-card"><div class="metric-label">模型调用</div><div class="metric-value">{{ filteredRecords.length }}</div><div class="metric-detail">当前筛选范围内的调用记录</div></article>
       <article class="metric-card"><div class="metric-label">Token 用量</div><div class="metric-value">{{ formatTokens(totalTokens) }}</div><div class="metric-detail">输入与输出 Token 合计</div></article>
-      <article class="metric-card"><div class="metric-label">估算成本</div><div class="metric-value">¥{{ totalCost.toFixed(2) }}</div><div class="metric-detail">仅用于原型口径确认</div></article>
+      <article class="metric-card"><div class="metric-label">估算成本</div><div class="metric-value">¥{{ totalCost.toFixed(2) }}</div><div class="metric-detail">MVP 暂按估算口径记录</div></article>
       <article class="metric-card"><div class="metric-label">平均模型延迟</div><div class="metric-value">{{ formatLatency(averageLatency) }}</div><div class="metric-detail">只统计成功调用</div></article>
     </section>
 
@@ -124,7 +124,7 @@ onMounted(() => contentStore.load())
           <div><dt>估算成本</dt><dd>¥{{ selectedRecord.costCny.toFixed(2) }}</dd></div>
           <div><dt>链路编号</dt><dd class="mono">{{ selectedRecord.traceId }}</dd></div>
         </dl>
-        <el-alert type="info" :closable="false" show-icon title="成本为原型估算值；生产版本由模型网关按实际账单口径记录。" />
+        <el-alert type="info" :closable="false" show-icon title="Token 与成本为 MVP 估算值；生产版本由模型网关按实际账单口径记录。" />
         <div class="model-detail__footer"><el-button type="primary" @click="openAudit">查看关联审计</el-button></div>
       </template>
     </el-drawer>

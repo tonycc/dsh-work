@@ -22,6 +22,7 @@ import { RunTimeline, StatusTag } from '@dsh-work/ui-core'
 import { useTaskStore } from '@/stores/tasks'
 import type { Artifact, TaskSource } from '@/types/domain'
 import { TaskComposer } from '@dsh-work/workbench-components'
+import { workbenchApi } from '@/api/client'
 
 const route = useRoute()
 const router = useRouter()
@@ -81,17 +82,21 @@ async function stopCurrentRun() {
         type: 'warning',
       },
     )
-    taskStore.cancelTask(task.value.id)
+    await taskStore.cancelTask(task.value.id)
     ElMessage.success('本轮执行已停止，对话记录已保留')
   } catch {
     // User cancelled the confirmation.
   }
 }
 
-function retryRun() {
+async function retryRun() {
   if (!task.value) return
-  taskStore.retryTask(task.value.id)
-  ElMessage.success('已创建新的运行尝试')
+  try {
+    await taskStore.retryTask(task.value.id)
+    ElMessage.success('已创建新的运行尝试')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '重新执行失败')
+  }
 }
 
 function approveRun() {
@@ -100,9 +105,9 @@ function approveRun() {
   ElMessage.success('已确认数据范围，正在继续回答')
 }
 
-function rejectRun() {
+async function rejectRun() {
   if (!task.value) return
-  taskStore.cancelTask(task.value.id)
+  await taskStore.cancelTask(task.value.id)
   ElMessage.info('已拒绝本轮数据查询，你仍可继续提问')
 }
 
@@ -160,22 +165,22 @@ function preview(item: Artifact) {
 }
 
 function download(item: Artifact) {
-  const blob = new Blob([`dsh-work 原型成果\n\n${item.name}\n${item.summary}`], {
-    type: 'text/plain;charset=utf-8',
-  })
-  const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = `${item.name}-原型.txt`
+  anchor.href = workbenchApi.artifactDownloadUrl(item.id, item.version)
+  anchor.download = item.name
   anchor.click()
-  URL.revokeObjectURL(url)
-  ElMessage.success('已下载原型示例文件')
+  ElMessage.success('已开始下载真实成果文件')
 }
 
-function submitFollowUp(payload: { prompt: string; files: string[]; workspaceId: string }) {
+async function submitFollowUp(payload: { prompt: string; files: string[]; workspaceId: string }) {
   if (!task.value) return
-  taskStore.sendMessage(task.value.id, payload.prompt, payload.files)
-  void nextTick(() => scrollToBottom())
+  try {
+    const nextTask = await taskStore.sendMessage(task.value.id, payload.prompt, payload.files)
+    if (nextTask) await router.replace(`/conversations/${nextTask.id}`)
+    await nextTick(() => scrollToBottom())
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '发送消息失败')
+  }
 }
 
 async function initializeConversation() {

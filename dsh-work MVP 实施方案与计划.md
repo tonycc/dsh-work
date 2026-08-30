@@ -227,6 +227,8 @@ M2 工程 Gate 于 2026-08-30 完成：物理 DDL、迁移器、PostgreSQL Repos
 
 M3 的唯一验收主场景：使用一个真实企业测试账号，从浏览器提交任务，DSH 调用真实模型和一个真实只读 Tool，生成一个可下载 Artifact，并能在管理后台追踪完整链路。
 
+M3 工程 Gate 于 2026-08-30 完成：员工端已切换真实 Session/Run/Attempt API、PostgreSQL 原子调度、DSH ACP Runtime、可续传 SSE、取消/重试/刷新恢复、团队工作空间、文件安全接口、Artifact 版本与下载、DSH 权威 Token 投影和管理运行视图。受 D-03 与首个企业 Tool 外部接口约束，当前工程验收使用受控种子员工账号；真实只读 Tool 已在 M1 DSH POC 验证，M3 已完成 Tool 审计投影与集成测试。企业 SSO 账号和首个企业 Tool 的联合试点仍作为 M4/M5 试点准入条件，不用 Mock 冒充。
+
 ## 5.5 M4：MVP 功能完成
 
 | ID | 工作项 | 主要交付和完成定义 | 依赖 | 主责 | 估算 |

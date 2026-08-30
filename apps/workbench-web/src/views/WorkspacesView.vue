@@ -17,6 +17,7 @@ const createDialogOpen = ref(false)
 const newWorkspaceName = ref('')
 const newWorkspaceDescription = ref('')
 const newWorkspaceTeam = ref('供应链中心')
+const creating = ref(false)
 
 const filteredWorkspaces = computed(() => {
   const keyword = query.value.trim().toLowerCase()
@@ -33,23 +34,30 @@ function openWorkspace(workspace: Workspace) {
   void router.push(`/workspaces/${workspace.id}`)
 }
 
-function createWorkspace() {
+async function createWorkspace() {
   if (!canCreate.value) return
-  const workspace = contentStore.createTeamWorkspace({
-    name: newWorkspaceName.value.trim(),
-    description: newWorkspaceDescription.value.trim(),
-    owningTeam: newWorkspaceTeam.value,
-    creator: authStore.user.name,
-  })
-  ElMessage.success(`已创建团队工作空间“${newWorkspaceName.value.trim()}”`)
-  newWorkspaceName.value = ''
-  newWorkspaceDescription.value = ''
-  newWorkspaceTeam.value = '供应链中心'
-  createDialogOpen.value = false
-  void router.push(`/workspaces/${workspace.id}`)
+  creating.value = true
+  try {
+    const workspace = await contentStore.createTeamWorkspace({
+      name: newWorkspaceName.value.trim(),
+      description: newWorkspaceDescription.value.trim(),
+      owningTeam: newWorkspaceTeam.value,
+      creator: authStore.user.name,
+    })
+    ElMessage.success(`已创建团队工作空间“${newWorkspaceName.value.trim()}”`)
+    newWorkspaceName.value = ''
+    newWorkspaceDescription.value = ''
+    newWorkspaceTeam.value = '供应链中心'
+    createDialogOpen.value = false
+    await router.push(`/workspaces/${workspace.id}`)
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '创建工作空间失败')
+  } finally {
+    creating.value = false
+  }
 }
 
-onMounted(() => contentStore.load())
+onMounted(() => contentStore.refresh())
 </script>
 
 <template>
@@ -132,7 +140,7 @@ onMounted(() => contentStore.load())
       </el-form>
       <template #footer>
         <el-button @click="createDialogOpen = false">取消</el-button>
-        <el-button type="primary" :disabled="!canCreate" @click="createWorkspace">创建工作空间</el-button>
+        <el-button type="primary" :disabled="!canCreate" :loading="creating" @click="createWorkspace">创建工作空间</el-button>
       </template>
     </el-dialog>
   </div>

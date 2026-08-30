@@ -14,6 +14,7 @@
     "test:m1": "pnpm --filter @dsh-work/server test:runtime",
     "test:m2": "pnpm --filter @dsh-work/server test:m2",
     "test:m2:integration": "pnpm --filter @dsh-work/server test:m2:integration",
+    "test:m3:integration": "pnpm --filter @dsh-work/server test:m3:integration",
     "probe:m1": "node --experimental-strip-types scripts/probe-dsh-acp.ts",
     "probe:m1:real": "node --experimental-strip-types scripts/probe-dsh-acp-real.ts",
     "probe:m1:tool": "node --experimental-strip-types scripts/probe-dsh-acp-real.ts --tool",
@@ -23,7 +24,8 @@
     "verify:m0": "node scripts/verify-m0.mjs",
     "verify:m1": "node scripts/verify-m1.mjs",
     "verify:m2": "node scripts/verify-m2.mjs",
-    "ci:check": "pnpm verify:m0 && pnpm verify:m1 && pnpm verify:m2 && pnpm typecheck && pnpm test:m1 && pnpm test:m2 && pnpm lint && pnpm build",
+    "verify:m3": "node scripts/verify-m3.mjs",
+    "ci:check": "pnpm verify:m0 && pnpm verify:m1 && pnpm verify:m2 && pnpm verify:m3 && pnpm typecheck && pnpm test:m1 && pnpm test:m2 && pnpm lint && pnpm build",
     "check:architecture": "node scripts/check-architecture.mjs",
     "validate:ui": "pnpm --filter @dsh-work/admin-web --filter @dsh-work/workbench-web validate:ui",
     "lint": "pnpm check:architecture && pnpm validate:ui && eslint apps packages server scripts --max-warnings=0"

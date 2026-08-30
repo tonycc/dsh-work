@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { access, mkdir, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import {
   AcpJsonRpcClient,
@@ -62,7 +62,9 @@ export class DshAcpRuntimeAdapter implements AgentRuntimePort {
   async execute(manifest: RuntimeManifest): Promise<RuntimeExecutionHandle> {
     if (this.closed) throw new Error('Runtime Adapter is closed')
     if (!this.acceptingRuns) throw new Error('Runtime Adapter is not accepting runs')
-    if (this.executions.has(manifest.run_id)) throw new Error(`Run already exists: ${manifest.run_id}`)
+    const previous = this.executions.get(manifest.run_id)
+    if (previous !== undefined && !previous.terminal) throw new Error(`Run already exists: ${manifest.run_id}`)
+    if (previous?.terminal) this.executions.delete(manifest.run_id)
 
     const compiled = compileRuntimeManifest(manifest)
     const attemptDirectory = resolve(
@@ -193,6 +195,7 @@ export class DshAcpRuntimeAdapter implements AgentRuntimePort {
           shutdownGraceMs: this.configuration.shutdownGraceMs ?? this.configuration.process.shutdownGraceMs,
           env: {
             DSH_PERMISSION_MODE: 'workspace-write',
+            DSH_SNAPSHOT: 'record',
             DSH_SNAPSHOT_SESSIONS_ROOT: join(record.snapshot.attemptDirectory, 'sessions'),
             ...this.configuration.process.env,
           },
@@ -235,7 +238,15 @@ export class DshAcpRuntimeAdapter implements AgentRuntimePort {
         this.emit(record, 'assistant.completed', record.assistantText, { committed: true })
       }
       this.setStatus(record, 'completed')
-      this.emit(record, 'run.completed', '任务执行完成', { stop_reason: stopReason ?? 'unknown' })
+      const evidence = await waitForSessionEvidence(join(record.snapshot.attemptDirectory, 'sessions'))
+      this.emit(record, 'run.completed', '任务执行完成', {
+        stop_reason: stopReason ?? 'unknown',
+        input_tokens: evidence?.inputTokens ?? null,
+        output_tokens: evidence?.outputTokens ?? null,
+        tool_call_count: evidence?.toolCallCount ?? 0,
+        tool_result_count: evidence?.toolResultCount ?? 0,
+        usage_source: evidence ? 'dsh-session-log' : 'unavailable',
+      })
       this.finish(record)
     } catch (error) {
       if (record.cancelCause === 'timeout') this.finishFailed(record, 'RUN_TIMEOUT', 'Runtime execution timed out')
@@ -268,6 +279,12 @@ export class DshAcpRuntimeAdapter implements AgentRuntimePort {
   ): Promise<{ outcome: Record<string, unknown> }> {
     this.emit(record, 'approval.required', 'DSH 请求一次性工具权限', {
       option_kinds: request.options?.map(option => option.kind).filter(Boolean) ?? [],
+      tool_name: typeof request.toolCall?.['title'] === 'string'
+        ? request.toolCall['title']
+        : typeof request.toolCall?.['name'] === 'string' ? request.toolCall['name'] : 'dsh-runtime-tool',
+      tool_call_id: typeof request.toolCall?.['toolCallId'] === 'string'
+        ? request.toolCall['toolCallId']
+        : null,
     })
     const decision = record.manifest.permission_policy.approval_mode === 'never'
       ? 'reject_once'
@@ -386,6 +403,59 @@ function truncateUtf8(value: string, maxBytes: number): string {
 function safeErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
   return message.replaceAll(/(sk-[A-Za-z0-9_-]{8,})/g, '[REDACTED]').slice(0, 1000)
+}
+
+interface SessionEvidence {
+  inputTokens: number
+  outputTokens: number
+  toolCallCount: number
+  toolResultCount: number
+}
+
+async function waitForSessionEvidence(root: string): Promise<SessionEvidence | undefined> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const evidence = await readSessionEvidence(root)
+    if (evidence) return evidence
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  return undefined
+}
+
+async function readSessionEvidence(root: string): Promise<SessionEvidence | undefined> {
+  const paths = await findSessionLogs(root)
+  let inputTokens = 0
+  let outputTokens = 0
+  let usageFound = false
+  let toolCallCount = 0
+  let toolResultCount = 0
+  for (const path of paths) {
+    const content = await readFile(path, 'utf8')
+    for (const line of content.split('\n')) {
+      if (!line) continue
+      const event = JSON.parse(line) as unknown
+      if (!isRecord(event) || typeof event['type'] !== 'string') continue
+      if (event['type'] === 'tool/call') toolCallCount += 1
+      if (event['type'] === 'tool/result') toolResultCount += 1
+      if (event['type'] !== 'assistant/message' || !isRecord(event['data'])) continue
+      const usage = event['data']['usage']
+      if (!isRecord(usage) || typeof usage['inputTokens'] !== 'number' || typeof usage['outputTokens'] !== 'number') continue
+      usageFound = true
+      inputTokens += usage['inputTokens']
+      outputTokens += usage['outputTokens']
+    }
+  }
+  return usageFound ? { inputTokens, outputTokens, toolCallCount, toolResultCount } : undefined
+}
+
+async function findSessionLogs(directory: string): Promise<string[]> {
+  const entries = await readdir(directory, { withFileTypes: true }).catch(() => [])
+  const paths: string[] = []
+  for (const entry of entries) {
+    const path = join(directory, entry.name)
+    if (entry.isDirectory()) paths.push(...await findSessionLogs(path))
+    else if (entry.isFile() && entry.name === 'session.jsonl') paths.push(path)
+  }
+  return paths
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

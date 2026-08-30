@@ -10,6 +10,7 @@
     "db:migrate": "node --experimental-strip-types src/infrastructure/postgres/migrate.ts",
     "test:m2": "node --experimental-strip-types --test src/modules/run/run-state-machine.test.ts src/modules/model/model-governance-service.test.ts",
     "test:m2:integration": "node --experimental-strip-types --test src/infrastructure/postgres/postgres-repositories.integration.test.ts",
+    "test:m3:integration": "node --experimental-strip-types --test src/infrastructure/postgres/m3-orchestration.integration.test.ts",
     "test:runtime": "node --experimental-strip-types --test src/modules/runtime/runtime-adapter.test.ts",
     "start": "node dist/main.js"
   },

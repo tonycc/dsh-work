@@ -64,7 +64,7 @@ onMounted(() => contentStore.load())
     <el-alert type="info" :closable="false" show-icon title="本页用于运行治理，只展示 Session、用户、工作空间、Agent、Token 和链路等元数据；消息正文需要专项审计授权。" />
 
     <section v-loading="contentStore.loading" class="metric-grid">
-      <article class="metric-card"><div class="metric-label">Session 总数</div><div class="metric-value">{{ contentStore.sessions.length }}</div><div class="metric-detail">当前原型记录</div></article>
+      <article class="metric-card"><div class="metric-label">Session 总数</div><div class="metric-value">{{ contentStore.sessions.length }}</div><div class="metric-detail">PostgreSQL 实时记录</div></article>
       <article class="metric-card"><div class="metric-label">活动 Session</div><div class="metric-value">{{ activeCount }}</div><div class="metric-detail">执行中或排队中</div></article>
       <article class="metric-card"><div class="metric-label">等待确认</div><div class="metric-value">{{ approvalCount }}</div><div class="metric-detail">等待员工授权后继续</div></article>
       <article class="metric-card"><div class="metric-label">失败 Session</div><div class="metric-value">{{ failedCount }}</div><div class="metric-detail">需要检查运行或依赖</div></article>

@@ -18,6 +18,7 @@ import { useContentStore } from '@/stores/content'
 import type { Artifact, WorkspaceFile } from '@/types/domain'
 import ConversationStarter from '@/components/ConversationStarter.vue'
 import { WorkspaceInfoPanel } from '@dsh-work/workbench-components'
+import { workbenchApi } from '@/api/client'
 
 type WorkspaceTab = 'conversation' | 'files' | 'artifacts'
 
@@ -31,6 +32,8 @@ const panelCollapsed = ref(false)
 const mobileInfoOpen = ref(false)
 const previewArtifact = ref<Artifact>()
 const previewOpen = ref(false)
+const uploadInput = ref<HTMLInputElement>()
+const uploading = ref(false)
 
 const requestedTab = String(route.query.tab ?? 'conversation')
 const activeTab = ref<WorkspaceTab>(
@@ -101,7 +104,23 @@ function useWorkspaceFile(file: WorkspaceFile) {
 }
 
 function uploadFile() {
-  ElMessage.info('原型阶段暂不保存文件；可在“对话”页签中从输入框上传本地文件')
+  uploadInput.value?.click()
+}
+
+async function onUploadSelected(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file || !workspace.value) return
+  uploading.value = true
+  try {
+    await contentStore.uploadWorkspaceFile(workspace.value.id, file)
+    ElMessage.success(`已上传“${file.name}”并完成安全检查`)
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '上传文件失败')
+  } finally {
+    uploading.value = false
+    input.value = ''
+  }
 }
 
 function preview(item: Artifact) {
@@ -110,16 +129,11 @@ function preview(item: Artifact) {
 }
 
 function download(item: Artifact) {
-  const blob = new Blob([`dsh-work 原型成果\n\n${item.name}\n${item.summary}`], {
-    type: 'text/plain;charset=utf-8',
-  })
-  const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = `${item.name}-原型.txt`
+  anchor.href = workbenchApi.artifactDownloadUrl(item.id, item.version)
+  anchor.download = item.name
   anchor.click()
-  URL.revokeObjectURL(url)
-  ElMessage.success('已下载原型示例文件')
+  ElMessage.success('已开始下载真实成果文件')
 }
 
 watch(
@@ -133,7 +147,7 @@ watch(
 )
 
 onMounted(() => {
-  void contentStore.load()
+  void contentStore.refresh()
 })
 </script>
 
@@ -235,7 +249,8 @@ onMounted(() => {
               <h1>共享文件</h1>
               <p>查看团队在当前工作空间共享的资料，并将指定文件直接引用到新对话。</p>
             </div>
-            <el-button type="primary" :icon="Plus" @click="uploadFile">上传文件</el-button>
+            <el-button type="primary" :icon="Plus" :loading="uploading" @click="uploadFile">上传文件</el-button>
+            <input ref="uploadInput" class="visually-hidden" type="file" accept=".pdf,.docx,.xlsx,.csv,.txt,.md" @change="onUploadSelected" />
           </header>
 
           <div v-if="workspace.files.length" class="workspace-file-list panel">
@@ -325,7 +340,7 @@ onMounted(() => {
           </dl>
           <div class="artifact-preview__lines"><i v-for="n in 7" :key="n"></i></div>
         </div>
-        <p class="artifact-preview__note">原型仅展示文件元数据和预览占位，未包含真实企业数据。</p>
+        <p class="artifact-preview__note">预览展示成果元数据；下载文件保留来源 Run 和不可覆盖版本。</p>
       </div>
       <template #footer>
         <el-button @click="previewOpen = false">关闭</el-button>
@@ -335,7 +350,7 @@ onMounted(() => {
           :icon="Download"
           @click="download(previewArtifact)"
         >
-          下载示例
+          下载成果
         </el-button>
       </template>
     </el-dialog>
@@ -343,6 +358,15 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 .workspace-context-state {
   min-height: 100vh;
   padding: 80px 10%;
