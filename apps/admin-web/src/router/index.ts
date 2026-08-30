@@ -16,6 +16,7 @@ const router = createRouter({
     { path: '/admin/sessions', redirect: '/sessions' },
     { path: '/admin/workspaces', redirect: '/workspaces' },
     { path: '/admin/model-usage', redirect: '/model-usage' },
+    { path: '/admin/model-governance', redirect: '/model-governance' },
     { path: '/admin/members', redirect: '/members' },
     { path: '/admin/permissions', redirect: '/permissions' },
     { path: '/admin/audit', redirect: '/audit' },
@@ -37,6 +38,12 @@ const router = createRouter({
       name: 'capabilities',
       component: () => import('@/views/CapabilityManagementView.vue'),
       meta: { title: 'Skill 与工具', requiresAdmin: true },
+    },
+    {
+      path: '/model-governance',
+      name: 'model-governance',
+      component: () => import('@/views/ModelGovernanceView.vue'),
+      meta: { title: '模型治理', requiresAdmin: true },
     },
     {
       path: '/model-usage',

@@ -57,6 +57,7 @@ const navigationGroups = [
     label: '运行治理',
     items: [
       { label: 'Session 列表', path: '/sessions', icon: ChatDotRound },
+      { label: '模型治理', path: '/model-governance', icon: Key },
       { label: '模型用量', path: '/model-usage', icon: PieChart },
     ],
   },

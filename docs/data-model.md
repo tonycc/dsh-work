@@ -2,7 +2,7 @@
 
 版本：V0.1
 数据库：PostgreSQL
-状态：逻辑模型已冻结，物理 DDL 在 M2 输出
+状态：逻辑模型与 M2 物理 DDL 已冻结；迁移位于 `server/migrations`
 
 ## 1. 建模原则
 
@@ -77,6 +77,17 @@ erDiagram
 | `tool_versions` | `id`, `tool_id`, `version`, `input_schema`, `output_schema`, `risk_level` | 工具契约版本化 |
 | `connectors` | `id`, `tenant_id`, `key`, `name`, `connector_type`, `credential_ref`, `status` | 一期只使用预置连接器；只存凭据引用 |
 
+### 3.3.1 Provider、模型路由与密钥引用
+
+| 表 | 关键字段 | 约束与说明 |
+|---|---|---|
+| `credential_refs` | `id`, `tenant_id`, `backend`, `external_ref`, `status`, `last_verified_at` | 只保存外部密钥引用和状态，不保存密钥正文 |
+| `model_providers` | `id`, `tenant_id`, `key`, `provider_type`, `base_url`, `credential_ref_id`, `status` | Provider 属于平台治理，不进入 Agent 配置 |
+| `provider_models` | `id`, `tenant_id`, `provider_id`, `model_key`, `capabilities`, `status` | 模型在 Provider 内唯一 |
+| `model_routes` | `id`, `tenant_id`, `key`, `purpose`, `provider_model_id`, `priority`, `enabled` | 每租户只允许一个启用的默认路由；运行前解析 |
+
+MVP 当前种子路由为 `deepseek-official / deepseek-v4-pro`，凭据引用为 DSH 受管的 `DEEPSEEK_API_KEY`。dsh-work 不读取或复制该密钥。M3 创建 Attempt 时把解析结果（Provider、模型、Base URL 和凭据引用，不含密钥）写入 `run_attempts.model_route_snapshot`，从而保证运行可追溯且不受后续路由修改影响。
+
 ### 3.4 对话、运行与事件
 
 | 表 | 关键字段 | 约束与说明 |
@@ -97,7 +108,7 @@ queued → running → completed
 queued ───────────────────────────→ cancelled
 ```
 
-完成、失败、取消为终态。终态不可回退；重试不复活原 Attempt。
+完成、失败、取消对当前 Attempt 都是终态，终态 Attempt 不可回退。Run 的普通状态转换同样不得从终态回退；唯一例外是显式“失败重试”命令在同一事务中创建新 Attempt 并把 Run 重新排队，原失败 Attempt 保持不可变。已成功或已取消的 Run 不接受重试。
 
 ### 3.5 Runtime、文件、成果、用量与审计
 
@@ -148,3 +159,5 @@ queued ────────────────────────�
 ## 7. M2 物理模型出口条件
 
 M2 创建迁移脚本前，必须完成 D-03（SSO）、D-06（数据分级）、D-07（保留周期）和 D-08（超级管理员入口）的企业确认；未确认项使用配置占位，不得形成不可逆硬编码。
+
+M2 已按上述规则使用可替换引用和配置字段承接未决项：身份只保存 `external_subject`，文件只保存 `storage_key`，保留周期进入 `system_settings`，超级管理员不在业务用户表保存密码。未决企业参数不阻塞物理结构与 Repository 工程验证，但在接入真实企业数据前仍须关闭对应决策。

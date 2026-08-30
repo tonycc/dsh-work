@@ -11,6 +11,7 @@
 | `AgentRuntimePort` | Run 编排服务 | DSH Runtime Adapter | 启动、取消、查询一次 Run Attempt | 明确区分拒绝、超时、取消、Runtime 故障 |
 | `RunEventStorePort` | Runtime Adapter、Run 编排服务 | PostgreSQL 事件存储 | 顺序追加、断点读取安全事件 | 同一 `event_id` 幂等；序号冲突拒绝 |
 | `ModelGatewayPort` | Runtime Adapter | 企业模型网关 | 路由、限流、Token 与费用计量 | 不向上游暴露模型密钥 |
+| `SecretStorePort` | 模型治理服务、Model Gateway | DSH Credentials Provider；未来为系统钥匙串或企业 Secret Manager | 写入、撤销和检查密钥引用对应的密钥 | 业务数据库、日志和 API 均不得出现密钥正文 |
 | `ToolGatewayPort` | Runtime Adapter | 企业 Tool/Connector Gateway | 调用一期平台预置工具和连接器 | 鉴权、审批、超时和业务错误分离 |
 | `ArtifactServicePort` | Runtime Adapter、员工 BFF | 文件与成果服务 | 创建成果版本、鉴权下载 | 成果不可覆盖，只能新增版本 |
 | `GovernancePort` | 员工 BFF、管理 BFF、编排服务 | 当前 dsh-work 控制面；未来可迁移 AI Hub | Agent、Skill、权限、数据范围快照 | 版本不存在或不可见时拒绝执行 |
@@ -45,6 +46,12 @@ interface ModelGatewayPort {
   recordUsage(usage: TokenUsage): Promise<void>
 }
 
+interface SecretStorePort {
+  put(reference: string, secret: string): Promise<void>
+  remove(reference: string): Promise<void>
+  exists(reference: string): Promise<boolean>
+}
+
 interface ToolGatewayPort {
   describe(toolId: string, version: string): Promise<ToolDescriptor>
   invoke(request: ToolInvocation, signal?: AbortSignal): Promise<ToolResult>
@@ -70,6 +77,8 @@ interface GovernancePort {
 - 调用链全程携带 `trace_id`，审计记录主体、动作、对象、结果和请求来源。
 - 超时由 Manifest 传入并受平台上限约束；取消先通过 ACP `session/cancel` 传播，宽限期后回收 Attempt 子进程。
 - 端口不得传递企业 SSO Cookie、模型密钥或连接器凭据；只传短期授权引用。
+- Provider、模型和路由由 dsh-work 治理；Agent 不保存模型策略。路由在创建 Attempt 前解析，并作为不含密钥正文的不可变快照持久化。
+- 当前 `dsh-managed` SecretStore 适配器只登记并检查引用，不读取、复制或覆盖 DSH 的现有密钥；切换密钥后端不改变模型治理业务表。
 - 对员工展示的事件必须符合 `run-event.schema.json`，隐藏推理不得持久化或返回前端。
 
 ## 4. M1 验证结果

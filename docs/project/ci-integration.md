@@ -13,9 +13,13 @@ pnpm ci:check
 `pnpm ci:check` 按顺序执行：
 
 1. `pnpm verify:m0`：检查产品、原型、契约、数据和治理基线；
-2. `pnpm typecheck`：检查两个 Vue 应用和 Node.js 服务；
-3. `pnpm lint`：检查双前端/双 API 架构边界、UI 契约和 ESLint；
-4. `pnpm build`：生成员工工作台、管理后台和服务端产物。
+2. `pnpm verify:m1` / `verify:m2`：检查 Runtime POC、迁移、Repository、模型治理和退出清单；
+3. `pnpm typecheck`：检查两个 Vue 应用和 Node.js 服务；
+4. `pnpm test:m1` / `test:m2`：执行 Runtime 与 M2 领域单元测试；
+5. `pnpm lint`：检查双前端/双 API 架构边界、UI 契约和 ESLint；
+6. `pnpm build`：生成员工工作台、管理后台和服务端产物。
+
+GitHub Actions 同一 Job 额外启动 PostgreSQL 17 Service，并执行 `pnpm test:m2:integration`。本地没有测试数据库时，`ci:check` 不隐式创建或删除数据库。
 
 任一步失败，流水线必须失败且禁止合并。
 
@@ -47,4 +51,5 @@ GitHub Actions 工作流位于 `.github/workflows/ci.yml`，必须满足：
 - 2026-08-29：本地 `pnpm ci:check` 首次完整通过；
 - 构建存在前端入口包超过 500 kB 的非阻塞警告，记录为性能优化项，不影响 M0 契约与功能基线；
 - 2026-08-29：项目 Owner 确认使用 GitHub，已加入 `.github/workflows/ci.yml`；
+- 2026-08-30：M2 增加 PostgreSQL 17 Service 和 Repository 集成测试；本地临时 PostgreSQL 实测 5/5 通过；
 - 首次托管运行必须在远程仓库创建并推送后补充 URL 或运行编号，此项不阻塞 M0 基线冻结。

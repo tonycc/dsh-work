@@ -49,6 +49,7 @@ requireFragments('../../packages/admin-components/src/AdminShell.vue', [
   '组织与权限',
   '成员管理',
   '模型用量',
+  '模型治理',
   '运行治理',
   'Runtimes',
   'Session 列表',
@@ -70,6 +71,7 @@ requireFragments('src/router/index.ts', [
   "meta: { title: 'Agent 管理'",
   "meta: { title: 'Skill 与工具'",
   "meta: { title: '模型用量'",
+  "meta: { title: '模型治理'",
   "meta: { title: 'Runtimes'",
   "meta: { title: 'Session 列表'",
   "meta: { title: '工作空间'",
@@ -133,6 +135,14 @@ forbidFragments('src/views/CapabilityManagementView.vue', [
 ])
 requireFragments('src/views/MemberManagementView.vue', ['data-action="view-member"'])
 requireFragments('src/views/ModelUsageView.vue', ['data-action="view-model-usage"'])
+requireFragments('src/views/ModelGovernanceView.vue', [
+  'ops-page',
+  'class="data-table"',
+  'v-loading',
+  'empty-text=',
+  '密钥正文未进入 dsh-work',
+  'Agent 不单独配置模型',
+])
 requireFragments('src/views/PermissionManagementView.vue', ['data-action="configure-role"', 'data-action="configure-tool-permission"'])
 requireFragments('src/views/AuditView.vue', ['data-action="view-audit"'])
 requireFragments('src/views/SystemHealthView.vue', ['data-action="refresh-health"'])

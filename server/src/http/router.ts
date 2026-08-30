@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 export interface ApiMeta {
   api: 'workbench' | 'admin' | 'system'
-  adapter: 'prototype-memory'
+  adapter: 'prototype-memory' | 'postgres'
   timestamp: string
 }
 
@@ -81,12 +81,12 @@ export async function readJsonBody<T>(request: IncomingMessage): Promise<T> {
   return JSON.parse(body) as T
 }
 
-export function envelope<T>(api: ApiMeta['api'], data: T): ApiEnvelope<T> {
+export function envelope<T>(api: ApiMeta['api'], data: T, adapter: ApiMeta['adapter'] = 'prototype-memory'): ApiEnvelope<T> {
   return {
     data,
     meta: {
       api,
-      adapter: 'prototype-memory',
+      adapter,
       timestamp: new Date().toISOString(),
     },
   }

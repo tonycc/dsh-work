@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "dsh-work 管理平台 API",
-    "version": "0.1.0-m0",
+    "version": "0.2.0-m2",
     "description": "MVP 管理面契约基线。所有写操作需要角色权限并写入审计事件。"
   },
   "servers": [{ "url": "/api/admin/v1" }],
@@ -66,6 +66,18 @@
     },
     "/roles": { "get": { "operationId": "listRoles", "summary": "查询平台角色和权限", "responses": { "200": { "$ref": "#/components/responses/Ok" } } } },
     "/model-usage": { "get": { "operationId": "getModelUsage", "summary": "查询 Token、延迟和费用汇总", "responses": { "200": { "$ref": "#/components/responses/Ok" } } } },
+    "/model-providers": {
+      "get": { "operationId": "listModelProviders", "summary": "查询 Provider、模型和密钥引用状态，不返回密钥正文", "responses": { "200": { "$ref": "#/components/responses/Ok" } } },
+      "post": { "operationId": "createModelProvider", "summary": "创建平台级模型 Provider", "responses": { "200": { "$ref": "#/components/responses/Ok" } } }
+    },
+    "/model-providers/status": { "patch": { "operationId": "setModelProviderStatus", "summary": "启用或停用 Provider", "responses": { "200": { "$ref": "#/components/responses/Ok" } } } },
+    "/model-providers/credential-reference": { "patch": { "operationId": "updateModelCredentialReference", "summary": "登记外部密钥引用和状态；请求不得包含密钥正文", "responses": { "200": { "$ref": "#/components/responses/Ok" } } } },
+    "/provider-models": { "post": { "operationId": "createProviderModel", "summary": "向 Provider 注册可治理模型", "responses": { "200": { "$ref": "#/components/responses/Ok" } } } },
+    "/model-routes": {
+      "get": { "operationId": "listModelRoutes", "summary": "查询平台模型路由", "responses": { "200": { "$ref": "#/components/responses/Ok" } } },
+      "post": { "operationId": "createModelRoute", "summary": "创建平台模型路由；Agent 不配置模型策略", "responses": { "200": { "$ref": "#/components/responses/Ok" } } }
+    },
+    "/model-routes/resolve": { "post": { "operationId": "resolveModelRoute", "summary": "诊断路由解析并返回不含密钥的快照", "responses": { "200": { "$ref": "#/components/responses/Ok" } } } },
     "/audit-events": { "get": { "operationId": "listAuditEvents", "summary": "查询管理写操作和敏感访问审计", "responses": { "200": { "$ref": "#/components/responses/Ok" } } } },
     "/health": { "get": { "operationId": "getPlatformHealth", "summary": "查询控制面、Runtime、模型和存储健康度", "responses": { "200": { "$ref": "#/components/responses/Ok" } } } }
   },
@@ -119,5 +131,5 @@
       }
     }
   },
-  "x-contract-status": "m0-review"
+  "x-contract-status": "m2-implemented"
 }

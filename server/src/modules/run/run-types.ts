@@ -1,0 +1,61 @@
+export type RunState = 'queued' | 'running' | 'cancel_requested' | 'succeeded' | 'failed' | 'cancelled'
+export type AttemptState = RunState
+export type JsonValue = null | string | number | boolean | JsonValue[] | { [key: string]: JsonValue }
+export type JsonObject = { [key: string]: JsonValue }
+
+export interface RunRecord {
+  id: string
+  tenantId: string
+  sessionId: string
+  requestedBy: string
+  idempotencyKey: string
+  status: RunState
+  currentAttemptId: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface RunAttemptRecord {
+  id: string
+  tenantId: string
+  runId: string
+  attemptNo: number
+  runtimeId: string | null
+  manifest: JsonObject
+  manifestSha256: string
+  modelRouteSnapshot: JsonObject
+  status: AttemptState
+  startedAt: string | null
+  endedAt: string | null
+  errorCode: string | null
+  createdAt: string
+}
+
+export interface StoredRunEvent {
+  id: string
+  tenantId: string
+  runId: string
+  attemptId: string
+  sequence: number
+  eventType: string
+  displayMessage: string | null
+  safeMetadata: JsonObject
+  traceId: string
+  occurredAt: string
+}
+
+export interface CreateRunInput {
+  tenantId: string
+  sessionId: string
+  requestedBy: string
+  idempotencyKey: string
+}
+
+export interface CreateAttemptInput {
+  tenantId: string
+  runId: string
+  runtimeId?: string
+  manifest: JsonObject
+  manifestSha256: string
+  modelRouteSnapshot: JsonObject
+}

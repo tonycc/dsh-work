@@ -195,7 +195,6 @@ export interface AgentDefinition {
   welcomeMessage: string
   examplePrompts: string[]
   systemPrompt: string
-  modelPolicy: string
   maxTokens: number
   timeoutSeconds: number
   skills: string[]
@@ -248,7 +247,6 @@ export interface AgentVersionRecord {
   welcomeMessage: string
   examplePrompts: string[]
   systemPrompt: string
-  modelPolicy: string
   maxTokens: number
   timeoutSeconds: number
   skills: string[]
@@ -403,7 +401,7 @@ export interface ModelUsageRecord {
   department: string
   provider: string
   model: string
-  modelPolicy: string
+  modelRoute: string
   dataLevel: 'L0' | 'L1' | 'L2'
   status: 'success' | 'failed' | 'blocked'
   promptTokens: number

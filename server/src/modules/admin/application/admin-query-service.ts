@@ -195,7 +195,6 @@ export class AdminQueryService {
     const { actor, changeSummary, ...configuration } = normalizedInput
     const agent: AgentDefinition = {
       ...configuration,
-      modelPolicy: 'approved-general',
       status: 'draft',
       version,
       updatedAt: timestamp,
@@ -305,7 +304,6 @@ export class AdminQueryService {
       welcomeMessage: target.welcomeMessage,
       examplePrompts: target.examplePrompts,
       systemPrompt: target.systemPrompt,
-      modelPolicy: target.modelPolicy,
       maxTokens: target.maxTokens,
       timeoutSeconds: target.timeoutSeconds,
       skills: target.skills,
@@ -601,7 +599,6 @@ function agentVersionSnapshot(agent: AgentDefinition) {
     welcomeMessage: agent.welcomeMessage,
     examplePrompts: [...agent.examplePrompts],
     systemPrompt: agent.systemPrompt,
-    modelPolicy: agent.modelPolicy,
     maxTokens: agent.maxTokens,
     timeoutSeconds: agent.timeoutSeconds,
     skills: [...agent.skills],

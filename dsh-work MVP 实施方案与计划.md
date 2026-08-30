@@ -206,6 +206,9 @@ M1 失败时不得直接扩大正式实现。必须在以下选项中形成书�
 | M2-10 | Repository 替换 | PostgreSQL Repository 实现既有端口，Prototype Repository 仅保留开发/演示用途 | M2-03～M2-09 | 后端 | 5 人日 |
 | M2-11 | 企业身份接入 | SSO 回调、服务端 Session、登出、用户同步、角色映射和两个 API Audience | D-03、M2-03 | 后端、企业 IT | 5 人日 |
 | M2-12 | 服务端授权 | Workspace、Agent、Tool、数据范围和管理角色均在 API 层强制校验 | M2-11、M2-04～M2-05 | 后端、安全 | 5 人日 |
+| M2-13 | Provider 与模型治理 | Provider、模型、平台路由、密钥引用和 Attempt 路由快照；密钥正文只进入 SecretStore，不进入 Agent、数据库、日志或 API 响应 | D-02、M2-02、M1 | 后端、AI、安全 | 4 人日 |
+
+M2 工程 Gate 于 2026-08-30 完成：物理 DDL、迁移器、PostgreSQL Repository、Run/Attempt 状态机、模型治理 API/管理页以及真实 PostgreSQL 集成测试均已落地。D-03、D-06、D-07、D-08 仍使用可替换配置占位；因此可进入合成数据的 M3 垂直闭环，但在真实企业身份、文件和数据上线前必须关闭对应外部决策。
 
 ## 5.4 M3：端到端垂直闭环
 
@@ -294,6 +297,7 @@ M3 的唯一验收主场景：使用一个真实企业测试账号，从浏览�
 | DB-06 文件 | files、artifacts、artifact_versions | 路径不进入业务主键；Artifact Version 可追溯 Run |
 | DB-07 治理记录 | tool_audit_logs、model_usage_records、approvals | 敏感参数脱敏；关联用户、Run 和 Trace |
 | DB-08 运维 | runtimes、system_settings | Runtime 健康状态与调度状态分离；配置修改审计 |
+| DB-09 模型治理 | model_providers、provider_models、model_routes、credential_refs | Agent 无模型策略；只保存密钥引用；默认路由唯一；Attempt 保存不可变路由快照 |
 
 迁移规则：
 

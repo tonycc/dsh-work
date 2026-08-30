@@ -12,6 +12,9 @@ import type {
   MemberDefinition,
   ModelUsageRecord,
   ManagedWorkspaceDefinition,
+  ModelProvider,
+  ModelRoute,
+  ModelRoutePurpose,
   PlatformStatus,
   RoleDefinition,
   RuntimeDefinition,
@@ -28,7 +31,7 @@ interface ApiEnvelope<T> {
   data: T
   meta: {
     api: 'admin'
-    adapter: 'prototype-memory'
+    adapter: 'prototype-memory' | 'postgres'
     timestamp: string
   }
 }
@@ -120,5 +123,42 @@ export const adminApi = {
   getHealth: () => request<HealthComponent[]>('/health'),
   getUsage: () => request<UsagePoint[]>('/usage'),
   getModelUsage: () => request<ModelUsageRecord[]>('/model-usage'),
+  getModelProviders: () => request<ModelProvider[]>('/model-providers'),
+  createModelProvider: (input: {
+    key: string
+    name: string
+    providerType: string
+    baseUrl: string
+    actor: string
+  }) => request<ModelProvider>('/model-providers', { method: 'POST', body: JSON.stringify(input) }),
+  setModelProviderStatus: (input: { providerId: string; status: 'active' | 'disabled'; actor: string }) =>
+    request<ModelProvider>('/model-providers/status', { method: 'PATCH', body: JSON.stringify(input) }),
+  createProviderModel: (input: {
+    providerId: string
+    modelKey: string
+    displayName: string
+    capabilities: string[]
+    actor: string
+  }) => request<ModelProvider>('/provider-models', { method: 'POST', body: JSON.stringify(input) }),
+  updateCredentialReference: (input: {
+    providerId: string
+    backend: 'dsh-managed' | 'keychain' | 'secret-manager'
+    externalRef: string
+    status: 'configured' | 'missing' | 'revoked'
+    actor: string
+  }) => request<ModelProvider>('/model-providers/credential-reference', {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  }),
+  getModelRoutes: () => request<ModelRoute[]>('/model-routes'),
+  createModelRoute: (input: {
+    key: string
+    name: string
+    purpose: ModelRoutePurpose
+    providerModelId: string
+    priority: number
+    enabled: boolean
+    actor: string
+  }) => request<ModelRoute>('/model-routes', { method: 'POST', body: JSON.stringify(input) }),
   getPlatformStatus: () => request<PlatformStatus>('/platform-status'),
 }

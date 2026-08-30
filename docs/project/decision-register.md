@@ -25,7 +25,7 @@
 | 编号 | 决策事项 | 当前结论/候选 | 状态 | 责任角色 | 截止时间 | 阻塞影响 |
 |---|---|---|---|---|---|---|
 | D-01 | DSH 仓库、版本和入口 | 已确认使用本地安装 `/Users/max/projects/deepseek-harness`；版本 `0.1.1-rc.2`；Commit `b150a551b8d465e31e418e1b2eaf5e79bbb7d28e`；程序化入口 `pnpm run demo:acp`，Headless CLI 仅作诊断 | 已确认 | 项目 Owner | 2026-08-29 | 真实 DSH ACP 协议探针通过；模型和 Tool 仍由 D-02/D-05 控制 |
-| D-02 | 模型 Provider 和预算 | M1 继承当前 DSH ACP 默认模型配置：`deepseek-official / deepseek-v4-pro`，公共 API Base URL，Thinking 开启、`reasoningEffort=max`，DSH 默认上下文和输出上限；dsh-work 不在 Agent 或 Runtime Manifest 中复制模型参数。POC 仅使用合成数据，正式企业数据出口仍由 D-09 控制 | 已确认 | 项目 Owner | 2026-08-30 | DSH 受管凭据真实 ACP 调用已通过；生产 Provider 治理和密钥存储在 Model Gateway 实施时收敛 |
+| D-02 | 模型 Provider 和预算 | M1/M2 默认使用 `deepseek-official / deepseek-v4-pro`；dsh-work 管理 Provider、模型和平台路由，但不在 Agent 中配置模型策略。运行参数仍继承 DSH 默认配置，正式企业数据出口由 D-09 控制 | 已确认 | 项目 Owner | 2026-08-30 | M2 已增加模型治理表、API、管理页和 Attempt 路由快照；M3 接入真实运行解析 |
 | D-03 | 企业身份 | SSO、LDAP 或受控内部账号待确定 | 待确定 | 项目 Owner | M2 身份接入前 | 阻塞真实授权，不阻塞 M0 |
 | D-04 | 试点部门 | 原型使用供应链合成场景，正式试点待确定 | 待确定 | 项目 Owner | M6 数据准备前 | 阻塞正式 UAT，不阻塞 M0 |
 | D-05 | 首批 Tool | M1 使用 DSH 内置文件读取 Tool 验证真实只读闭环、workspace sandbox 和权威日志审计；一期企业 Tool 仍从知识查询、订单、工单、库存和采购到货中按真实接口就绪情况预置，不开放自定义 Tool | M1 POC 已确认 | 项目 Owner | 2026-08-30 | M1 Tool Gate 不再阻塞；首个企业 Connector 仍在业务接入阶段确定 |
@@ -40,9 +40,10 @@
 | 编号 | 决策事项 | 建议 | 状态 | 责任角色 | 截止时间 |
 |---|---|---|---|---|---|
 | D-11 | 代码托管与 CI Provider | GitHub；仓库内使用 `.github/workflows/ci.yml` 执行 `pnpm ci:check` | 已确认 | 项目 Owner | 2026-08-29 |
-| D-12 | PostgreSQL 访问与迁移工具 | 选择支持显式 SQL、事务和可审查迁移的轻量方案，不引入领域 Active Record | 待确定 | 项目 Owner | M2 开始前 |
+| D-12 | PostgreSQL 访问与迁移工具 | 使用 `postgres.js` 轻量驱动、显式 SQL Repository 和顺序 SQL 迁移；不引入领域 Active Record | 已确认 | 项目 Owner | 2026-08-30 |
 | D-13 | 自动化测试框架 | 前端建议 Vitest，E2E 建议 Playwright；服务端选择 Node Test 或 Vitest 后统一 | 待确定 | 项目 Owner | M1 自动化测试前 |
 | D-14 | SSE 续传策略 | 建议使用稳定 event_id 和 `Last-Event-ID`，终态可从 PostgreSQL 重放 | 待确定 | 项目 Owner | M3 开始前 |
+| D-15 | Provider 与模型密钥治理 | dsh-work 管理 Provider、模型路由、密钥引用和状态；密钥正文由 `SecretStorePort` 后端保管。MVP 当前继续使用 DSH Credentials Provider，数据库/API/日志不保存或回显密钥；未来可迁移系统钥匙串、企业 Secret Manager 或 Model Gateway | 已确认 | 项目 Owner | 2026-08-30 |
 
 ## 4. D-01 实施注意事项
 

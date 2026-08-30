@@ -118,7 +118,6 @@ export interface AgentDefinition {
   welcomeMessage: string
   examplePrompts: string[]
   systemPrompt: string
-  modelPolicy: string
   maxTokens: number
   timeoutSeconds: number
   skills: string[]
@@ -171,7 +170,6 @@ export interface AgentVersionRecord {
   welcomeMessage: string
   examplePrompts: string[]
   systemPrompt: string
-  modelPolicy: string
   maxTokens: number
   timeoutSeconds: number
   skills: string[]
@@ -315,7 +313,7 @@ export interface ModelUsageRecord {
   department: string
   provider: string
   model: string
-  modelPolicy: string
+  modelRoute: string
   dataLevel: 'L0' | 'L1' | 'L2'
   status: 'success' | 'failed' | 'blocked'
   promptTokens: number
@@ -326,11 +324,61 @@ export interface ModelUsageRecord {
   traceId: string
 }
 
+export type ProviderStatus = 'active' | 'disabled'
+export type CredentialBackend = 'dsh-managed' | 'keychain' | 'secret-manager'
+export type CredentialStatus = 'configured' | 'missing' | 'revoked'
+export type ModelRoutePurpose = 'default' | 'chat' | 'analysis' | 'fallback'
+
+export interface CredentialReference {
+  id: string
+  backend: CredentialBackend
+  externalRef: string
+  status: CredentialStatus
+  lastVerifiedAt: string | null
+  updatedAt: string
+}
+
+export interface ProviderModel {
+  id: string
+  providerId: string
+  modelKey: string
+  displayName: string
+  capabilities: string[]
+  status: 'active' | 'disabled'
+}
+
+export interface ModelProvider {
+  id: string
+  key: string
+  name: string
+  providerType: string
+  baseUrl: string
+  status: ProviderStatus
+  credential: CredentialReference | null
+  models: ProviderModel[]
+  updatedAt: string
+}
+
+export interface ModelRoute {
+  id: string
+  key: string
+  name: string
+  purpose: ModelRoutePurpose
+  providerModelId: string
+  providerId: string
+  providerName: string
+  modelKey: string
+  modelName: string
+  priority: number
+  enabled: boolean
+  updatedAt: string
+}
+
 export interface PlatformStatus {
   architecture: 'node-modular-monolith'
-  persistence: 'prototype-memory'
+  persistence: 'prototype-memory' | 'postgres-foundation'
   sso: 'mock'
-  dshRuntime: 'not-connected'
-  database: 'not-configured'
+  dshRuntime: 'not-connected' | 'poc-validated'
+  database: 'not-configured' | Record<string, unknown>
   artifactStorage: 'not-configured'
 }

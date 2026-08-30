@@ -22,7 +22,7 @@ const providers = computed(() =>
 const filteredRecords = computed(() => {
   const keyword = query.value.trim().toLowerCase()
   return contentStore.modelUsage.filter((record) => {
-    const matchesQuery = !keyword || `${record.model} ${record.modelPolicy} ${record.agentId} ${record.runId} ${record.traceId} ${record.department}`.toLowerCase().includes(keyword)
+    const matchesQuery = !keyword || `${record.model} ${record.modelRoute} ${record.agentId} ${record.runId} ${record.traceId} ${record.department}`.toLowerCase().includes(keyword)
     const matchesProvider = providerFilter.value === 'all' || record.provider === providerFilter.value
     const matchesStatus = statusFilter.value === 'all' || record.status === statusFilter.value
     return matchesQuery && matchesProvider && matchesStatus
@@ -72,7 +72,7 @@ onMounted(() => contentStore.load())
 
     <section class="content-panel filter-panel">
       <div class="filter-bar">
-        <el-input v-model="query" :prefix-icon="Search" clearable placeholder="搜索模型、策略、运行或链路编号" />
+        <el-input v-model="query" :prefix-icon="Search" clearable placeholder="搜索模型、路由、运行或链路编号" />
         <el-select v-model="providerFilter" aria-label="筛选模型提供方">
           <el-option label="全部提供方" value="all" />
           <el-option v-for="provider in providers" :key="provider" :label="provider" :value="provider" />
@@ -91,7 +91,7 @@ onMounted(() => contentStore.load())
       <el-table class="data-table" v-loading="contentStore.loading" :data="filteredRecords" empty-text="暂无匹配的模型调用" @row-click="inspect">
         <el-table-column prop="time" label="时间" width="164" />
         <el-table-column label="模型" min-width="210">
-          <template #default="scope"><div class="model-cell"><strong>{{ scope.row.model }}</strong><small>{{ scope.row.provider }} · {{ scope.row.modelPolicy }}</small></div></template>
+          <template #default="scope"><div class="model-cell"><strong>{{ scope.row.model }}</strong><small>{{ scope.row.provider }} · {{ scope.row.modelRoute }}</small></div></template>
         </el-table-column>
         <el-table-column label="运行 / Agent" min-width="220">
           <template #default="scope"><div class="stack-cell"><span class="mono">{{ scope.row.runId }}</span><span>{{ scope.row.agentId }}</span></div></template>
@@ -109,7 +109,7 @@ onMounted(() => contentStore.load())
     <el-drawer v-model="drawerOpen" size="min(580px, 100vw)" title="模型调用详情">
       <template v-if="selectedRecord">
         <div class="model-detail__hero">
-          <div><small>{{ selectedRecord.provider }}</small><h2>{{ selectedRecord.model }}</h2><p>{{ selectedRecord.modelPolicy }} · 数据等级 {{ selectedRecord.dataLevel }}</p></div>
+          <div><small>{{ selectedRecord.provider }}</small><h2>{{ selectedRecord.model }}</h2><p>{{ selectedRecord.modelRoute }} · 数据等级 {{ selectedRecord.dataLevel }}</p></div>
           <StatusTag :status="selectedRecord.status" />
         </div>
         <dl class="model-detail__rows">
