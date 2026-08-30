@@ -78,7 +78,7 @@ interface GovernancePort {
 |---|---|
 | 稳定程序化接口 | 采用 DSH ACP JSON-RPC stdio；Headless CLI 最终文本不作为产品协议 |
 | 结构化事件 | ACP 支持提交后的 assistant 消息、取消和权限；Tool、Token 与原始增量需要 observer/telemetry 投影 |
-| 取消与超时 | Mock ACP 自动化测试通过；真实模型和真实 Tool 运行中验证待 D-02/D-05 |
+| 取消与超时 | Mock ACP 自动化测试通过；D-02 模型配置已确认，真实模型运行待凭据；真实 Tool 运行待 D-05 |
 | 进程与目录隔离 | 每 Attempt 独立进程和目录的并发测试通过 |
 | Manifest | canonical JSON、SHA-256 和 Attempt 快照已实现 |
 | 崩溃恢复 | Adapter 可形成失败终态；PostgreSQL 事件恢复在 M2-M3 实现 |

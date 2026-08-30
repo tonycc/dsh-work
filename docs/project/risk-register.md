@@ -7,7 +7,7 @@
 |---|---|---|---|---|---|---|---|
 | R-01 | DSH 预发布接口变化 | 高 | 高 | Headless、事件、取消或 Tool 协议变化 | 固定 Commit、Runtime Adapter、契约测试、升级沙箱和回滚版本 | 项目 Owner | 开放 |
 | R-02 | DSH ACP 不暴露 Tool、Token 和原始增量事件 | 高 | 高 | ACP 仅提供提交后的 assistant 消息；Tool/usage 留在内部观测面 | 优先实现正式 observer/telemetry 投影；失败时再比较最小 Fork 或降低事件粒度 | 项目 Owner | 开放 |
-| R-03 | 模型审批或密钥延期 | 中 | 高 | M1 模型链路前仍无 Provider | 使用 Keyless/Mock 验证协议，但不降低真实模型退出门槛 | 项目 Owner | 开放 |
+| R-03 | 模型凭据延期 | 中 | 高 | D-02 已确认，但本机仍无 `DEEPSEEK_API_KEY` | 使用 Keyless/Mock 验证协议；配置凭据后立即执行真实模型探针，但不降低真实模型退出门槛 | 项目 Owner | 开放 |
 | R-04 | SSO 测试环境延期 | 中 | 高 | M2 身份接入前无协议和测试账号 | 受控内部账号仅作临时替代；服务端授权模型保持一致 | 项目 Owner | 开放 |
 | R-05 | ERP/MES 接口和 Owner 不明确 | 高 | 高 | Tool Schema、数据范围或口径无法评审 | 每个真实 Tool 接入时记录外部联系人；先只接一个只读 Tool | 项目 Owner | 开放 |
 | R-06 | Mock 与正式状态机偏差 | 中 | 高 | 页面刷新后状态丢失，取消只改变前端 | M3 优先服务端 Run/SSE；逐链路替换 Mock | 项目 Owner | 开放 |

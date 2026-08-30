@@ -24,7 +24,7 @@
 | 编号 | 决策事项 | 当前结论/候选 | 状态 | 责任角色 | 截止时间 | 阻塞影响 |
 |---|---|---|---|---|---|---|
 | D-01 | DSH 仓库、版本和入口 | 已确认使用本地安装 `/Users/max/projects/deepseek-harness`；版本 `0.1.1-rc.2`；Commit `b150a551b8d465e31e418e1b2eaf5e79bbb7d28e`；程序化入口 `pnpm run demo:acp`，Headless CLI 仅作诊断 | 已确认 | 项目 Owner | 2026-08-29 | 真实 DSH ACP 协议探针通过；模型和 Tool 仍由 D-02/D-05 控制 |
-| D-02 | 模型 Provider 和预算 | 模型、区域、数据条款、Base URL 和 Token 预算待确定 | 待确定 | 项目 Owner | M1 模型链路前 | 阻塞真实模型链路，不阻塞 M0 |
+| D-02 | 模型 Provider 和预算 | M1 继承当前 DSH ACP 默认模型配置：`deepseek-official / deepseek-v4-pro`，公共 API Base URL，Thinking 开启、`reasoningEffort=max`，DSH 默认上下文和输出上限；dsh-work 不在 Agent 或 Runtime Manifest 中复制模型参数。POC 仅使用合成数据，正式企业数据出口仍由 D-09 控制 | 已确认 | 项目 Owner | 2026-08-30 | 模型选择不再阻塞；本机尚未配置 `DEEPSEEK_API_KEY`，真实模型验证需先提供凭据 |
 | D-03 | 企业身份 | SSO、LDAP 或受控内部账号待确定 | 待确定 | 项目 Owner | M2 身份接入前 | 阻塞真实授权，不阻塞 M0 |
 | D-04 | 试点部门 | 原型使用供应链合成场景，正式试点待确定 | 待确定 | 项目 Owner | M6 数据准备前 | 阻塞正式 UAT，不阻塞 M0 |
 | D-05 | 首批 Tool | 候选为知识查询、订单、工单、库存和采购到货，真实接口待确定 | 待确定 | 项目 Owner | M1 Tool 链路前 | Mock 可先验证协议，真实 Connector 后续接入 |

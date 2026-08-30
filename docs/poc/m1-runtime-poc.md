@@ -43,6 +43,23 @@ DSH 仓库存在未跟踪的 `scratch-plugin/`，不属于本次运行闭包，�
 - 用户取消和超时先发送 ACP `session/cancel`，宽限期后强制回收子进程；
 - 错误进入员工事件前截断并脱敏，DSH stderr 不进入员工 Run Event。
 
+### 3.1 M1 模型配置基线
+
+M1 不在 dsh-work 中建立一套平行的模型配置，而是由启动的 DSH ACP 组合解析当前默认模型配置：
+
+| 项目 | 当前 DSH 默认值 |
+|---|---|
+| Provider | `deepseek-official` |
+| 模型 | `deepseek-v4-pro` |
+| Base URL | 未设置 `DEEPSEEK_BASE_URL` 时使用 `https://api.deepseek.com` |
+| Thinking | 开启 |
+| Reasoning effort | `max` |
+| Context window | `1,000,000` Token |
+| 单次输出上限 | `256,000` Token |
+| 凭据引用 | `DEEPSEEK_API_KEY`，只由 DSH 的凭据层或进程环境解析 |
+
+dsh-work 的 Runtime Adapter 只启动固定版本的 `pnpm run demo:acp`，不注入 Provider、模型或 Base URL，也不把密钥写入 Manifest、日志或数据库。Agent 创建仍不提供模型策略。M1 POC 只发送合成数据；正式企业数据的模型出口、脱敏和合规规则属于 D-09。
+
 ## 4. 验证证据
 
 ### 4.1 自动化测试
@@ -100,13 +117,13 @@ DSH ACP 当前只发送已经提交的 assistant 消息块，明确不在 ACP �
 | 工作项 | 状态 | 下一条件 |
 |---|---|---|
 | M1-01 固定 DSH 版本 | 已完成 | 升级时重跑 POC |
-| M1-02 Headless/程序化冒烟 | 部分完成 | ACP 无密钥探针通过；真实模型回答待 D-02 |
+| M1-02 Headless/程序化冒烟 | 部分完成 | ACP 无密钥探针通过；真实模型回答待本机配置 `DEEPSEEK_API_KEY` |
 | M1-03 Runtime Adapter 骨架 | POC 已完成 | 接入服务端 Run Repository 后转正式实现 |
 | M1-04 Manifest 编译 | POC 已完成 | M2 增加数据库 Agent/权限快照来源 |
 | M1-05 Worker 生命周期 | POC 已完成 | 继续验证真实 DSH 崩溃和僵尸进程 |
 | M1-06 标准事件转换 | 部分完成 | 增加 DSH Tool/usage observer 投影 |
 | M1-07 取消、超时和重试 | 部分完成 | 真实模型/Tool 运行中取消；重试由 Run 编排创建新 Attempt |
-| M1-08 模型链路 | 阻塞 | D-02 模型 Provider、Base URL 和预算 |
+| M1-08 模型链路 | 配置已确认、验证阻塞 | D-02 已确认继承 DSH 默认配置；当前缺少 `DEEPSEEK_API_KEY`，尚未执行真实请求 |
 | M1-09 Tool 链路 | Mock 已完成 | D-05 至少一个真实只读 Tool |
 | M1-10 文件与成果 | 未开始 | D-07 Artifact 存储决定 |
 | M1-11 Mac mini 资源基线 | 未开始 | 真实模型链路可运行后测 1/3/5 并发 |
