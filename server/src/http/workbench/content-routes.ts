@@ -1,27 +1,39 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import type { PostgresContentService } from '../../modules/workbench/application/postgres-content-service.ts'
+import type { PostgresAuthorizationService } from '../../modules/authorization/postgres-authorization-service.ts'
 import { envelope, httpResult, readJsonBody, type Router } from '../router.ts'
 
 const basePath = '/api/workbench/v1'
+const userId = 'U00001'
 
-export function registerContentRoutes(router: Router, content: PostgresContentService) {
-  router.get(`${basePath}/workspaces`, async () =>
-    envelope('workbench', await content.listWorkspaces(), 'postgres'))
+export function registerContentRoutes(
+  router: Router,
+  content: PostgresContentService,
+  authorization?: PostgresAuthorizationService,
+) {
+  router.get(`${basePath}/workspaces`, async () => {
+    await authorization?.authorizeWorkbench({ userId })
+    return envelope('workbench', await content.listWorkspaces(userId), 'postgres')
+  })
 
   router.post(`${basePath}/workspaces`, async (request) => {
+    await authorization?.authorizeWorkbench({ userId })
     const body = await readJsonBody<{ name: string; description?: string }>(request)
     if (body.name.trim().length < 2) throw new Error('工作空间名称至少需要 2 个字符')
     return httpResult(201, envelope('workbench', await content.createWorkspace({
       name: body.name,
       description: body.description ?? '',
-    }), 'postgres'))
+    }, userId), 'postgres'))
   })
 
-  router.get(`${basePath}/artifacts`, async () =>
-    envelope('workbench', await content.listArtifacts(), 'postgres'))
+  router.get(`${basePath}/artifacts`, async () => {
+    await authorization?.authorizeWorkbench({ userId })
+    return envelope('workbench', await content.listArtifacts(userId), 'postgres')
+  })
 
   router.post(`${basePath}/workspaces/:workspaceId/files`, async (request, context) => {
+    await authorization?.authorizeWorkbench({ userId, workspaceId: context.params['workspaceId'] })
     const fileNameHeader = request.headers['x-file-name']
     const encodedName = Array.isArray(fileNameHeader) ? fileNameHeader[0] : fileNameHeader
     if (!encodedName) throw new Error('缺少文件名')
@@ -32,26 +44,47 @@ export function registerContentRoutes(router: Router, content: PostgresContentSe
       name,
       request.headers['content-type'] ?? 'application/octet-stream',
       bytes,
+      userId,
+    )
+    return httpResult(201, envelope('workbench', file, 'postgres'))
+  })
+
+  router.post(`${basePath}/sessions/:sessionId/files`, async (request, context) => {
+    await authorization?.authorizeWorkbench({ userId })
+    const fileNameHeader = request.headers['x-file-name']
+    const encodedName = Array.isArray(fileNameHeader) ? fileNameHeader[0] : fileNameHeader
+    if (!encodedName) throw new Error('缺少文件名')
+    const name = decodeURIComponent(encodedName)
+    const bytes = await readBinaryBody(request, 20 * 1024 * 1024)
+    const file = await content.storeSessionFile(
+      context.params['sessionId'] ?? '',
+      name,
+      request.headers['content-type'] ?? 'application/octet-stream',
+      bytes,
+      userId,
     )
     return httpResult(201, envelope('workbench', file, 'postgres'))
   })
 
   router.get(`${basePath}/files/:fileId/download`, async (_request, context, response) => {
-    const file = await content.readFile(context.params['fileId'] ?? '')
+    await authorization?.authorizeWorkbench({ userId })
+    const file = await content.readFile(context.params['fileId'] ?? '', userId)
     writeDownload(response, file.name, file.mimeType, file.bytes)
   })
 
   router.get(`${basePath}/artifacts/:artifactId/download`, async (_request, context, response) => {
-    const fileId = await content.artifactFileId(context.params['artifactId'] ?? '')
-    const file = await content.readFile(fileId)
+    await authorization?.authorizeWorkbench({ userId })
+    const fileId = await content.artifactFileId(context.params['artifactId'] ?? '', undefined, userId)
+    const file = await content.readFile(fileId, userId)
     writeDownload(response, file.name, file.mimeType, file.bytes)
   })
 
   router.get(`${basePath}/artifacts/:artifactId/versions/:versionId/download`, async (_request, context, response) => {
+    await authorization?.authorizeWorkbench({ userId })
     const version = Number(context.params['versionId'])
     if (!Number.isInteger(version) || version < 1) throw new Error('Artifact 版本号无效')
-    const fileId = await content.artifactFileId(context.params['artifactId'] ?? '', version)
-    const file = await content.readFile(fileId)
+    const fileId = await content.artifactFileId(context.params['artifactId'] ?? '', version, userId)
+    const file = await content.readFile(fileId, userId)
     writeDownload(response, file.name, file.mimeType, file.bytes)
   })
 }

@@ -1,8 +1,8 @@
-import type { ServerResponse } from 'node:http'
-
 import type { PostgresConversationRepository } from '../../modules/workbench/application/postgres-conversation-repository.ts'
 import type { RunOrchestrationService } from '../../modules/run/run-orchestration-service.ts'
 import type { RunRepository } from '../../modules/run/run-repository.ts'
+import type { PostgresAgentService } from '../../modules/agent/postgres-agent-service.ts'
+import type { PostgresAuthorizationService } from '../../modules/authorization/postgres-authorization-service.ts'
 import { envelope, httpResult, readJsonBody, type Router } from '../router.ts'
 
 const basePath = '/api/workbench/v1'
@@ -14,17 +14,28 @@ export function registerConversationRoutes(
   conversations: PostgresConversationRepository,
   orchestration: RunOrchestrationService,
   runs: RunRepository,
+  agents: PostgresAgentService,
+  authorization?: PostgresAuthorizationService,
 ) {
-  router.get(`${basePath}/tasks`, async () =>
-    envelope('workbench', await conversations.listTasks(userId), 'postgres'))
+  router.get(`${basePath}/tasks`, async () => {
+    await authorization?.authorizeWorkbench({ userId })
+    return envelope('workbench', await conversations.listTasks(userId), 'postgres')
+  })
 
   router.post(`${basePath}/sessions`, async (request) => {
-    const body = await readJsonBody<{ title: string; workspaceId?: string | null }>(request)
-    const session = await orchestration.createSession({ userId, title: body.title, workspaceId: body.workspaceId })
+    const body = await readJsonBody<{ title: string; workspaceId?: string; agentId?: string }>(request)
+    const agentVersionId = await agents.resolveWorkbenchAgentVersion(body.agentId, userId)
+    const session = await orchestration.createSession({
+      userId,
+      title: body.title,
+      workspaceId: body.workspaceId,
+      agentVersionId,
+    })
     return httpResult(201, envelope('workbench', session, 'postgres'))
   })
 
   router.get(`${basePath}/runs/:runId`, async (_request, context) => {
+    await authorization?.authorizeWorkbench({ userId })
     const task = await conversations.getTask(context.params['runId'] ?? '', userId)
     return task
       ? envelope('workbench', task, 'postgres')
@@ -32,13 +43,18 @@ export function registerConversationRoutes(
   })
 
   router.post(`${basePath}/sessions/:sessionId/runs`, async (request, context) => {
-    const body = await readJsonBody<{ prompt: string; idempotencyKey?: string }>(request)
+    const body = await readJsonBody<{ prompt: string; idempotencyKey?: string; fileIds?: string[] }>(request)
+    if (body.fileIds !== undefined && (!Array.isArray(body.fileIds) || body.fileIds.some(id => typeof id !== 'string'))) {
+      throw new Error('fileIds 必须是文件标识数组')
+    }
+    if ((body.fileIds?.length ?? 0) > 5) throw new Error('每次 Run 最多分析 5 个文件')
     const headerKey = request.headers['idempotency-key']
     const run = await orchestration.startRun({
       userId,
       sessionId: context.params['sessionId'] ?? '',
       prompt: body.prompt,
       idempotencyKey: body.idempotencyKey ?? (Array.isArray(headerKey) ? headerKey[0] : headerKey) ?? crypto.randomUUID(),
+      fileIds: body.fileIds ?? [],
     })
     if (!run) throw new Error('Run 创建失败')
     const task = await conversations.getTask(run.id, userId)
@@ -58,6 +74,7 @@ export function registerConversationRoutes(
   })
 
   router.get(`${basePath}/runs/:runId/events`, async (request, context, response) => {
+    await authorization?.authorizeWorkbench({ userId })
     const runId = context.params['runId'] ?? ''
     const task = await conversations.getTask(runId, userId)
     if (!task) return httpResult(404, { error: { code: 'run_not_found', message: 'Run 不存在或不可访问' } })
@@ -65,11 +82,13 @@ export function registerConversationRoutes(
   })
 }
 
-async function streamRunEvents(
-  response: ServerResponse,
+export async function streamRunEvents(
+  response: RunEventStreamResponse,
   lastEventHeader: string | string[] | undefined,
   runId: string,
-  runs: RunRepository,
+  runs: Pick<RunRepository, 'readEventsAfterEvent' | 'getRun'>,
+  pollIntervalMs = 250,
+  heartbeatIntervalMs = 15_000,
 ) {
   response.writeHead(200, {
     'Cache-Control': 'no-cache, no-transform',
@@ -109,13 +128,21 @@ async function streamRunEvents(
     } else {
       emptyTerminalPolls = 0
     }
-    if (Date.now() - heartbeatAt >= 15_000) {
+    if (Date.now() - heartbeatAt >= heartbeatIntervalMs) {
       response.write(`: heartbeat ${Date.now()}\n\n`)
       heartbeatAt = Date.now()
     }
-    await wait(250)
+    await wait(pollIntervalMs)
   }
   if (!closed) response.end()
+}
+
+interface RunEventStreamResponse {
+  writeHead(statusCode: number, headers: Record<string, string>): unknown
+  flushHeaders(): void
+  write(chunk: string): boolean
+  end(): unknown
+  on(event: 'close', listener: () => void): unknown
 }
 
 function wait(milliseconds: number) {

@@ -7,6 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "vue-tsc -b && vite build",
     "typecheck": "vue-tsc -b",
+    "test": "vitest run --config vitest.config.ts",
     "lint": "eslint . --max-warnings=0",
     "validate:ui": "node scripts/validate-ui-contract.mjs",
     "preview": "vite preview --host 0.0.0.0"

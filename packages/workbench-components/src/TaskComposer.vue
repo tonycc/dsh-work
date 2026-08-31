@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   ArrowDown,
@@ -9,7 +9,6 @@ import {
   FolderOpened,
   Loading,
   Lock,
-  MagicStick,
   Microphone,
   Paperclip,
   Plus,
@@ -21,14 +20,16 @@ const props = withDefaults(
     initialPrompt?: string
     initialWorkspaceId?: string
     initialWorkspaceName?: string
+    workspaces?: Array<{ id: string; name: string; type: 'personal' | 'team' }>
     workspaceLocked?: boolean
     compact?: boolean
     submitting?: boolean
   }>(),
   {
     initialPrompt: '',
-    initialWorkspaceId: 'standalone',
+    initialWorkspaceId: '',
     initialWorkspaceName: '',
+    workspaces: () => [],
     workspaceLocked: false,
     compact: false,
     submitting: false,
@@ -36,54 +37,52 @@ const props = withDefaults(
 )
 
 const emit = defineEmits<{
-  submit: [payload: { prompt: string; files: string[]; workspaceId: string }]
+  submit: [payload: { prompt: string; files: File[]; workspaceId: string }]
 }>()
 
 const prompt = ref(props.initialPrompt)
 const workspaceId = ref(props.initialWorkspaceId)
-const permissionScope = ref('default')
-const modelMode = ref('auto')
-const files = ref<string[]>([])
+const files = ref<File[]>([])
 const fileInput = ref<HTMLInputElement>()
 const inputRef = ref<HTMLTextAreaElement>()
 const isDragging = ref(false)
 
 const canSubmit = computed(() => prompt.value.trim().length > 0 && !props.submitting)
 const workspaceLabel = computed(() => {
-  if (workspaceId.value === props.initialWorkspaceId && props.initialWorkspaceName) {
-    return props.initialWorkspaceName
-  }
-  if (workspaceId.value === 'ws-supply') return '供应链经营分析'
-  if (workspaceId.value === 'ws-operations') return '月度经营复盘'
-  return '未加入工作空间'
-})
-const permissionLabel = computed(() =>
-  permissionScope.value === 'strict' ? '仅本人数据' : '默认权限',
-)
-const modelLabel = computed(() => {
-  if (modelMode.value === 'fast') return '快速'
-  if (modelMode.value === 'precise') return '深度'
-  return '自动'
+  const selected = props.workspaces.find(workspace => workspace.id === workspaceId.value)
+  if (selected) return selected.name
+  if (workspaceId.value === props.initialWorkspaceId && props.initialWorkspaceName) return props.initialWorkspaceName
+  return '我的空间'
 })
 
+watch(
+  () => props.initialWorkspaceId,
+  (next, previous) => {
+    if (!workspaceId.value || workspaceId.value === previous) workspaceId.value = next
+  },
+)
 function openFilePicker() {
   fileInput.value?.click()
 }
 
 function acceptFiles(fileList: FileList | File[]) {
   const incoming = Array.from(fileList)
-  const allowedExtensions = ['pdf', 'docx', 'xlsx', 'csv']
+  const allowedExtensions = ['pdf', 'docx', 'xlsx', 'csv', 'txt', 'md']
   for (const file of incoming) {
     const extension = file.name.split('.').pop()?.toLowerCase() ?? ''
     if (!allowedExtensions.includes(extension)) {
-      ElMessage.warning(`${file.name} 暂不支持，当前版本支持 PDF、DOCX、XLSX 和 CSV`)
+      ElMessage.warning(`${file.name} 暂不支持，当前版本支持 PDF、DOCX、XLSX、CSV、TXT 和 Markdown`)
       continue
     }
     if (file.size > 20 * 1024 * 1024) {
       ElMessage.warning(`${file.name} 超过 20 MB 的单文件限制`)
       continue
     }
-    if (!files.value.includes(file.name)) files.value.push(file.name)
+    if (files.value.length >= 5) {
+      ElMessage.warning('每次对话最多添加 5 个文件')
+      break
+    }
+    if (!files.value.some(selected => selected.name === file.name && selected.size === file.size)) files.value.push(file)
   }
 }
 
@@ -98,8 +97,8 @@ function onDrop(event: DragEvent) {
   if (event.dataTransfer?.files) acceptFiles(event.dataTransfer.files)
 }
 
-function removeFile(name: string) {
-  files.value = files.value.filter((file) => file !== name)
+function removeFile(file: File) {
+  files.value = files.value.filter((selected) => selected !== file)
 }
 
 function insertReference(reference: string) {
@@ -119,14 +118,6 @@ function onWorkspaceCommand(command: string | number | object) {
   workspaceId.value = String(command)
 }
 
-function onPermissionCommand(command: string | number | object) {
-  permissionScope.value = String(command)
-}
-
-function onModelCommand(command: string | number | object) {
-  modelMode.value = String(command)
-}
-
 function showVoiceMessage() {
   ElMessage.info('语音输入不在当前版本范围内，可继续使用文字或文件输入')
 }
@@ -143,10 +134,9 @@ function submit() {
 }
 
 function onKeydown(event: KeyboardEvent) {
-  if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-    event.preventDefault()
-    submit()
-  }
+  if (event.key !== 'Enter' || event.shiftKey || event.isComposing || event.keyCode === 229) return
+  event.preventDefault()
+  submit()
 }
 </script>
 
@@ -165,6 +155,16 @@ function onKeydown(event: KeyboardEvent) {
     </div>
 
     <div class="composer__surface">
+      <div v-if="files.length" class="composer__files" aria-label="已选择文件">
+        <span v-for="file in files" :key="`${file.name}:${file.size}:${file.lastModified}`" class="file-chip">
+          <el-icon><Paperclip /></el-icon>
+          <span>{{ file.name }}</span>
+          <button type="button" :aria-label="`移除 ${file.name}`" @click="removeFile(file)">
+            <el-icon><Close /></el-icon>
+          </button>
+        </span>
+      </div>
+
       <textarea
         ref="inputRef"
         v-model="prompt"
@@ -179,16 +179,6 @@ function onKeydown(event: KeyboardEvent) {
         @keydown="onKeydown"
       ></textarea>
 
-      <div v-if="files.length" class="composer__files" aria-label="已选择文件">
-        <span v-for="file in files" :key="file" class="file-chip">
-          <el-icon><Paperclip /></el-icon>
-          <span>{{ file }}</span>
-          <button type="button" :aria-label="`移除 ${file}`" @click="removeFile(file)">
-            <el-icon><Close /></el-icon>
-          </button>
-        </span>
-      </div>
-
       <div class="composer__action-row">
         <div class="composer__leading-actions">
           <input
@@ -196,7 +186,7 @@ function onKeydown(event: KeyboardEvent) {
             class="composer__file-input"
             type="file"
             multiple
-            accept=".pdf,.docx,.xlsx,.csv"
+            accept=".pdf,.docx,.xlsx,.csv,.txt,.md"
             @change="onFileChange"
           />
           <el-dropdown trigger="click" placement="top-start" @command="onAddCommand">
@@ -220,37 +210,18 @@ function onKeydown(event: KeyboardEvent) {
               </el-dropdown-menu>
             </template>
           </el-dropdown>
-          <el-dropdown v-if="compact" trigger="click" placement="top-start" @command="onPermissionCommand">
-            <button class="composer__compact-permission" type="button" aria-label="选择数据权限范围">
-              <el-icon><Lock /></el-icon>
-              {{ permissionLabel }}
-              <el-icon class="composer__chevron"><ArrowDown /></el-icon>
-            </button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item command="default">默认权限 · 按企业身份注入</el-dropdown-item>
-                <el-dropdown-item command="strict">仅本人数据 · 进一步收窄</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
+          <span
+            v-if="compact"
+            class="composer__compact-trust"
+            aria-label="按企业身份和工作空间权限执行"
+          >
+            <el-icon><Lock /></el-icon>
+            <span>按企业权限执行</span>
+          </span>
           <span v-if="files.length" class="composer__file-count">{{ files.length }} 个文件</span>
         </div>
 
         <div class="composer__trailing-actions">
-          <el-dropdown trigger="click" placement="top-end" @command="onModelCommand">
-            <button class="composer__model" type="button" aria-label="选择执行模式">
-              <el-icon><MagicStick /></el-icon>
-              {{ modelLabel }}
-              <el-icon class="composer__chevron"><ArrowDown /></el-icon>
-            </button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item command="auto">自动 · 智能选择</el-dropdown-item>
-                <el-dropdown-item command="fast">快速 · 优先响应速度</el-dropdown-item>
-                <el-dropdown-item command="precise">深度 · 优先分析质量</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
           <button
             class="composer__icon-action composer__voice"
             type="button"
@@ -295,32 +266,20 @@ function onKeydown(event: KeyboardEvent) {
           </button>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item command="standalone">未加入工作空间</el-dropdown-item>
-              <el-dropdown-item command="ws-supply">供应链经营分析</el-dropdown-item>
-              <el-dropdown-item command="ws-operations">月度经营复盘</el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
-
-        <span class="context-divider"></span>
-
-        <el-dropdown trigger="click" @command="onPermissionCommand">
-          <button class="context-control" type="button" aria-label="选择数据权限范围">
-            <el-icon><Lock /></el-icon>
-            <span>{{ permissionLabel }}</span>
-            <el-icon class="composer__chevron"><ArrowDown /></el-icon>
-          </button>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item command="default">默认权限 · 按企业身份注入</el-dropdown-item>
-              <el-dropdown-item command="strict">仅本人数据 · 进一步收窄</el-dropdown-item>
+              <el-dropdown-item
+                v-for="workspace in workspaces"
+                :key="workspace.id"
+                :command="workspace.id"
+              >
+                {{ workspace.name }}{{ workspace.type === 'personal' ? '（个人）' : '' }}
+              </el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
       </div>
       <span class="composer__trust-note">
         <el-icon><Lock /></el-icon>
-        不会突破你的企业权限
+        按企业身份和工作空间权限执行
       </span>
     </div>
   </section>
@@ -400,7 +359,19 @@ function onKeydown(event: KeyboardEvent) {
   display: flex;
   flex-wrap: wrap;
   gap: 7px;
-  padding: 0 13px 7px;
+  padding: 13px 13px 0;
+}
+
+.composer__files + .composer__input {
+  padding-top: 8px;
+}
+
+.composer--compact .composer__files {
+  padding: 11px 11px 0;
+}
+
+.composer--compact .composer__files + .composer__input {
+  padding-top: 7px;
 }
 
 .file-chip {
@@ -467,8 +438,6 @@ function onKeydown(event: KeyboardEvent) {
 
 .composer__icon-action,
 .composer__send,
-.composer__model,
-.composer__compact-permission,
 .context-control {
   display: inline-flex;
   align-items: center;
@@ -487,8 +456,6 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 .composer__icon-action:hover,
-.composer__model:hover,
-.composer__compact-permission:hover,
 .context-control:hover {
   color: #202320;
   background: #f0f1ef;
@@ -501,20 +468,12 @@ function onKeydown(event: KeyboardEvent) {
   font-size: var(--dsh-font-size-badge);
 }
 
-.composer__model {
-  min-height: 31px;
+.composer__compact-trust {
+  display: inline-flex;
+  align-items: center;
   gap: 5px;
-  padding: 0 8px;
-  border-radius: 8px;
-  font-size: var(--dsh-font-size-caption);
-}
-
-.composer__compact-permission {
-  min-height: 31px;
-  gap: 5px;
-  padding: 0 7px;
-  border-radius: 8px;
-  color: #646964;
+  margin-left: 4px;
+  color: #858a85;
   font-size: var(--dsh-font-size-badge);
 }
 
@@ -594,13 +553,6 @@ function onKeydown(event: KeyboardEvent) {
   background: #eaf5f1;
 }
 
-.context-divider {
-  width: 1px;
-  height: 14px;
-  margin: 0 2px;
-  background: #d9dad7;
-}
-
 .composer__trust-note {
   display: inline-flex;
   flex: 0 0 auto;
@@ -638,8 +590,8 @@ function onKeydown(event: KeyboardEvent) {
     margin-left: 7px;
   }
 
-  .composer__model {
-    padding: 0 5px;
+  .composer__compact-trust span {
+    display: none;
   }
 
   .composer__shortcut-hint {

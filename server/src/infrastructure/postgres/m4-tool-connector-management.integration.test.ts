@@ -1,0 +1,141 @@
+import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
+import { after, before, test } from 'node:test'
+
+import { PostgresAgentService } from '../../modules/agent/postgres-agent-service.ts'
+import { PostgresSkillService } from '../../modules/skill/postgres-skill-service.ts'
+import { PostgresToolConnectorService } from '../../modules/tool/postgres-tool-connector-service.ts'
+import type { AgentRuntimePort, RuntimeHealth } from '../../modules/runtime/runtime-types.ts'
+import { createDatabase, type DatabaseClient } from './database.ts'
+import { runMigrations } from './migration-runner.ts'
+
+const databaseUrl = process.env.DSH_WORK_TEST_DATABASE_URL
+if (!databaseUrl) throw new Error('DSH_WORK_TEST_DATABASE_URL 未配置')
+
+let database: DatabaseClient
+let runtimeStatus: RuntimeHealth['status'] = 'healthy'
+let tools: PostgresToolConnectorService
+let skills: PostgresSkillService
+let agents: PostgresAgentService
+
+const runtime: AgentRuntimePort = {
+  async execute() { throw new Error('此测试不执行真实 Runtime') },
+  subscribe() { return () => undefined },
+  async cancel() { return { accepted: false } },
+  status() { return undefined },
+  async health() {
+    return {
+      status: runtimeStatus,
+      runtimeId: 'runtime-local-01',
+      activeExecutions: 0,
+      acceptingRuns: runtimeStatus === 'healthy',
+      dshRepository: '/test/deepseek-harness',
+      transport: 'acp-stdio',
+      message: `测试 Runtime：${runtimeStatus}`,
+    }
+  },
+  async close() {},
+}
+
+before(async () => {
+  database = createDatabase({ url: databaseUrl, maxConnections: 3 })
+  await runMigrations(database)
+  tools = new PostgresToolConnectorService(database, runtime)
+  skills = new PostgresSkillService(database, undefined, tools)
+  agents = new PostgresAgentService(database, undefined, skills, tools)
+})
+
+after(async () => {
+  await database.end()
+})
+
+test('Tool and Connector management gates immutable Agent and Skill references', async () => {
+  const catalog = await tools.getTools()
+  assert.deepEqual(catalog.map(tool => tool.id).sort(), ['glob', 'grep', 'read'])
+  assert.ok(catalog.every(tool => tool.mode === 'read' && tool.version === '1.0.0'))
+
+  const [connector] = await tools.getConnectors()
+  assert.equal(connector?.id, 'connector-dsh-workspace')
+  assert.equal(connector?.name, 'DSH 工作空间文件连接器')
+  assert.equal(connector?.protocol, 'runtime')
+  assert.equal(connector?.toolCount, 3)
+
+  await tools.assertAvailableReferences(['read@1.0.0', 'glob@1.0.0', 'grep@1.0.0'])
+  await assert.rejects(tools.assertAvailableReferences(['read']), /锁定版本/)
+  await assert.rejects(tools.assertAvailableReferences(['write@1.0.0']), /一期只读工具/)
+
+  assert.equal(await tools.resolveRuntimeApprovalMode(['read@1.0.0']), 'never')
+  await tools.updateToolPermissions({
+    toolId: 'read',
+    allowedRoles: ['普通员工', '平台管理员'],
+    dataScopes: ['workspace:authorized'],
+    approvalPolicy: 'always',
+    actor: '陈默',
+  })
+  assert.equal(await tools.resolveRuntimeApprovalMode(['read@1.0.0']), 'always')
+  await tools.updateToolPermissions({
+    toolId: 'read',
+    allowedRoles: ['普通员工', '平台管理员'],
+    dataScopes: ['workspace:authorized'],
+    approvalPolicy: 'sensitive',
+    actor: '陈默',
+  })
+  assert.equal(await tools.resolveRuntimeApprovalMode(['read@1.0.0']), 'risk_based')
+
+  const permissionUpdated = await tools.updateToolPermissions({
+    toolId: 'read',
+    allowedRoles: ['普通员工', '平台管理员'],
+    dataScopes: ['workspace:authorized'],
+    approvalPolicy: 'none',
+    actor: '陈默',
+  })
+  assert.deepEqual(permissionUpdated.allowedRoles, ['普通员工', '平台管理员'])
+
+  await tools.setToolStatus({ toolId: 'read', status: 'disabled', actor: '陈默' })
+  await assert.rejects(tools.assertAvailableReferences(['read@1.0.0']), /不可用/)
+  await tools.setToolStatus({ toolId: 'read', status: 'available', actor: '陈默' })
+
+  runtimeStatus = 'degraded'
+  const degraded = await tools.checkConnector({ connectorId: 'connector-dsh-workspace', actor: '陈默' })
+  assert.equal(degraded.status, 'degraded')
+  await assert.rejects(tools.assertAvailableReferences(['read@1.0.0']), /不可用/)
+  runtimeStatus = 'healthy'
+  const healthy = await tools.checkConnector({ connectorId: 'connector-dsh-workspace', actor: '陈默' })
+  assert.equal(healthy.status, 'healthy')
+  await tools.assertAvailableReferences(['read@1.0.0'])
+
+  const suffix = randomUUID().slice(0, 8)
+  const baseInput = {
+    id: `agent-tool-${suffix}`,
+    name: '只读工具验证助手',
+    description: '验证 Agent 只能使用已发布、可用且由 Skill 明确依赖的只读工具。',
+    owner: '客户端占位',
+    department: '客户端占位',
+    visibility: '全体试点员工',
+    roleIds: ['role-employee'],
+    dataScopes: ['workspace:authorized'],
+    welcomeMessage: '',
+    examplePrompts: ['整理当前工作空间文档'],
+    systemPrompt: '你是只读文档助手，只能读取当前工作空间已经授权的文件，不得执行任何写入操作。',
+    maxTokens: 12000,
+    timeoutSeconds: 300,
+    skills: ['skill-document@1.0.0'],
+    changeSummary: '验证 Tool 和 Skill 的强引用约束',
+    actor: '陈默',
+  }
+  await assert.rejects(agents.createAgent({ ...baseInput, tools: ['glob@1.0.0'] }), /必须显式授权/)
+  const created = await agents.createAgent({ ...baseInput, tools: ['read@1.0.0'] })
+  await agents.testAgent({ agentId: created.agent.id, prompt: '整理当前工作空间文档', actor: '陈默' })
+  await agents.setStatus({ agentId: created.agent.id, status: 'published', actor: '陈默' })
+  const snapshot = await agents.getRuntimeSnapshot(created.version.id)
+  assert.deepEqual(snapshot.tools, ['read@1.0.0'])
+  assert.deepEqual(snapshot.runtimeTools, ['read@1.0.0'])
+  assert.equal(snapshot.approvalMode, 'never')
+  assert.deepEqual(snapshot.skillInstructions[0]?.tools, ['read@1.0.0'])
+
+  const checks = await database<{ status: string }[]>`
+    select status from connector_health_checks
+     where tenant_id = 'tenant-dsh-work' and connector_id = 'connector-dsh-workspace'
+  `
+  assert.deepEqual(new Set(checks.map(check => check.status)), new Set(['healthy', 'degraded']))
+})

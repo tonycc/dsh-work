@@ -22,7 +22,7 @@ import { RunTimeline, StatusTag } from '@dsh-work/ui-core'
 import { useTaskStore } from '@/stores/tasks'
 import type { Artifact, TaskSource } from '@/types/domain'
 import { TaskComposer } from '@dsh-work/workbench-components'
-import { workbenchApi } from '@/api/client'
+import { downloadArtifactFile, notifyActionFailure } from '@/utils/feedback'
 
 const route = useRoute()
 const router = useRouter()
@@ -37,7 +37,8 @@ const messageFeedback = ref<Record<string, 'up' | 'down'>>({})
 
 const task = computed(() => taskStore.getTask(String(route.params.id)))
 const canStop = computed(() => task.value && ['queued', 'running'].includes(task.value.status))
-const canRetry = computed(() => task.value && ['failed', 'cancelled'].includes(task.value.status))
+const canRetry = computed(() => task.value && ['failed', 'cancelled'].includes(task.value.status)
+  && (task.value.error?.retryable ?? true))
 const currentStep = computed(() =>
   task.value?.steps.find((step) => ['running', 'awaiting_approval'].includes(step.status)),
 )
@@ -95,20 +96,8 @@ async function retryRun() {
     await taskStore.retryTask(task.value.id)
     ElMessage.success('已创建新的运行尝试')
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '重新执行失败')
+    notifyActionFailure('重新执行', `运行 ${task.value.id}`, error, '刷新对话状态；确认本轮仍为失败或已停止后再重试。')
   }
-}
-
-function approveRun() {
-  if (!task.value) return
-  taskStore.approveTask(task.value.id)
-  ElMessage.success('已确认数据范围，正在继续回答')
-}
-
-async function rejectRun() {
-  if (!task.value) return
-  await taskStore.cancelTask(task.value.id)
-  ElMessage.info('已拒绝本轮数据查询，你仍可继续提问')
 }
 
 function copyAnswer(content: string) {
@@ -165,21 +154,17 @@ function preview(item: Artifact) {
 }
 
 function download(item: Artifact) {
-  const anchor = document.createElement('a')
-  anchor.href = workbenchApi.artifactDownloadUrl(item.id, item.version)
-  anchor.download = item.name
-  anchor.click()
-  ElMessage.success('已开始下载真实成果文件')
+  void downloadArtifactFile(item)
 }
 
-async function submitFollowUp(payload: { prompt: string; files: string[]; workspaceId: string }) {
+async function submitFollowUp(payload: { prompt: string; files: File[]; workspaceId: string }) {
   if (!task.value) return
   try {
     const nextTask = await taskStore.sendMessage(task.value.id, payload.prompt, payload.files)
     if (nextTask) await router.replace(`/conversations/${nextTask.id}`)
     await nextTick(() => scrollToBottom())
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '发送消息失败')
+    notifyActionFailure('发送消息', `对话“${task.value.title}”`, error, '检查输入和附件后重试；已有对话内容不会丢失。')
   }
 }
 
@@ -378,27 +363,29 @@ watch(
           <section v-if="task.status === 'awaiting_approval'" class="conversation-notice approval-notice">
             <span class="conversation-notice__icon"><el-icon><Lock /></el-icon></span>
             <div>
-              <strong>继续回答前需要确认数据范围</strong>
-              <p>本轮将只读查询工厂一范围内 42 张订单，不会修改任何业务数据。</p>
+              <strong>正在确认本轮工具权限</strong>
+              <p>{{ task.approval?.reason ?? '服务端正在校验本轮工具、角色和数据范围。' }}</p>
               <dl>
-                <div><dt>工具</dt><dd class="mono">erp.get_order_materials</dd></div>
-                <div><dt>范围</dt><dd>工厂一 · 当前用户授权</dd></div>
+                <div><dt>对象</dt><dd class="mono">{{ task.approval?.object ?? '受控工具' }}</dd></div>
+                <div><dt>范围</dt><dd>{{ task.approval?.dataScope ?? '当前用户授权范围' }}</dd></div>
               </dl>
+              <p>{{ task.approval?.nextStep ?? '确认结果会自动更新，无需重复提交。' }}</p>
             </div>
-            <div class="conversation-notice__actions">
-              <el-button @click="rejectRun">拒绝</el-button>
-              <el-button type="primary" @click="approveRun">确认并继续</el-button>
-            </div>
+            <StatusTag status="awaiting_approval" label="自动确认中" />
           </section>
 
           <section v-if="task.error" class="conversation-notice error-notice">
             <span class="conversation-notice__icon"><el-icon><Close /></el-icon></span>
             <div>
               <strong>{{ task.error.message }}</strong>
-              <p>{{ task.error.suggestion }}</p>
+              <dl>
+                <div><dt>对象</dt><dd>{{ task.error.object }}</dd></div>
+                <div><dt>原因</dt><dd>{{ task.error.reason }}</dd></div>
+              </dl>
+              <p><strong>下一步：</strong>{{ task.error.suggestion }}</p>
               <code>{{ task.error.code }}</code>
             </div>
-            <el-button type="primary" plain :icon="RefreshRight" @click="retryRun">
+            <el-button v-if="task.error.retryable" type="primary" plain :icon="RefreshRight" @click="retryRun">
               重新执行本轮
             </el-button>
           </section>
@@ -450,6 +437,12 @@ watch(
             <article v-for="source in task.sources" :key="source.id">
               <span>{{ sourceTypeLabels[source.type] }}</span>
               <strong>{{ source.title }}</strong>
+              <small v-if="source.version || source.effectiveAt">
+                <template v-if="source.version">v{{ source.version }}</template>
+                <template v-if="source.effectiveAt"> · {{ source.effectiveAt }} 生效</template>
+                <template v-if="source.dataScope"> · {{ source.dataScope }}</template>
+                <template v-if="source.synthetic"> · 合成测试数据</template>
+              </small>
               <p>{{ source.description }}</p>
             </article>
           </div>
@@ -1025,6 +1018,14 @@ watch(
   margin-top: 4px;
   color: #343834;
   font-size: var(--dsh-font-size-badge);
+}
+
+.source-list small {
+  display: block;
+  margin-top: 4px;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-badge);
+  line-height: 1.5;
 }
 
 .source-list p {

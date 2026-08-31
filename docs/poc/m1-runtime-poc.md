@@ -228,3 +228,5 @@ DSH observer/telemetry（待实现）
 ```
 
 最终决定不 Fork DSH。ACP 承担安全控制与已提交回答，DSH 权威 Session Log 提供完整审计事实，官方 Session Telemetry 扩展点承担后续实时投影。dsh-work 必须在 FULL Telemetry 出口前实现显式脱敏规则，只投影允许的 Tool、Token、时延和状态字段。
+
+M3 完成后补充交付决策：本地开发可继续使用经过版本与 Commit 校验的源码 checkout；integration、staging 和 pilot 使用独立受管 Runtime 制品。服务端在监听端口前完成安装元数据校验和 ACP `initialize` 预检。详见 `docs/deployment/dsh-runtime-delivery.md`。

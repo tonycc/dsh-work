@@ -126,6 +126,38 @@ test('retry creates a new immutable Attempt and events are idempotent', async ()
     runs.appendEvent({ ...event, id: `event-m2-${suffix}-002` }),
     /duplicate key|unique constraint/i,
   )
+
+  await runs.transitionAttempt(run.tenantId, second.id, 'cancelled')
+  await runs.transitionRun(run.tenantId, run.id, 'cancelled')
+})
+
+test('Attempt creation rolls back when an immutable input association cannot be persisted', async () => {
+  const run = await runs.createRun({
+    tenantId: 'tenant-dsh-work',
+    sessionId,
+    requestedBy: 'U00001',
+    idempotencyKey: `m2-attempt-atomic-${suffix}`,
+  })
+  const attemptId = `attempt-atomic-${suffix}`
+  await assert.rejects(
+    runs.createAttempt({
+      attemptId,
+      tenantId: run.tenantId,
+      runId: run.id,
+      manifest: { runId: run.id },
+      manifestSha256: 'b'.repeat(64),
+      modelRouteSnapshot: {},
+      knowledgeSources: [{
+        documentId: `missing-document-${suffix}`,
+        relevanceScore: 10,
+        excerpt: '不可落库的知识快照',
+      }],
+    }),
+    /foreign key|violates/i,
+  )
+
+  assert.equal(await runs.getAttempt(run.tenantId, attemptId), null)
+  assert.equal((await runs.getRun(run.tenantId, run.id))?.currentAttemptId, null)
 })
 
 test('published governance versions reject in-place mutation', async () => {
@@ -165,9 +197,9 @@ async function seedRunDependencies(sql: DatabaseClient) {
   `
   await sql`
     insert into sessions (
-      id, tenant_id, created_by, agent_version_id, title, status
+      id, tenant_id, workspace_id, created_by, agent_version_id, title, status
     ) values (
-      ${sessionId}, 'tenant-dsh-work', 'U00001', ${agentVersionId},
+      ${sessionId}, 'tenant-dsh-work', 'ws-personal-U00001', 'U00001', ${agentVersionId},
       'M2 集成 Session', 'active'
     ) on conflict (id) do nothing
   `

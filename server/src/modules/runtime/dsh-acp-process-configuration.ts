@@ -2,8 +2,13 @@ import { resolve } from 'node:path'
 import type { AcpProcessConfiguration } from './acp-json-rpc-client.ts'
 
 export interface ManagedDshAcpProcessOptions {
-  dshRepository: string
+  /** Installed DSH runtime root. `dshRepository` remains as a development compatibility alias. */
+  runtimeHome?: string
+  dshRepository?: string
   projectRoot: string
+  command?: string
+  args?: string[]
+  deploymentConfig?: string
   env?: Record<string, string>
   shutdownGraceMs?: number
 }
@@ -12,26 +17,28 @@ export interface ManagedDshAcpProcessOptions {
 export function createManagedDshAcpProcessConfiguration(
   options: ManagedDshAcpProcessOptions,
 ): AcpProcessConfiguration {
-  const dshRepository = resolve(options.dshRepository)
-  const pinnedSiblingRepository = resolve(options.projectRoot, '../deepseek-harness')
-  if (dshRepository !== pinnedSiblingRepository) {
-    throw new Error(`DSH repository must match the pinned sibling checkout: ${pinnedSiblingRepository}`)
-  }
-  const deploymentConfig = resolve(
+  const configuredHome = options.runtimeHome ?? options.dshRepository
+  if (!configuredHome) throw new Error('DSH runtime home is required')
+  const runtimeHome = resolve(configuredHome)
+  const deploymentConfig = options.deploymentConfig ?? resolve(
     options.projectRoot,
     'server/config/dsh/acp-managed-credentials.cordis.yml',
   )
+  const acpBaseConfig = resolve(runtimeHome, 'examples/acp-agent/cordis.yml')
   return {
-    command: process.execPath,
-    args: [
+    command: options.command ?? process.execPath,
+    args: options.args ?? [
       '--import',
       'tsx',
       'packages/examples/acp-demo/src/bin.ts',
       '--config',
       deploymentConfig,
     ],
-    cwd: dshRepository,
-    env: options.env,
+    cwd: runtimeHome,
+    env: {
+      DSH_ACP_BASE_CONFIG: acpBaseConfig,
+      ...options.env,
+    },
     shutdownGraceMs: options.shutdownGraceMs,
   }
 }

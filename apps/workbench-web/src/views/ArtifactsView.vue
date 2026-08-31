@@ -1,12 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
 import { Download, Files, Search } from '@element-plus/icons-vue'
 
 import { ArtifactCard } from '@dsh-work/ui-core'
 import { useContentStore } from '@/stores/content'
 import type { Artifact } from '@/types/domain'
-import { workbenchApi } from '@/api/client'
+import { downloadArtifactFile } from '@/utils/feedback'
 
 const contentStore = useContentStore()
 const query = ref('')
@@ -29,11 +28,7 @@ function preview(item: Artifact) {
 }
 
 function download(item: Artifact) {
-  const anchor = document.createElement('a')
-  anchor.href = workbenchApi.artifactDownloadUrl(item.id, item.version)
-  anchor.download = item.name
-  anchor.click()
-  ElMessage.success('已开始下载真实成果文件')
+  void downloadArtifactFile(item)
 }
 
 onMounted(() => contentStore.refresh())

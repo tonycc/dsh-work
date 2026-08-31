@@ -5,6 +5,9 @@ apps/*/dist/
 *.tsbuildinfo
 *.log
 .runtime/
+test-results/
+playwright-report/
+blob-report/
 .env
 .env.*
 !.env.example

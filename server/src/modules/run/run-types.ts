@@ -60,4 +60,14 @@ export interface CreateAttemptInput {
   manifest: JsonObject
   manifestSha256: string
   modelRouteSnapshot: JsonObject
+  knowledgeSources?: Array<{
+    documentId: string
+    relevanceScore: number
+    excerpt: string
+  }>
+  inputFiles?: Array<{
+    fileId: string
+    extractionId: string
+    mountPath: string
+  }>
 }

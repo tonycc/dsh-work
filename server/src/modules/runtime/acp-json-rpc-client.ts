@@ -1,6 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
 
+import { redactSensitiveText } from '../../security/safe-observability.ts'
+
 interface JsonRpcRequest {
   jsonrpc: '2.0'
   id: number
@@ -54,6 +56,37 @@ export interface AcpClientHandlers {
   onDiagnostic?: (message: string) => void
 }
 
+const inheritedEnvironmentKeys = [
+  'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'TMP', 'TEMP',
+  'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM', 'NO_COLOR', 'FORCE_COLOR', 'COLORTERM',
+  'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'DSH_HOME',
+  'NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
+] as const
+
+export function buildAcpChildEnvironment(overrides: Record<string, string> = {}) {
+  const environment: NodeJS.ProcessEnv = {}
+  for (const key of inheritedEnvironmentKeys) {
+    const value = process.env[key]
+    if (value !== undefined) environment[key] = value
+  }
+  for (const [key, value] of Object.entries(overrides)) {
+    if (isSensitiveEnvironmentKey(key)) {
+      throw new Error(`ACP 子进程环境禁止直接注入敏感变量：${key}`)
+    }
+    environment[key] = value
+  }
+  return environment
+}
+
+function isSensitiveEnvironmentKey(key: string) {
+  const normalized = key.replaceAll(/[^A-Za-z0-9]/g, '').toLowerCase()
+  return normalized.includes('apikey')
+    || normalized.includes('password')
+    || normalized.includes('secret')
+    || normalized.endsWith('token')
+    || normalized.includes('credentialvalue')
+}
+
 export class AcpProtocolError extends Error {
   readonly data: unknown
 
@@ -84,14 +117,14 @@ export class AcpJsonRpcClient {
     this.handlers = handlers
     this.process = spawn(configuration.command, configuration.args, {
       cwd: configuration.cwd,
-      env: { ...process.env, ...configuration.env },
+      env: buildAcpChildEnvironment(configuration.env),
       stdio: ['pipe', 'pipe', 'pipe'],
     })
 
     this.process.stdout.on('data', (chunk: Buffer) => { this.consume(chunk) })
     this.process.stderr.on('data', (chunk: Buffer) => {
       const diagnostic = chunk.toString('utf8').trim()
-      if (diagnostic.length > 0) this.handlers.onDiagnostic?.(diagnostic.slice(0, 4000))
+      if (diagnostic.length > 0) this.handlers.onDiagnostic?.(redactSensitiveText(diagnostic.slice(0, 4000)))
     })
     this.process.on('error', (error) => { this.failPending(error) })
     this.exitPromise = new Promise(resolve => {

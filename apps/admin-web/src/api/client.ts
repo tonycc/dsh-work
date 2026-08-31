@@ -15,11 +15,14 @@ import type {
   ModelProvider,
   ModelRoute,
   ModelRoutePurpose,
+  OperationsSummary,
   PlatformStatus,
   RoleDefinition,
   RuntimeDefinition,
   SessionDefinition,
   SkillDefinition,
+  SkillReleaseRecord,
+  SkillVersionRecord,
   ToolDefinition,
   UpdateAgentDraftInput,
   UpdateRuntimeConfigurationInput,
@@ -38,6 +41,32 @@ interface ApiEnvelope<T> {
 
 const baseUrl = import.meta.env.VITE_ADMIN_API_BASE_URL ?? '/api/admin/v1'
 
+interface ApiErrorPayload {
+  code?: string
+  message?: string
+  object?: string
+  suggestion?: string
+  traceId?: string
+}
+
+export class AdminApiError extends Error {
+  readonly code: string
+  readonly object: string
+  readonly suggestion: string
+  readonly traceId: string
+  readonly status: number
+
+  constructor(payload: ApiErrorPayload, status: number, fallback: string) {
+    super(payload.message ?? fallback)
+    this.name = 'AdminApiError'
+    this.code = payload.code ?? 'request_failed'
+    this.object = payload.object ?? '当前操作'
+    this.suggestion = payload.suggestion ?? '请稍后重试；若问题持续，请检查系统健康。'
+    this.traceId = payload.traceId ?? '—'
+    this.status = status
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,
@@ -50,13 +79,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const fallback = `管理后台接口请求失败（${response.status}）`
-    try {
-      const payload = (await response.json()) as { error?: { message?: string } }
-      throw new Error(payload.error?.message || fallback)
-    } catch (cause) {
-      if (cause instanceof Error && cause.message !== 'Unexpected end of JSON input') throw cause
-      throw new Error(fallback)
-    }
+    const payload = await response.json().catch(() => undefined) as { error?: ApiErrorPayload } | undefined
+    throw new AdminApiError(payload?.error ?? {}, response.status, fallback)
   }
 
   const payload = (await response.json()) as ApiEnvelope<T>
@@ -86,6 +110,18 @@ export const adminApi = {
       method: 'PATCH',
       body: JSON.stringify(input),
     }),
+  testAgent: (input: { agentId: string; prompt: string; actor: string }) =>
+    request<{
+      id: string
+      agentId: string
+      version: string
+      status: 'passed' | 'failed'
+      resultSummary: string
+      testedAt: string
+    }>('/agents/test', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
   setAgentStatus: (input: { agentId: string; status: 'published' | 'disabled'; actor: string }) =>
     request<{ agent: AgentDefinition; release: AgentReleaseRecord }>('/agents/status', {
       method: 'PATCH',
@@ -97,12 +133,18 @@ export const adminApi = {
       body: JSON.stringify(input),
     }),
   getSkills: () => request<SkillDefinition[]>('/skills'),
+  getSkillVersions: () => request<SkillVersionRecord[]>('/skill-versions'),
+  getSkillReleaseRecords: () => request<SkillReleaseRecord[]>('/skill-release-records'),
   createSkill: (input: CreateSkillInput) =>
-    request<SkillDefinition>('/skills', { method: 'POST', body: JSON.stringify(input) }),
+    request<{ skill: SkillDefinition; version: SkillVersionRecord }>('/skills', { method: 'POST', body: JSON.stringify(input) }),
   updateSkill: (input: UpdateSkillInput) =>
-    request<SkillDefinition>('/skills', { method: 'PATCH', body: JSON.stringify(input) }),
+    request<{ skill: SkillDefinition; version: SkillVersionRecord }>('/skills', { method: 'PATCH', body: JSON.stringify(input) }),
+  testSkill: (input: { skillId: string; prompt?: string; actor: string }) =>
+    request<{ id: string; skillId: string; version: string; status: 'passed' | 'failed'; resultSummary: string; testedAt: string }>('/skills/test', { method: 'POST', body: JSON.stringify(input) }),
   setSkillStatus: (input: { skillId: string; status: 'published' | 'disabled'; actor: string }) =>
-    request<SkillDefinition>('/skills/status', { method: 'PATCH', body: JSON.stringify(input) }),
+    request<{ skill: SkillDefinition; release: SkillReleaseRecord }>('/skills/status', { method: 'PATCH', body: JSON.stringify(input) }),
+  rollbackSkill: (input: { skillId: string; version: string; actor: string }) =>
+    request<{ skill: SkillDefinition; release: SkillReleaseRecord }>('/skills/rollback', { method: 'POST', body: JSON.stringify(input) }),
   getTools: () => request<ToolDefinition[]>('/tools'),
   setToolStatus: (input: { toolId: string; status: 'available' | 'disabled'; actor: string }) =>
     request<ToolDefinition>('/tools/status', { method: 'PATCH', body: JSON.stringify(input) }),
@@ -118,8 +160,11 @@ export const adminApi = {
     allowedRoles: string[]
     dataScopes: string[]
     approvalPolicy: ToolDefinition['approvalPolicy']
+    actor: string
   }) => request<ToolDefinition>('/tools/permissions', { method: 'PATCH', body: JSON.stringify(input) }),
   getAuditEvents: () => request<AuditEvent[]>('/audit-events'),
+  getOperationsSummary: () => request<OperationsSummary>('/operations/summary'),
+  getRunOperations: (runId: string) => request<AuditEvent[]>(`/operations/runs/${encodeURIComponent(runId)}`),
   getHealth: () => request<HealthComponent[]>('/health'),
   getUsage: () => request<UsagePoint[]>('/usage'),
   getModelUsage: () => request<ModelUsageRecord[]>('/model-usage'),

@@ -1,22 +1,18 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
 import {
-  ArrowRight,
-  Close,
-  DataAnalysis,
   Document,
   DocumentChecked,
   Files,
   Reading,
-  Search,
-  TrendCharts,
-  Warning,
 } from '@element-plus/icons-vue'
 
 import { TaskComposer } from '@dsh-work/workbench-components'
+import { useContentStore } from '@/stores/content'
 import { useTaskStore } from '@/stores/tasks'
+import type { WorkspaceFile } from '@/types/domain'
+import { notifyActionFailure } from '@/utils/feedback'
 
 const props = withDefaults(
   defineProps<{
@@ -24,154 +20,120 @@ const props = withDefaults(
     workspaceName?: string
     workspaceLocked?: boolean
     embedded?: boolean
-    showActivity?: boolean
     title?: string
   }>(),
   {
-    workspaceId: 'standalone',
-    workspaceName: '未加入工作空间',
+    workspaceId: '',
+    workspaceName: '',
     workspaceLocked: false,
     embedded: false,
-    showActivity: true,
     title: 'dsh-work，我帮你',
   },
 )
 
 const router = useRouter()
 const taskStore = useTaskStore()
+const contentStore = useContentStore()
 const rootRef = ref<HTMLElement>()
+const workspaceLoadFinished = ref(false)
 
-const selectedMode = ref('office')
-const selectedCapability = ref('')
+const selectedTask = ref('')
 const presetPrompt = ref('')
 const composerKey = ref(0)
-const activityVisible = ref(true)
+const referencedWorkspaceFileIds = ref<string[]>([])
 
-const workModes = [
-  {
-    id: 'office',
-    label: '日常办公',
-    description: '整理文档、查询制度和形成可交付报告',
-  },
-  {
-    id: 'query',
-    label: '企业查询',
-    description: '在授权范围内查询 ERP、MES 和企业知识',
-  },
-  {
-    id: 'analysis',
-    label: '数据分析',
-    description: '分析业务数据、上传文件并识别风险',
-  },
-]
+const personalWorkspace = computed(() =>
+  contentStore.workspaces.find(workspace => workspace.type === 'personal'),
+)
+const selectedWorkspace = computed(() => {
+  if (props.workspaceLocked) {
+    return contentStore.workspaces.find(workspace => workspace.id === props.workspaceId)
+  }
+  return personalWorkspace.value ?? contentStore.workspaces[0]
+})
+const composerWorkspaceId = computed(() =>
+  props.workspaceLocked ? props.workspaceId : (selectedWorkspace.value?.id ?? ''),
+)
+const composerWorkspaceName = computed(() =>
+  props.workspaceLocked ? props.workspaceName : (selectedWorkspace.value?.name ?? '我的空间'),
+)
+const composerReady = computed(() =>
+  props.workspaceLocked || contentStore.initialized || workspaceLoadFinished.value,
+)
 
-const capabilities = [
+const commonTasks = [
   {
-    label: '文档处理',
+    label: '整理文档',
     icon: Document,
-    modes: ['office'],
     prompt: '请整理我接下来提供的业务材料，提炼关键事实、待办事项和责任人。',
   },
   {
-    label: '企业知识',
+    label: '查询制度',
     icon: Reading,
-    modes: ['office', 'query'],
     prompt: '查询公司现行制度中与委外加工发料和库存扣减有关的规定，并列出依据。',
   },
   {
-    label: '订单进度',
-    icon: Search,
-    modes: ['query'],
-    prompt: '查询订单 SO20260821001 当前生产进度，并说明是否能按期交付。',
-  },
-  {
-    label: '生产进度',
-    icon: TrendCharts,
-    modes: ['query', 'analysis'],
-    prompt: '汇总本周生产计划的执行进度，标出延期工单、影响因素和责任环节。',
-  },
-  {
-    label: '库存分析',
-    icon: Warning,
-    modes: ['analysis'],
-    prompt: '结合本周生产计划、当前库存和采购到货计划，识别未来 7 天的缺料风险。',
-  },
-  {
-    label: '文件分析',
+    label: '分析文件',
     icon: Files,
-    modes: ['office', 'analysis'],
     prompt: '分析我上传的文件，概括主要指标、异常项和需要跟进的问题。',
   },
   {
-    label: '经营分析',
-    icon: DataAnalysis,
-    modes: ['analysis'],
-    prompt: '分析本月供应链经营数据，对比上月变化，找出影响交付的主要因素。',
-  },
-  {
-    label: '报告生成',
+    label: '生成报告',
     icon: DocumentChecked,
-    modes: ['office', 'analysis'],
     prompt: '根据当前数据生成一份管理层可阅读的经营分析报告，包含摘要、风险和行动建议。',
   },
 ]
-
-const orderedCapabilities = computed(() => {
-  return [...capabilities].sort((left, right) => {
-    const leftRelevant = left.modes.includes(selectedMode.value) ? 0 : 1
-    const rightRelevant = right.modes.includes(selectedMode.value) ? 0 : 1
-    return leftRelevant - rightRelevant
-  })
-})
-
-const selectedModeDescription = computed(
-  () => workModes.find((mode) => mode.id === selectedMode.value)?.description ?? '',
-)
-const currentActivity = computed(() => taskStore.activeTasks[0])
-const activityStatusLabel = computed(() => {
-  if (!currentActivity.value) return '就绪'
-  if (currentActivity.value.status === 'awaiting_approval') return '待确认'
-  if (currentActivity.value.status === 'queued') return '排队中'
-  return '执行中'
-})
 
 function focusComposer() {
   void nextTick(() => rootRef.value?.querySelector<HTMLTextAreaElement>('.composer__input')?.focus())
 }
 
-function selectCapability(item: (typeof capabilities)[number]) {
-  selectedCapability.value = item.label
+function selectTask(item: (typeof commonTasks)[number]) {
+  selectedTask.value = item.label
+  referencedWorkspaceFileIds.value = []
   presetPrompt.value = item.prompt
   composerKey.value += 1
   focusComposer()
 }
 
-function useWorkspaceFile(name: string) {
-  selectedMode.value = 'analysis'
-  selectedCapability.value = '文件分析'
-  presetPrompt.value = `请分析工作空间文件“${name}”，概括关键信息、异常项和需要跟进的问题。 @工作空间文件`
+function useWorkspaceFile(file: WorkspaceFile) {
+  selectedTask.value = '分析文件'
+  referencedWorkspaceFileIds.value = [file.id]
+  presetPrompt.value = `请分析工作空间文件“${file.name}”，概括关键信息、异常项和需要跟进的问题。 @工作空间文件`
   composerKey.value += 1
   focusComposer()
 }
 
-function openActivity() {
-  if (currentActivity.value) void router.push(`/conversations/${currentActivity.value.id}`)
-  else void router.push('/workspaces')
-}
-
-async function submitTask(payload: { prompt: string; files: string[]; workspaceId: string }) {
+async function submitTask(payload: { prompt: string; files: File[]; workspaceId: string }) {
   try {
     const task = await taskStore.createTask(
       payload.prompt,
       payload.files,
       payload.workspaceId,
-      props.workspaceLocked ? props.workspaceName : undefined,
+      props.workspaceLocked ? props.workspaceName : composerWorkspaceName.value,
+      undefined,
+      referencedWorkspaceFileIds.value,
     )
+    referencedWorkspaceFileIds.value = []
     await router.push(`/conversations/${task.id}`)
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '创建对话失败')
+    notifyActionFailure('创建对话', props.workspaceLocked ? `工作空间“${props.workspaceName}”` : '新对话', error, '检查 Agent、工作空间、附件和输入内容后重新提交。')
   }
 }
+
+onMounted(async () => {
+  if (props.workspaceLocked) {
+    workspaceLoadFinished.value = true
+    return
+  }
+  try {
+    await contentStore.load()
+  } catch (error) {
+    notifyActionFailure('加载工作空间', '新对话的空间列表', error, '仍可继续发送，服务端会自动归入“我的空间”。')
+  } finally {
+    workspaceLoadFinished.value = true
+  }
+})
 
 defineExpose({ useWorkspaceFile })
 </script>
@@ -186,66 +148,17 @@ defineExpose({ useWorkspaceFile })
       <section class="workbench-welcome" aria-labelledby="conversation-starter-title">
         <div class="workbench-welcome__copy">
           <h1 id="conversation-starter-title">{{ title }}</h1>
-          <p>{{ selectedModeDescription }}</p>
+          <p>整理文档、查询制度、分析文件并形成可交付报告</p>
         </div>
 
-        <aside
-          v-if="showActivity && activityVisible"
-          class="activity-card"
-          aria-label="当前活动"
-        >
-          <header>
-            <span class="activity-card__label">
-              <span
-                class="activity-card__signal"
-                :class="{ 'activity-card__signal--active': currentActivity }"
-              ></span>
-              活动
-            </span>
-            <button type="button" aria-label="关闭活动提示" @click="activityVisible = false">
-              <el-icon><Close /></el-icon>
-            </button>
-          </header>
-          <template v-if="taskStore.loading">
-            <el-skeleton :rows="2" animated />
-          </template>
-          <template v-else>
-            <strong>{{ currentActivity ? currentActivity.title : '企业工作上下文已就绪' }}</strong>
-            <p v-if="currentActivity">
-              {{ activityStatusLabel }} · {{ currentActivity.workspaceName }}
-            </p>
-            <p v-else>已注入身份、工作空间和默认数据权限</p>
-            <button class="activity-card__action" type="button" @click="openActivity">
-              {{ currentActivity ? '查看对话' : '查看空间' }}
-              <el-icon><ArrowRight /></el-icon>
-            </button>
-          </template>
-        </aside>
-
-        <div class="work-modes" role="group" aria-label="选择工作模式">
+        <nav class="capability-strip" aria-label="常用任务">
           <button
-            v-for="mode in workModes"
-            :key="mode.id"
-            type="button"
-            :class="{ 'is-active': selectedMode === mode.id }"
-            :aria-pressed="selectedMode === mode.id"
-            @click="selectedMode = mode.id"
-          >
-            {{ mode.label }}
-          </button>
-        </div>
-
-        <nav class="capability-strip" aria-label="常用能力">
-          <button
-            v-for="item in orderedCapabilities"
+            v-for="item in commonTasks"
             :key="item.label"
             class="capability-chip"
-            :class="{
-              'is-selected': selectedCapability === item.label,
-              'is-secondary': !item.modes.includes(selectedMode),
-            }"
+            :class="{ 'is-selected': selectedTask === item.label }"
             type="button"
-            @click="selectCapability(item)"
+            @click="selectTask(item)"
           >
             <el-icon><component :is="item.icon" /></el-icon>
             <span>{{ item.label }}</span>
@@ -253,19 +166,22 @@ defineExpose({ useWorkspaceFile })
         </nav>
 
         <TaskComposer
+          v-if="composerReady"
           :key="composerKey"
           class="workbench-composer"
           :initial-prompt="presetPrompt"
-          :initial-workspace-id="workspaceId"
-          :initial-workspace-name="workspaceName"
+          :initial-workspace-id="composerWorkspaceId"
+          :initial-workspace-name="composerWorkspaceName"
+          :workspaces="contentStore.workspaces"
           :workspace-locked="workspaceLocked"
           @submit="submitTask"
         />
+        <el-skeleton v-else class="workbench-composer" :rows="3" animated />
 
         <footer class="workbench-trust">
           <span><i></i> PostgreSQL 与 DSH Runtime 已连接</span>
           <span>支持 PDF、DOCX、XLSX、CSV，单文件不超过 20 MB</span>
-          <span>⌘ + 回车键发送</span>
+          <span>Enter 发送 · Shift + Enter 换行</span>
         </footer>
       </section>
     </main>
@@ -315,139 +231,12 @@ defineExpose({ useWorkspaceFile })
   font-size: var(--dsh-font-size-caption);
 }
 
-.work-modes {
-  display: flex;
-  justify-content: center;
-  gap: 3px;
-  margin-top: 16px;
-}
-
-.work-modes button {
-  min-height: 29px;
-  padding: 0 12px;
-  border: 0;
-  border-radius: 999px;
-  color: #666a66;
-  background: transparent;
-  cursor: pointer;
-  font-size: var(--dsh-font-size-caption);
-  transition: color 140ms ease, background 140ms ease;
-}
-
-.work-modes button:hover {
-  color: #252725;
-  background: #f0f1ef;
-}
-
-.work-modes button.is-active {
-  color: #fff;
-  background: #393c39;
-}
-
-.activity-card {
-  position: absolute;
-  top: -4px;
-  right: 0;
-  width: 190px;
-  min-height: 120px;
-  padding: 12px;
-  border: 1px solid #dfe9e5;
-  border-radius: 13px;
-  background: #f0f7f4;
-  box-shadow: 0 10px 28px rgb(40 68 57 / 5%);
-}
-
-.activity-card header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.activity-card header > button {
-  display: grid;
-  width: 21px;
-  height: 21px;
-  padding: 0;
-  place-items: center;
-  border: 0;
-  border-radius: 6px;
-  color: #8a938f;
-  background: transparent;
-  cursor: pointer;
-}
-
-.activity-card header > button:hover {
-  color: #3d4541;
-  background: #e3eeea;
-}
-
-.activity-card__label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: #50605a;
-  font-size: var(--dsh-font-size-badge);
-  font-weight: 650;
-}
-
-.activity-card__signal {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #54b99a;
-}
-
-.activity-card__signal--active {
-  box-shadow: 0 0 0 4px rgb(84 185 154 / 14%);
-}
-
-.activity-card > strong {
-  display: -webkit-box;
-  margin-top: 12px;
-  overflow: hidden;
-  color: #35413c;
-  font-size: var(--dsh-font-size-caption);
-  font-weight: 620;
-  line-height: 1.45;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-
-.activity-card > p {
-  margin: 5px 0 0;
-  overflow: hidden;
-  color: #7a8882;
-  font-size: var(--dsh-font-size-micro);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.activity-card__action {
-  display: flex;
-  align-items: center;
-  width: max-content;
-  min-height: 24px;
-  gap: 4px;
-  margin: 9px 0 0 auto;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 7px;
-  color: #365f52;
-  background: #fff;
-  cursor: pointer;
-  font-size: var(--dsh-font-size-micro);
-}
-
-.activity-card__action:hover {
-  color: #164f3f;
-  box-shadow: 0 2px 8px rgb(38 75 62 / 9%);
-}
-
 .capability-strip {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
-  margin: 45px 0 8px;
+  margin: 22px 0 8px;
   padding: 0 1px;
   overflow-x: auto;
   scrollbar-width: none;
@@ -483,10 +272,6 @@ defineExpose({ useWorkspaceFile })
   border-color: #9fc8ba;
   color: #155e4b;
   background: #edf7f3;
-}
-
-.capability-chip.is-secondary {
-  color: #909490;
 }
 
 .capability-chip .el-icon {
@@ -536,21 +321,6 @@ defineExpose({ useWorkspaceFile })
   transform: translateY(-1.5vh);
 }
 
-@media (max-width: 1020px) {
-  .activity-card {
-    position: relative;
-    top: auto;
-    right: auto;
-    width: min(100%, 360px);
-    min-height: auto;
-    margin: 20px auto 0;
-  }
-
-  .capability-strip {
-    margin-top: 24px;
-  }
-}
-
 @media (max-width: 640px) {
   .workbench-stage,
   .conversation-starter--embedded .workbench-stage {
@@ -572,15 +342,8 @@ defineExpose({ useWorkspaceFile })
     line-height: 1.55;
   }
 
-  .work-modes {
-    margin-top: 13px;
-  }
-
-  .work-modes button {
-    padding: 0 9px;
-  }
-
   .capability-strip {
+    justify-content: flex-start;
     margin-right: -14px;
     margin-left: -14px;
     padding: 0 14px;

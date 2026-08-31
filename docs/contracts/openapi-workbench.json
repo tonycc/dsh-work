@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "dsh-work 员工工作台 API",
-    "version": "0.3.0-m3",
-    "description": "M3 契约基线。员工工作台通过独立 API 使用 PostgreSQL 编排、DSH Runtime、SSE、工作空间文件和 Artifact。"
+    "version": "0.5.0-m5",
+    "description": "M5 契约基线。每位用户具有唯一默认个人工作空间，所有 Session、文件与成果均归属个人或团队工作空间；运行仍通过 PostgreSQL 编排、服务端权限过滤、DSH Runtime 与 SSE 执行。"
   },
   "servers": [{ "url": "/api/workbench/v1" }],
   "security": [{ "enterpriseSession": [] }],
@@ -15,10 +15,17 @@
         "responses": { "200": { "$ref": "#/components/responses/Ok" }, "401": { "$ref": "#/components/responses/Error" } }
       }
     },
+    "/agents": {
+      "get": {
+        "operationId": "listAvailableAgents",
+        "summary": "按当前员工角色查询可用的已发布 Agent",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+      }
+    },
     "/workspaces": {
       "get": {
         "operationId": "listMyWorkspaces",
-        "summary": "查询当前员工加入的团队工作空间",
+        "summary": "查询当前员工的个人工作空间和已加入的团队工作空间",
         "responses": { "200": { "$ref": "#/components/responses/Ok" } }
       }
     },
@@ -55,14 +62,14 @@
         "operationId": "listMySessions",
         "summary": "按工作空间或关键字查询当前员工可见对话",
         "parameters": [
-          { "name": "workspaceId", "in": "query", "schema": { "type": ["string", "null"] } },
+          { "name": "workspaceId", "in": "query", "schema": { "type": "string" } },
           { "name": "cursor", "in": "query", "schema": { "type": "string" } }
         ],
         "responses": { "200": { "$ref": "#/components/responses/Ok" } }
       },
       "post": {
         "operationId": "createSession",
-        "summary": "创建对话；workspaceId 为空时创建独立对话",
+        "summary": "创建对话；workspaceId 省略时自动归入当前用户的默认个人空间",
         "requestBody": {
           "required": true,
           "content": {
@@ -70,7 +77,7 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "workspaceId": { "type": ["string", "null"] },
+                  "workspaceId": { "type": "string", "description": "个人或团队工作空间 ID；省略时由服务端选择默认个人空间。" },
                   "agentId": { "type": ["string", "null"] },
                   "title": { "type": ["string", "null"], "maxLength": 120 }
                 }
@@ -89,21 +96,38 @@
         "responses": { "200": { "$ref": "#/components/responses/Ok" }, "404": { "$ref": "#/components/responses/Error" } }
       }
     },
+    "/sessions/{sessionId}/files": {
+      "parameters": [{ "$ref": "#/components/parameters/SessionId" }],
+      "post": {
+        "operationId": "uploadSessionFile",
+        "summary": "上传、扫描并基础解析当前对话输入文件",
+        "parameters": [
+          { "name": "X-File-Name", "in": "header", "required": true, "schema": { "type": "string" }, "description": "encodeURIComponent 编码后的原文件名" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": { "schema": { "type": "string", "format": "binary", "maxLength": 20971520 } }
+          }
+        },
+        "responses": { "201": { "$ref": "#/components/responses/Ok" }, "413": { "$ref": "#/components/responses/Error" }, "422": { "$ref": "#/components/responses/Error" } }
+      }
+    },
     "/sessions/{sessionId}/runs": {
       "parameters": [{ "$ref": "#/components/parameters/SessionId" }],
       "post": {
         "operationId": "startRun",
-        "summary": "提交消息并启动一次 Run",
+        "summary": "提交消息并启动一次 Run；企业知识和解析文件在进入 Runtime 前完成权限过滤并固化版本来源",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["message", "idempotencyKey"],
+                "required": ["prompt", "idempotencyKey"],
                 "properties": {
-                  "message": { "type": "string", "minLength": 1, "maxLength": 20000 },
-                  "fileIds": { "type": "array", "items": { "type": "string" }, "maxItems": 20 },
+                  "prompt": { "type": "string", "minLength": 1, "maxLength": 20000 },
+                  "fileIds": { "type": "array", "items": { "type": "string" }, "maxItems": 5, "uniqueItems": true },
                   "idempotencyKey": { "type": "string", "minLength": 8, "maxLength": 128 }
                 }
               }
@@ -158,7 +182,7 @@
         "operationId": "listArtifacts",
         "summary": "查询当前员工可见成果",
         "parameters": [
-          { "name": "workspaceId", "in": "query", "schema": { "type": ["string", "null"] } },
+          { "name": "workspaceId", "in": "query", "schema": { "type": "string" } },
           { "name": "sessionId", "in": "query", "schema": { "type": ["string", "null"] } }
         ],
         "responses": { "200": { "$ref": "#/components/responses/Ok" } }
@@ -209,18 +233,19 @@
       },
       "ErrorEnvelope": {
         "type": "object",
-        "required": ["error", "meta"],
+        "required": ["error"],
         "properties": {
           "error": {
             "type": "object",
-            "required": ["code", "message"],
+            "required": ["code", "message", "object", "suggestion", "traceId"],
             "properties": {
               "code": { "type": "string" },
               "message": { "type": "string" },
-              "details": { "type": ["object", "null"], "additionalProperties": true }
+              "object": { "type": "string" },
+              "suggestion": { "type": "string" },
+              "traceId": { "type": "string" }
             }
-          },
-          "meta": { "$ref": "#/components/schemas/Meta" }
+          }
         }
       },
       "Meta": {

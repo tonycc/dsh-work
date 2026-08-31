@@ -21,7 +21,7 @@ MVP 的第一条可运行主链路必须是：
 
 ```text
 企业用户登录
-  → 发起对话或进入团队工作空间
+  → 在默认个人空间发起对话或进入团队工作空间
   → 创建 Session / Run / Attempt
   → Runtime Adapter 启动独立 DSH Worker
   → DSH 通过 Model Gateway 和 Connector Gateway 执行
@@ -36,7 +36,8 @@ MVP 的第一条可运行主链路必须是：
 - Node.js 服务端保持一个模块化单体，不拆业务微服务；
 - 一个 Attempt 默认启动一个独立 DSH Worker 子进程；
 - Runtime 是长期运行环境，不等于单个 DSH Worker 子进程；
-- 只支持团队工作空间，不建设个人工作空间；
+- 每位用户由系统自动创建一个默认个人工作空间，同时支持团队工作空间；
+- 所有 Session、文件和成果必须归属某个工作空间，不保留无空间归属的对话；
 - 不建设独立的全量对话记录页面，最近对话承担快速回访；
 - 不实现 PPT 生成；
 - 不开放自定义 Tool 和 Connector，首批能力由实施团队预置；
@@ -198,7 +199,7 @@ M1 失败时不得直接扩大正式实现。必须在以下选项中形成书�
 | M2-02 | PostgreSQL 工程化 | 连接池、迁移、事务、测试数据库、种子数据和健康检查 | M0-05 | 后端、运维 | 4 人日 |
 | M2-03 | 身份与组织表 | users、roles、user_roles、data_scopes 及约束 | M2-02、D-03 | 后端 | 3 人日 |
 | M2-04 | 治理配置表 | agents、agent_versions、skills、tools 及不可变版本约束 | M2-02 | 后端、AI | 4 人日 |
-| M2-05 | 工作空间与会话表 | workspaces、workspace_members、sessions、messages；只支持团队工作空间 | M2-02 | 后端 | 4 人日 |
+| M2-05 | 工作空间与会话表 | workspaces、workspace_members、sessions、messages；支持唯一默认个人空间和团队工作空间，Session 空间归属非空 | M2-02 | 后端 | 4 人日 |
 | M2-06 | 运行表 | runs、runtime_attempts、run_events；状态转换使用事务和幂等键 | M2-02、M1 | 后端、Runtime | 5 人日 |
 | M2-07 | 文件与成果表 | files、artifacts、artifact_versions 和来源追溯 | M2-02、D-07 | 后端 | 4 人日 |
 | M2-08 | 审计与用量表 | tool_audit_logs、model_usage_records、管理操作审计 | M2-02 | 后端、安全 | 3 人日 |
@@ -243,6 +244,26 @@ M3 工程 Gate 于 2026-08-30 完成：员工端已切换真实 Session/Run/Atte
 | M4-08 | 审计与运营 | 运行、模型、Tool、成果、管理操作和失败事件可查询与下钻 | M2-08、M3 | 后端、前端 | 4 人日 |
 | M4-09 | 通知和错误体验 | 待审批、失败、超时、连接器异常和下载失败有明确对象、原因和下一步 | M3 | 前端、后端 | 3 人日 |
 
+M4-01 Agent 管理于 2026-08-30 完成：Agent 草稿、服务端测试门禁、发布、停用/启用、不可变版本、回滚、发布记录、员工可见范围、Session 版本锁定和 Runtime 配置注入均已落地，并通过真实 PostgreSQL 生命周期集成测试。该结论只关闭 M4-01；M4 总 Gate 仍需完成 M4-02～M4-09，并关闭对应外部决策。
+
+M4-02 Skill 管理于 2026-08-30 完成：Skill 标识由服务端自动生成，草稿、配置指纹测试门禁、不可变版本、发布、停用/启用、回滚和发布记录均已持久化；Agent 只能引用已发布的具体 Skill Version，Run Manifest 固化并向 DSH 注入对应执行指令。真实 PostgreSQL 集成测试已验证旧 Agent Version 在 Skill 升级和停用后仍保持历史快照。M4-03 已继续补齐预置 Tool/Connector 的真实目录与可用性强校验。
+
+M4-03 预置 Tool/Connector 于 2026-08-30 完成工程范围：基于已锁定的 DSH Runtime 交付 `read`、`glob`、`grep` 三个本地工作空间只读 Tool 和一个 DSH Runtime Connector；Tool Version、Schema、角色、数据范围、启停、健康检查、审计以及 Agent/Skill 强引用均使用 PostgreSQL。每个 Run 将不可变 Manifest 中的 Tool 列表注入 DSH 进程，执行前守卫对未授权 Tool 失败关闭，因此 DSH 基础配置中的写文件、命令等能力不能绕过平台白名单。该结论不冒充企业 ERP/MES 已接通：D-05 的首个企业 Connector 仍是 M4/M5 联合试点准入项。
+
+M4-04 企业知识查询于 2026-08-30 完成工程范围：以 PostgreSQL 受控知识目录作为可替换来源，使用两份明确标记为合成测试数据的版本化制度文档验证检索、角色和工作空间权限过滤、文档版本不可变、Attempt 来源快照、Runtime Manifest 上下文及员工端来源展示。DSH 只接收过滤后的最多三份知识摘要，并被要求对知识结论使用 `【序号】` 引用；服务端为实际命中文档追加包含版本和生效日期的来源清单。D-06 的真实知识库 API 或文档目录仍待确定，因此该工程 Gate 不等于真实知识 UAT 通过。
+
+M4-05 文件分析于 2026-08-30 完成工程范围：员工新对话和追问支持上传 PDF、DOCX、XLSX、CSV、TXT 与 Markdown，服务端在 Run 前完成扩展名、大小、安全扫描、基础文本解析和 Session/工作空间权限校验；每个 Attempt 通过 `run_input_files` 固化原文件、解析器版本、文本校验值和挂载路径。Runtime Adapter 仅允许将校验后的解析文本排他写入 Attempt 的 `/workspace/input/*.txt`，并设置为 `0400` 只读。单元、Runtime 与真实 PostgreSQL 测试覆盖解析、失败码、越权、Manifest 注入和对话追溯。当前不包含 OCR、复杂 Office 版面、生产杀毒和正式 NAS/对象存储，相关生产 Gate 继续由 D-07、D-09 约束。收尾复跑时，当前 DSH 默认模型链路的纯模型与 Tool 探针均返回 `stopReason=cancelled` 且没有提交消息；因此 M4-05 工程 Gate 可关闭，但当前环境的真实模型 UAT 需在 DSH 链路恢复后重跑。
+
+M4-06 权限与数据范围于 2026-08-30 完成工程范围：新增服务端统一授权服务，在员工资源读取、Session 创建、Run 启动、取消和重试前校验启用用户、未过期角色与 `workbench:use`；空间内操作继续校验工作空间成员，运行前再验证 Session 锁定的 Agent 已发布版本与可见角色、用户/角色/空间数据范围、工作空间 Agent/Skill/Tool 精确版本授权，以及 Tool/Connector 可用性和只读调用权限。授权结果中的真实角色与有效数据范围进入不可变 Runtime Manifest，不再硬编码普通员工。Agent 配置阶段同步校验 Tool 角色与数据范围兼容性，Agent/Skill/Tool 管理写操作要求有效 `admin:*`，所有运行授权通过与拒绝均追加审计。真实 PostgreSQL 测试覆盖允许、跨空间、缺能力授权、缺数据范围、普通员工管理越权及 Manifest 快照。D-03 未确定前 HTTP 入口仍使用受控种子身份，不能等同于企业 SSO 上线验收。
+
+M4-07 Runtime 运维配置于 2026-08-30 完成工程范围：Runtime 配置改为按 Runtime 保存不可覆盖版本历史；最大并发由 PostgreSQL 原子抢占强制执行，下调容量不能小于活动 Worker 数；Runtime 超时作为硬上限与 Agent 超时取较短值后进入不可变 Manifest。`accepting`、`draining`、`disabled` 同时控制数据库调度与 DSH Adapter 新执行入口，服务重启会恢复持久化调度状态，排空和停用都不会隐式取消在途 Attempt。健康检查回写真实 Adapter 状态、版本、心跳和最近执行质量，配置与检查写操作要求平台管理员并记录审计。Adapter 单元测试和真实 PostgreSQL 测试覆盖调度状态、容量、超时、权限、健康、配置历史及 Manifest。CPU/内存/磁盘监控和多节点租约仍属于后续部署 Gate；R-15 真实模型复验已于 2026-08-30 通过并关闭。
+
+M4-08 审计与运营于 2026-08-30 完成工程范围：新增只读 `operational_events` 投影，统一管理操作、安全授权、运行、模型、工具和成果事实；管理端提供近 24 小时真实汇总、类型/结果/关键词筛选、脱敏导出、事件详情和按 Run 安全时间线下钻。Agent、Skill、工具、连接器和运行时管理记录恢复各自对象类型，运营概览中的演示数量和风险事项已替换为 PostgreSQL 事实。投影明确排除消息、提示词、回答正文和文件内容。生产日志平台、告警、长期归档和保留期属于后续部署工作；R-15 真实模型复验已通过独立探针和浏览器 UAT 关闭。
+
+M4-09 通知和错误体验于 2026-08-30 完成工程范围：失败 Run 从当前 Attempt 读取真实错误码，员工端按超时、连接器异常、Tool 权限拒绝、模型失败和未知 Runtime 错误显示受影响对象、原因、下一步及是否可重试；项目既定的自动确认策略不再呈现只改变前端状态的伪人工审批。文件上传、对话创建、追问、重试和成果下载统一使用结构化失败反馈，成果下载只有取得服务端 Blob 后才提示成功；管理端连接器检查明确异常对象以及端点、凭据和 Runtime 排查方向。两个 API 客户端和 OpenAPI 已统一 `code`、`message`、`object`、`suggestion`、`traceId` 错误契约，未知异常不向浏览器暴露内部细节。生产通知渠道、告警升级和重试退避属于 M5。
+
+M4 工程 Gate 于 2026-08-30 关闭：M4-01～M4-09 的代码、契约、检查表、单元测试和 PostgreSQL 集成测试已形成可重复基线，可以进入 M5 安全、测试和部署工程。R-15 默认模型链路随后完成修复并通过真实模型、Tool、Artifact 和浏览器文件 UAT；该结论仍不等于真实业务试点准入通过，因为 D-03 企业 SSO、D-05 首个企业只读 Connector、D-06 真实知识源、生产文件与部署参数仍待外部决策。在这些项目关闭并重跑对应端到端用例前，不启动正式试点，也不以种子账号、合成知识或本地 Tool 冒充企业联调结果。
+
 ## 5.6 M5：安全、测试和部署
 
 | ID | 工作项 | 主要交付和完成定义 | 依赖 | 主责 | 估算 |
@@ -256,6 +277,14 @@ M3 工程 Gate 于 2026-08-30 完成：员工端已切换真实 Session/Run/Atte
 | M5-07 | 日志监控告警 | 结构化日志、Trace、磁盘、内存、队列、Runtime、模型和 Tool 告警 | M4、D-10 | 运维、后端 | 4 人日 |
 | M5-08 | 备份恢复 | PostgreSQL、Artifact、配置备份；完成一次可记录的恢复演练 | D-07、D-10 | 运维、后端 | 3 人日 |
 | M5-09 | 发布与回滚 | 版本清单、数据库前向迁移、应用回滚、DSH 回滚和维护窗口步骤 | M5-05～M5-08 | 技术负责人 | 2 人日 |
+
+M5-01 自动化测试基线于 2026-08-30 完成：D-13 正式确定为 Vue 使用 Vitest、Vue Test Utils 与 happy-dom，浏览器使用 Playwright Chromium，服务端继续使用 Node Test。员工端覆盖 TaskComposer、Run/SSE Store 和结构化 API 错误，管理端覆盖角色写权限和 API 错误；服务端增加真实 HTTP 双 Audience、命名空间隔离、安全 Agent DTO 和错误响应契约测试。Playwright 会自动启动 Node、员工端和管理端，覆盖员工工作台进入团队工作空间，以及管理端能力页签进入 Runtimes 的浏览器冒烟，并在失败时保留截图、视频和 Trace。首轮 E2E 发现并修复原型模式缺少员工 Agent 接口导致工作空间 `Promise.all` 整体失败的问题。上述测试与既有领域、PostgreSQL Repository、Runtime 契约测试均已进入 GitHub Actions；这不替代 M5-02 安全、M5-03 故障或 M5-04 容量测试。
+
+M5-02 权限与安全测试于 2026-08-30 完成工程范围：独立 PostgreSQL 回归覆盖非管理员写操作、跨用户/跨 Workspace 文件访问、路径穿越、伪装可执行文件、授权拒绝审计及嵌套 Tool 元数据脱敏，4/4 通过。安全检查同时发现并修正 ACP Worker 默认继承 Node.js 全量环境的问题：DSH 子进程现在只继承显式 OS/DSH 基线变量，敏感环境覆盖失败关闭；管理审计、授权详情、Runtime 诊断和 Tool 参数在写入前统一脱敏，读取时再次防御性脱敏。Tool Allowlist 与仓库密钥签名扫描进入 CI。该 Gate 不替代 D-03 企业 SSO、D-07 企业级恶意文件扫描、D-09 L2 数据策略或 M5-06 生产 Secret/网络控制。
+
+M5-03 运行故障测试于 2026-08-30 完成工程范围：Runtime Adapter 对 Worker 崩溃、员工取消、Attempt 超时、模型失败、Tool 超时、运行网络中断和服务关闭保留独立终态与可重试错误语义；服务关闭和无本地取消原因的 ACP `cancelled` 不再被误记为员工主动取消。启动恢复会将无法续接旧 Worker 的运行中/取消中 Attempt 标记为 `SERVICE_RESTARTED`，保留事件与审计；只对尚未开始、没有外部副作用的排队 Attempt 使用原不可变 Manifest 恢复调度。SSE 以 PostgreSQL `stream_position` 和 `Last-Event-ID` 续传，重启后仍只返回游标之后的事件；前端按当前 Attempt 过滤旧终态。Runtime 22/22、SSE 1/1、独立 PostgreSQL 故障回归 2/2 和真实浏览器重试通过。R-15 默认模型链路复验已关闭；真实网络/Provider 故障、主机与数据库恢复和生产告警仍属于后续部署 Gate。
+
+M5-04 容量测试于 2026-08-30 完成工程范围：真实 PostgreSQL、Run Repository、状态机和调度泵在确定性 Instrumented Runtime 下验证 1、3、5 并发均严格达到且不超过配置值；50 Run 突发在并发 5 时形成运行 5、排队 45，最终 50/50 成功，受理 P95 74.66 ms、完成 P95 301.01 ms、Node RSS 峰值 107.72 MiB、测试目录累计写入 52,441 B。M1 已留存真实 DSH 1/3/5 并发历史证据，5 并发 Worker 进程树 RSS 峰值 829 MiB。R-15 默认模型单 Run 链路已恢复，但当前控制面数据仍不能推导真实模型吞吐；D-08 目标 Mac mini 未确定，因此正式并发、20 MB 文件和长对话容量仍须在预生产环境重跑后决定。
 
 ## 5.7 M6：业务验收与试点启动
 
@@ -395,7 +424,7 @@ GET        /api/admin/v1/health
 
 | ID | 用例 | 验收结果 |
 |---|---|---|
-| UAT-01 | 未绑定工作空间的新对话 | 创建 Session/Run，流式返回，最近对话可回访 |
+| UAT-01 | 默认个人空间中的新对话 | 未显式选择团队空间时自动绑定“我的空间”，创建 Session/Run，流式返回且最近对话可回访 |
 | UAT-02 | 团队工作空间内对话 | Session 锁定当前空间，成员和文件权限正确 |
 | UAT-03 | 企业知识问答 | 返回答案、引用、文档版本和数据范围 |
 | UAT-04 | ERP/MES 只读查询 | 只调用 Allowlist Tool，结果字段过滤，审计完整 |
@@ -439,7 +468,8 @@ Mac mini
 ├── admin-web：独立 Vue 构建物
 ├── dsh-work-app：一个 Node.js 模块化单体
 ├── PostgreSQL
-├── DSH Worker：由 Runtime Adapter 按 Attempt 启动
+├── DSH Runtime 制品：独立版本、安装元数据和正式 ACP 入口
+├── DSH Worker：由 Runtime Adapter 从受管制品按 Attempt 启动
 └── persistent-data
     ├── uploads
     ├── workspaces
@@ -447,6 +477,8 @@ Mac mini
     ├── runtime-logs
     └── backups
 ```
+
+DSH 源码不并入 dsh-work。local 环境允许使用经过 version、Commit 和 ACP 协议预检的源码 checkout；integration、staging 和 pilot 必须使用固定版本受管制品。Runtime 安装与回滚规范见 `docs/deployment/dsh-runtime-delivery.md`。
 
 ## 8.2 环境划分
 

@@ -98,6 +98,7 @@ const shortageSteps = [
 export const mockTasks: TaskRun[] = [
   {
     id: 'run-260828-002',
+    attemptId: 'attempt-run-260828-002-1',
     title: '核查 SO20260821001 缺料风险',
     prompt: '查询订单 SO20260821001 当前生产进度，判断是否存在缺料风险。',
     status: 'running',
@@ -129,6 +130,7 @@ export const mockTasks: TaskRun[] = [
   },
   {
     id: 'run-260828-001',
+    attemptId: 'attempt-run-260828-001-1',
     title: '分析华东区本月订单交付风险',
     prompt: '分析华东区本月订单交付情况，找出延期风险最高的订单并给出跟进建议。',
     status: 'succeeded',
@@ -240,6 +242,7 @@ export const mockTasks: TaskRun[] = [
   },
   {
     id: 'run-260827-004',
+    attemptId: 'attempt-run-260827-004-1',
     title: '分析八月生产计划文件',
     prompt: '分析上传的八月生产计划，结合当前库存标出下周可能缺料的订单。',
     status: 'awaiting_approval',
@@ -300,11 +303,12 @@ export const mockTasks: TaskRun[] = [
   },
   {
     id: 'run-260827-002',
+    attemptId: 'attempt-run-260827-002-1',
     title: '查询委外加工发料制度',
     prompt: '公司的委外加工业务应该如何处理发料和库存扣减？',
     status: 'succeeded',
-    workspaceId: 'standalone',
-    workspaceName: '未加入工作空间',
+    workspaceId: 'ws-personal-U10086',
+    workspaceName: '我的空间',
     sessionId: 'session-0991',
     agentVersion: 'dsh-work-assistant@1.1.0',
     createdAt: '昨天 11:32',
@@ -371,6 +375,7 @@ export const mockTasks: TaskRun[] = [
   },
   {
     id: 'run-260826-008',
+    attemptId: 'attempt-run-260826-008-1',
     title: '汇总供应商延期到货记录',
     prompt: '汇总上周供应商延期到货记录并生成表格。',
     status: 'failed',
@@ -425,12 +430,28 @@ export const mockTasks: TaskRun[] = [
     error: {
       code: 'CONNECTOR_TIMEOUT',
       message: '采购平台连接超时，未获取到完整数据。',
+      object: '运行 run-260828-005',
+      reason: '采购平台连接器在规定时间内没有返回完整数据。',
       suggestion: '请稍后重试；如持续失败，请联系数字化中心检查采购平台连接器。',
+      retryable: true,
     },
   },
 ]
 
 export const mockWorkspaces: Workspace[] = [
+  {
+    id: 'ws-personal-U10086',
+    name: '我的空间',
+    description: '仅你可访问的默认工作空间，用于归档个人对话、文件和成果。',
+    type: 'personal',
+    memberCount: 1,
+    sessionCount: 1,
+    artifactCount: 0,
+    updatedAt: '昨天 11:33',
+    owner: '林岚',
+    members: ['林岚'],
+    files: [],
+  },
   {
     id: 'ws-supply',
     name: '供应链经营分析',
@@ -996,6 +1017,7 @@ export const mockAuditEvents: AuditEvent[] = [
     time: '2026-08-28 10:43:22',
     actor: '林岚',
     department: '供应链中心',
+    category: 'model', objectType: 'model', objectId: 'DeepSeek-V3', runId: 'run-260828-002', attemptId: 'attempt-demo-001',
     action: '模型调用',
     object: 'DeepSeek-V3 · approved-general',
     status: 'success',
@@ -1007,6 +1029,7 @@ export const mockAuditEvents: AuditEvent[] = [
     time: '2026-08-28 10:43:18',
     actor: '林岚',
     department: '供应链中心',
+    category: 'tool', objectType: 'tool', objectId: 'mes.get_work_order_progress', runId: 'run-260828-002', attemptId: 'attempt-demo-001',
     action: '工具调用',
     object: 'mes.get_work_order_progress',
     status: 'success',
@@ -1018,6 +1041,7 @@ export const mockAuditEvents: AuditEvent[] = [
     time: '2026-08-28 10:42:51',
     actor: '林岚',
     department: '供应链中心',
+    category: 'run', objectType: 'run', objectId: 'run-260828-002', runId: 'run-260828-002', attemptId: 'attempt-demo-001',
     action: '创建运行',
     object: 'run-260828-002',
     status: 'success',
@@ -1029,6 +1053,7 @@ export const mockAuditEvents: AuditEvent[] = [
     time: '2026-08-28 09:51:03',
     actor: '赵宁',
     department: '采购部',
+    category: 'tool', objectType: 'tool', objectId: 'erp.get_supplier_price', runId: 'run-260828-003', attemptId: 'attempt-demo-002',
     action: '工具调用',
     object: 'erp.get_supplier_price',
     status: 'blocked',
@@ -1040,6 +1065,7 @@ export const mockAuditEvents: AuditEvent[] = [
     time: '2026-08-28 09:50:58',
     actor: '赵宁',
     department: '采购部',
+    category: 'model', objectType: 'model', objectId: 'approved-general', runId: 'run-260828-003', attemptId: 'attempt-demo-002',
     action: '模型调用',
     object: '外部模型 · approved-general',
     status: 'blocked',
@@ -1051,6 +1077,7 @@ export const mockAuditEvents: AuditEvent[] = [
     time: '2026-08-28 09:22:14',
     actor: '林岚',
     department: '供应链中心',
+    category: 'artifact', objectType: 'artifact', objectId: 'artifact-report-001', runId: 'run-260828-001', attemptId: 'attempt-demo-003',
     action: '发布成果',
     object: '华东区交付风险分析报告.pdf',
     status: 'success',
@@ -1062,6 +1089,7 @@ export const mockAuditEvents: AuditEvent[] = [
     time: '2026-08-27 15:23:28',
     actor: '林岚',
     department: '供应链中心',
+    category: 'tool', objectType: 'connector', objectId: 'procurement.get_delivery_records', runId: 'run-260827-004', attemptId: 'attempt-demo-004',
     action: '连接器调用',
     object: 'procurement.get_delivery_records',
     status: 'failed',
@@ -1144,11 +1172,11 @@ export const mockUsage: UsagePoint[] = [
 ]
 
 export const mockModelUsage: ModelUsageRecord[] = [
-  { id: 'model-call-001', time: '2026-08-28 10:43:22', runId: 'run-260828-002', agentId: 'dsh-work-assistant', department: '供应链中心', provider: '企业模型网关', model: 'DeepSeek-V3', modelRoute: 'default', dataLevel: 'L1', status: 'success', promptTokens: 2840, completionTokens: 1126, totalTokens: 3966, latencyMs: 2810, costCny: 0.12, traceId: 'tr_92af80d18d' },
-  { id: 'model-call-002', time: '2026-08-28 09:51:00', runId: 'run-260828-003', agentId: 'dsh-work-assistant', department: '采购部', provider: '企业模型网关', model: '外部模型-自动选择', modelRoute: 'default', dataLevel: 'L2', status: 'blocked', promptTokens: 0, completionTokens: 0, totalTokens: 0, latencyMs: 18, costCny: 0, traceId: 'tr_3127ad981f' },
-  { id: 'model-call-003', time: '2026-08-28 09:21:44', runId: 'run-260828-001', agentId: 'dsh-work-assistant', department: '供应链中心', provider: '企业模型网关', model: 'Qwen3-32B', modelRoute: 'analysis', dataLevel: 'L2', status: 'success', promptTokens: 10320, completionTokens: 8020, totalTokens: 18340, latencyMs: 8420, costCny: 0.66, traceId: 'tr_abe490071c' },
-  { id: 'model-call-004', time: '2026-08-27 16:09:26', runId: 'run-260827-004', agentId: 'dsh-work-assistant', department: '供应链中心', provider: '企业模型网关', model: 'Qwen3-32B', modelRoute: 'analysis', dataLevel: 'L2', status: 'success', promptTokens: 4822, completionTokens: 1770, totalTokens: 6592, latencyMs: 5180, costCny: 0.24, traceId: 'tr_c4d871e065' },
-  { id: 'model-call-005', time: '2026-08-27 15:23:24', runId: 'run-260826-008', agentId: 'dsh-work-assistant', department: '供应链中心', provider: '企业模型网关', model: 'DeepSeek-V3', modelRoute: 'default', dataLevel: 'L1', status: 'failed', promptTokens: 1450, completionTokens: 0, totalTokens: 1450, latencyMs: 30000, costCny: 0.03, traceId: 'tr_6a7c31e02d' },
-  { id: 'model-call-006', time: '2026-08-27 11:33:12', runId: 'run-260827-002', agentId: 'dsh-work-assistant', department: '供应链中心', provider: '企业模型网关', model: 'DeepSeek-V3', modelRoute: 'default', dataLevel: 'L1', status: 'success', promptTokens: 2790, completionTokens: 1470, totalTokens: 4260, latencyMs: 1920, costCny: 0.09, traceId: 'tr_628aae109c' },
-  { id: 'model-call-007', time: '2026-08-26 14:18:03', runId: 'run-260826-005', agentId: 'operations-analyst', department: '供应链中心', provider: '企业模型网关', model: 'GLM-4.5', modelRoute: 'fallback', dataLevel: 'L1', status: 'success', promptTokens: 6240, completionTokens: 2890, totalTokens: 9130, latencyMs: 4360, costCny: 0.31, traceId: 'tr_70c92ab116' },
+  { id: 'model-call-001', time: '2026-08-28 10:43:22', runId: 'run-260828-002', agentId: 'dsh-work-assistant', employeeId: 'U10086', employeeName: '林岚', department: '供应链中心', provider: '企业模型网关', model: 'DeepSeek-V3', modelRoute: 'default', dataLevel: 'L1', status: 'success', promptTokens: 2840, completionTokens: 1126, totalTokens: 3966, latencyMs: 2810, costCny: 0.12, traceId: 'tr_92af80d18d' },
+  { id: 'model-call-002', time: '2026-08-28 09:51:00', runId: 'run-260828-003', agentId: 'dsh-work-assistant', employeeId: 'U00008', employeeName: '陈默', department: '数字化中心', provider: '企业模型网关', model: '外部模型-自动选择', modelRoute: 'default', dataLevel: 'L2', status: 'blocked', promptTokens: 0, completionTokens: 0, totalTokens: 0, latencyMs: 18, costCny: 0, traceId: 'tr_3127ad981f' },
+  { id: 'model-call-003', time: '2026-08-28 09:21:44', runId: 'run-260828-001', agentId: 'dsh-work-assistant', employeeId: 'U10021', employeeName: '周衡', department: '供应链中心', provider: '企业模型网关', model: 'Qwen3-32B', modelRoute: 'analysis', dataLevel: 'L2', status: 'success', promptTokens: 10320, completionTokens: 8020, totalTokens: 18340, latencyMs: 8420, costCny: 0.66, traceId: 'tr_abe490071c' },
+  { id: 'model-call-004', time: '2026-08-27 16:09:26', runId: 'run-260827-004', agentId: 'dsh-work-assistant', employeeId: 'U10086', employeeName: '林岚', department: '供应链中心', provider: '企业模型网关', model: 'Qwen3-32B', modelRoute: 'analysis', dataLevel: 'L2', status: 'success', promptTokens: 4822, completionTokens: 1770, totalTokens: 6592, latencyMs: 5180, costCny: 0.24, traceId: 'tr_c4d871e065' },
+  { id: 'model-call-005', time: '2026-08-27 15:23:24', runId: 'run-260826-008', agentId: 'dsh-work-assistant', employeeId: 'U10086', employeeName: '林岚', department: '供应链中心', provider: '企业模型网关', model: 'DeepSeek-V3', modelRoute: 'default', dataLevel: 'L1', status: 'failed', promptTokens: 1450, completionTokens: 0, totalTokens: 1450, latencyMs: 30000, costCny: 0.03, traceId: 'tr_6a7c31e02d' },
+  { id: 'model-call-006', time: '2026-08-27 11:33:12', runId: 'run-260827-002', agentId: 'dsh-work-assistant', employeeId: 'U10021', employeeName: '周衡', department: '供应链中心', provider: '企业模型网关', model: 'DeepSeek-V3', modelRoute: 'default', dataLevel: 'L1', status: 'success', promptTokens: 2790, completionTokens: 1470, totalTokens: 4260, latencyMs: 1920, costCny: 0.09, traceId: 'tr_628aae109c' },
+  { id: 'model-call-007', time: '2026-08-26 14:18:03', runId: 'run-260826-005', agentId: 'operations-analyst', employeeId: 'U10021', employeeName: '周衡', department: '供应链中心', provider: '企业模型网关', model: 'GLM-4.5', modelRoute: 'fallback', dataLevel: 'L1', status: 'success', promptTokens: 6240, completionTokens: 2890, totalTokens: 9130, latencyMs: 4360, costCny: 0.31, traceId: 'tr_70c92ab116' },
 ]

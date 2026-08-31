@@ -3,12 +3,17 @@ import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
 
 import { registerAdminRoutes } from './http/admin/routes.ts'
+import { registerAgentRoutes } from './http/admin/agent-routes.ts'
+import { registerSkillRoutes } from './http/admin/skill-routes.ts'
+import { registerToolRoutes } from './http/admin/tool-routes.ts'
 import { registerModelGovernanceRoutes } from './http/admin/model-routes.ts'
 import { registerOperationsRoutes } from './http/admin/operations-routes.ts'
 import { Router, envelope } from './http/router.ts'
 import { registerWorkbenchRoutes } from './http/workbench/routes.ts'
 import { registerConversationRoutes } from './http/workbench/conversation-routes.ts'
 import { registerContentRoutes } from './http/workbench/content-routes.ts'
+import { registerWorkbenchAgentRoutes } from './http/workbench/agent-routes.ts'
+import { registerUnavailableWorkbenchCommandRoutes } from './http/workbench/unavailable-routes.ts'
 import { checkDatabase, createDatabase } from './infrastructure/postgres/database.ts'
 import { runMigrations } from './infrastructure/postgres/migration-runner.ts'
 import { PrototypeRepository } from './infrastructure/prototype/prototype-repository.ts'
@@ -22,8 +27,17 @@ import { PostgresConversationRepository } from './modules/workbench/application/
 import { PostgresRunRepository } from './modules/run/postgres-run-repository.ts'
 import { RunOrchestrationService } from './modules/run/run-orchestration-service.ts'
 import { DshAcpRuntimeAdapter } from './modules/runtime/dsh-acp-runtime-adapter.ts'
-import { createManagedDshAcpProcessConfiguration } from './modules/runtime/dsh-acp-process-configuration.ts'
+import {
+  preflightDshRuntime,
+  resolveDshRuntimeInstallation,
+  type DshRuntimeInstallation,
+} from './modules/runtime/dsh-runtime-installation.ts'
 import { PostgresContentService } from './modules/workbench/application/postgres-content-service.ts'
+import { PostgresAgentService } from './modules/agent/postgres-agent-service.ts'
+import { PostgresSkillService } from './modules/skill/postgres-skill-service.ts'
+import { PostgresToolConnectorService } from './modules/tool/postgres-tool-connector-service.ts'
+import { PostgresKnowledgeService } from './modules/knowledge/postgres-knowledge-service.ts'
+import { PostgresAuthorizationService } from './modules/authorization/postgres-authorization-service.ts'
 
 const port = Number(process.env.DSH_WORK_SERVER_PORT ?? 4190)
 const host = process.env.DSH_WORK_SERVER_HOST ?? '127.0.0.1'
@@ -40,20 +54,33 @@ async function start() {
     : new MemoryModelGovernanceRepository()
 
   let orchestration: RunOrchestrationService | null = null
+  let dshInstallation: DshRuntimeInstallation | null = null
   if (database) {
     const projectRoot = fileURLToPath(new URL('../..', import.meta.url))
-    const dshRepository = resolve(projectRoot, '../deepseek-harness')
+    dshInstallation = await resolveDshRuntimeInstallation({ projectRoot })
+    await preflightDshRuntime(dshInstallation)
     const runtime = new DshAcpRuntimeAdapter({
       runtimeId: 'runtime-local-01',
       runtimeRoot: resolve(projectRoot, '.runtime/dsh-attempts'),
-      dshRepository,
-      process: createManagedDshAcpProcessConfiguration({ dshRepository, projectRoot }),
+      dshRepository: dshInstallation.home,
+      runtimeVersion: dshInstallation.version,
+      runtimeCommit: dshInstallation.commit,
+      protocolVersion: dshInstallation.protocolVersion,
+      launchMode: dshInstallation.launchMode,
+      process: dshInstallation.process,
       permissionDecision: async () => 'allow_once',
     })
     const conversations = new PostgresConversationRepository(database)
     const content = new PostgresContentService(database, resolve(projectRoot, '.runtime/storage'))
     const runs = new PostgresRunRepository(database)
-    const operations = new PostgresOperationsService(database)
+    const authorization = new PostgresAuthorizationService(database)
+    const operations = new PostgresOperationsService(database, runtime, authorization)
+    const runtimePolicy = await operations.getRuntimePolicy('runtime-local-01')
+    await runtime.configureScheduling(runtimePolicy.schedulingStatus)
+    const tools = new PostgresToolConnectorService(database, runtime, operations)
+    const skills = new PostgresSkillService(database, operations, tools)
+    const agents = new PostgresAgentService(database, operations, skills, tools)
+    const knowledge = new PostgresKnowledgeService(database)
     orchestration = new RunOrchestrationService(
       runs,
       conversations,
@@ -61,10 +88,23 @@ async function start() {
       runtime,
       content,
       operations,
+      agents,
+      knowledge,
+      authorization,
     )
-    registerConversationRoutes(router, conversations, orchestration, runs)
-    registerContentRoutes(router, content)
+    const restartRecovery = await orchestration.recoverAfterServiceRestart()
+    if (restartRecovery.failed > 0 || restartRecovery.resumedQueued > 0) {
+      console.warn('service restart recovery completed', restartRecovery)
+    }
+    registerConversationRoutes(router, conversations, orchestration, runs, agents, authorization)
+    registerContentRoutes(router, content, authorization)
     registerOperationsRoutes(router, operations)
+    registerAgentRoutes(router, agents)
+    registerSkillRoutes(router, skills)
+    registerToolRoutes(router, tools)
+    registerWorkbenchAgentRoutes(router, agents, authorization)
+  } else {
+    registerUnavailableWorkbenchCommandRoutes(router)
   }
   registerWorkbenchRoutes(router, new WorkbenchQueryService(repository))
   registerAdminRoutes(router, new AdminQueryService(repository))
@@ -77,7 +117,13 @@ async function start() {
       architecture: 'node-modular-monolith',
       persistence: database ? 'postgres-foundation' : 'prototype-memory',
       sso: 'mock',
-      dshRuntime: 'poc-validated',
+      dshRuntime: dshInstallation ? {
+        status: 'connected',
+        version: dshInstallation.version,
+        commit: dshInstallation.commit,
+        protocolVersion: dshInstallation.protocolVersion,
+        launchMode: dshInstallation.launchMode,
+      } : 'not-configured',
       database: database ? await checkDatabase(database) : 'not-configured',
     }, database ? 'postgres' : 'prototype-memory'),
   )

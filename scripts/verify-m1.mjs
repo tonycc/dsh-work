@@ -9,7 +9,10 @@ const requiredFiles = [
   'server/src/modules/runtime/acp-json-rpc-client.ts',
   'server/src/modules/runtime/dsh-acp-runtime-adapter.ts',
   'server/src/modules/runtime/dsh-acp-process-configuration.ts',
+  'server/src/modules/runtime/dsh-runtime-installation.ts',
   'server/config/dsh/acp-managed-credentials.cordis.yml',
+  'server/config/dsh/runtime-lock.json',
+  'docs/deployment/dsh-runtime-delivery.md',
   'server/src/modules/runtime/manifest-compiler.ts',
   'server/src/modules/runtime/runtime-adapter.test.ts',
   'scripts/probe-dsh-acp.ts',
@@ -28,7 +31,7 @@ for (const script of ['test:m1', 'probe:m1', 'probe:m1:real', 'probe:m1:tool', '
 }
 
 const poc = readFileSync(resolve(root, 'docs/poc/m1-runtime-poc.md'), 'utf8')
-for (const fragment of ['ACP JSON-RPC stdio', 'realModelPromptExecuted', '最终决定不 Fork DSH', 'M1 工作项结论']) {
+for (const fragment of ['ACP JSON-RPC stdio', 'realModelPromptExecuted', '最终决定不 Fork DSH', '受管 Runtime 制品', 'M1 工作项结论']) {
   if (!poc.includes(fragment)) failures.push(`M1 POC 记录缺少：${fragment}`)
 }
 

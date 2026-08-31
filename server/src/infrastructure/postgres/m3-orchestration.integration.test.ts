@@ -63,6 +63,8 @@ test('real PostgreSQL orchestration persists events, assistant result, Artifact 
   const task = await waitForTask(created.id, 'succeeded')
   assert.match(task.messages.at(-1)?.content ?? '', /真实回答/)
   assert.equal(task.artifacts.length, 1)
+  assert.equal(task.artifacts[0]?.runId, created.id)
+  assert.equal(task.artifacts[0]?.version, 1)
 
   const events = await runs.readEventsAfterEvent('tenant-dsh-work', created.id)
   assert.deepEqual(events.map((event) => event.eventType), [
@@ -72,7 +74,11 @@ test('real PostgreSQL orchestration persists events, assistant result, Artifact 
   assert.deepEqual(resumed.map((event) => event.eventType), ['run.completed'])
 
   const usage = await new PostgresOperationsService(database).getModelUsage()
-  assert.ok(usage.some((record) => record.runId === created.id && record.totalTokens > 0))
+  const usageRecord = usage.find((record) => record.runId === created.id)
+  assert.ok(usageRecord && usageRecord.totalTokens > 0)
+  assert.equal(usageRecord.employeeId, 'U00001')
+  assert.equal(usageRecord.employeeName, '林岚')
+  assert.equal(usageRecord.department, '供应链中心')
 })
 
 test('cancel and retry keep one Run and create a new immutable Attempt', async () => {
@@ -110,7 +116,7 @@ test('file safety gate blocks executable signatures and Tool audit is persisted'
     runId: target.runId,
     attemptId: target.attemptId,
     traceId: `trace-${target.runId}`,
-    metadata: { tool_name: 'read-only-fixture', data_scope: 'workspace' },
+    metadata: { tool_name: 'read', data_scope: 'workspace' },
   })
   const [count] = await database<{ count: number }[]>`
     select count(*)::integer as count from tool_audit_logs

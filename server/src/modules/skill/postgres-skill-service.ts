@@ -1,0 +1,607 @@
+import { createHash, randomUUID } from 'node:crypto'
+
+import type {
+  CreateSkillInput,
+  PublishStatus,
+  SkillConfiguration,
+  SkillDefinition,
+  SkillReleaseRecord,
+  SkillVersionRecord,
+  UpdateSkillInput,
+} from '../../domain/types.ts'
+import type { DatabaseClient, DatabaseTransaction } from '../../infrastructure/postgres/database.ts'
+import type { PostgresOperationsService } from '../admin/application/postgres-operations-service.ts'
+import type { PostgresToolConnectorService } from '../tool/postgres-tool-connector-service.ts'
+
+const tenantId = 'tenant-dsh-work'
+
+interface SkillRow {
+  id: string
+  name: string
+  category: string
+  description: string
+  instructions: string
+  owner: string
+  persistedStatus: PublishStatus
+  activeVersionId: string | null
+  draftVersionId: string | null
+  versionId: string
+  version: string
+  activeVersion: string | null
+  toolIds: string[]
+  testPrompt: string
+  updatedAt: Date
+}
+
+type SkillFingerprintSource = Pick<SkillRow,
+  | 'versionId'
+  | 'name'
+  | 'category'
+  | 'description'
+  | 'instructions'
+  | 'toolIds'
+  | 'testPrompt'
+>
+
+type LockedSkillDraft = SkillFingerprintSource & { id: string }
+
+interface VersionRow {
+  id: string
+  skillId: string
+  version: string
+  name: string
+  category: string
+  description: string
+  instructions: string
+  toolIds: string[]
+  testPrompt: string
+  status: PublishStatus
+  createdAt: Date
+  createdBy: string
+  publishedAt: Date | null
+  publishedBy: string | null
+  sourceVersion: string | null
+  summary: string
+}
+
+export interface SkillTestResult {
+  id: string
+  skillId: string
+  version: string
+  status: 'passed' | 'failed'
+  resultSummary: string
+  testedAt: string
+}
+
+export interface RuntimeSkillConfiguration {
+  id: string
+  version: string
+  instructions: string
+  tools: string[]
+}
+
+export class PostgresSkillService {
+  private readonly database: DatabaseClient
+  private readonly operations?: PostgresOperationsService
+  private readonly toolService?: PostgresToolConnectorService
+
+  constructor(
+    database: DatabaseClient,
+    operations?: PostgresOperationsService,
+    toolService?: PostgresToolConnectorService,
+  ) {
+    this.database = database
+    this.operations = operations
+    this.toolService = toolService
+  }
+
+  async getSkills(): Promise<SkillDefinition[]> {
+    return (await this.readSkillRows()).map(toSkillDefinition)
+  }
+
+  async getSkillVersions(): Promise<SkillVersionRecord[]> {
+    const rows = await this.database<VersionRow[]>`
+      select sv.id, sv.skill_id as "skillId", sv.version, sv.name, sv.category,
+             sv.description, sv.instructions, sv.tool_refs as "toolIds",
+             sv.test_prompt as "testPrompt", sv.status, sv.created_at as "createdAt",
+             creator.display_name as "createdBy", sv.published_at as "publishedAt",
+             publisher.display_name as "publishedBy", sv.source_version as "sourceVersion",
+             sv.change_summary as summary
+        from skill_versions sv
+        join users creator on creator.tenant_id = sv.tenant_id and creator.id = sv.created_by
+        left join users publisher on publisher.tenant_id = sv.tenant_id and publisher.id = sv.published_by
+       where sv.tenant_id = ${tenantId}
+       order by sv.created_at desc
+    `
+    return rows.map(toVersionRecord)
+  }
+
+  async getReleaseRecords(): Promise<SkillReleaseRecord[]> {
+    const rows = await this.database<{
+      id: string
+      skillId: string
+      version: string
+      action: SkillReleaseRecord['action']
+      actor: string
+      time: Date
+      note: string
+    }[]>`
+      select srr.id, srr.skill_id as "skillId", sv.version, srr.action,
+             u.display_name as actor, srr.created_at as time, srr.note
+        from skill_release_records srr
+        join skill_versions sv on sv.tenant_id = srr.tenant_id and sv.id = srr.skill_version_id
+        join users u on u.tenant_id = srr.tenant_id and u.id = srr.actor_id
+       where srr.tenant_id = ${tenantId}
+       order by srr.created_at desc
+    `
+    return rows.map(row => ({ ...row, time: formatDateTime(row.time) }))
+  }
+
+  async createSkill(input: CreateSkillInput) {
+    const actor = await this.requireActor(input.actor)
+    const configuration = normalizeConfiguration({
+      id: `skill-${randomUUID().slice(0, 12)}`,
+      name: input.name,
+      category: input.category,
+      description: input.description,
+      instructions: input.instructions,
+      toolIds: input.toolIds,
+      testPrompt: input.testPrompt,
+    })
+    assertConfiguration(configuration)
+    await this.toolService?.assertAvailableReferences(configuration.toolIds)
+    const versionId = `skill-version-${randomUUID()}`
+
+    await this.database.begin(async transaction => {
+      await transaction`
+        insert into skills (
+          id, tenant_id, key, name, category, description, owner_user_id, created_by,
+          status, draft_version_id
+        ) values (
+          ${configuration.id}, ${tenantId}, ${configuration.id}, ${configuration.name},
+          ${configuration.category}, ${configuration.description}, ${actor.id}, ${actor.id},
+          'draft', null
+        )
+      `
+      await transaction`
+        insert into skill_versions (
+          id, tenant_id, skill_id, version, name, category, description, instructions,
+          manifest, tool_refs, test_prompt, status, created_by, change_summary
+        ) values (
+          ${versionId}, ${tenantId}, ${configuration.id}, '0.1.0', ${configuration.name},
+          ${configuration.category}, ${configuration.description}, ${configuration.instructions},
+          '{}', ${transaction.json(configuration.toolIds)}, ${configuration.testPrompt},
+          'draft', ${actor.id}, '创建 Skill 初始版本'
+        )
+      `
+      await transaction`
+        update skills set draft_version_id = ${versionId}, updated_at = now()
+         where tenant_id = ${tenantId} and id = ${configuration.id}
+      `
+    })
+    await this.audit(actor.id, 'skill.create', configuration.id, 'success', '创建 Skill 0.1.0 草稿')
+    return this.requireSkillResult(configuration.id, versionId)
+  }
+
+  async updateSkill(input: UpdateSkillInput) {
+    const actor = await this.requireActor(input.actor)
+    const [current] = await this.readSkillRows(input.skillId)
+    if (!current) throw new Error(`Skill 不存在：${input.skillId}`)
+    const configuration = normalizeConfiguration({ id: input.skillId, ...input })
+    assertConfiguration(configuration)
+    await this.toolService?.assertAvailableReferences(configuration.toolIds)
+    let draftVersionId = current.draftVersionId
+
+    await this.database.begin(async transaction => {
+      const [locked] = await transaction<{
+        activeVersionId: string | null
+        draftVersionId: string | null
+        activeVersion: string | null
+      }[]>`
+        select s.active_version_id as "activeVersionId", s.draft_version_id as "draftVersionId",
+               active.version as "activeVersion"
+          from skills s
+          left join skill_versions active on active.tenant_id = s.tenant_id and active.id = s.active_version_id
+         where s.tenant_id = ${tenantId} and s.id = ${input.skillId}
+         for update of s
+      `
+      if (!locked) throw new Error(`Skill 不存在：${input.skillId}`)
+      draftVersionId = locked.draftVersionId
+      if (draftVersionId) {
+        await transaction`
+          update skill_versions
+             set name = ${configuration.name}, category = ${configuration.category},
+                 description = ${configuration.description}, instructions = ${configuration.instructions},
+                 tool_refs = ${transaction.json(configuration.toolIds)}, test_prompt = ${configuration.testPrompt},
+                 change_summary = ${`更新 ${configuration.name} 配置`}
+           where tenant_id = ${tenantId} and id = ${draftVersionId} and status = 'draft'
+        `
+      } else {
+        if (!locked.activeVersionId || !locked.activeVersion) throw new Error('Skill 没有可用于创建新版本的已发布版本')
+        const [latest] = await transaction<{ version: string }[]>`
+          select version from skill_versions
+           where tenant_id = ${tenantId} and skill_id = ${input.skillId}
+           order by split_part(version, '.', 1)::integer desc,
+                    split_part(version, '.', 2)::integer desc,
+                    split_part(version, '.', 3)::integer desc
+           limit 1
+        `
+        draftVersionId = `skill-version-${randomUUID()}`
+        await transaction`
+          insert into skill_versions (
+            id, tenant_id, skill_id, version, name, category, description, instructions,
+            manifest, tool_refs, test_prompt, status, created_by, source_version, change_summary
+          ) values (
+            ${draftVersionId}, ${tenantId}, ${input.skillId}, ${nextVersion(latest?.version ?? locked.activeVersion)},
+            ${configuration.name}, ${configuration.category}, ${configuration.description},
+            ${configuration.instructions}, '{}', ${transaction.json(configuration.toolIds)},
+            ${configuration.testPrompt}, 'draft', ${actor.id}, ${locked.activeVersion},
+            ${`创建 ${configuration.name} 新版本`}
+          )
+        `
+      }
+      await transaction`
+        update skills set name = ${configuration.name}, category = ${configuration.category},
+                          description = ${configuration.description}, draft_version_id = ${draftVersionId},
+                          updated_at = now()
+         where tenant_id = ${tenantId} and id = ${input.skillId}
+      `
+    })
+    await this.audit(actor.id, 'skill.draft.update', input.skillId, 'success', '保存 Skill 待发布版本')
+    if (!draftVersionId) throw new Error('Skill 草稿版本创建失败')
+    return this.requireSkillResult(input.skillId, draftVersionId)
+  }
+
+  async testSkill(input: { skillId: string; prompt?: string; actor: string }): Promise<SkillTestResult> {
+    const actor = await this.requireActor(input.actor)
+    const [skill] = await this.readSkillRows(input.skillId)
+    if (!skill) throw new Error(`Skill 不存在：${input.skillId}`)
+    if (!skill.draftVersionId) throw new Error('当前 Skill 没有待测试的草稿版本')
+    await this.toolService?.assertAvailableReferences(skill.toolIds)
+    const prompt = (input.prompt ?? skill.testPrompt).trim()
+    if (prompt.length < 4) throw new Error('测试问题至少需要 4 个字符')
+    const fingerprint = configurationFingerprint(skill)
+    const testId = `skill-test-${randomUUID()}`
+    const summary = `配置校验通过：执行指令 ${skill.instructions.length} 字符，${skill.toolIds.length} 个工具引用。`
+    await this.database`
+      insert into skill_test_runs (
+        id, tenant_id, skill_id, skill_version_id, configuration_fingerprint,
+        test_prompt, status, result_summary, tested_by
+      ) values (
+        ${testId}, ${tenantId}, ${skill.id}, ${skill.draftVersionId}, ${fingerprint},
+        ${prompt}, 'passed', ${summary}, ${actor.id}
+      )
+    `
+    await this.audit(actor.id, 'skill.test', skill.id, 'success', summary)
+    return {
+      id: testId,
+      skillId: skill.id,
+      version: skill.version,
+      status: 'passed',
+      resultSummary: summary,
+      testedAt: new Date().toISOString(),
+    }
+  }
+
+  async setStatus(input: {
+    skillId: string
+    status: Extract<PublishStatus, 'published' | 'disabled'>
+    actor: string
+  }) {
+    const actor = await this.requireActor(input.actor)
+    const [current] = await this.readSkillRows(input.skillId)
+    if (!current) throw new Error(`Skill 不存在：${input.skillId}`)
+
+    if (input.status === 'disabled') {
+      if (current.draftVersionId) throw new Error('存在待发布草稿时不能停用 Skill，请先发布或回滚')
+      if (!current.activeVersionId) throw new Error('尚未发布的 Skill 不能停用')
+      const activeVersionId = current.activeVersionId
+      const release = await this.database.begin(async transaction => {
+        const updated = await transaction`
+          update skills set status = 'disabled', updated_at = now()
+           where tenant_id = ${tenantId} and id = ${input.skillId}
+             and status = 'published' and active_version_id = ${activeVersionId}
+             and draft_version_id is null
+           returning id
+        `
+        if (!updated.length) throw new Error('Skill 状态已发生变化，请刷新后重试')
+        return this.appendRelease(transaction, activeVersionId, input.skillId, 'disabled', actor.id, '停用 Skill；既有 Agent Version 的固定引用不被改写。')
+      })
+      await this.audit(actor.id, 'skill.disable', input.skillId, 'success', release.note)
+      return { skill: await this.requireSkill(input.skillId), release }
+    }
+
+    if (current.draftVersionId) return this.publishDraft(current, actor.id)
+    if (!current.activeVersionId || current.persistedStatus !== 'disabled') {
+      throw new Error('当前 Skill 没有可发布草稿，也不处于停用状态')
+    }
+    const activeVersionId = current.activeVersionId
+    const release = await this.database.begin(async transaction => {
+      const updated = await transaction`
+        update skills set status = 'published', updated_at = now()
+         where tenant_id = ${tenantId} and id = ${input.skillId}
+           and status = 'disabled' and active_version_id = ${activeVersionId}
+         returning id
+      `
+      if (!updated.length) throw new Error('Skill 状态已发生变化，请刷新后重试')
+      return this.appendRelease(transaction, activeVersionId, input.skillId, 'enabled', actor.id, '重新启用当前 Skill 版本。')
+    })
+    await this.audit(actor.id, 'skill.enable', input.skillId, 'success', release.note)
+    return { skill: await this.requireSkill(input.skillId), release }
+  }
+
+  async rollback(input: { skillId: string; version: string; actor: string }) {
+    const actor = await this.requireActor(input.actor)
+    const [current] = await this.readSkillRows(input.skillId)
+    if (!current) throw new Error(`Skill 不存在：${input.skillId}`)
+    const [target] = await this.database<VersionRow[]>`
+      select sv.id, sv.skill_id as "skillId", sv.version, sv.name, sv.category,
+             sv.description, sv.instructions, sv.tool_refs as "toolIds",
+             sv.test_prompt as "testPrompt", sv.status, sv.created_at as "createdAt",
+             creator.display_name as "createdBy", sv.published_at as "publishedAt",
+             publisher.display_name as "publishedBy", sv.source_version as "sourceVersion",
+             sv.change_summary as summary
+        from skill_versions sv
+        join users creator on creator.tenant_id = sv.tenant_id and creator.id = sv.created_by
+        left join users publisher on publisher.tenant_id = sv.tenant_id and publisher.id = sv.published_by
+       where sv.tenant_id = ${tenantId} and sv.skill_id = ${input.skillId}
+         and sv.version = ${input.version} and sv.status = 'published'
+    `
+    if (!target) throw new Error(`已发布 Skill Version 不存在：${input.skillId}@${input.version}`)
+
+    const note = `活动版本由 v${current.activeVersion ?? current.version} 回滚到 v${target.version}。`
+    const release = await this.database.begin(async transaction => {
+      if (current.draftVersionId) {
+        await transaction`update skill_versions set status = 'disabled' where tenant_id = ${tenantId} and id = ${current.draftVersionId} and status = 'draft'`
+      }
+      await transaction`
+        update skills set active_version_id = ${target.id}, draft_version_id = null,
+                          status = 'published', name = ${target.name}, category = ${target.category},
+                          description = ${target.description}, updated_at = now()
+         where tenant_id = ${tenantId} and id = ${input.skillId}
+      `
+      return this.appendRelease(transaction, target.id, input.skillId, 'rollback', actor.id, note)
+    })
+    await this.audit(actor.id, 'skill.rollback', input.skillId, 'success', release.note)
+    return { skill: await this.requireSkill(input.skillId), release }
+  }
+
+  async assertPublishedReferences(references: string[]): Promise<void> {
+    for (const reference of unique(references)) {
+      const { id, version } = parseReference(reference)
+      const [row] = await this.database<{ id: string }[]>`
+        select sv.id from skills s
+        join skill_versions sv on sv.tenant_id = s.tenant_id and sv.skill_id = s.id
+         where s.tenant_id = ${tenantId} and s.id = ${id} and s.status = 'published'
+           and sv.version = ${version} and sv.status = 'published'
+      `
+      if (!row) throw new Error(`Agent 引用的 Skill 不存在、未发布或已停用：${reference}`)
+    }
+  }
+
+  async resolveRuntimeSkills(references: string[]): Promise<RuntimeSkillConfiguration[]> {
+    const resolved: RuntimeSkillConfiguration[] = []
+    for (const reference of unique(references)) {
+      const { id, version } = parseReference(reference)
+      const [row] = await this.database<{ instructions: string; tools: string[] }[]>`
+        select instructions, tool_refs as tools from skill_versions
+         where tenant_id = ${tenantId} and skill_id = ${id} and version = ${version}
+           and status = 'published'
+      `
+      if (!row) throw new Error(`Runtime 无法解析已锁定的 Skill Version：${reference}`)
+      resolved.push({ id, version, instructions: row.instructions, tools: row.tools })
+    }
+    return resolved
+  }
+
+  private async publishDraft(current: SkillRow, actorId: string) {
+    await this.toolService?.assertAvailableReferences(current.toolIds)
+    const release = await this.database.begin(async transaction => {
+      const [locked] = await transaction<LockedSkillDraft[]>`
+        select s.id, sv.id as "versionId", sv.name, sv.category, sv.description,
+               sv.instructions, sv.tool_refs as "toolIds", sv.test_prompt as "testPrompt"
+          from skills s
+          join skill_versions sv on sv.tenant_id = s.tenant_id and sv.id = s.draft_version_id
+         where s.tenant_id = ${tenantId} and s.id = ${current.id} and sv.status = 'draft'
+         for update of s, sv
+      `
+      if (!locked) throw new Error('当前 Skill 草稿已发生变化，请重新测试后再发布')
+
+      const fingerprint = configurationFingerprint(locked)
+      const [test] = await transaction<{ id: string }[]>`
+        select id from skill_test_runs
+         where tenant_id = ${tenantId} and skill_version_id = ${locked.versionId}
+           and configuration_fingerprint = ${fingerprint} and status = 'passed'
+         order by created_at desc limit 1
+      `
+      if (!test) throw new Error('发布前必须使用当前配置完成一次服务端测试')
+
+      const published = await transaction<{ id: string }[]>`
+        update skill_versions set status = 'published', published_at = now(), published_by = ${actorId}
+         where tenant_id = ${tenantId} and id = ${locked.versionId} and status = 'draft'
+         returning id
+      `
+      if (!published.length) throw new Error('Skill 草稿发布状态已发生变化，请刷新后重试')
+
+      const activated = await transaction<{ id: string }[]>`
+        update skills set active_version_id = ${locked.versionId}, draft_version_id = null,
+                          status = 'published', updated_at = now()
+         where tenant_id = ${tenantId} and id = ${current.id} and draft_version_id = ${locked.versionId}
+         returning id
+      `
+      if (!activated.length) throw new Error('Skill 草稿指针已发生变化，请刷新后重试')
+      return this.appendRelease(transaction, locked.versionId, current.id, 'published', actorId, '服务端配置测试通过，发布当前 Skill 版本。')
+    })
+    await this.audit(actorId, 'skill.publish', current.id, 'success', release.note)
+    return { skill: await this.requireSkill(current.id), release }
+  }
+
+  private async appendRelease(
+    transaction: DatabaseTransaction,
+    versionId: string,
+    skillId: string,
+    action: SkillReleaseRecord['action'],
+    actorId: string,
+    note: string,
+  ): Promise<SkillReleaseRecord> {
+    const id = `skill-release-${randomUUID()}`
+    const [row] = await transaction<{ version: string; actor: string; time: Date }[]>`
+      with inserted as (
+        insert into skill_release_records (
+          id, tenant_id, skill_id, skill_version_id, action, actor_id, note
+        ) values (${id}, ${tenantId}, ${skillId}, ${versionId}, ${action}, ${actorId}, ${note})
+        returning skill_version_id, actor_id, created_at
+      )
+      select sv.version, u.display_name as actor, inserted.created_at as time
+        from inserted
+        join skill_versions sv on sv.tenant_id = ${tenantId} and sv.id = inserted.skill_version_id
+        join users u on u.tenant_id = ${tenantId} and u.id = inserted.actor_id
+    `
+    if (!row) throw new Error('Skill 发布记录写入失败')
+    return { id, skillId, version: row.version, action, actor: row.actor, time: formatDateTime(row.time), note }
+  }
+
+  private async readSkillRows(skillId?: string): Promise<SkillRow[]> {
+    return this.database<SkillRow[]>`
+      select s.id, sv.name, sv.category, sv.description, sv.instructions,
+             owner.display_name as owner, s.status as "persistedStatus",
+             s.active_version_id as "activeVersionId", s.draft_version_id as "draftVersionId",
+             sv.id as "versionId", sv.version, active.version as "activeVersion",
+             sv.tool_refs as "toolIds", sv.test_prompt as "testPrompt", s.updated_at as "updatedAt"
+        from skills s
+        join users owner on owner.tenant_id = s.tenant_id and owner.id = s.owner_user_id
+        join skill_versions sv on sv.tenant_id = s.tenant_id
+         and sv.id = coalesce(s.draft_version_id, s.active_version_id)
+        left join skill_versions active on active.tenant_id = s.tenant_id and active.id = s.active_version_id
+       where s.tenant_id = ${tenantId} ${skillId ? this.database`and s.id = ${skillId}` : this.database``}
+       order by s.updated_at desc
+    `
+  }
+
+  private async requireActor(name: string) {
+    const [actor] = await this.database<{ id: string; displayName: string }[]>`
+      select u.id, u.display_name as "displayName" from users u
+       where u.tenant_id = ${tenantId} and u.display_name = ${name.trim()} and u.status = 'active'
+         and exists (
+           select 1 from user_roles ur
+           join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id
+            where ur.tenant_id = u.tenant_id and ur.user_id = u.id
+              and (ur.valid_until is null or ur.valid_until > now())
+              and r.permissions ? 'admin:*'
+         )
+    `
+    if (!actor) throw new Error(`操作人不存在、已停用或不是平台管理员：${name}`)
+    return actor
+  }
+
+  private async requireSkill(skillId: string): Promise<SkillDefinition> {
+    const [row] = await this.readSkillRows(skillId)
+    if (!row) throw new Error(`Skill 不存在：${skillId}`)
+    return toSkillDefinition(row)
+  }
+
+  private async requireSkillResult(skillId: string, versionId: string) {
+    const skill = await this.requireSkill(skillId)
+    const version = (await this.getSkillVersions()).find(item => item.id === versionId)
+    if (!version) throw new Error(`Skill Version 不存在：${versionId}`)
+    return { skill, version }
+  }
+
+  private audit(actorId: string, action: string, skillId: string, result: 'success' | 'failed', detail: string) {
+    return this.operations?.appendAudit(actorId, action, skillId, result, `trace-skill-${randomUUID()}`, detail)
+      ?? Promise.resolve()
+  }
+}
+
+function normalizeConfiguration(input: SkillConfiguration): SkillConfiguration {
+  return {
+    id: input.id,
+    name: input.name.trim(),
+    category: input.category.trim(),
+    description: input.description.trim(),
+    instructions: input.instructions.trim(),
+    toolIds: unique(input.toolIds),
+    testPrompt: input.testPrompt.trim(),
+  }
+}
+
+function assertConfiguration(input: SkillConfiguration) {
+  if (!/^skill-[a-z0-9-]{6,48}$/.test(input.id)) throw new Error('Skill 标识格式不正确')
+  if (input.name.length < 2 || input.name.length > 40) throw new Error('Skill 名称长度为 2～40 个字符')
+  if (!input.category || input.category.length > 40) throw new Error('Skill 分类不能为空且不能超过 40 个字符')
+  if (input.description.length < 10 || input.description.length > 200) throw new Error('Skill 说明长度为 10～200 个字符')
+  if (input.instructions.length < 20 || input.instructions.length > 10000) throw new Error('执行指令长度为 20～10000 个字符')
+  if (!input.toolIds.length) throw new Error('必须引用至少一个工具')
+  if (input.testPrompt.length < 4 || input.testPrompt.length > 500) throw new Error('典型测试问题长度为 4～500 个字符')
+}
+
+function toSkillDefinition(row: SkillRow): SkillDefinition {
+  return {
+    id: row.id,
+    name: row.name,
+    version: row.version,
+    ...(row.activeVersion ? { activeVersion: row.activeVersion } : {}),
+    category: row.category,
+    owner: row.owner,
+    status: row.draftVersionId ? 'draft' : row.persistedStatus,
+    description: row.description,
+    instructions: row.instructions,
+    toolIds: row.toolIds,
+    testPrompt: row.testPrompt,
+    updatedAt: formatDateTime(row.updatedAt),
+  }
+}
+
+function toVersionRecord(row: VersionRow): SkillVersionRecord {
+  return {
+    id: row.id,
+    skillId: row.skillId,
+    version: row.version,
+    name: row.name,
+    category: row.category,
+    description: row.description,
+    instructions: row.instructions,
+    toolIds: row.toolIds,
+    testPrompt: row.testPrompt,
+    status: row.status,
+    createdAt: formatDateTime(row.createdAt),
+    createdBy: row.createdBy,
+    ...(row.publishedAt ? { publishedAt: formatDateTime(row.publishedAt) } : {}),
+    ...(row.publishedBy ? { publishedBy: row.publishedBy } : {}),
+    ...(row.sourceVersion ? { sourceVersion: row.sourceVersion } : {}),
+    summary: row.summary,
+  }
+}
+
+function configurationFingerprint(row: SkillFingerprintSource) {
+  return createHash('sha256').update(JSON.stringify({
+    versionId: row.versionId,
+    name: row.name,
+    category: row.category,
+    description: row.description,
+    instructions: row.instructions,
+    toolIds: [...row.toolIds].sort(),
+    testPrompt: row.testPrompt,
+  })).digest('hex')
+}
+
+function parseReference(reference: string) {
+  const separator = reference.lastIndexOf('@')
+  if (separator <= 0 || separator === reference.length - 1) {
+    throw new Error(`Skill 引用必须锁定版本：${reference}`)
+  }
+  return { id: reference.slice(0, separator), version: reference.slice(separator + 1) }
+}
+
+function nextVersion(current: string) {
+  const [major = 0, minor = 0] = current.split('.').map(Number)
+  return `${major}.${minor + 1}.0`
+}
+
+function unique(values: string[]) {
+  return [...new Set(values.map(value => value.trim()).filter(Boolean))]
+}
+
+function formatDateTime(value: Date) {
+  return value.toISOString().slice(0, 16).replace('T', ' ')
+}

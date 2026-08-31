@@ -8,4 +8,5 @@ export function registerWorkbenchRoutes(router: Router, service: WorkbenchQueryS
   router.get(`${basePath}/tasks`, async () => envelope('workbench', await service.getTasks()))
   router.get(`${basePath}/workspaces`, async () => envelope('workbench', await service.getWorkspaces()))
   router.get(`${basePath}/artifacts`, async () => envelope('workbench', await service.getArtifacts()))
+  router.get(`${basePath}/agents`, async () => envelope('workbench', await service.getAgents()))
 }

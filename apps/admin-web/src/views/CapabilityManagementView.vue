@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import { Connection, DocumentCopy, Edit, Plus, Refresh, Search, View } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 
@@ -8,7 +8,7 @@ import { StatusTag } from '@dsh-work/ui-core'
 import SkillEditorDialog from '@/components/SkillEditorDialog.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useContentStore } from '@/stores/content'
-import type { ConnectorDefinition, SkillDefinition, ToolDefinition } from '@/types/domain'
+import type { ConnectorDefinition, SkillDefinition, SkillReleaseRecord, SkillVersionRecord, ToolDefinition } from '@/types/domain'
 
 type CapabilityTab = 'skills' | 'tools' | 'connectors'
 
@@ -22,10 +22,15 @@ const detailTitle = ref('')
 const detailRows = ref<Array<{ label: string; value: string }>>([])
 const detailType = ref<'skill' | 'tool' | 'connector'>('skill')
 const detailTargetId = ref('')
+const skillDetailTab = ref<'config' | 'versions' | 'releases'>('config')
 const skillEditorOpen = ref(false)
 const editingSkill = ref<SkillDefinition>()
 const actionLoading = ref('')
 const healthRefreshing = ref(false)
+
+const selectedSkill = computed(() => contentStore.skills.find((item) => item.id === detailTargetId.value))
+const selectedSkillVersions = computed(() => contentStore.skillVersions.filter((item) => item.skillId === detailTargetId.value))
+const selectedSkillReleases = computed(() => contentStore.skillReleaseRecords.filter((item) => item.skillId === detailTargetId.value))
 
 const filteredSkills = computed(() => {
   const keyword = query.value.trim().toLowerCase()
@@ -55,6 +60,7 @@ function openSkillEditor(skill: SkillDefinition) {
 }
 
 function inspectSkill(skill: SkillDefinition) {
+  skillDetailTab.value = 'config'
   showDetail(skill.name, [
     { label: 'Skill 标识', value: skill.id },
     { label: '版本', value: `v${skill.version}` },
@@ -119,7 +125,7 @@ async function copySkillIdentifier(value: string) {
 function editDetailSkill() {
   detailOpen.value = false
   const skill = contentStore.skills.find((item) => item.id === detailTargetId.value)
-  if (skill?.status === 'draft') openSkillEditor(skill)
+  if (skill) openSkillEditor(skill)
 }
 
 function openToolPermissions(toolId = detailTargetId.value) {
@@ -138,13 +144,48 @@ async function changeSkillStatus(skill: SkillDefinition) {
       { confirmButtonText: `确认${action}`, cancelButtonText: '取消', type: 'warning' },
     )
     actionLoading.value = `skill:${skill.id}`
-    await contentStore.setSkillStatus(skill.id, nextStatus, authStore.user.name)
+    if (skill.status === 'draft') {
+      const test = await contentStore.testSkill(skill.id, skill.testPrompt, authStore.user.name)
+      if (test.status !== 'passed') throw new Error(test.resultSummary)
+    }
+    const updated = await contentStore.setSkillStatus(skill.id, nextStatus, authStore.user.name)
+    if (detailOpen.value && detailTargetId.value === skill.id) inspectSkill(updated)
     ElMessage.success(`Skill 已${action}`)
   } catch (cause) {
     if (cause instanceof Error) ElMessage.error(cause.message)
   } finally {
     actionLoading.value = ''
   }
+}
+
+async function rollbackSkill(version: SkillVersionRecord) {
+  const skill = selectedSkill.value
+  if (!skill) return
+  try {
+    await ElMessageBox.confirm(
+      `活动版本将切换为已发布的 v${version.version}，历史版本不会被修改。`,
+      `回滚“${skill.name}”？`,
+      { confirmButtonText: '确认回滚', cancelButtonText: '取消', type: 'warning' },
+    )
+    actionLoading.value = `skill-rollback:${version.id}`
+    const updated = await contentStore.rollbackSkill(skill.id, version.version, authStore.user.name)
+    inspectSkill(updated)
+    skillDetailTab.value = 'releases'
+    ElMessage.success(`Skill 已回滚到 v${version.version}`)
+  } catch (cause) {
+    if (cause instanceof Error) ElMessage.error(cause.message)
+  } finally {
+    actionLoading.value = ''
+  }
+}
+
+function releaseActionLabel(record: SkillReleaseRecord) {
+  return {
+    published: '发布版本',
+    enabled: '启用 Skill',
+    disabled: '停用 Skill',
+    rollback: '版本回滚',
+  }[record.action]
 }
 
 async function changeToolStatus(tool: ToolDefinition) {
@@ -170,10 +211,20 @@ async function changeToolStatus(tool: ToolDefinition) {
 async function checkConnector(connector: ConnectorDefinition) {
   actionLoading.value = `connector:${connector.id}`
   try {
-    await contentStore.checkConnector(connector.id, authStore.user.name)
-    ElMessage.success(`${connector.name}健康检查通过（Mock）`)
+    const updated = await contentStore.checkConnector(connector.id, authStore.user.name)
+    if (updated.status === 'healthy') ElMessage.success(`${connector.name}健康检查通过`)
+    else ElNotification.error({
+      title: `连接器异常：${connector.name}`,
+      message: `原因：健康检查结果为${updated.status === 'offline' ? '离线' : '性能下降'}。下一步：检查 ${updated.endpoint}、凭据引用和 DSH Runtime 状态，恢复后重新检查。`,
+      duration: 8000,
+    })
   } catch (cause) {
-    ElMessage.error(cause instanceof Error ? cause.message : '连接器健康检查失败')
+    const failure = cause as Error & { object?: string; suggestion?: string; traceId?: string }
+    ElNotification.error({
+      title: `连接器检查失败：${failure.object ?? connector.name}`,
+      message: `原因：${failure.message ?? '健康检查未完成'}。下一步：${failure.suggestion ?? '检查连接器配置和系统健康后重试。'}${failure.traceId && failure.traceId !== '—' ? ` 链路编号：${failure.traceId}` : ''}`,
+      duration: 8000,
+    })
   } finally {
     actionLoading.value = ''
   }
@@ -182,8 +233,14 @@ async function checkConnector(connector: ConnectorDefinition) {
 async function refreshHealth() {
   healthRefreshing.value = true
   try {
-    await Promise.all(contentStore.connectors.map((connector) => contentStore.checkConnector(connector.id, authStore.user.name)))
-    ElMessage.success(`已完成 ${contentStore.connectors.length} 个连接器的健康检查（Mock）`)
+    const results = await Promise.all(contentStore.connectors.map((connector) => contentStore.checkConnector(connector.id, authStore.user.name)))
+    const abnormal = results.filter((connector) => connector.status !== 'healthy')
+    if (!abnormal.length) ElMessage.success(`全部 ${results.length} 个连接器健康检查通过`)
+    else ElNotification.warning({
+      title: `${abnormal.length} 个连接器需要处理`,
+      message: `对象：${abnormal.map((connector) => connector.name).join('、')}。下一步：逐项检查端点、凭据引用和依赖状态。`,
+      duration: 8000,
+    })
   } catch (cause) {
     ElMessage.error(cause instanceof Error ? cause.message : '批量健康检查失败')
   } finally {
@@ -191,8 +248,12 @@ async function refreshHealth() {
   }
 }
 
-function toolNames(ids: string[]) {
-  return ids.map((id) => contentStore.tools.find((tool) => tool.id === id)?.name ?? id).join('、')
+function toolNames(references: string[]) {
+  return references.map((reference) => {
+    const separator = reference.lastIndexOf('@')
+    const id = separator > 0 ? reference.slice(0, separator) : reference
+    return contentStore.tools.find((tool) => tool.id === id)?.name ?? reference
+  }).join('、')
 }
 
 function riskLabel(risk: ToolDefinition['risk']) {
@@ -204,7 +265,7 @@ function approvalLabel(policy: ToolDefinition['approvalPolicy']) {
 }
 
 function protocolLabel(protocol: ConnectorDefinition['protocol']) {
-  return { rest: 'REST API', openapi: 'OpenAPI', mcp: 'MCP', database: '数据库代理' }[protocol]
+  return { runtime: 'Runtime', rest: 'REST API', openapi: 'OpenAPI', mcp: 'MCP', database: '数据库代理' }[protocol]
 }
 
 onMounted(() => contentStore.load())
@@ -232,13 +293,13 @@ onMounted(() => contentStore.load())
     <section class="content-panel content-panel--flush capability-panel">
       <el-table v-if="activeTab === 'skills'" class="data-table" v-loading="contentStore.loading" :data="filteredSkills" empty-text="暂无匹配的 Skill">
         <el-table-column label="Skill" min-width="290"><template #default="scope"><div class="primary-cell"><strong>{{ scope.row.name }}</strong><small>{{ scope.row.description }}</small></div></template></el-table-column>
-        <el-table-column prop="version" label="版本" width="100"><template #default="scope"><span class="mono">v{{ scope.row.version }}</span></template></el-table-column>
+        <el-table-column prop="version" label="版本" width="125"><template #default="scope"><span class="mono">v{{ scope.row.version }}</span><small v-if="scope.row.activeVersion && scope.row.activeVersion !== scope.row.version" class="active-version-hint">活动 v{{ scope.row.activeVersion }}</small></template></el-table-column>
         <el-table-column prop="category" label="分类" width="110" />
         <el-table-column label="工具" width="90"><template #default="scope">{{ scope.row.toolIds.length }} 个</template></el-table-column>
         <el-table-column prop="owner" label="负责人" min-width="140" />
         <el-table-column label="状态" width="108"><template #default="scope"><StatusTag :status="scope.row.status" /></template></el-table-column>
         <el-table-column prop="updatedAt" label="更新时间" width="120" />
-        <el-table-column label="操作" width="220" fixed="right"><template #default="scope"><el-button link type="primary" :icon="View" data-action="view-skill" @click="inspectSkill(scope.row)">查看</el-button><el-button v-if="authStore.canManage && scope.row.status === 'draft'" link type="primary" :icon="Edit" data-action="edit-skill" @click="openSkillEditor(scope.row)">编辑</el-button><el-button v-if="authStore.canManage" link type="primary" :loading="actionLoading === `skill:${scope.row.id}`" :data-action="scope.row.status === 'published' ? 'disable-skill' : 'publish-skill'" @click="changeSkillStatus(scope.row)">{{ scope.row.status === 'published' ? '停用' : scope.row.status === 'draft' ? '发布' : '启用' }}</el-button></template></el-table-column>
+        <el-table-column label="操作" width="280" fixed="right"><template #default="scope"><el-button link type="primary" :icon="View" data-action="view-skill" @click="inspectSkill(scope.row)">查看</el-button><el-button v-if="authStore.canManage" link type="primary" :icon="Edit" data-action="edit-skill" @click="openSkillEditor(scope.row)">{{ scope.row.status === 'draft' ? '编辑' : '创建新版本' }}</el-button><el-button v-if="authStore.canManage" link type="primary" :loading="actionLoading === `skill:${scope.row.id}`" :data-action="scope.row.status === 'published' ? 'disable-skill' : 'publish-skill'" @click="changeSkillStatus(scope.row)">{{ scope.row.status === 'published' ? '停用' : scope.row.status === 'draft' ? '测试并发布' : '启用' }}</el-button></template></el-table-column>
       </el-table>
 
       <el-table v-else-if="activeTab === 'tools'" class="data-table" v-loading="contentStore.loading" :data="filteredTools" empty-text="暂无匹配的工具">
@@ -265,7 +326,12 @@ onMounted(() => contentStore.load())
 
     <el-drawer v-model="detailOpen" size="min(620px, 100vw)" :title="detailTitle">
       <div class="capability-detail__notice"><el-icon><Connection /></el-icon><p>{{ detailType === 'connector' ? '一期连接器由实施团队通过服务端配置，管理后台只查看状态和执行健康检查。' : detailType === 'tool' ? '一期工具由实施团队预置；调用仍经过员工身份、数据范围、风险和审批策略校验。' : 'Skill 发布后当前版本不可原地编辑，Agent 引用时锁定具体版本。' }}</p></div>
-      <dl class="capability-detail__rows">
+      <div v-if="detailType === 'skill'" class="status-tabs capability-detail__tabs" role="tablist" aria-label="Skill 详情类型">
+        <button class="status-tab" :class="{ active: skillDetailTab === 'config' }" type="button" role="tab" :aria-selected="skillDetailTab === 'config'" @click="skillDetailTab = 'config'">配置详情</button>
+        <button class="status-tab" :class="{ active: skillDetailTab === 'versions' }" type="button" role="tab" :aria-selected="skillDetailTab === 'versions'" @click="skillDetailTab = 'versions'">版本历史 <span class="tab-count">{{ selectedSkillVersions.length }}</span></button>
+        <button class="status-tab" :class="{ active: skillDetailTab === 'releases' }" type="button" role="tab" :aria-selected="skillDetailTab === 'releases'" @click="skillDetailTab = 'releases'">发布记录 <span class="tab-count">{{ selectedSkillReleases.length }}</span></button>
+      </div>
+      <dl v-if="detailType !== 'skill' || skillDetailTab === 'config'" class="capability-detail__rows">
         <div v-for="row in detailRows" :key="row.label">
           <dt>{{ row.label }}</dt>
           <dd :class="{ 'capability-detail__code': row.label.includes('Schema') }">
@@ -277,7 +343,19 @@ onMounted(() => contentStore.load())
           </dd>
         </div>
       </dl>
-      <div v-if="authStore.canManage" class="capability-detail__actions"><el-button v-if="detailType === 'skill' && contentStore.skills.find((item) => item.id === detailTargetId)?.status === 'draft'" @click="editDetailSkill">编辑配置</el-button><el-button v-if="detailType === 'tool'" type="primary" @click="openToolPermissions()">配置权限与数据范围</el-button></div>
+      <section v-else-if="detailType === 'skill' && skillDetailTab === 'versions'" class="capability-detail__table">
+        <el-table class="data-table" :data="selectedSkillVersions" empty-text="暂无版本记录">
+          <el-table-column label="版本" width="95"><template #default="scope"><span class="mono">v{{ scope.row.version }}</span></template></el-table-column>
+          <el-table-column label="变更说明" min-width="210"><template #default="scope"><div class="version-summary"><strong>{{ scope.row.summary }}</strong><small>{{ scope.row.createdBy }} · {{ scope.row.createdAt }}</small></div></template></el-table-column>
+          <el-table-column label="状态" width="95"><template #default="scope"><StatusTag :status="scope.row.status" /></template></el-table-column>
+          <el-table-column label="操作" width="100" fixed="right"><template #default="scope"><el-button v-if="authStore.canManage && scope.row.status === 'published' && scope.row.version !== selectedSkill?.activeVersion" link type="primary" :loading="actionLoading === `skill-rollback:${scope.row.id}`" @click="rollbackSkill(scope.row)">回滚至此</el-button><span v-else class="muted">—</span></template></el-table-column>
+        </el-table>
+      </section>
+      <section v-else-if="detailType === 'skill'" class="capability-detail__releases">
+        <el-empty v-if="!selectedSkillReleases.length" description="暂无发布记录" />
+        <el-timeline v-else><el-timeline-item v-for="record in selectedSkillReleases" :key="record.id" :timestamp="record.time" placement="top"><article class="release-record"><strong>{{ releaseActionLabel(record) }} · v{{ record.version }}</strong><p>{{ record.note }}</p><small>操作人：{{ record.actor }}</small></article></el-timeline-item></el-timeline>
+      </section>
+      <div v-if="authStore.canManage" class="capability-detail__actions"><template v-if="detailType === 'skill' && selectedSkill"><el-button @click="editDetailSkill">{{ selectedSkill.status === 'draft' ? '编辑配置' : '创建新版本' }}</el-button><el-button :type="selectedSkill.status === 'published' ? 'danger' : 'primary'" :loading="actionLoading === `skill:${selectedSkill.id}`" @click="changeSkillStatus(selectedSkill)">{{ selectedSkill.status === 'published' ? '停用 Skill' : selectedSkill.status === 'draft' ? '测试并发布' : '启用 Skill' }}</el-button></template><el-button v-if="detailType === 'tool'" type="primary" @click="openToolPermissions()">配置权限与数据范围</el-button></div>
     </el-drawer>
 
     <SkillEditorDialog v-model="skillEditorOpen" :skill="editingSkill" @saved="inspectSkill" />
@@ -296,6 +374,7 @@ onMounted(() => contentStore.load())
 .primary-cell strong { color: var(--color-text-heading); font-size: var(--font-size-caption); font-weight: var(--font-weight-title); }
 .primary-cell small { max-width: 440px; margin-top: 4px; overflow: hidden; color: var(--color-text-muted); font-size: var(--font-size-badge); text-overflow: ellipsis; white-space: nowrap; }
 .primary-cell code { margin-top: 4px; color: var(--color-text-secondary); font-size: var(--font-size-badge); }
+.active-version-hint { display: block; margin-top: 3px; color: var(--color-text-muted); font-size: var(--font-size-micro); }
 .mode-label { display: inline-flex; padding: 3px 7px; border-radius: var(--radius-tag); color: var(--color-primary); background: var(--color-primary-light); font-size: var(--font-size-badge); font-weight: var(--font-weight-badge); }
 .mode-label--write { color: var(--color-warning-strong); background: var(--color-warning-light); }
 .role-text { color: var(--color-text-secondary); font-size: var(--font-size-badge); }
@@ -307,6 +386,7 @@ onMounted(() => contentStore.load())
 .capability-detail__notice { display: flex; align-items: flex-start; gap: 9px; padding: 13px; border-radius: var(--radius-button); color: var(--color-primary); background: var(--color-primary-light); }
 .capability-detail__notice p { margin: 0; font-size: var(--font-size-badge); line-height: 1.6; }
 .capability-detail__rows { margin: 18px 0 0; }
+.capability-detail__tabs { margin-top: 16px; }
 .capability-detail__rows div { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 12px; padding: 12px 2px; border-bottom: 1px solid var(--color-border); }
 .capability-detail__rows dt { color: var(--color-text-muted); font-size: var(--font-size-badge); }
 .capability-detail__rows dd { margin: 0; color: var(--color-text-primary); font-size: var(--font-size-caption); line-height: 1.55; overflow-wrap: anywhere; white-space: pre-wrap; }
@@ -314,5 +394,11 @@ onMounted(() => contentStore.load())
 .capability-detail__identifier code { color: var(--color-text-primary); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--font-size-badge); }
 .capability-detail__code { padding: 9px; border-radius: var(--radius-button); background: var(--color-bg-subtle); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--font-size-badge) !important; }
 .capability-detail__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 24px; }
+.capability-detail__table { margin-top: 14px; overflow: hidden; border: 1px solid var(--color-border); border-radius: var(--radius-card); }
+.capability-detail__releases { margin-top: 18px; }
+.version-summary { display: flex; flex-direction: column; gap: 4px; }
+.version-summary small,
+.release-record small { color: var(--color-text-muted); font-size: var(--font-size-badge); }
+.release-record p { margin: 6px 0; color: var(--color-text-secondary); font-size: var(--font-size-caption); line-height: 1.5; }
 @media (max-width: 760px) { .capability-toolbar { align-items: stretch; flex-direction: column; } .capability-toolbar .el-input { width: 100%; } .capability-toolbar__legend { margin-left: 0; } }
 </style>

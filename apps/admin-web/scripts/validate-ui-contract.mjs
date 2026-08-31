@@ -134,7 +134,12 @@ forbidFragments('src/views/CapabilityManagementView.vue', [
   'data-action="create-connectors"',
 ])
 requireFragments('src/views/MemberManagementView.vue', ['data-action="view-member"'])
-requireFragments('src/views/ModelUsageView.vue', ['data-action="view-model-usage"'])
+requireFragments('src/views/ModelUsageView.vue', [
+  'data-action="view-model-usage"',
+  'data-action="view-employee-model-usage"',
+  '员工统计',
+  '筛选员工',
+])
 requireFragments('src/views/ModelGovernanceView.vue', [
   'ops-page',
   'class="data-table"',

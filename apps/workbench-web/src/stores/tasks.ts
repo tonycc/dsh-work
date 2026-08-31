@@ -49,27 +49,50 @@ export const useTaskStore = defineStore('tasks', () => {
     return tasks.value.find((task) => task.id === id)
   }
 
-  async function createTask(prompt: string, _attachments: string[], workspaceId = 'standalone', _workspaceName?: string) {
-    void _attachments
+  async function createTask(
+    prompt: string,
+    attachments: File[],
+    workspaceId?: string,
+    _workspaceName?: string,
+    agentId?: string,
+    referencedFileIds: string[] = [],
+  ) {
     void _workspaceName
     const session = await workbenchApi.createSession({
       title: prompt,
-      workspaceId: workspaceId === 'standalone' ? null : workspaceId,
+      ...(workspaceId ? { workspaceId } : {}),
+      ...(agentId ? { agentId } : {}),
     })
-    const task = await workbenchApi.startRun(session.id, { prompt, idempotencyKey: crypto.randomUUID() })
+    const uploadedFileIds = await uploadSessionFiles(session.id, attachments)
+    const fileIds = [...new Set([...referencedFileIds, ...uploadedFileIds])]
+    const task = await workbenchApi.startRun(session.id, {
+      prompt,
+      idempotencyKey: crypto.randomUUID(),
+      fileIds,
+    })
     upsert(task)
     subscribe(task.id)
     return task
   }
 
-  async function sendMessage(id: string, prompt: string, _attachments: string[]) {
-    void _attachments
+  async function sendMessage(id: string, prompt: string, attachments: File[]) {
     const current = getTask(id)
     if (!current) return undefined
-    const task = await workbenchApi.startRun(current.sessionId, { prompt, idempotencyKey: crypto.randomUUID() })
+    const fileIds = await uploadSessionFiles(current.sessionId, attachments)
+    const task = await workbenchApi.startRun(current.sessionId, {
+      prompt,
+      idempotencyKey: crypto.randomUUID(),
+      fileIds,
+    })
     upsert(task)
     subscribe(task.id)
     return task
+  }
+
+  async function uploadSessionFiles(sessionId: string, attachments: File[]) {
+    const uploaded = []
+    for (const file of attachments) uploaded.push(await workbenchApi.uploadSessionFile(sessionId, file))
+    return uploaded.map(file => file.id)
   }
 
   async function cancelTask(id: string) {
@@ -83,11 +106,6 @@ export const useTaskStore = defineStore('tasks', () => {
     upsert(task)
     subscribe(task.id, true)
     return task
-  }
-
-  function approveTask(id: string) {
-    const task = getTask(id)
-    if (task?.status === 'awaiting_approval') task.status = 'running'
   }
 
   function subscribe(runId: string, replace = false) {
@@ -109,10 +127,26 @@ export const useTaskStore = defineStore('tasks', () => {
   async function applyEvent(event: RuntimeEvent) {
     const task = getTask(event.run_id)
     if (!task) return
+    if (task.attemptId !== null && event.attempt_id !== task.attemptId) return
     if (event.event_type === 'run.queued') task.status = 'queued'
     if (event.event_type === 'run.started') task.status = 'running'
-    if (event.event_type === 'approval.required') task.status = 'awaiting_approval'
-    if (event.event_type === 'approval.resolved') task.status = 'running'
+    if (event.event_type === 'approval.required') {
+      task.status = 'awaiting_approval'
+      const toolName = typeof event.safe_metadata['tool_name'] === 'string'
+        ? event.safe_metadata['tool_name']
+        : '受控工具'
+      task.approval = {
+        object: `工具 ${toolName}`,
+        reason: 'DSH 请求本轮一次性工具权限，服务端正在校验 Agent、角色和数据范围。',
+        nextStep: '当前项目采用自动确认策略，无需手动操作；确认结果会自动更新。',
+        toolName,
+        dataScope: task.workspaceName === '我的空间' ? '当前员工个人授权范围' : `${task.workspaceName}成员授权范围`,
+      }
+    }
+    if (event.event_type === 'approval.resolved') {
+      task.status = 'running'
+      task.approval = undefined
+    }
     if (event.event_type === 'run.cancel_requested') task.status = 'running'
     if (event.event_type === 'run.cancelled') task.status = 'cancelled'
     if (event.event_type === 'run.failed') task.status = 'failed'
@@ -170,7 +204,7 @@ export const useTaskStore = defineStore('tasks', () => {
 
   return {
     tasks, loading, initialized, activeTasks, recentTasks, load, getTask,
-    createTask, sendMessage, cancelTask, retryTask, approveTask, refreshRun,
+    createTask, sendMessage, cancelTask, retryTask, refreshRun,
   }
 })
 

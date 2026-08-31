@@ -35,6 +35,10 @@ export interface TaskSource {
   type: 'knowledge' | 'erp' | 'mes' | 'file'
   title: string
   description: string
+  version?: string
+  effectiveAt?: string
+  dataScope?: string
+  synthetic?: boolean
   updatedAt?: string
 }
 
@@ -59,6 +63,7 @@ export interface ChatMessage {
 
 export interface TaskRun {
   id: string
+  attemptId: string | null
   title: string
   prompt: string
   status: RunStatus
@@ -77,10 +82,20 @@ export interface TaskRun {
   artifacts: Artifact[]
   attachments: string[]
   summary?: string
+  approval?: {
+    object: string
+    reason: string
+    nextStep: string
+    toolName: string
+    dataScope: string
+  }
   error?: {
     code: string
     message: string
+    object: string
+    reason: string
     suggestion: string
+    retryable: boolean
   }
 }
 
@@ -267,6 +282,7 @@ export interface SkillDefinition {
   id: string
   name: string
   version: string
+  activeVersion?: string
   category: string
   owner: string
   status: PublishStatus
@@ -275,6 +291,35 @@ export interface SkillDefinition {
   toolIds: string[]
   testPrompt: string
   updatedAt: string
+}
+
+export interface SkillVersionRecord {
+  id: string
+  skillId: string
+  version: string
+  name: string
+  category: string
+  description: string
+  instructions: string
+  toolIds: string[]
+  testPrompt: string
+  status: PublishStatus
+  createdAt: string
+  createdBy: string
+  publishedAt?: string
+  publishedBy?: string
+  sourceVersion?: string
+  summary: string
+}
+
+export interface SkillReleaseRecord {
+  id: string
+  skillId: string
+  version: string
+  action: 'published' | 'enabled' | 'disabled' | 'rollback'
+  actor: string
+  time: string
+  note: string
 }
 
 export interface SkillConfiguration {
@@ -298,6 +343,7 @@ export interface UpdateSkillInput extends Omit<SkillConfiguration, 'id'> {
 
 export interface ToolDefinition {
   id: string
+  version?: string
   name: string
   system: string
   description: string
@@ -318,9 +364,9 @@ export interface ConnectorDefinition {
   id: string
   name: string
   system: string
-  status: 'healthy' | 'degraded' | 'offline'
+  status: 'healthy' | 'degraded' | 'offline' | 'disabled'
   toolCount: number
-  protocol: 'rest' | 'openapi' | 'mcp' | 'database'
+  protocol: 'runtime' | 'rest' | 'openapi' | 'mcp' | 'database'
   endpoint: string
   authType: string
   credentialRef: string
@@ -369,11 +415,26 @@ export interface AuditEvent {
   time: string
   actor: string
   department: string
+  category: 'management' | 'security' | 'run' | 'model' | 'tool' | 'artifact'
   action: string
+  objectType: string
+  objectId: string
   object: string
   status: 'success' | 'failed' | 'blocked'
   traceId: string
+  runId: string | null
+  attemptId: string | null
   detail: string
+}
+
+export interface OperationsSummary {
+  runs24h: number
+  successfulRuns24h: number
+  failedRuns24h: number
+  modelTokens24h: number
+  toolCalls24h: number
+  artifacts24h: number
+  attentionEvents24h: number
 }
 
 export interface HealthComponent {
@@ -398,6 +459,8 @@ export interface ModelUsageRecord {
   time: string
   runId: string
   agentId: string
+  employeeId: string
+  employeeName: string
   department: string
   provider: string
   model: string

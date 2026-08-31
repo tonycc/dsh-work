@@ -24,8 +24,16 @@ export interface RuntimeManifest {
   run_id: string
   attempt_id: string
   session_id: string
-  workspace_id: string | null
+  workspace_id: string
   agent_version_id: string | null
+  agent_configuration: {
+    system_prompt: string
+    skill_instructions: Array<{
+      id: string
+      version: string
+      instructions: string
+    }>
+  }
   user_context: {
     user_id: string
     tenant_id: string
@@ -39,6 +47,7 @@ export interface RuntimeManifest {
   skills: CapabilityReference[]
   tools: CapabilityReference[]
   data_scopes: string[]
+  knowledge_context: RuntimeKnowledgeDocument[]
   model_route_id?: string | null
   input: {
     message: string
@@ -53,6 +62,16 @@ export interface RuntimeManifest {
   trace_id?: string
 }
 
+export interface RuntimeKnowledgeDocument {
+  documentId: string
+  title: string
+  version: string
+  effectiveDate: string
+  dataScope: string
+  contentChecksum: string
+  excerpt: string
+}
+
 export interface CapabilityReference {
   id: string
   version: string
@@ -62,6 +81,10 @@ export interface FileMount {
   file_id: string
   mount_path: string
   access: 'read_only'
+  source_name: string
+  media_type: string
+  content_sha256: string
+  content: string
 }
 
 export interface CompiledRuntimeManifest {
@@ -109,6 +132,10 @@ export interface RuntimeHealth {
   activeExecutions: number
   acceptingRuns: boolean
   dshRepository: string
+  runtimeVersion?: string
+  runtimeCommit?: string
+  protocolVersion?: number
+  launchMode?: 'source-checkout' | 'managed-distribution'
   transport: 'acp-stdio'
   message: string
 }
@@ -116,10 +143,13 @@ export interface RuntimeHealth {
 export type RuntimeEventListener = (event: RuntimeEvent) => void
 
 export interface AgentRuntimePort {
+  /** Execute a manifest that the durable scheduler has already admitted. */
   execute(manifest: RuntimeManifest): Promise<RuntimeExecutionHandle>
   subscribe(runId: string, listener: RuntimeEventListener): () => void
   cancel(runId: string, requestedBy: string): Promise<{ accepted: boolean }>
   status(runId: string): RuntimeExecutionSnapshot | undefined
   health(): Promise<RuntimeHealth>
+  /** Mirror scheduler state for health reporting; admission remains database-owned. */
+  configureScheduling?(status: 'accepting' | 'draining' | 'disabled'): Promise<void>
   close(): Promise<void>
 }

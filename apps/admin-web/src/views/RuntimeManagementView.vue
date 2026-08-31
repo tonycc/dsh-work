@@ -39,7 +39,7 @@ const configurationRules: FormRules<RuntimeConfigurationForm> = {
   ],
   attemptTimeoutMinutes: [
     { required: true, message: '请输入单次执行超时时间', trigger: 'change' },
-    { type: 'number', min: 1, max: 1440, message: '请输入 1～1440 分钟', trigger: 'change' },
+    { type: 'number', min: 1, max: 60, message: '请输入 1～60 分钟', trigger: 'change' },
   ],
   schedulingStatus: [{ required: true, message: '请选择调度状态', trigger: 'change' }],
 }
@@ -250,8 +250,8 @@ onMounted(() => contentStore.load())
           <p class="field-help">控制该 Runtime 同时运行的 DSH Worker 子进程数量，不能低于当前活动 Worker 数。</p>
         </el-form-item>
         <el-form-item label="单次执行超时时间" prop="attemptTimeoutMinutes">
-          <el-input-number v-model="configurationForm.attemptTimeoutMinutes" class="configuration-number" :min="1" :max="1440" :step="5" controls-position="right" aria-label="单次执行超时时间（分钟）" />
-          <p class="field-help">超过该时长后，Runtime Adapter 将终止当前 Attempt，单位为分钟。</p>
+          <el-input-number v-model="configurationForm.attemptTimeoutMinutes" class="configuration-number" :min="1" :max="60" :step="5" controls-position="right" aria-label="单次执行超时时间（分钟）" />
+          <p class="field-help">这是 Runtime 硬上限；若 Agent 超时更短则取较短值，超过后 Adapter 将终止当前 Attempt。</p>
         </el-form-item>
         <el-form-item label="调度状态" prop="schedulingStatus">
           <el-radio-group v-model="configurationForm.schedulingStatus" aria-label="Runtime 调度状态">

@@ -14,12 +14,15 @@ import type {
   MemberDefinition,
   ManagedWorkspaceDefinition,
   ModelUsageRecord,
+  OperationsSummary,
   PlatformStatus,
   RoleDefinition,
   RuntimeDefinition,
   SessionDefinition,
   SkillConfiguration,
   SkillDefinition,
+  SkillReleaseRecord,
+  SkillVersionRecord,
   ToolDefinition,
   UpdateRuntimeConfigurationInput,
   UsagePoint,
@@ -34,11 +37,14 @@ export const useContentStore = defineStore('admin-content', () => {
   const agentVersions = ref<AgentVersionRecord[]>([])
   const agentReleaseRecords = ref<AgentReleaseRecord[]>([])
   const skills = ref<SkillDefinition[]>([])
+  const skillVersions = ref<SkillVersionRecord[]>([])
+  const skillReleaseRecords = ref<SkillReleaseRecord[]>([])
   const tools = ref<ToolDefinition[]>([])
   const connectors = ref<ConnectorDefinition[]>([])
   const roles = ref<RoleDefinition[]>([])
   const members = ref<MemberDefinition[]>([])
   const auditEvents = ref<AuditEvent[]>([])
+  const operationsSummary = ref<OperationsSummary | null>(null)
   const health = ref<HealthComponent[]>([])
   const usage = ref<UsagePoint[]>([])
   const modelUsage = ref<ModelUsageRecord[]>([])
@@ -61,11 +67,14 @@ export const useContentStore = defineStore('admin-content', () => {
         agentVersionData,
         agentReleaseData,
         skillData,
+        skillVersionData,
+        skillReleaseData,
         toolData,
         connectorData,
         roleData,
         memberData,
         auditData,
+        operationsSummaryData,
         healthData,
         usageData,
         modelUsageData,
@@ -79,11 +88,14 @@ export const useContentStore = defineStore('admin-content', () => {
         adminApi.getAgentVersions(),
         adminApi.getAgentReleaseRecords(),
         adminApi.getSkills(),
+        adminApi.getSkillVersions(),
+        adminApi.getSkillReleaseRecords(),
         adminApi.getTools(),
         adminApi.getConnectors(),
         adminApi.getRoles(),
         adminApi.getMembers(),
         adminApi.getAuditEvents(),
+        adminApi.getOperationsSummary(),
         adminApi.getHealth(),
         adminApi.getUsage(),
         adminApi.getModelUsage(),
@@ -97,11 +109,14 @@ export const useContentStore = defineStore('admin-content', () => {
       agentVersions.value = agentVersionData
       agentReleaseRecords.value = agentReleaseData
       skills.value = skillData
+      skillVersions.value = skillVersionData
+      skillReleaseRecords.value = skillReleaseData
       tools.value = toolData
       connectors.value = connectorData
       roles.value = roleData
       members.value = memberData
       auditEvents.value = auditData
+      operationsSummary.value = operationsSummaryData
       health.value = healthData
       usage.value = usageData
       modelUsage.value = modelUsageData
@@ -127,6 +142,10 @@ export const useContentStore = defineStore('admin-content', () => {
     )
     if (version) version.status = status
     return result.agent
+  }
+
+  function testAgent(agentId: string, prompt: string, actor: string) {
+    return adminApi.testAgent({ agentId, prompt, actor })
   }
 
   async function createAgentDraft(input: AgentDraftConfiguration, actor: string) {
@@ -175,6 +194,7 @@ export const useContentStore = defineStore('admin-content', () => {
     allowedRoles: string[]
     dataScopes: string[]
     approvalPolicy: ToolDefinition['approvalPolicy']
+    actor: string
   }) {
     const tool = await adminApi.updateToolPermissions(input)
     replaceById(tools.value, tool)
@@ -182,16 +202,22 @@ export const useContentStore = defineStore('admin-content', () => {
   }
 
   async function createSkill(input: Omit<SkillConfiguration, 'id'>, actor: string) {
-    const skill = await adminApi.createSkill({ ...input, actor })
-    skills.value.unshift(skill)
-    return skill
+    const result = await adminApi.createSkill({ ...input, actor })
+    skills.value.unshift(result.skill)
+    skillVersions.value.unshift(result.version)
+    return result.skill
   }
 
   async function updateSkill(input: SkillConfiguration, actor: string) {
     const { id, ...configuration } = input
-    const skill = await adminApi.updateSkill({ skillId: id, actor, ...configuration })
-    replaceById(skills.value, skill)
-    return skill
+    const result = await adminApi.updateSkill({ skillId: id, actor, ...configuration })
+    replaceById(skills.value, result.skill)
+    replaceById(skillVersions.value, result.version)
+    return result.skill
+  }
+
+  function testSkill(skillId: string, prompt: string, actor: string) {
+    return adminApi.testSkill({ skillId, prompt, actor })
   }
 
   async function setSkillStatus(
@@ -199,9 +225,30 @@ export const useContentStore = defineStore('admin-content', () => {
     status: 'published' | 'disabled',
     actor: string,
   ) {
-    const skill = await adminApi.setSkillStatus({ skillId, status, actor })
-    replaceById(skills.value, skill)
-    return skill
+    const result = await adminApi.setSkillStatus({ skillId, status, actor })
+    replaceById(skills.value, result.skill)
+    skillReleaseRecords.value.unshift(result.release)
+    if (result.release.action === 'published') {
+      const version = skillVersions.value.find(
+        item => item.skillId === skillId && item.version === result.release.version,
+      )
+      if (version) {
+        version.status = 'published'
+        version.publishedAt = result.release.time
+        version.publishedBy = result.release.actor
+      }
+    }
+    return result.skill
+  }
+
+  async function rollbackSkill(skillId: string, version: string, actor: string) {
+    const result = await adminApi.rollbackSkill({ skillId, version, actor })
+    replaceById(skills.value, result.skill)
+    skillReleaseRecords.value.unshift(result.release)
+    for (const item of skillVersions.value) {
+      if (item.skillId === skillId && item.status === 'draft') item.status = 'disabled'
+    }
+    return result.skill
   }
 
   async function setToolStatus(
@@ -241,11 +288,14 @@ export const useContentStore = defineStore('admin-content', () => {
     agentVersions,
     agentReleaseRecords,
     skills,
+    skillVersions,
+    skillReleaseRecords,
     tools,
     connectors,
     roles,
     members,
     auditEvents,
+    operationsSummary,
     health,
     usage,
     modelUsage,
@@ -257,10 +307,13 @@ export const useContentStore = defineStore('admin-content', () => {
     createAgentDraft,
     updateAgentDraft,
     setAgentStatus,
+    testAgent,
     rollbackAgent,
     createSkill,
     updateSkill,
     setSkillStatus,
+    testSkill,
+    rollbackSkill,
     setToolStatus,
     checkConnector,
     checkRuntime,
@@ -273,4 +326,5 @@ export const useContentStore = defineStore('admin-content', () => {
 function replaceById<T extends { id: string }>(collection: T[], item: T) {
   const index = collection.findIndex((candidate) => candidate.id === item.id)
   if (index >= 0) collection.splice(index, 1, item)
+  else collection.unshift(item)
 }

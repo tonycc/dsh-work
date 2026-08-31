@@ -35,6 +35,10 @@ export interface TaskSource {
   type: 'knowledge' | 'erp' | 'mes' | 'file'
   title: string
   description: string
+  version?: string
+  effectiveAt?: string
+  dataScope?: string
+  synthetic?: boolean
   updatedAt?: string
 }
 
@@ -59,6 +63,7 @@ export interface ChatMessage {
 
 export interface TaskRun {
   id: string
+  attemptId: string | null
   title: string
   prompt: string
   status: RunStatus
@@ -77,10 +82,20 @@ export interface TaskRun {
   artifacts: Artifact[]
   attachments: string[]
   summary?: string
+  approval?: {
+    object: string
+    reason: string
+    nextStep: string
+    toolName: string
+    dataScope: string
+  }
   error?: {
     code: string
     message: string
+    object: string
+    reason: string
     suggestion: string
+    retryable: boolean
   }
 }
 
@@ -91,6 +106,7 @@ export interface WorkspaceFile {
   size: string
   uploadedBy: string
   uploadedAt: string
+  extractionStatus?: 'succeeded' | 'failed'
 }
 
 export interface Workspace {
@@ -111,4 +127,13 @@ export interface WorkbenchSession {
   user: UserProfile
   identityProvider: 'prototype-sso'
   apiAudience: 'workbench'
+}
+
+export interface WorkbenchAgent {
+  id: string
+  name: string
+  description: string
+  welcomeMessage: string
+  version: string
+  examplePrompts: string[]
 }

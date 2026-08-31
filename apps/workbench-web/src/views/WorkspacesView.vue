@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowRight, Plus, Search, UserFilled } from '@element-plus/icons-vue'
+import { ArrowRight, Plus, Search, User, UserFilled } from '@element-plus/icons-vue'
 
 import { StatusTag } from '@dsh-work/ui-core'
 import { useAuthStore } from '@/stores/auth'
@@ -21,11 +21,11 @@ const creating = ref(false)
 
 const filteredWorkspaces = computed(() => {
   const keyword = query.value.trim().toLowerCase()
-  return contentStore.workspaces.filter(
-    (workspace) =>
-      workspace.type === 'team' &&
-      (!keyword || `${workspace.name} ${workspace.description} ${workspace.owner}`.toLowerCase().includes(keyword)),
-  )
+  return [...contentStore.workspaces]
+    .filter((workspace) =>
+      !keyword || `${workspace.name} ${workspace.description} ${workspace.owner}`.toLowerCase().includes(keyword),
+    )
+    .sort((left, right) => Number(right.type === 'personal') - Number(left.type === 'personal'))
 })
 
 const canCreate = computed(() => Boolean(newWorkspaceName.value.trim() && newWorkspaceTeam.value))
@@ -65,14 +65,14 @@ onMounted(() => contentStore.refresh())
     <header class="page-header">
       <div>
         <h1 class="page-title">工作空间</h1>
-        <p class="page-description">按团队业务主题组织成员、文件、对话和成果；工作空间只能收窄成员权限，不能扩大其企业数据范围。</p>
+        <p class="page-description">个人空间用于沉淀仅你可见的内容，团队空间用于协作；所有对话、文件和成果始终归属一个工作空间。</p>
       </div>
       <el-button type="primary" :icon="Plus" @click="createDialogOpen = true">创建团队工作空间</el-button>
     </header>
 
     <div class="workspace-toolbar">
       <el-input v-model="query" :prefix-icon="Search" clearable placeholder="搜索工作空间或责任团队" />
-      <span>{{ filteredWorkspaces.length }} 个团队工作空间</span>
+      <span>{{ filteredWorkspaces.length }} 个可访问工作空间</span>
     </div>
 
     <div v-if="contentStore.loading" class="workspace-grid">
@@ -86,14 +86,15 @@ onMounted(() => contentStore.refresh())
         v-for="workspace in filteredWorkspaces"
         :key="workspace.id"
         class="workspace-card panel"
+        :class="{ 'workspace-card--personal': workspace.type === 'personal' }"
         type="button"
         @click="openWorkspace(workspace)"
       >
         <div class="workspace-card__top">
-          <span class="workspace-card__icon">
-            <el-icon><UserFilled /></el-icon>
+          <span class="workspace-card__icon" :class="{ 'workspace-card__icon--personal': workspace.type === 'personal' }">
+            <el-icon><component :is="workspace.type === 'personal' ? User : UserFilled" /></el-icon>
           </span>
-          <StatusTag status="neutral" label="团队工作空间" />
+          <StatusTag status="neutral" :label="workspace.type === 'personal' ? '个人工作空间' : '团队工作空间'" />
         </div>
         <h2>{{ workspace.name }}</h2>
         <p>{{ workspace.description }}</p>
@@ -101,16 +102,17 @@ onMounted(() => contentStore.refresh())
           <div><strong>{{ workspace.sessionCount }}</strong><span>对话</span></div>
           <div><strong>{{ workspace.files.length }}</strong><span>文件</span></div>
           <div><strong>{{ workspace.artifactCount }}</strong><span>成果</span></div>
-          <div><strong>{{ workspace.memberCount }}</strong><span>成员</span></div>
+          <div><strong>{{ workspace.memberCount }}</strong><span>{{ workspace.type === 'personal' ? '访问者' : '成员' }}</span></div>
         </div>
         <div class="workspace-card__footer">
-          <span>责任团队 {{ workspace.owner }} · {{ workspace.updatedAt }}更新</span>
+          <span v-if="workspace.type === 'personal'">仅你可访问 · {{ workspace.updatedAt }}更新</span>
+          <span v-else>负责人 {{ workspace.owner }} · {{ workspace.updatedAt }}更新</span>
           <el-icon><ArrowRight /></el-icon>
         </div>
       </button>
     </div>
 
-    <el-empty v-else description="没有匹配的团队工作空间">
+    <el-empty v-else description="没有匹配的工作空间">
       <el-button @click="query = ''">清除筛选</el-button>
     </el-empty>
 

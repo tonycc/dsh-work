@@ -26,4 +26,18 @@ export class WorkbenchQueryService {
   getArtifacts() {
     return this.repository.read('artifacts')
   }
+
+  async getAgents() {
+    const agents = await this.repository.read('agents')
+    return agents
+      .filter(agent => agent.status === 'published')
+      .map(agent => ({
+        id: agent.id,
+        name: agent.name,
+        description: agent.description,
+        welcomeMessage: agent.welcomeMessage,
+        version: agent.version,
+        examplePrompts: [...agent.examplePrompts],
+      }))
+  }
 }

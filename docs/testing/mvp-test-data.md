@@ -16,7 +16,7 @@
 
 | 用户 | 角色 | 数据范围 | 主要验证 |
 |---|---|---|---|
-| 林岚 `usr-linlan` | 普通员工 | 华东供应链 | 员工工作台、独立对话、团队 Workspace |
+| 林岚 `usr-linlan` | 普通员工 | 华东供应链 | 员工工作台、默认个人 Workspace、团队 Workspace |
 | 周衡 `usr-zhouheng` | 部门经理 | 华东供应链全部 | Workspace owner、成果查看、成员权限 |
 | 陈默 `usr-chenmo` | 企业管理员 | 企业治理数据 | Agent、Skill、Workspace、Runtimes 配置 |
 | 许宁 `usr-xuning` | 审计员 | 审计与用量 | Session 摘要、Token、审计事件；不能改配置 |

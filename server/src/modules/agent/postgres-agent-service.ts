@@ -1,0 +1,733 @@
+import { createHash, randomUUID } from 'node:crypto'
+
+import type {
+  AgentDefinition,
+  AgentDraftConfiguration,
+  AgentReleaseRecord,
+  AgentVersionRecord,
+  CreateAgentDraftInput,
+  PublishStatus,
+  UpdateAgentDraftInput,
+} from '../../domain/types.ts'
+import type { DatabaseClient, DatabaseTransaction } from '../../infrastructure/postgres/database.ts'
+import type { PostgresOperationsService } from '../admin/application/postgres-operations-service.ts'
+import type { PostgresSkillService, RuntimeSkillConfiguration } from '../skill/postgres-skill-service.ts'
+import type { PostgresToolConnectorService } from '../tool/postgres-tool-connector-service.ts'
+
+const tenantId = 'tenant-dsh-work'
+
+interface AgentRow {
+  id: string
+  name: string
+  description: string
+  welcomeMessage: string
+  owner: string
+  department: string
+  persistedStatus: PublishStatus
+  activeVersionId: string | null
+  draftVersionId: string | null
+  versionId: string
+  version: string
+  systemPrompt: string
+  roleIds: string[]
+  dataScopes: string[]
+  examplePrompts: string[]
+  maxTokens: number
+  timeoutSeconds: number
+  skills: string[]
+  tools: string[]
+  updatedAt: Date
+}
+
+type AgentFingerprintSource = Pick<AgentRow,
+  | 'versionId'
+  | 'name'
+  | 'description'
+  | 'welcomeMessage'
+  | 'systemPrompt'
+  | 'roleIds'
+  | 'dataScopes'
+  | 'examplePrompts'
+  | 'skills'
+  | 'tools'
+  | 'maxTokens'
+  | 'timeoutSeconds'
+>
+
+type LockedAgentDraft = AgentFingerprintSource & { id: string }
+
+interface VersionRow {
+  id: string
+  agentId: string
+  version: string
+  name: string
+  description: string
+  status: PublishStatus
+  createdAt: Date
+  createdBy: string
+  publishedAt: Date | null
+  publishedBy: string | null
+  sourceVersion: string | null
+  summary: string
+  roleIds: string[]
+  dataScopes: string[]
+  welcomeMessage: string
+  examplePrompts: string[]
+  systemPrompt: string
+  maxTokens: number
+  timeoutSeconds: number
+  skills: string[]
+  tools: string[]
+}
+
+export interface AgentTestResult {
+  id: string
+  agentId: string
+  version: string
+  status: 'passed' | 'failed'
+  resultSummary: string
+  testedAt: string
+}
+
+export interface WorkbenchAgentDefinition {
+  id: string
+  name: string
+  description: string
+  welcomeMessage: string
+  version: string
+  examplePrompts: string[]
+}
+
+export interface RuntimeAgentSnapshot {
+  versionId: string
+  systemPrompt: string
+  skills: string[]
+  skillInstructions: RuntimeSkillConfiguration[]
+  tools: string[]
+  runtimeTools: string[]
+  approvalMode: 'always' | 'risk_based' | 'never'
+  roleIds: string[]
+  dataScopes: string[]
+  maxTokens: number
+  timeoutSeconds: number
+}
+
+export class PostgresAgentService {
+  private readonly database: DatabaseClient
+  private readonly operations?: PostgresOperationsService
+  private readonly skillService?: PostgresSkillService
+  private readonly toolService?: PostgresToolConnectorService
+
+  constructor(
+    database: DatabaseClient,
+    operations?: PostgresOperationsService,
+    skillService?: PostgresSkillService,
+    toolService?: PostgresToolConnectorService,
+  ) {
+    this.database = database
+    this.operations = operations
+    this.skillService = skillService
+    this.toolService = toolService
+  }
+
+  async getAgents(): Promise<AgentDefinition[]> {
+    const rows = await this.readAgentRows()
+    return rows.map(toAgentDefinition)
+  }
+
+  async getAgentVersions(): Promise<AgentVersionRecord[]> {
+    const rows = await this.database<VersionRow[]>`
+      select av.id, av.agent_id as "agentId", av.version, av.name, av.description, av.status,
+             av.created_at as "createdAt", creator.display_name as "createdBy",
+             av.published_at as "publishedAt", publisher.display_name as "publishedBy",
+             av.source_version as "sourceVersion", av.change_summary as summary,
+             av.visible_role_ids as "roleIds", av.data_scopes as "dataScopes",
+             av.welcome_message as "welcomeMessage", av.example_prompts as "examplePrompts",
+             av.system_prompt as "systemPrompt", av.max_tokens as "maxTokens",
+             av.timeout_seconds as "timeoutSeconds", av.skill_refs as skills, av.tool_refs as tools
+        from agent_versions av
+        join users creator on creator.tenant_id = av.tenant_id and creator.id = av.created_by
+        left join users publisher on publisher.tenant_id = av.tenant_id and publisher.id = av.published_by
+       where av.tenant_id = ${tenantId}
+       order by av.created_at desc
+    `
+    return rows.map(toVersionRecord)
+  }
+
+  async getReleaseRecords(): Promise<AgentReleaseRecord[]> {
+    const rows = await this.database<{
+      id: string; agentId: string; version: string; action: AgentReleaseRecord['action'];
+      actor: string; time: Date; note: string
+    }[]>`
+      select arr.id, arr.agent_id as "agentId", av.version, arr.action,
+             u.display_name as actor, arr.created_at as time, arr.note
+        from agent_release_records arr
+        join agent_versions av on av.tenant_id = arr.tenant_id and av.id = arr.agent_version_id
+        join users u on u.tenant_id = arr.tenant_id and u.id = arr.actor_id
+       where arr.tenant_id = ${tenantId}
+       order by arr.created_at desc
+    `
+    return rows.map(row => ({ ...row, time: formatDateTime(row.time) }))
+  }
+
+  async createAgent(input: CreateAgentDraftInput) {
+    const actor = await this.requireActor(input.actor)
+    const configuration = normalizeConfiguration(input, actor.displayName, actor.department)
+    assertConfiguration(configuration)
+    await this.assertCapabilityReferences(configuration.skills, configuration.tools, configuration.roleIds, configuration.dataScopes)
+    const versionId = `agent-version-${randomUUID()}`
+    const version = '0.1.0'
+
+    await this.database.begin(async transaction => {
+      await transaction`
+        insert into agents (
+          id, tenant_id, name, description, welcome_message, owner_user_id, created_by,
+          status, draft_version_id
+        ) values (
+          ${configuration.id}, ${tenantId}, ${configuration.name}, ${configuration.description},
+          ${configuration.welcomeMessage}, ${actor.id}, ${actor.id}, 'draft', null
+        )
+      `
+      await transaction`
+        insert into agent_versions (
+          id, tenant_id, agent_id, version, name, description, welcome_message,
+          example_prompts, system_prompt, visible_role_ids, data_scopes, max_tokens,
+          timeout_seconds, skill_refs, tool_refs, status, created_by, change_summary
+        ) values (
+          ${versionId}, ${tenantId}, ${configuration.id}, ${version}, ${configuration.name},
+          ${configuration.description}, ${configuration.welcomeMessage}, ${transaction.json(configuration.examplePrompts)},
+          ${configuration.systemPrompt}, ${transaction.json(configuration.roleIds)},
+          ${transaction.json(configuration.dataScopes)}, ${configuration.maxTokens},
+          ${configuration.timeoutSeconds}, ${transaction.json(configuration.skills)},
+          ${transaction.json(configuration.tools)}, 'draft', ${actor.id}, ${configuration.changeSummary}
+        )
+      `
+      await transaction`
+        update agents set draft_version_id = ${versionId}, updated_at = now()
+         where tenant_id = ${tenantId} and id = ${configuration.id}
+      `
+    })
+    await this.audit(actor.id, 'agent.create', configuration.id, 'success', `创建 Agent ${version}`)
+    return this.requireAgentResult(configuration.id, versionId)
+  }
+
+  async updateAgent(input: UpdateAgentDraftInput) {
+    const actor = await this.requireActor(input.actor)
+    const [current] = await this.readAgentRows(input.agentId)
+    if (!current) throw new Error(`Agent 不存在：${input.agentId}`)
+    const configuration = normalizeConfiguration(
+      { ...input, id: input.agentId },
+      current.owner,
+      current.department,
+    )
+    assertConfiguration(configuration)
+    await this.assertCapabilityReferences(configuration.skills, configuration.tools, configuration.roleIds, configuration.dataScopes)
+
+    let draftVersionId = current.draftVersionId
+    await this.database.begin(async transaction => {
+      const [locked] = await transaction<{
+        activeVersionId: string | null
+        draftVersionId: string | null
+        activeVersion: string | null
+      }[]>`
+        select a.active_version_id as "activeVersionId", a.draft_version_id as "draftVersionId",
+               active.version as "activeVersion"
+          from agents a
+          left join agent_versions active on active.tenant_id = a.tenant_id and active.id = a.active_version_id
+         where a.tenant_id = ${tenantId} and a.id = ${input.agentId}
+         for update of a
+      `
+      if (!locked) throw new Error(`Agent 不存在：${input.agentId}`)
+      draftVersionId = locked.draftVersionId
+      if (draftVersionId) {
+        await transaction`
+          update agent_versions
+             set name = ${configuration.name}, description = ${configuration.description},
+                 welcome_message = ${configuration.welcomeMessage},
+                 example_prompts = ${transaction.json(configuration.examplePrompts)},
+                 system_prompt = ${configuration.systemPrompt},
+                 visible_role_ids = ${transaction.json(configuration.roleIds)},
+                 data_scopes = ${transaction.json(configuration.dataScopes)},
+                 max_tokens = ${configuration.maxTokens}, timeout_seconds = ${configuration.timeoutSeconds},
+                 skill_refs = ${transaction.json(configuration.skills)}, tool_refs = ${transaction.json(configuration.tools)},
+                 change_summary = ${configuration.changeSummary}
+           where tenant_id = ${tenantId} and id = ${draftVersionId} and status = 'draft'
+        `
+      } else {
+        if (!locked.activeVersionId || !locked.activeVersion) throw new Error('Agent 没有可用于创建新版本的已发布版本')
+        const [latest] = await transaction<{ version: string }[]>`
+          select version from agent_versions
+           where tenant_id = ${tenantId} and agent_id = ${input.agentId}
+           order by split_part(version, '.', 1)::integer desc,
+                    split_part(version, '.', 2)::integer desc,
+                    split_part(version, '.', 3)::integer desc
+           limit 1
+        `
+        draftVersionId = `agent-version-${randomUUID()}`
+        await transaction`
+          insert into agent_versions (
+            id, tenant_id, agent_id, version, name, description, welcome_message,
+            example_prompts, system_prompt, visible_role_ids, data_scopes, max_tokens,
+            timeout_seconds, skill_refs, tool_refs, status, created_by, source_version, change_summary
+          ) values (
+            ${draftVersionId}, ${tenantId}, ${input.agentId}, ${nextVersion(latest?.version ?? locked.activeVersion)},
+            ${configuration.name}, ${configuration.description}, ${configuration.welcomeMessage},
+            ${transaction.json(configuration.examplePrompts)}, ${configuration.systemPrompt},
+            ${transaction.json(configuration.roleIds)}, ${transaction.json(configuration.dataScopes)},
+            ${configuration.maxTokens}, ${configuration.timeoutSeconds},
+            ${transaction.json(configuration.skills)}, ${transaction.json(configuration.tools)},
+            'draft', ${actor.id}, ${locked.activeVersion}, ${configuration.changeSummary}
+          )
+        `
+      }
+      await transaction`
+        update agents set name = ${configuration.name}, description = ${configuration.description},
+                          welcome_message = ${configuration.welcomeMessage}, draft_version_id = ${draftVersionId},
+                          updated_at = now()
+         where tenant_id = ${tenantId} and id = ${input.agentId}
+      `
+    })
+    await this.audit(actor.id, 'agent.draft.update', input.agentId, 'success', '保存 Agent 待发布版本')
+    if (!draftVersionId) throw new Error('Agent 草稿版本创建失败')
+    return this.requireAgentResult(input.agentId, draftVersionId)
+  }
+
+  async testAgent(input: { agentId: string; prompt: string; actor: string }): Promise<AgentTestResult> {
+    const actor = await this.requireActor(input.actor)
+    const [agent] = await this.readAgentRows(input.agentId)
+    if (!agent) throw new Error(`Agent 不存在：${input.agentId}`)
+    if (!agent.draftVersionId) throw new Error('当前 Agent 没有待测试的草稿版本')
+    if (input.prompt.trim().length < 4) throw new Error('测试问题至少需要 4 个字符')
+    await this.assertCapabilityReferences(agent.skills, agent.tools, agent.roleIds, agent.dataScopes)
+    const fingerprint = configurationFingerprint(agent)
+    const testId = `agent-test-${randomUUID()}`
+    const summary = `配置校验通过：${agent.skills.length} 个 Skill、${agent.tools.length} 个工具、${agent.roleIds.length} 个可见角色。`
+    await this.database`
+      insert into agent_test_runs (
+        id, tenant_id, agent_id, agent_version_id, configuration_fingerprint,
+        test_prompt, status, result_summary, tested_by
+      ) values (
+        ${testId}, ${tenantId}, ${agent.id}, ${agent.draftVersionId}, ${fingerprint},
+        ${input.prompt.trim()}, 'passed', ${summary}, ${actor.id}
+      )
+    `
+    await this.audit(actor.id, 'agent.test', agent.id, 'success', summary)
+    return {
+      id: testId,
+      agentId: agent.id,
+      version: agent.version,
+      status: 'passed',
+      resultSummary: summary,
+      testedAt: new Date().toISOString(),
+    }
+  }
+
+  async setStatus(input: {
+    agentId: string
+    status: Extract<PublishStatus, 'published' | 'disabled'>
+    actor: string
+  }) {
+    const actor = await this.requireActor(input.actor)
+    const [current] = await this.readAgentRows(input.agentId)
+    if (!current) throw new Error(`Agent 不存在：${input.agentId}`)
+
+    if (input.status === 'disabled') {
+      if (current.draftVersionId) throw new Error('存在待发布草稿时不能停用 Agent，请先发布或回滚')
+      if (!current.activeVersionId) throw new Error('尚未发布的 Agent 不能停用')
+      const activeVersionId = current.activeVersionId
+      const release = await this.database.begin(async transaction => {
+        const updated = await transaction`
+          update agents set status = 'disabled', updated_at = now()
+           where tenant_id = ${tenantId} and id = ${input.agentId}
+             and status = 'published' and active_version_id = ${activeVersionId}
+             and draft_version_id is null
+           returning id
+        `
+        if (!updated.length) throw new Error('Agent 状态已发生变化，请刷新后重试')
+        return this.appendRelease(transaction, activeVersionId, input.agentId, 'disabled', actor.id, '停用当前 Agent，不影响已创建的运行。')
+      })
+      await this.audit(actor.id, 'agent.disable', input.agentId, 'success', release.note)
+      return { agent: await this.requireAgent(input.agentId), release }
+    }
+
+    if (current.draftVersionId) return this.publishDraft(current, actor)
+    if (!current.activeVersionId || current.persistedStatus !== 'disabled') {
+      throw new Error('当前 Agent 没有可发布草稿，也不处于停用状态')
+    }
+    const activeVersionId = current.activeVersionId
+    const release = await this.database.begin(async transaction => {
+      const updated = await transaction`
+        update agents set status = 'published', updated_at = now()
+         where tenant_id = ${tenantId} and id = ${input.agentId}
+           and status = 'disabled' and active_version_id = ${activeVersionId}
+         returning id
+      `
+      if (!updated.length) throw new Error('Agent 状态已发生变化，请刷新后重试')
+      return this.appendRelease(transaction, activeVersionId, input.agentId, 'enabled', actor.id, '重新启用当前 Agent 版本。')
+    })
+    await this.audit(actor.id, 'agent.enable', input.agentId, 'success', release.note)
+    return { agent: await this.requireAgent(input.agentId), release }
+  }
+
+  async rollback(input: { agentId: string; version: string; actor: string }) {
+    const actor = await this.requireActor(input.actor)
+    const [current] = await this.readAgentRows(input.agentId)
+    if (!current) throw new Error(`Agent 不存在：${input.agentId}`)
+    const [target] = await this.database<VersionRow[]>`
+      select av.id, av.agent_id as "agentId", av.version, av.name, av.description, av.status, av.created_at as "createdAt",
+             creator.display_name as "createdBy", av.published_at as "publishedAt",
+             publisher.display_name as "publishedBy", av.source_version as "sourceVersion",
+             av.change_summary as summary, av.visible_role_ids as "roleIds", av.data_scopes as "dataScopes",
+             av.welcome_message as "welcomeMessage", av.example_prompts as "examplePrompts",
+             av.system_prompt as "systemPrompt", av.max_tokens as "maxTokens",
+             av.timeout_seconds as "timeoutSeconds", av.skill_refs as skills, av.tool_refs as tools
+        from agent_versions av
+        join users creator on creator.tenant_id = av.tenant_id and creator.id = av.created_by
+        left join users publisher on publisher.tenant_id = av.tenant_id and publisher.id = av.published_by
+       where av.tenant_id = ${tenantId} and av.agent_id = ${input.agentId}
+         and av.version = ${input.version} and av.status = 'published'
+    `
+    if (!target) throw new Error(`已发布 Agent Version 不存在：${input.agentId}@${input.version}`)
+    await this.assertCapabilityReferences(target.skills, target.tools, target.roleIds, target.dataScopes)
+
+    const note = `活动版本由 v${current.version} 回滚到 v${target.version}。`
+    const release = await this.database.begin(async transaction => {
+      if (current.draftVersionId) {
+        await transaction`update agent_versions set status = 'disabled' where tenant_id = ${tenantId} and id = ${current.draftVersionId} and status = 'draft'`
+      }
+      await transaction`
+        update agents set active_version_id = ${target.id}, draft_version_id = null,
+                          status = 'published', name = ${target.name},
+                          description = ${target.description},
+                          welcome_message = ${target.welcomeMessage}, updated_at = now()
+         where tenant_id = ${tenantId} and id = ${input.agentId}
+      `
+      return this.appendRelease(transaction, target.id, input.agentId, 'rollback', actor.id, note)
+    })
+    await this.audit(actor.id, 'agent.rollback', input.agentId, 'success', release.note)
+    return { agent: await this.requireAgent(input.agentId), release }
+  }
+
+  async listWorkbenchAgents(userId: string): Promise<WorkbenchAgentDefinition[]> {
+    return this.database<WorkbenchAgentDefinition[]>`
+      select a.id, av.name, av.description, av.welcome_message as "welcomeMessage",
+             av.version, av.example_prompts as "examplePrompts"
+        from agents a
+        join agent_versions av on av.tenant_id = a.tenant_id and av.id = a.active_version_id
+        join users u on u.tenant_id = a.tenant_id and u.id = ${userId} and u.status = 'active'
+        join user_roles ur on ur.tenant_id = a.tenant_id and ur.user_id = ${userId}
+       where a.tenant_id = ${tenantId} and a.status = 'published'
+         and av.status = 'published' and av.visible_role_ids ? ur.role_id
+         and (ur.valid_until is null or ur.valid_until > now())
+       group by a.id, av.id
+       order by a.updated_at desc
+    `
+  }
+
+  async resolveWorkbenchAgentVersion(agentId: string | undefined, userId: string): Promise<string> {
+    const agents = await this.listWorkbenchAgents(userId)
+    const selected = agentId ? agents.find(agent => agent.id === agentId) : agents[0]
+    if (!selected) throw new Error(agentId ? 'Agent 不存在或当前用户不可用' : '当前用户没有可用 Agent')
+    const [row] = await this.database<{ activeVersionId: string }[]>`
+      select active_version_id as "activeVersionId" from agents
+       where tenant_id = ${tenantId} and id = ${selected.id}
+    `
+    if (!row?.activeVersionId) throw new Error('Agent 没有活动版本')
+    return row.activeVersionId
+  }
+
+  async getRuntimeSnapshot(versionId: string): Promise<RuntimeAgentSnapshot> {
+    const [row] = await this.database<Omit<RuntimeAgentSnapshot, 'skillInstructions' | 'runtimeTools' | 'approvalMode'>[]>`
+      select id as "versionId", system_prompt as "systemPrompt", skill_refs as skills,
+             tool_refs as tools, visible_role_ids as "roleIds", data_scopes as "dataScopes",
+             max_tokens as "maxTokens", timeout_seconds as "timeoutSeconds"
+        from agent_versions where tenant_id = ${tenantId} and id = ${versionId}
+    `
+    if (!row) throw new Error(`Agent Version 不存在：${versionId}`)
+    await this.assertCapabilityReferences(row.skills, row.tools, row.roleIds, row.dataScopes)
+    const skillInstructions = this.skillService
+      ? await this.skillService.resolveRuntimeSkills(row.skills)
+      : []
+    const runtimeToolNames = this.toolService
+      ? await this.toolService.resolveRuntimeToolNames(row.tools)
+      : unique(row.tools).map(reference => parseReference(reference).id)
+    const runtimeTools = unique(row.tools).map((reference, index) => {
+      const { version } = parseReference(reference)
+      return `${runtimeToolNames[index]}@${version}`
+    })
+    const approvalMode = this.toolService
+      ? await this.toolService.resolveRuntimeApprovalMode(row.tools)
+      : 'risk_based'
+    return { ...row, skillInstructions, runtimeTools, approvalMode }
+  }
+
+  private async publishDraft(current: AgentRow, actor: { id: string; displayName: string; department: string }) {
+    await this.assertCapabilityReferences(current.skills, current.tools, current.roleIds, current.dataScopes)
+    const release = await this.database.begin(async transaction => {
+      const [locked] = await transaction<LockedAgentDraft[]>`
+        select a.id, av.id as "versionId", av.name, av.description,
+               av.welcome_message as "welcomeMessage", av.system_prompt as "systemPrompt",
+               av.visible_role_ids as "roleIds", av.data_scopes as "dataScopes",
+               av.example_prompts as "examplePrompts", av.skill_refs as skills,
+               av.tool_refs as tools, av.max_tokens as "maxTokens",
+               av.timeout_seconds as "timeoutSeconds"
+          from agents a
+          join agent_versions av on av.tenant_id = a.tenant_id and av.id = a.draft_version_id
+         where a.tenant_id = ${tenantId} and a.id = ${current.id} and av.status = 'draft'
+         for update of a, av
+      `
+      if (!locked) throw new Error('当前 Agent 草稿已发生变化，请重新测试后再发布')
+
+      const fingerprint = configurationFingerprint(locked)
+      const [test] = await transaction<{ id: string }[]>`
+        select id from agent_test_runs
+         where tenant_id = ${tenantId} and agent_version_id = ${locked.versionId}
+           and configuration_fingerprint = ${fingerprint} and status = 'passed'
+         order by created_at desc limit 1
+      `
+      if (!test) throw new Error('发布前必须使用当前配置完成一次服务端测试')
+
+      const published = await transaction<{ id: string }[]>`
+        update agent_versions set status = 'published', published_at = now(), published_by = ${actor.id}
+         where tenant_id = ${tenantId} and id = ${locked.versionId} and status = 'draft'
+         returning id
+      `
+      if (!published.length) throw new Error('Agent 草稿发布状态已发生变化，请刷新后重试')
+
+      const activated = await transaction<{ id: string }[]>`
+        update agents set active_version_id = ${locked.versionId}, draft_version_id = null,
+                          status = 'published', updated_at = now()
+         where tenant_id = ${tenantId} and id = ${current.id} and draft_version_id = ${locked.versionId}
+         returning id
+      `
+      if (!activated.length) throw new Error('Agent 草稿指针已发生变化，请刷新后重试')
+      return this.appendRelease(transaction, locked.versionId, current.id, 'published', actor.id, '服务端配置测试通过，发布当前 Agent 版本。')
+    })
+    await this.audit(actor.id, 'agent.publish', current.id, 'success', release.note)
+    return { agent: await this.requireAgent(current.id), release }
+  }
+
+  private async assertCapabilityReferences(
+    skills: string[],
+    tools: string[],
+    roleIds?: string[],
+    dataScopes?: string[],
+  ) {
+    await this.skillService?.assertPublishedReferences(skills)
+    await this.toolService?.assertAvailableReferences(tools)
+    if (roleIds && dataScopes) {
+      await this.toolService?.assertAuthorizationCompatibility(tools, roleIds, dataScopes)
+    }
+    if (!this.skillService) return
+    const runtimeSkills = await this.skillService.resolveRuntimeSkills(skills)
+    const selectedTools = new Set(unique(tools))
+    const missingTools = unique(runtimeSkills.flatMap(skill => skill.tools))
+      .filter(reference => !selectedTools.has(reference))
+    if (missingTools.length) {
+      throw new Error(`Agent 必须显式授权所选 Skill 依赖的工具：${missingTools.join('、')}`)
+    }
+  }
+
+  private async appendRelease(
+    transaction: DatabaseTransaction,
+    versionId: string,
+    agentId: string,
+    action: AgentReleaseRecord['action'],
+    actorId: string,
+    note: string,
+  ): Promise<AgentReleaseRecord> {
+    const id = `agent-release-${randomUUID()}`
+    const [row] = await transaction<{ version: string; actor: string; time: Date }[]>`
+      with inserted as (
+        insert into agent_release_records (
+          id, tenant_id, agent_id, agent_version_id, action, actor_id, note
+        ) values (${id}, ${tenantId}, ${agentId}, ${versionId}, ${action}, ${actorId}, ${note})
+        returning agent_version_id, actor_id, created_at
+      )
+      select av.version, u.display_name as actor, inserted.created_at as time
+        from inserted
+        join agent_versions av on av.tenant_id = ${tenantId} and av.id = inserted.agent_version_id
+        join users u on u.tenant_id = ${tenantId} and u.id = inserted.actor_id
+    `
+    if (!row) throw new Error('Agent 发布记录写入失败')
+    return { id, agentId, version: row.version, action, actor: row.actor, time: formatDateTime(row.time), note }
+  }
+
+  private async requireActor(name: string) {
+    const [actor] = await this.database<{ id: string; displayName: string; department: string }[]>`
+      select u.id, u.display_name as "displayName", coalesce(u.department_id, '未分配部门') as department
+        from users u where u.tenant_id = ${tenantId} and u.display_name = ${name.trim()} and u.status = 'active'
+         and exists (
+           select 1 from user_roles ur
+           join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id
+            where ur.tenant_id = u.tenant_id and ur.user_id = u.id
+              and (ur.valid_until is null or ur.valid_until > now())
+              and r.permissions ? 'admin:*'
+         )
+    `
+    if (!actor) throw new Error(`操作人不存在、已停用或不是平台管理员：${name}`)
+    return actor
+  }
+
+  private async readAgentRows(agentId?: string): Promise<AgentRow[]> {
+    return this.database<AgentRow[]>`
+      select a.id, av.name, av.description, av.welcome_message as "welcomeMessage",
+             owner.display_name as owner, coalesce(owner.department_id, '未分配部门') as department,
+             a.status as "persistedStatus", a.active_version_id as "activeVersionId",
+             a.draft_version_id as "draftVersionId", av.id as "versionId", av.version,
+             av.system_prompt as "systemPrompt", av.visible_role_ids as "roleIds",
+             av.data_scopes as "dataScopes", av.example_prompts as "examplePrompts",
+             av.max_tokens as "maxTokens", av.timeout_seconds as "timeoutSeconds",
+             av.skill_refs as skills, av.tool_refs as tools, a.updated_at as "updatedAt"
+        from agents a
+        join users owner on owner.tenant_id = a.tenant_id and owner.id = a.owner_user_id
+        join agent_versions av on av.tenant_id = a.tenant_id
+         and av.id = coalesce(a.draft_version_id, a.active_version_id)
+       where a.tenant_id = ${tenantId} ${agentId ? this.database`and a.id = ${agentId}` : this.database``}
+       order by a.updated_at desc
+    `
+  }
+
+  private async requireAgent(agentId: string): Promise<AgentDefinition> {
+    const [row] = await this.readAgentRows(agentId)
+    if (!row) throw new Error(`Agent 不存在：${agentId}`)
+    return toAgentDefinition(row)
+  }
+
+  private async requireAgentResult(agentId: string, versionId: string) {
+    const agent = await this.requireAgent(agentId)
+    const versions = await this.getAgentVersions()
+    const version = versions.find(item => item.id === versionId)
+    if (!version) throw new Error(`Agent Version 不存在：${versionId}`)
+    return { agent, version }
+  }
+
+  private audit(actorId: string, action: string, agentId: string, result: 'success' | 'failed', detail: string) {
+    return this.operations?.appendAudit(actorId, action, agentId, result, `trace-agent-${randomUUID()}`, detail)
+      ?? Promise.resolve()
+  }
+}
+
+function normalizeConfiguration(
+  input: AgentDraftConfiguration,
+  owner: string,
+  department: string,
+): AgentDraftConfiguration {
+  const welcomeMessage = input.welcomeMessage.trim()
+    || `你好，我是${input.name.trim() || '企业 Agent'}。${input.description.trim() || '我会协助你完成工作。'}`.slice(0, 120)
+  return {
+    ...input,
+    name: input.name.trim(),
+    description: input.description.trim(),
+    owner,
+    department,
+    visibility: input.visibility.trim() || '指定角色',
+    roleIds: unique(input.roleIds),
+    dataScopes: unique(input.dataScopes),
+    welcomeMessage,
+    examplePrompts: unique(input.examplePrompts),
+    systemPrompt: input.systemPrompt.trim(),
+    skills: unique(input.skills),
+    tools: unique(input.tools),
+    changeSummary: input.changeSummary.trim() || '更新 Agent 配置',
+  }
+}
+
+function assertConfiguration(input: AgentDraftConfiguration) {
+  if (!/^[a-z][a-z0-9-]{2,47}$/.test(input.id)) throw new Error('Agent 标识格式不正确')
+  if (input.name.length < 2 || input.name.length > 40) throw new Error('Agent 名称长度为 2～40 个字符')
+  if (input.description.length < 10 || input.description.length > 200) throw new Error('Agent 说明长度为 10～200 个字符')
+  if (input.welcomeMessage.length > 120) throw new Error('欢迎语不能超过 120 个字符')
+  if (input.systemPrompt.length < 20 || input.systemPrompt.length > 20000) throw new Error('System Prompt 长度必须为 20～20000 个字符')
+  if (!input.roleIds.length || !input.dataScopes.length) throw new Error('必须配置可见角色和数据范围')
+  if (!input.examplePrompts.length) throw new Error('必须配置至少一个示例问题')
+  if (!input.skills.length || !input.tools.length) throw new Error('必须配置至少一个 Skill 和工具')
+  if (input.maxTokens < 1024 || input.maxTokens > 32768) throw new Error('Token 上限必须在 1024～32768 之间')
+  if (input.timeoutSeconds < 30 || input.timeoutSeconds > 600) throw new Error('运行超时必须在 30～600 秒之间')
+}
+
+function toAgentDefinition(row: AgentRow): AgentDefinition {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    owner: row.owner,
+    department: row.department,
+    visibility: row.roleIds.includes('role-employee') ? '全体试点员工' : `指定 ${row.roleIds.length} 个角色`,
+    roleIds: row.roleIds,
+    dataScopes: row.dataScopes,
+    status: row.draftVersionId ? 'draft' : row.persistedStatus,
+    version: row.version,
+    welcomeMessage: row.welcomeMessage,
+    examplePrompts: row.examplePrompts,
+    systemPrompt: row.systemPrompt,
+    maxTokens: row.maxTokens,
+    timeoutSeconds: row.timeoutSeconds,
+    skills: row.skills,
+    tools: row.tools,
+    updatedAt: formatDateTime(row.updatedAt),
+  }
+}
+
+function toVersionRecord(row: VersionRow): AgentVersionRecord {
+  return {
+    id: row.id,
+    agentId: row.agentId,
+    version: row.version,
+    status: row.status,
+    createdAt: formatDateTime(row.createdAt),
+    createdBy: row.createdBy,
+    ...(row.publishedAt ? { publishedAt: formatDateTime(row.publishedAt) } : {}),
+    ...(row.publishedBy ? { publishedBy: row.publishedBy } : {}),
+    ...(row.sourceVersion ? { sourceVersion: row.sourceVersion } : {}),
+    summary: row.summary,
+    visibility: row.roleIds.includes('role-employee') ? '全体试点员工' : `指定 ${row.roleIds.length} 个角色`,
+    roleIds: row.roleIds,
+    dataScopes: row.dataScopes,
+    welcomeMessage: row.welcomeMessage,
+    examplePrompts: row.examplePrompts,
+    systemPrompt: row.systemPrompt,
+    maxTokens: row.maxTokens,
+    timeoutSeconds: row.timeoutSeconds,
+    skills: row.skills,
+    tools: row.tools,
+  }
+}
+
+function configurationFingerprint(row: AgentFingerprintSource) {
+  return createHash('sha256').update(JSON.stringify({
+    versionId: row.versionId,
+    name: row.name,
+    description: row.description,
+    welcomeMessage: row.welcomeMessage,
+    systemPrompt: row.systemPrompt,
+    roleIds: [...row.roleIds].sort(),
+    dataScopes: [...row.dataScopes].sort(),
+    examplePrompts: [...row.examplePrompts],
+    skills: [...row.skills].sort(),
+    tools: [...row.tools].sort(),
+    maxTokens: row.maxTokens,
+    timeoutSeconds: row.timeoutSeconds,
+  })).digest('hex')
+}
+
+function nextVersion(current: string) {
+  const [major = 0, minor = 0] = current.split('.').map(Number)
+  return `${major}.${minor + 1}.0`
+}
+
+function unique(values: string[]) {
+  return [...new Set(values.map(value => value.trim()).filter(Boolean))]
+}
+
+function parseReference(reference: string) {
+  const separator = reference.lastIndexOf('@')
+  if (separator <= 0 || separator === reference.length - 1) {
+    throw new Error(`工具引用必须锁定版本：${reference}`)
+  }
+  return { id: reference.slice(0, separator), version: reference.slice(separator + 1) }
+}
+
+function formatDateTime(value: Date) {
+  return value.toISOString().slice(0, 16).replace('T', ' ')
+}

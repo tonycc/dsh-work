@@ -79,6 +79,11 @@ interface GovernancePort {
 - 端口不得传递企业 SSO Cookie、模型密钥或连接器凭据；只传短期授权引用。
 - Provider、模型和路由由 dsh-work 治理；Agent 不保存模型策略。路由在创建 Attempt 前解析，并作为不含密钥正文的不可变快照持久化。
 - 当前 `dsh-managed` SecretStore 适配器只登记并检查引用，不读取、复制或覆盖 DSH 的现有密钥；切换密钥后端不改变模型治理业务表。
+- DSH ACP 子进程只继承显式 OS/DSH 基线环境；数据库连接、应用 Secret、Token 和连接器凭据不得通过父进程环境透传，敏感覆盖请求必须失败关闭。
+- 管理审计、授权记录、Runtime 诊断和 Tool 参数摘要在持久化前统一递归脱敏，读取时再次执行防御性脱敏；Token 数量等非凭据指标可以保留。
+- Worker 崩溃、模型失败、Tool 超时、网络中断和服务停止必须保留独立错误码；不得全部折叠为通用失败或员工取消。
+- 服务启动时，旧进程遗留的运行中 Attempt 以 `SERVICE_RESTARTED` 失败关闭；只有尚未开始的排队 Attempt 可以使用原不可变 Manifest 恢复调度。
+- SSE 重连只依赖 PostgreSQL 全 Run `stream_position` 和 `Last-Event-ID`，不得依赖进程内事件缓存。
 - 对员工展示的事件必须符合 `run-event.schema.json`，隐藏推理不得持久化或返回前端。
 
 ## 4. M1 验证结果

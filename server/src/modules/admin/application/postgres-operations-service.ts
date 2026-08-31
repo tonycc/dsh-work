@@ -5,6 +5,7 @@ import type {
   HealthComponent,
   ManagedWorkspaceDefinition,
   ModelUsageRecord,
+  OperationsSummary,
   RuntimeDefinition,
   SessionDefinition,
   UpdateRuntimeConfigurationInput,
@@ -12,14 +13,25 @@ import type {
 } from '../../../domain/types.ts'
 import type { DatabaseClient } from '../../../infrastructure/postgres/database.ts'
 import type { RunAttemptRecord, RunRecord } from '../../run/run-types.ts'
+import type { AgentRuntimePort } from '../../runtime/runtime-types.ts'
+import type { PostgresAuthorizationService } from '../../authorization/postgres-authorization-service.ts'
+import { redactSensitiveText, sanitizeSafeMetadata } from '../../../security/safe-observability.ts'
 
 const tenantId = 'tenant-dsh-work'
 
 export class PostgresOperationsService {
   private readonly database: DatabaseClient
+  private readonly runtime?: AgentRuntimePort
+  private readonly authorization?: PostgresAuthorizationService
 
-  constructor(database: DatabaseClient) {
+  constructor(
+    database: DatabaseClient,
+    runtime?: AgentRuntimePort,
+    authorization?: PostgresAuthorizationService,
+  ) {
     this.database = database
+    this.runtime = runtime
+    this.authorization = authorization
   }
 
   async getTaskSummaries() {
@@ -29,6 +41,7 @@ export class PostgresOperationsService {
   }
 
   async getRuntimes(): Promise<RuntimeDefinition[]> {
+    const liveHealth = await this.runtime?.health()
     const rows = await this.database<{
       id: string; nodeName: string; runtimeVersion: string; healthStatus: RuntimeDefinition['status'];
       schedulingStatus: RuntimeDefinition['schedulingStatus']; capacity: number; lastHeartbeatAt: Date | null;
@@ -39,7 +52,9 @@ export class PostgresOperationsService {
              r.capacity, r.last_heartbeat_at as "lastHeartbeatAt",
              count(a.id) filter (where a.status = 'running')::integer as "activeWorkers",
              count(a.id) filter (where a.status = 'queued')::integer as "queuedRuns",
-             coalesce((select timeout_seconds from runtime_configurations c where c.tenant_id = r.tenant_id order by revision desc limit 1), 300)::integer as "timeoutSeconds"
+             coalesce((select timeout_seconds from runtime_configurations c
+                        where c.tenant_id = r.tenant_id and c.runtime_id = r.id
+                        order by revision desc limit 1), 300)::integer as "timeoutSeconds"
         from runtimes r
         left join run_attempts a on a.tenant_id = r.tenant_id and a.runtime_id = r.id
        where r.tenant_id = ${tenantId}
@@ -51,9 +66,11 @@ export class PostgresOperationsService {
       name: row.nodeName,
       environment: '本地 MVP',
       mode: 'dsh-worker',
-      status: row.healthStatus,
+      status: liveHealth?.runtimeId === row.id ? liveHealth.status : row.healthStatus,
       schedulingStatus: row.schedulingStatus,
-      version: row.runtimeVersion,
+      version: liveHealth?.runtimeId === row.id && liveHealth.runtimeVersion
+        ? liveHealth.runtimeVersion
+        : row.runtimeVersion,
       endpoint: 'ACP stdio（本机子进程）',
       maxConcurrentWorkers: row.capacity,
       activeWorkers: row.activeWorkers,
@@ -64,52 +81,131 @@ export class PostgresOperationsService {
       latency: '本地 stdio',
       lastHeartbeat: row.lastHeartbeatAt ? formatDateTime(row.lastHeartbeatAt) : '—',
       checkedAt: '刚刚',
-      healthMessage: row.healthStatus === 'healthy' ? 'DSH 仓库可访问，Runtime 正在接收任务。' : 'Runtime 当前不可用。',
+      healthMessage: liveHealth?.runtimeId === row.id
+        ? liveHealth.message
+        : row.healthStatus === 'healthy'
+          ? 'DSH Runtime 已登记，等待实时健康检查。'
+          : 'Runtime 当前不可用。',
       capabilities: ['ACP stdio', 'DSH Agent Loop', '取消', '事件流', '工作区沙箱'],
     }))
   }
 
   async checkRuntime(input: { runtimeId: string; actor: string }) {
+    const actor = await this.requirePlatformAdmin(input.actor)
+    await this.requireRuntime(input.runtimeId)
+    const health = await this.runtime?.health()
+    const status = health?.runtimeId === input.runtimeId ? health.status : 'offline'
     await this.database`
-      update runtimes set health_status = 'healthy', last_heartbeat_at = now()
+      update runtimes set health_status = ${status}, last_heartbeat_at = now(),
+                          runtime_version = coalesce(${health?.runtimeVersion ?? null}, runtime_version)
        where tenant_id = ${tenantId} and id = ${input.runtimeId}
     `
-    await this.appendAudit('U00008', 'runtime.health.check', input.runtimeId, 'success', `trace-runtime-${input.runtimeId}`, input.actor)
+    await this.appendAudit(
+      actor.id,
+      'runtime.health.check',
+      input.runtimeId,
+      status === 'offline' ? 'failed' : 'success',
+      `trace-runtime-${input.runtimeId}`,
+      health?.message ?? 'Runtime Adapter 未连接',
+    )
     return (await this.getRuntimes()).find((runtime) => runtime.id === input.runtimeId)
   }
 
   async updateRuntimeConfiguration(input: UpdateRuntimeConfigurationInput) {
-    const [active] = await this.database<{ count: number }[]>`
-      select count(*)::integer as count from run_attempts
-       where tenant_id = ${tenantId} and runtime_id = ${input.runtimeId} and status = 'running'
-    `
-    if (input.maxConcurrentWorkers < (active?.count ?? 0)) throw new Error('最大并发数不能小于当前活动 Worker 数')
-    await this.database.begin(async (transaction) => {
-      await transaction`
-        insert into runtime_configurations (
-          tenant_id, revision, concurrency_limit, timeout_seconds, sandbox_policy, updated_by
-        ) select ${tenantId}, coalesce(max(revision), 0) + 1, ${input.maxConcurrentWorkers},
-                 ${input.attemptTimeoutMinutes * 60}, '{"network":"deny","write":"workspace_only"}', 'U00008'
-          from runtime_configurations where tenant_id = ${tenantId}
-      `
-      await transaction`
-        update runtimes set capacity = ${input.maxConcurrentWorkers}, scheduling_status = ${input.schedulingStatus}
-         where tenant_id = ${tenantId} and id = ${input.runtimeId}
-      `
-    })
-    await this.appendAudit('U00008', 'runtime.configuration.update', input.runtimeId, 'success', `trace-runtime-${input.runtimeId}`, input.actor)
+    const actor = await this.requirePlatformAdmin(input.actor)
+    assertRuntimeConfiguration(input)
+    let runtimeConfigurationStarted = false
+    try {
+      await this.database.begin(async (transaction) => {
+        const [runtime] = await transaction<{ id: string }[]>`
+          select id from runtimes
+           where tenant_id = ${tenantId} and id = ${input.runtimeId}
+           for update
+        `
+        if (!runtime) throw new Error(`Runtime 不存在：${input.runtimeId}`)
+
+        if (input.schedulingStatus === 'accepting') {
+          const health = await this.runtime?.health()
+          if (!health || health.runtimeId !== input.runtimeId || health.status === 'offline') {
+            throw new Error('Runtime 当前离线，不能切换为接收任务')
+          }
+        }
+
+        const [active] = await transaction<{ count: number }[]>`
+          select count(*)::integer as count from run_attempts
+           where tenant_id = ${tenantId} and runtime_id = ${input.runtimeId} and status = 'running'
+        `
+        if (input.maxConcurrentWorkers < (active?.count ?? 0)) {
+          throw new Error('最大并发数不能小于当前活动 Worker 数')
+        }
+
+        await transaction`
+          insert into runtime_configurations (
+            tenant_id, runtime_id, revision, concurrency_limit, timeout_seconds, sandbox_policy, updated_by
+          ) select ${tenantId}, ${input.runtimeId}, coalesce(max(revision), 0) + 1,
+                   ${input.maxConcurrentWorkers}, ${input.attemptTimeoutMinutes * 60},
+                   '{"network":"deny","write":"workspace_only","approval":"risk_based"}', ${actor.id}
+            from runtime_configurations
+           where tenant_id = ${tenantId} and runtime_id = ${input.runtimeId}
+        `
+        const updated = await transaction`
+          update runtimes set capacity = ${input.maxConcurrentWorkers},
+                              scheduling_status = ${input.schedulingStatus}
+           where tenant_id = ${tenantId} and id = ${input.runtimeId}
+           returning id
+        `
+        if (!updated.length) throw new Error(`Runtime 不存在：${input.runtimeId}`)
+
+        // claimAttempt locks the same Runtime row before admitting work. Keep
+        // the row lock while mirroring the state so no claim can observe a
+        // half-applied scheduling transition.
+        runtimeConfigurationStarted = true
+        await this.runtime?.configureScheduling?.(input.schedulingStatus)
+      })
+    } catch (error) {
+      if (runtimeConfigurationStarted) {
+        await this.reconcileRuntimeScheduling(input.runtimeId).catch(() => undefined)
+      }
+      throw error
+    }
+    await this.appendAudit(actor.id, 'runtime.configuration.update', input.runtimeId, 'success', `trace-runtime-${input.runtimeId}`, `${input.schedulingStatus} · 并发 ${input.maxConcurrentWorkers} · 超时 ${input.attemptTimeoutMinutes} 分钟`)
     return (await this.getRuntimes()).find((runtime) => runtime.id === input.runtimeId)
+  }
+
+  async getRuntimePolicy(runtimeId: string) {
+    const runtime = await this.requireRuntime(runtimeId)
+    const [configuration] = await this.database<{
+      revision: number
+      concurrencyLimit: number
+      timeoutSeconds: number
+      sandboxPolicy: Record<string, unknown>
+    }[]>`
+      select revision, concurrency_limit as "concurrencyLimit",
+             timeout_seconds as "timeoutSeconds", sandbox_policy as "sandboxPolicy"
+        from runtime_configurations
+       where tenant_id = ${tenantId} and runtime_id = ${runtimeId}
+       order by revision desc limit 1
+    `
+    return {
+      runtimeId,
+      schedulingStatus: runtime.schedulingStatus,
+      concurrencyLimit: configuration?.concurrencyLimit ?? runtime.capacity,
+      timeoutSeconds: configuration?.timeoutSeconds ?? 300,
+      revision: configuration?.revision ?? 0,
+      sandboxPolicy: configuration?.sandboxPolicy ?? {},
+    }
   }
 
   async getSessions(): Promise<SessionDefinition[]> {
     const rows = await this.database<{
-      id: string; title: string; user: string; workspaceId: string | null; workspaceName: string | null;
+      id: string; title: string; user: string; workspaceId: string; workspaceName: string; workspaceType: 'personal' | 'team';
       agentId: string; agentName: string; agentVersion: string; runId: string | null; status: SessionDefinition['status'] | null;
       runCount: number; messageCount: number; tokenUsage: number; createdAt: Date; updatedAt: Date;
       traceId: string | null
     }[]>`
       select s.id, s.title, u.display_name as "user", s.workspace_id as "workspaceId",
-             w.name as "workspaceName", a.id as "agentId", a.name as "agentName", av.version as "agentVersion",
+             w.name as "workspaceName", w.workspace_type as "workspaceType",
+             a.id as "agentId", a.name as "agentName", av.version as "agentVersion",
              latest.id as "runId", latest.status, count(distinct r.id)::integer as "runCount",
              count(distinct m.id)::integer as "messageCount",
              coalesce(sum(distinct mu.input_tokens + mu.output_tokens), 0)::integer as "tokenUsage",
@@ -118,14 +214,14 @@ export class PostgresOperationsService {
         join users u on u.tenant_id = s.tenant_id and u.id = s.created_by
         join agent_versions av on av.tenant_id = s.tenant_id and av.id = s.agent_version_id
         join agents a on a.tenant_id = av.tenant_id and a.id = av.agent_id
-        left join workspaces w on w.tenant_id = s.tenant_id and w.id = s.workspace_id
+        join workspaces w on w.tenant_id = s.tenant_id and w.id = s.workspace_id
         left join lateral (select id, status, current_attempt_id from runs where tenant_id = s.tenant_id and session_id = s.id order by created_at desc limit 1) latest on true
         left join runs r on r.tenant_id = s.tenant_id and r.session_id = s.id
         left join messages m on m.tenant_id = s.tenant_id and m.session_id = s.id
         left join model_usage_events mu on mu.tenant_id = s.tenant_id and mu.run_id = r.id
         left join lateral (select trace_id from run_events where tenant_id = s.tenant_id and run_id = latest.id order by stream_position desc limit 1) ev on true
        where s.tenant_id = ${tenantId}
-       group by s.id, u.display_name, w.name, a.id, a.name, av.version, latest.id, latest.status, ev.trace_id
+       group by s.id, u.display_name, w.name, w.workspace_type, a.id, a.name, av.version, latest.id, latest.status, ev.trace_id
        order by s.last_active_at desc
     `
     return rows.map((row) => ({
@@ -133,8 +229,8 @@ export class PostgresOperationsService {
       title: row.title,
       user: row.user,
       department: '供应链中心',
-      workspaceId: row.workspaceId ?? 'standalone',
-      workspaceName: row.workspaceName ?? '未加入工作空间',
+      workspaceId: row.workspaceId,
+      workspaceName: row.workspaceName,
       agentId: row.agentId,
       agentName: row.agentName,
       agentVersion: row.agentVersion,
@@ -147,7 +243,9 @@ export class PostgresOperationsService {
       createdAt: formatDateTime(row.createdAt),
       updatedAt: formatDateTime(row.updatedAt),
       traceId: row.traceId ?? '—',
-      dataScopes: row.workspaceId ? ['工作空间成员范围', '员工业务数据范围'] : ['员工身份范围'],
+      dataScopes: row.workspaceType === 'personal'
+        ? ['个人空间范围', '员工业务数据范围']
+        : ['工作空间成员范围', '员工业务数据范围'],
       summary: '真实 Session/Run 元数据；平台管理员默认不查看消息正文。',
     }))
   }
@@ -166,7 +264,8 @@ export class PostgresOperationsService {
         left join sessions s on s.tenant_id = w.tenant_id and s.workspace_id = w.id
         left join artifacts a on a.tenant_id = w.tenant_id and a.workspace_id = w.id
         left join file_objects f on f.tenant_id = w.tenant_id and f.workspace_id = w.id and f.session_id is null
-       where w.tenant_id = ${tenantId} group by w.id, u.display_name order by w.created_at desc
+       where w.tenant_id = ${tenantId} and w.workspace_type = 'team'
+       group by w.id, u.display_name order by w.created_at desc
     `
     return rows.map((row) => ({
       id: row.id, name: row.name, description: row.description, type: 'team', status: 'active',
@@ -178,29 +277,107 @@ export class PostgresOperationsService {
   }
 
   async getAuditEvents(): Promise<AuditEvent[]> {
+    return this.readOperationalEvents()
+  }
+
+  async getRunOperations(runId: string): Promise<AuditEvent[]> {
+    const [run] = await this.database<{ id: string }[]>`
+      select id from runs where tenant_id = ${tenantId} and id = ${runId}
+    `
+    if (!run) throw new Error(`Run 不存在：${runId}`)
+    return this.readOperationalEvents(runId)
+  }
+
+  async getOperationsSummary(): Promise<OperationsSummary> {
+    const [summary] = await this.database<OperationsSummary[]>`
+      select
+        (select count(*)::integer from runs
+          where tenant_id = ${tenantId} and created_at >= now() - interval '24 hours') as "runs24h",
+        (select count(*)::integer from runs
+          where tenant_id = ${tenantId} and status = 'succeeded'
+            and updated_at >= now() - interval '24 hours') as "successfulRuns24h",
+        (select count(*)::integer from runs
+          where tenant_id = ${tenantId} and status = 'failed'
+            and updated_at >= now() - interval '24 hours') as "failedRuns24h",
+        (select coalesce(sum(input_tokens + output_tokens), 0)::integer from model_usage_events
+          where tenant_id = ${tenantId} and occurred_at >= now() - interval '24 hours') as "modelTokens24h",
+        (select count(*)::integer from tool_audit_logs
+          where tenant_id = ${tenantId} and occurred_at >= now() - interval '24 hours') as "toolCalls24h",
+        (select count(*)::integer from artifact_versions
+          where tenant_id = ${tenantId} and created_at >= now() - interval '24 hours') as "artifacts24h",
+        (select count(*)::integer from operational_events
+          where tenant_id = ${tenantId} and occurred_at >= now() - interval '24 hours'
+            and result in ('failed', 'blocked')) as "attentionEvents24h"
+    `
+    return summary ?? {
+      runs24h: 0, successfulRuns24h: 0, failedRuns24h: 0, modelTokens24h: 0,
+      toolCalls24h: 0, artifacts24h: 0, attentionEvents24h: 0,
+    }
+  }
+
+  private async readOperationalEvents(runId?: string): Promise<AuditEvent[]> {
     const rows = await this.database<{
-      id: string; occurredAt: Date; actor: string; action: string; objectType: string;
-      objectId: string; result: AuditEvent['status']; traceId: string; safeContext: Record<string, unknown>
+      id: string; occurredAt: Date; actor: string; category: AuditEvent['category']; action: string;
+      objectType: string; objectId: string; result: AuditEvent['status']; traceId: string;
+      runId: string | null; attemptId: string | null; safeContext: Record<string, unknown>
     }[]>`
-      select ae.id, ae.occurred_at as "occurredAt", coalesce(u.display_name, ae.actor_id) as actor,
-             ae.action, ae.object_type as "objectType", ae.object_id as "objectId", ae.result,
-             ae.trace_id as "traceId", ae.safe_context as "safeContext"
-        from audit_events ae left join users u on u.tenant_id = ae.tenant_id and u.id = ae.actor_id
-       where ae.tenant_id = ${tenantId} order by ae.occurred_at desc limit 200
+      select oe.id, oe.occurred_at as "occurredAt",
+             case when oe.actor_id = 'system' then '系统' else coalesce(u.display_name, oe.actor_id) end as actor,
+             oe.category, oe.action, oe.object_type as "objectType", oe.object_id as "objectId", oe.result,
+             oe.trace_id as "traceId", oe.run_id as "runId", oe.attempt_id as "attemptId",
+             oe.safe_context as "safeContext"
+        from operational_events oe
+        left join users u on u.tenant_id = oe.tenant_id and u.id = oe.actor_id
+       where oe.tenant_id = ${tenantId}
+         and (${runId ?? null}::text is null or oe.run_id = ${runId ?? null})
+       order by oe.occurred_at desc limit 500
     `
     return rows.map((row) => ({
       id: row.id, time: formatDateTime(row.occurredAt), actor: row.actor, department: 'dsh-work',
-      action: row.action, object: `${row.objectType} · ${row.objectId}`, status: row.result,
-      traceId: row.traceId, detail: JSON.stringify(row.safeContext),
+      category: row.category, action: row.action, objectType: row.objectType, objectId: row.objectId,
+      object: `${row.objectType} · ${row.objectId}`, status: row.result,
+      traceId: row.traceId, runId: row.runId, attemptId: row.attemptId,
+      detail: JSON.stringify(sanitizeSafeMetadata(row.safeContext)),
     }))
   }
 
   async getHealth(): Promise<HealthComponent[]> {
     const [runtime] = await this.getRuntimes()
+    const [quality] = await this.database<{ sampleSize: number; succeeded: number; failed: number }[]>`
+      select count(*)::integer as "sampleSize",
+             count(*) filter (where status = 'succeeded')::integer as succeeded,
+             count(*) filter (where status = 'failed')::integer as failed
+        from (
+          select status from run_attempts
+           where tenant_id = ${tenantId}
+             and status in ('succeeded', 'failed')
+             and created_at >= now() - interval '24 hours'
+           order by created_at desc
+           limit 20
+        ) recent
+    `
+    const sampleSize = quality?.sampleSize ?? 0
+    const failed = quality?.failed ?? 0
+    const runtimeConnected = runtime?.status === 'healthy'
+    const runtimeStatus: HealthComponent['status'] = !runtimeConnected
+      ? 'offline'
+      : failed > 0 ? 'warning' : 'healthy'
+    const executionQuality = sampleSize === 0
+      ? '尚无最近执行样本'
+      : `最近 ${sampleSize} 次完成中 ${quality?.succeeded ?? 0} 次成功、${failed} 次失败`
     return [
       { id: 'server', name: 'dsh-work 服务端', category: 'application', status: 'healthy', latency: '本机', availability: '当前可用', message: 'Node.js 模块化单体运行正常', checkedAt: '刚刚' },
       { id: 'postgres', name: 'PostgreSQL', category: 'dependency', status: 'healthy', latency: '本机', availability: '当前可用', message: '真实持久化已连接', checkedAt: '刚刚' },
-      { id: runtime?.id ?? 'runtime', name: 'DSH Runtime', category: 'runtime', status: runtime?.status === 'healthy' ? 'healthy' : 'offline', latency: runtime?.latency ?? '—', availability: runtime?.schedulingStatus ?? '—', message: runtime?.healthMessage ?? 'Runtime 未注册', checkedAt: '刚刚' },
+      {
+        id: runtime?.id ?? 'runtime',
+        name: 'DSH Runtime',
+        category: 'runtime',
+        status: runtimeStatus,
+        latency: runtime?.latency ?? '—',
+        availability: executionQuality,
+        message: runtime ? `${runtime.healthMessage}；调度：${runtime.schedulingStatus}` : 'Runtime 未注册',
+        checkedAt: '刚刚',
+      },
     ]
   }
 
@@ -219,17 +396,29 @@ export class PostgresOperationsService {
   async getModelUsage(): Promise<ModelUsageRecord[]> {
     const rows = await this.database<{
       id: string; occurredAt: Date; runId: string; provider: string; model: string; status: ModelUsageRecord['status'];
-      inputTokens: number; outputTokens: number; latencyMs: number | null; costAmount: string | null; traceId: string
+      inputTokens: number; outputTokens: number; latencyMs: number | null; costAmount: string | null; traceId: string;
+      employeeId: string; employeeName: string; departmentId: string | null; agentId: string; modelRoute: string
     }[]>`
-      select id, occurred_at as "occurredAt", run_id as "runId", provider, model, status,
-             input_tokens::integer as "inputTokens", output_tokens::integer as "outputTokens",
-             latency_ms as "latencyMs", cost_amount::text as "costAmount", trace_id as "traceId"
-        from model_usage_events where tenant_id = ${tenantId} order by occurred_at desc limit 200
+      select mu.id, mu.occurred_at as "occurredAt", mu.run_id as "runId", mu.provider, mu.model, mu.status,
+             mu.input_tokens::integer as "inputTokens", mu.output_tokens::integer as "outputTokens",
+             mu.latency_ms as "latencyMs", mu.cost_amount::text as "costAmount", mu.trace_id as "traceId",
+             u.id as "employeeId", u.display_name as "employeeName", u.department_id as "departmentId",
+             a.id as "agentId", coalesce(ra.model_route_snapshot ->> 'routeKey', 'default') as "modelRoute"
+        from model_usage_events mu
+        join runs r on r.tenant_id = mu.tenant_id and r.id = mu.run_id
+        join users u on u.tenant_id = r.tenant_id and u.id = r.requested_by
+        join sessions s on s.tenant_id = r.tenant_id and s.id = r.session_id
+        join agent_versions av on av.tenant_id = s.tenant_id and av.id = s.agent_version_id
+        join agents a on a.tenant_id = av.tenant_id and a.id = av.agent_id
+        join run_attempts ra on ra.tenant_id = mu.tenant_id and ra.id = mu.attempt_id
+       where mu.tenant_id = ${tenantId}
+       order by mu.occurred_at desc limit 200
     `
     return rows.map((row) => ({
       id: row.id, time: formatDateTime(row.occurredAt), runId: row.runId,
-      agentId: 'agent-dsh-work-assistant', department: '供应链中心', provider: row.provider,
-      model: row.model, modelRoute: 'default', dataLevel: 'L1', status: row.status,
+      agentId: row.agentId, employeeId: row.employeeId, employeeName: row.employeeName,
+      department: departmentLabel(row.departmentId), provider: row.provider,
+      model: row.model, modelRoute: row.modelRoute, dataLevel: 'L1', status: row.status,
       promptTokens: row.inputTokens, completionTokens: row.outputTokens,
       totalTokens: row.inputTokens + row.outputTokens, latencyMs: row.latencyMs ?? 0,
       costCny: Number(row.costAmount ?? 0), traceId: row.traceId,
@@ -259,34 +448,177 @@ export class PostgresOperationsService {
     `
   }
 
-  async recordToolAudit(input: { runId: string; attemptId: string; traceId: string; metadata: Record<string, unknown> }) {
+  async recordToolAudit(input: {
+    runId: string
+    attemptId: string
+    traceId: string
+    metadata: Record<string, unknown>
+    result?: 'success' | 'failed' | 'blocked'
+  }) {
+    const [run] = await this.database<{ requestedBy: string }[]>`
+      select requested_by as "requestedBy" from runs
+       where tenant_id = ${tenantId} and id = ${input.runId}
+    `
+    if (!run) throw new Error(`Run 不存在：${input.runId}`)
+    const toolVersionId = await this.resolveToolVersionId(input.runId, input.attemptId, input.metadata)
     await this.database`
       insert into tool_audit_logs (
         id, tenant_id, run_id, attempt_id, tool_version_id, actor_user_id,
         parameter_summary, result, trace_id, occurred_at
       ) values (
         ${`tool-audit-${randomUUID()}`}, ${tenantId}, ${input.runId}, ${input.attemptId},
-        'tool-version-dsh-runtime-1', 'U00001', ${this.database.json(JSON.parse(JSON.stringify(input.metadata)))},
-        'success', ${input.traceId}, now()
+        ${toolVersionId}, ${run.requestedBy}, ${this.database.json(sanitizeSafeMetadata(input.metadata))},
+        ${input.result ?? 'success'}, ${input.traceId}, now()
       )
     `
   }
 
-  appendAudit(actorId: string, action: string, objectId: string, result: AuditEvent['status'], traceId: string, detail: string) {
+  private async resolveToolVersionId(
+    runId: string,
+    attemptId: string,
+    metadata: Record<string, unknown>,
+  ) {
+    const toolName = typeof metadata['tool_name'] === 'string' ? metadata['tool_name'].trim() : ''
+    if (!toolName) throw new Error('工具审计缺少 tool_name，无法关联 Tool Version')
+
+    const [attempt] = await this.database<{ manifest: unknown }[]>`
+      select manifest from run_attempts
+       where tenant_id = ${tenantId} and run_id = ${runId} and id = ${attemptId}
+    `
+    if (!attempt) throw new Error(`Attempt 不存在：${attemptId}`)
+    const manifestTools = readManifestToolReferences(attempt.manifest)
+    const normalizedName = toolName.toLowerCase()
+    const manifestTool = manifestTools.find(reference =>
+      reference.id.toLowerCase() === normalizedName
+      || `${reference.id}@${reference.version}`.toLowerCase() === normalizedName,
+    )
+    if (manifestTool) {
+      const [lockedVersion] = await this.database<{ id: string }[]>`
+        select id from tool_versions
+         where tenant_id = ${tenantId} and tool_id = ${manifestTool.id}
+           and version = ${manifestTool.version}
+      `
+      if (lockedVersion) return lockedVersion.id
+    }
+
+    const catalogName = toolName.includes('@') ? toolName.slice(0, toolName.lastIndexOf('@')) : toolName
+    const [catalogVersion] = await this.database<{ id: string }[]>`
+      select tv.id from tools t
+      join tool_versions tv on tv.tenant_id = t.tenant_id and tv.tool_id = t.id
+       where t.tenant_id = ${tenantId} and tv.status = 'published'
+         and (
+           lower(t.id) = lower(${catalogName})
+           or lower(coalesce(t.dsh_tool_name, '')) = lower(${catalogName})
+           or lower(t.name) = lower(${catalogName})
+         )
+       order by tv.created_at desc
+       limit 1
+    `
+    if (!catalogVersion) throw new Error(`工具审计无法解析 Tool Version：${toolName}`)
+    return catalogVersion.id
+  }
+
+  appendAudit(
+    actorId: string,
+    action: string,
+    objectId: string,
+    result: AuditEvent['status'],
+    traceId: string,
+    detail: string,
+    objectType = auditObjectType(action),
+  ) {
     return this.database`
       insert into audit_events (
         id, tenant_id, actor_type, actor_id, action, object_type, object_id,
         result, trace_id, safe_context
       ) values (
         ${`audit-${randomUUID()}`}, ${tenantId}, ${actorId === 'system' ? 'system' : 'user'},
-        ${actorId}, ${action}, 'run', ${objectId}, ${result}, ${traceId},
-        ${this.database.json({ detail })}
+        ${actorId}, ${action}, ${objectType}, ${objectId}, ${result}, ${traceId},
+        ${this.database.json({ detail: redactSensitiveText(detail) })}
       )
     `.then(() => undefined)
+  }
+
+  private async requirePlatformAdmin(displayName: string) {
+    if (this.authorization) return this.authorization.requirePlatformAdmin(displayName)
+    const [actor] = await this.database<{ id: string; displayName: string }[]>`
+      select u.id, u.display_name as "displayName" from users u
+       where u.tenant_id = ${tenantId} and u.display_name = ${displayName.trim()} and u.status = 'active'
+         and exists (
+           select 1 from user_roles ur
+           join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id
+            where ur.tenant_id = u.tenant_id and ur.user_id = u.id
+              and (ur.valid_until is null or ur.valid_until > now())
+              and r.permissions ? 'admin:*'
+         )
+    `
+    if (!actor) throw new Error(`操作人不存在、已停用或不是平台管理员：${displayName}`)
+    return actor
+  }
+
+  private async requireRuntime(runtimeId: string) {
+    const [runtime] = await this.database<{
+      id: string
+      capacity: number
+      schedulingStatus: 'accepting' | 'draining' | 'disabled'
+    }[]>`
+      select id, capacity, scheduling_status as "schedulingStatus" from runtimes
+       where tenant_id = ${tenantId} and id = ${runtimeId}
+    `
+    if (!runtime) throw new Error(`Runtime 不存在：${runtimeId}`)
+    return runtime
+  }
+
+  private async reconcileRuntimeScheduling(runtimeId: string) {
+    if (!this.runtime?.configureScheduling) return
+    await this.database.begin(async transaction => {
+      const [runtime] = await transaction<{ schedulingStatus: 'accepting' | 'draining' | 'disabled' }[]>`
+        select scheduling_status as "schedulingStatus" from runtimes
+         where tenant_id = ${tenantId} and id = ${runtimeId}
+         for update
+      `
+      if (runtime) await this.runtime?.configureScheduling?.(runtime.schedulingStatus)
+    })
+  }
+}
+
+function assertRuntimeConfiguration(input: UpdateRuntimeConfigurationInput) {
+  if (!Number.isInteger(input.maxConcurrentWorkers) || input.maxConcurrentWorkers < 1 || input.maxConcurrentWorkers > 128) {
+    throw new Error('最大并发 Worker 数必须是 1～128 之间的整数')
+  }
+  if (!Number.isInteger(input.attemptTimeoutMinutes) || input.attemptTimeoutMinutes < 1 || input.attemptTimeoutMinutes > 60) {
+    throw new Error('单次执行超时时间必须是 1～60 分钟之间的整数')
+  }
+  if (!['accepting', 'draining', 'disabled'].includes(input.schedulingStatus)) {
+    throw new Error('Runtime 调度状态无效')
   }
 }
 
 function estimateTokens(value: string) { return Math.ceil([...value].length / 2) }
+function readManifestToolReferences(manifest: unknown) {
+  if (!isRecord(manifest) || !Array.isArray(manifest['tools'])) return []
+  return manifest['tools'].flatMap((candidate) => {
+    if (!isRecord(candidate)) return []
+    const id = candidate['id']
+    const version = candidate['version']
+    return typeof id === 'string' && typeof version === 'string' ? [{ id, version }] : []
+  })
+}
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+function departmentLabel(departmentId: string | null) {
+  if (departmentId === 'supply-chain') return '供应链中心'
+  if (departmentId === 'platform') return '数字化中心'
+  return departmentId?.trim() || '未归属部门'
+}
+function auditObjectType(action: string) {
+  const prefix = action.split('.')[0]
+  if (prefix === 'model_provider' || prefix === 'provider_model' || prefix === 'model_route') return 'model_governance'
+  return ['run', 'agent', 'skill', 'tool', 'connector', 'runtime', 'workspace', 'artifact'].includes(prefix)
+    ? prefix
+    : 'platform'
+}
 function formatDateTime(value: Date) {
   return new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(value)
 }

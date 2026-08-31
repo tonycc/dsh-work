@@ -1,14 +1,16 @@
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 
 import { workbenchApi } from '../api/client'
-import type { Artifact, Workspace } from '../types/domain'
+import type { Artifact, WorkbenchAgent, Workspace } from '../types/domain'
 
 export const useContentStore = defineStore('workbench-content', () => {
   const workspaces = ref<Workspace[]>([])
   const artifacts = ref<Artifact[]>([])
+  const agents = ref<WorkbenchAgent[]>([])
   const loading = ref(false)
   const initialized = ref(false)
+  const personalWorkspace = computed(() => workspaces.value.find(workspace => workspace.type === 'personal'))
 
   async function load() {
     if (initialized.value) return
@@ -18,12 +20,14 @@ export const useContentStore = defineStore('workbench-content', () => {
   async function refresh() {
     loading.value = true
     try {
-      const [workspaceData, artifactData] = await Promise.all([
+      const [workspaceData, artifactData, agentData] = await Promise.all([
         workbenchApi.getWorkspaces(),
         workbenchApi.getArtifacts(),
+        workbenchApi.getAgents(),
       ])
       workspaces.value = workspaceData
       artifacts.value = artifactData
+      agents.value = agentData
       initialized.value = true
     } finally {
       loading.value = false
@@ -59,7 +63,9 @@ export const useContentStore = defineStore('workbench-content', () => {
 
   return {
     workspaces,
+    personalWorkspace,
     artifacts,
+    agents,
     loading,
     initialized,
     load,

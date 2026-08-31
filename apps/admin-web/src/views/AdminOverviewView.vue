@@ -16,6 +16,27 @@ const successRate = computed(() => {
   if (!finished.length) return '—'
   return `${Math.round((finished.filter((task) => task.status === 'succeeded').length / finished.length) * 100)}%`
 })
+const statusCounts = computed(() => ({
+  succeeded: contentStore.tasks.filter((task) => task.status === 'succeeded').length,
+  running: contentStore.tasks.filter((task) => task.status === 'running').length,
+  queued: contentStore.tasks.filter((task) => ['queued', 'cancel_requested'].includes(task.status)).length,
+  failed: contentStore.tasks.filter((task) => ['failed', 'cancelled'].includes(task.status)).length,
+}))
+const currentRunCount = computed(() => Object.values(statusCounts.value).reduce((sum, count) => sum + count, 0))
+const attentionEvents = computed(() => contentStore.auditEvents.filter((event) => event.status !== 'success').slice(0, 3))
+const donutStyle = computed(() => {
+  const total = Math.max(currentRunCount.value, 1)
+  const successEnd = (statusCounts.value.succeeded / total) * 100
+  const runningEnd = successEnd + (statusCounts.value.running / total) * 100
+  const queuedEnd = runningEnd + (statusCounts.value.queued / total) * 100
+  return {
+    background: `conic-gradient(var(--color-success) 0 ${successEnd}%, var(--color-primary) ${successEnd}% ${runningEnd}%, var(--color-warning) ${runningEnd}% ${queuedEnd}%, var(--color-danger) ${queuedEnd}% 100%)`,
+  }
+})
+
+function percent(count: number) {
+  return currentRunCount.value ? `${((count / currentRunCount.value) * 100).toFixed(1)}%` : '0%'
+}
 
 onMounted(() => contentStore.load())
 </script>
@@ -32,10 +53,10 @@ onMounted(() => contentStore.load())
     </section>
 
     <section v-loading="contentStore.loading" class="metric-grid">
-      <article class="metric-card"><div class="metric-label">近 7 日对话</div><div class="metric-value">{{ totalRuns }}</div><div class="metric-detail"><span class="metric-delta is-up">↑ 12%</span> · 50 位注册试点员工</div></article>
-      <article class="metric-card"><div class="metric-label">运行成功率</div><div class="metric-value">{{ successRate }}</div><div class="metric-detail"><span class="metric-delta is-up">↑ 2.1%</span> · 不含取消与排队运行</div></article>
-      <article class="metric-card"><div class="metric-label">模型 Token</div><div class="metric-value">{{ (totalTokens / 10000).toFixed(1) }} 万</div><div class="metric-detail"><span class="metric-delta is-up">↑ 8%</span> · <button class="metric-link" type="button" @click="router.push('/model-usage')">查看用量明细</button></div></article>
-      <article class="metric-card"><div class="metric-label">第 95 百分位运行耗时</div><div class="metric-value">3 分 48 秒</div><div class="metric-detail"><span class="metric-delta is-down">↓ 6%</span> · 包含工具与文件处理</div></article>
+      <article class="metric-card"><div class="metric-label">近 7 日运行</div><div class="metric-value">{{ totalRuns }}</div><div class="metric-detail">来自真实运行记录</div></article>
+      <article class="metric-card"><div class="metric-label">运行成功率</div><div class="metric-value">{{ successRate }}</div><div class="metric-detail">不含取消与排队运行</div></article>
+      <article class="metric-card"><div class="metric-label">模型 Token</div><div class="metric-value">{{ totalTokens.toLocaleString() }}</div><div class="metric-detail"><button class="metric-link" type="button" @click="router.push('/model-usage')">查看用量明细</button></div></article>
+      <article class="metric-card"><div class="metric-label">近 24 小时需关注</div><div class="metric-value">{{ contentStore.operationsSummary?.attentionEvents24h ?? 0 }}</div><div class="metric-detail"><button class="metric-link" type="button" @click="router.push('/audit')">查看失败与阻止事件</button></div></article>
     </section>
 
     <section class="overview-main-grid">
@@ -54,14 +75,14 @@ onMounted(() => contentStore.load())
       </div>
 
       <aside class="content-panel content-panel--flush status-panel">
-        <div class="panel-header"><div><h2 class="panel-title">今日运行状态</h2><p class="panel-subtitle">实时运行分布</p></div></div>
+        <div class="panel-header"><div><h2 class="panel-title">当前运行状态</h2><p class="panel-subtitle">最近 100 条运行分布</p></div></div>
         <div class="status-donut-wrap">
-          <div class="status-donut"><div><strong>96</strong><span>今日运行</span></div></div>
+          <div class="status-donut" :style="donutStyle"><div><strong>{{ currentRunCount }}</strong><span>运行</span></div></div>
           <div class="status-legend">
-            <div><span class="is-success"></span><label>已完成</label><strong>78</strong><small>81.3%</small></div>
-            <div><span class="is-running"></span><label>执行中</label><strong>7</strong><small>7.3%</small></div>
-            <div><span class="is-waiting"></span><label>等待确认</label><strong>5</strong><small>5.2%</small></div>
-            <div><span class="is-failed"></span><label>失败</label><strong>6</strong><small>6.2%</small></div>
+            <div><span class="is-success"></span><label>已完成</label><strong>{{ statusCounts.succeeded }}</strong><small>{{ percent(statusCounts.succeeded) }}</small></div>
+            <div><span class="is-running"></span><label>执行中</label><strong>{{ statusCounts.running }}</strong><small>{{ percent(statusCounts.running) }}</small></div>
+            <div><span class="is-waiting"></span><label>排队或取消中</label><strong>{{ statusCounts.queued }}</strong><small>{{ percent(statusCounts.queued) }}</small></div>
+            <div><span class="is-failed"></span><label>失败或已取消</label><strong>{{ statusCounts.failed }}</strong><small>{{ percent(statusCounts.failed) }}</small></div>
           </div>
         </div>
       </aside>
@@ -74,21 +95,12 @@ onMounted(() => contentStore.load())
           <el-button text @click="router.push('/health')">查看系统健康</el-button>
         </div>
         <div class="attention-list">
-          <article>
-            <span class="attention-icon attention-icon--warning">警</span>
-            <div><strong>企业连接器网关尚未接入</strong><p>ERP、MES、WMS 数据当前均为服务端原型数据。</p></div>
-            <StatusTag status="offline" label="未配置" />
+          <article v-for="event in attentionEvents" :key="event.id">
+            <span class="attention-icon" :class="event.status === 'failed' ? 'attention-icon--blocked' : 'attention-icon--warning'">{{ event.status === 'failed' ? '错' : '阻' }}</span>
+            <div><strong>{{ event.action }} · {{ event.object }}</strong><p>{{ event.actor }} · {{ event.time }} · {{ event.traceId }}</p></div>
+            <StatusTag :status="event.status" />
           </article>
-          <article>
-            <span class="attention-icon attention-icon--blocked">权</span>
-            <div><strong>1 次敏感字段读取被阻止</strong><p>采购用户尝试读取供应商价格字段，权限策略已生效。</p></div>
-            <StatusTag status="blocked" />
-          </article>
-          <article>
-            <span class="attention-icon attention-icon--info">审</span>
-            <div><strong>经营分析助手等待发布评审</strong><p>版本 0.4.0 已完成测试，尚未进入员工可见范围。</p></div>
-            <StatusTag status="draft" />
-          </article>
+          <el-empty v-if="!contentStore.loading && !attentionEvents.length" :image-size="54" description="当前没有失败或已阻止事件" />
         </div>
       </div>
 
@@ -218,7 +230,7 @@ onMounted(() => contentStore.load())
   height: 140px;
   place-items: center;
   border-radius: 50%;
-  background: conic-gradient(var(--color-success) 0 81.3%, var(--color-primary) 81.3% 88.6%, var(--color-warning) 88.6% 93.8%, var(--color-danger) 93.8% 100%);
+  background: var(--color-bg-subtle);
 }
 
 .status-donut::before {

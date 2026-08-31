@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 import type { DatabaseClient } from '../../infrastructure/postgres/database.ts'
-import type { RunRepository } from './run-repository.ts'
+import type { RestartRecoveryResult, RunRepository } from './run-repository.ts'
 import { assertAttemptTransition, assertRunTransition, isTerminalState } from './run-state-machine.ts'
 import type {
   AttemptState,
@@ -54,6 +54,16 @@ interface EventRow {
   traceId: string
   occurredAt: Date
   streamPosition: string | number
+}
+
+interface RecoveryRow extends AttemptRow {
+  runSessionId: string
+  runRequestedBy: string
+  runIdempotencyKey: string
+  runStatus: RunState
+  runCurrentAttemptId: string | null
+  runCreatedAt: Date
+  runUpdatedAt: Date
 }
 
 export class PostgresRunRepository implements RunRepository {
@@ -143,6 +153,26 @@ export class PostgresRunRepository implements RunRepository {
            set current_attempt_id = ${attemptId}, status = 'queued', updated_at = now()
          where tenant_id = ${input.tenantId} and id = ${input.runId}
       `
+      for (const source of input.knowledgeSources ?? []) {
+        await transaction`
+          insert into run_knowledge_sources (
+            id, tenant_id, run_id, attempt_id, document_id, relevance_score, excerpt
+          ) values (
+            ${`run-knowledge-${randomUUID()}`}, ${input.tenantId}, ${input.runId}, ${attemptId},
+            ${source.documentId}, ${source.relevanceScore}, ${source.excerpt}
+          ) on conflict (tenant_id, attempt_id, document_id) do nothing
+        `
+      }
+      for (const file of input.inputFiles ?? []) {
+        await transaction`
+          insert into run_input_files (
+            id, tenant_id, run_id, attempt_id, file_id, extraction_id, mount_path
+          ) values (
+            ${`run-input-${randomUUID()}`}, ${input.tenantId}, ${input.runId}, ${attemptId},
+            ${file.fileId}, ${file.extractionId}, ${file.mountPath}
+          ) on conflict (tenant_id, attempt_id, file_id) do nothing
+        `
+      }
       if (!created) throw new Error('Attempt 创建失败')
       return mapAttempt(created)
     })
@@ -292,6 +322,95 @@ export class PostgresRunRepository implements RunRepository {
        order by stream_position asc
     `
     return rows.map(mapEvent)
+  }
+
+  async recoverAfterRestart(tenantId: string, runtimeId: string): Promise<RestartRecoveryResult> {
+    return this.database.begin(async (transaction) => {
+      const interrupted = await transaction<RecoveryRow[]>`
+        select a.id, a.tenant_id as "tenantId", a.run_id as "runId", a.attempt_no as "attemptNo",
+               a.runtime_id as "runtimeId", a.manifest, a.manifest_sha256 as "manifestSha256",
+               a.model_route_snapshot as "modelRouteSnapshot", a.status, a.started_at as "startedAt",
+               a.ended_at as "endedAt", a.error_code as "errorCode", a.created_at as "createdAt",
+               r.session_id as "runSessionId", r.requested_by as "runRequestedBy",
+               r.idempotency_key as "runIdempotencyKey", r.status as "runStatus",
+               r.current_attempt_id as "runCurrentAttemptId", r.created_at as "runCreatedAt",
+               r.updated_at as "runUpdatedAt"
+          from run_attempts a
+          join runs r on r.tenant_id = a.tenant_id and r.id = a.run_id
+         where a.tenant_id = ${tenantId} and a.runtime_id = ${runtimeId}
+           and a.status in ('running', 'cancel_requested')
+           and r.current_attempt_id = a.id
+         for update of a, r
+      `
+
+      const failed: RestartRecoveryResult['failed'] = []
+      for (const row of interrupted) {
+        const [sequence] = await transaction<{ next: number }[]>`
+          select coalesce(max(sequence), 0)::integer + 1 as next
+            from run_events
+           where tenant_id = ${tenantId} and attempt_id = ${row.id}
+        `
+        const eventId = `event-recovery-${randomUUID()}`
+        const traceId = typeof row.manifest['trace_id'] === 'string'
+          ? row.manifest['trace_id']
+          : `trace-recovery-${row.runId}`
+        await transaction`
+          update run_attempts
+             set status = 'failed', ended_at = now(), error_code = 'SERVICE_RESTARTED'
+           where tenant_id = ${tenantId} and id = ${row.id}
+        `
+        await transaction`
+          update runs set status = 'failed', updated_at = now()
+           where tenant_id = ${tenantId} and id = ${row.runId}
+        `
+        await transaction`
+          insert into run_events (
+            id, tenant_id, run_id, attempt_id, sequence, event_type,
+            display_message, safe_metadata, trace_id, occurred_at
+          ) values (
+            ${eventId}, ${tenantId}, ${row.runId}, ${row.id}, ${sequence?.next ?? 1}, 'run.failed',
+            '服务重启后，上一进程遗留的执行已安全终止',
+            ${transaction.json({ error_code: 'SERVICE_RESTARTED', reason: 'orphaned_active_attempt' })},
+            ${traceId}, now()
+          )
+        `
+        failed.push({ runId: row.runId, attemptId: row.id })
+      }
+
+      const queuedRows = await transaction<RecoveryRow[]>`
+        select a.id, a.tenant_id as "tenantId", a.run_id as "runId", a.attempt_no as "attemptNo",
+               a.runtime_id as "runtimeId", a.manifest, a.manifest_sha256 as "manifestSha256",
+               a.model_route_snapshot as "modelRouteSnapshot", a.status, a.started_at as "startedAt",
+               a.ended_at as "endedAt", a.error_code as "errorCode", a.created_at as "createdAt",
+               r.session_id as "runSessionId", r.requested_by as "runRequestedBy",
+               r.idempotency_key as "runIdempotencyKey", r.status as "runStatus",
+               r.current_attempt_id as "runCurrentAttemptId", r.created_at as "runCreatedAt",
+               r.updated_at as "runUpdatedAt"
+          from run_attempts a
+          join runs r on r.tenant_id = a.tenant_id and r.id = a.run_id
+         where a.tenant_id = ${tenantId} and a.runtime_id = ${runtimeId}
+           and a.status = 'queued' and r.status = 'queued' and r.current_attempt_id = a.id
+         order by a.created_at asc
+         for update of a, r
+      `
+      return {
+        failed,
+        queued: queuedRows.map(row => ({
+          run: mapRun({
+            id: row.runId,
+            tenantId: row.tenantId,
+            sessionId: row.runSessionId,
+            requestedBy: row.runRequestedBy,
+            idempotencyKey: row.runIdempotencyKey,
+            status: row.runStatus,
+            currentAttemptId: row.runCurrentAttemptId,
+            createdAt: row.runCreatedAt,
+            updatedAt: row.runUpdatedAt,
+          }),
+          attempt: mapAttempt(row),
+        })),
+      }
+    })
   }
 }
 

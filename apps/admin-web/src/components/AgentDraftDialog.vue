@@ -51,17 +51,28 @@ const rules: FormRules = {
   dataScopes: [{ type: 'array', required: true, min: 1, message: '请至少配置一个业务数据范围', trigger: 'change' }],
 }
 
-const publishedSkills = computed(() => contentStore.skills.filter((skill) => skill.status === 'published'))
-const usableTools = computed(() => contentStore.tools.filter((tool) => tool.status !== 'disabled'))
+const publishedSkills = computed(() => contentStore.skills.filter((skill) =>
+  Boolean(skill.activeVersion) && skill.status !== 'disabled',
+))
+const usableTools = computed(() => contentStore.tools.filter((tool) => tool.status === 'available'))
 const dataScopeOptions = computed(() => unique([
-  '继承员工角色与工作空间数据范围',
-  '本部门汇总数据',
-  '企业公开知识',
-  '当前有效制度',
+  'enterprise:authorized',
+  'workspace:authorized',
+  'domain:supply-chain',
+  'domain:operations',
   ...contentStore.roles.flatMap((role) => role.dataScopes),
 ]))
+const dataScopeLabels: Record<string, string> = {
+  'enterprise:authorized': '企业授权范围',
+  'workspace:authorized': '当前工作空间授权范围',
+  'domain:supply-chain': '供应链业务范围',
+  'domain:operations': '经营分析范围',
+}
 const selectedRoleNames = computed(() => form.roleIds.map((id) => contentStore.roles.find((role) => role.id === id)?.name ?? id))
-const selectedToolLabels = computed(() => form.tools.map((id) => contentStore.tools.find((tool) => tool.id === id)?.name ?? id))
+const selectedToolLabels = computed(() => form.tools.map((reference) => {
+  const id = toolReferenceId(reference)
+  return contentStore.tools.find((tool) => tool.id === id)?.name ?? reference
+}))
 const editorTitle = computed(() => props.agent ? `编辑 Agent：${props.agent.name}` : '创建 Agent')
 const employeeWelcome = computed(() => form.welcomeMessage.trim() || buildWelcomeMessage(form.name, form.description))
 const configurationFingerprint = computed(() => JSON.stringify({
@@ -88,6 +99,16 @@ watch(dialogOpen, (open) => {
   if (open) resetEditor()
 })
 
+watch(() => [...form.skills], (references) => {
+  const requiredTools = references.flatMap((reference) => {
+    const separator = reference.lastIndexOf('@')
+    const skillId = separator > 0 ? reference.slice(0, separator) : reference
+    const skill = contentStore.skills.find(item => item.id === skillId)
+    return skill?.toolIds.map(toVersionedToolReference) ?? []
+  })
+  form.tools = unique([...form.tools, ...requiredTools])
+})
+
 function emptyDraft(): AgentDraftConfiguration {
   return {
     id: createAgentId(),
@@ -97,7 +118,7 @@ function emptyDraft(): AgentDraftConfiguration {
     department: authStore.user.department,
     visibility: '全体试点员工',
     roleIds: ['role-employee'],
-    dataScopes: ['继承员工角色与工作空间数据范围'],
+    dataScopes: ['enterprise:authorized', 'workspace:authorized'],
     welcomeMessage: '',
     examplePrompts: ['请介绍你能提供哪些帮助'],
     systemPrompt: '',
@@ -126,7 +147,7 @@ function resetEditor() {
         maxTokens: props.agent.maxTokens,
         timeoutSeconds: props.agent.timeoutSeconds,
         skills: [...props.agent.skills],
-        tools: [...props.agent.tools],
+        tools: props.agent.tools.map(toVersionedToolReference),
         changeSummary: `更新 ${props.agent.name} 草稿配置`,
       }
     : emptyDraft()
@@ -197,7 +218,9 @@ async function saveAgent() {
     initialSnapshot.value = JSON.stringify(form)
     dialogOpen.value = false
     emit('saved', saved)
-    ElMessage.success(props.agent ? 'Agent 配置已保存' : 'Agent 已创建，当前为草稿状态')
+    ElMessage.success(props.agent?.status === 'published' || props.agent?.status === 'disabled'
+      ? 'Agent 新版本草稿已创建'
+      : props.agent ? 'Agent 配置已保存' : 'Agent 已创建，当前为草稿状态')
   } catch (cause) {
     ElMessage.error(cause instanceof Error ? cause.message : 'Agent 保存失败')
   } finally {
@@ -272,6 +295,17 @@ function buildVisibilityLabel(roleIds: string[]) {
 function unique(values: string[]) {
   return [...new Set(values.filter(Boolean))]
 }
+
+function toolReferenceId(reference: string) {
+  const separator = reference.lastIndexOf('@')
+  return separator > 0 ? reference.slice(0, separator) : reference
+}
+
+function toVersionedToolReference(reference: string) {
+  if (reference.lastIndexOf('@') > 0) return reference
+  const tool = contentStore.tools.find((item) => item.id === reference)
+  return `${reference}@${tool?.version ?? '1.0.0'}`
+}
 </script>
 
 <template>
@@ -329,13 +363,13 @@ function unique(values: string[]) {
         <div class="form-grid form-grid--two">
           <el-form-item label="引用 Skill" prop="skills">
             <el-select v-model="form.skills" multiple filterable collapse-tags :max-collapse-tags="2" placeholder="选择已发布 Skill">
-              <el-option v-for="skill in publishedSkills" :key="skill.id" :label="`${skill.name} · v${skill.version}`" :value="skill.name" />
+              <el-option v-for="skill in publishedSkills" :key="skill.id" :label="`${skill.name} · v${skill.activeVersion}`" :value="`${skill.id}@${skill.activeVersion}`" />
             </el-select>
             <p class="field-help">仅允许引用已发布版本，运行时锁定具体版本。</p>
           </el-form-item>
           <el-form-item label="工具允许列表" prop="tools">
             <el-select v-model="form.tools" multiple filterable collapse-tags :max-collapse-tags="2" placeholder="选择 Agent 可调用的工具">
-              <el-option v-for="tool in usableTools" :key="tool.id" :label="`${tool.name} · ${tool.system}`" :value="tool.id" />
+              <el-option v-for="tool in usableTools" :key="tool.id" :label="`${tool.name} · v${tool.version ?? '1.0.0'} · ${tool.system}`" :value="`${tool.id}@${tool.version ?? '1.0.0'}`" />
             </el-select>
             <p class="field-help">这里只声明允许列表，实际调用仍需通过员工和数据权限检查。</p>
           </el-form-item>
@@ -354,7 +388,7 @@ function unique(values: string[]) {
           </el-form-item>
           <el-form-item label="数据范围" prop="dataScopes">
             <el-select v-model="form.dataScopes" multiple filterable allow-create default-first-option placeholder="选择或输入数据范围">
-              <el-option v-for="scope in dataScopeOptions" :key="scope" :label="scope" :value="scope" />
+              <el-option v-for="scope in dataScopeOptions" :key="scope" :label="dataScopeLabels[scope] ? `${dataScopeLabels[scope]} · ${scope}` : scope" :value="scope" />
             </el-select>
             <p class="field-help">最终权限取 Agent 范围、员工角色、工作空间和工具审批策略的交集。</p>
           </el-form-item>

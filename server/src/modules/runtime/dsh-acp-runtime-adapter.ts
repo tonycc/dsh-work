@@ -1,13 +1,15 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { access, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { access, chmod, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
 import {
   AcpJsonRpcClient,
+  AcpProtocolError,
   type AcpPermissionRequest,
   type AcpProcessConfiguration,
   type AcpSessionUpdate,
 } from './acp-json-rpc-client.ts'
 import { compileRuntimeManifest } from './manifest-compiler.ts'
+import { redactSensitiveText, sanitizeSafeMetadata } from '../../security/safe-observability.ts'
 import type {
   AgentRuntimePort,
   RuntimeEvent,
@@ -38,6 +40,10 @@ export interface DshAcpRuntimeAdapterConfiguration {
   runtimeId: string
   runtimeRoot: string
   dshRepository: string
+  runtimeVersion?: string
+  runtimeCommit?: string
+  protocolVersion?: number
+  launchMode?: 'source-checkout' | 'managed-distribution'
   process: Omit<AcpProcessConfiguration, 'env'> & { env?: Record<string, string> }
   acceptingRuns?: boolean
   shutdownGraceMs?: number
@@ -61,7 +67,9 @@ export class DshAcpRuntimeAdapter implements AgentRuntimePort {
 
   async execute(manifest: RuntimeManifest): Promise<RuntimeExecutionHandle> {
     if (this.closed) throw new Error('Runtime Adapter is closed')
-    if (!this.acceptingRuns) throw new Error('Runtime Adapter is not accepting runs')
+    // The Postgres scheduler is the admission gate. A manifest reaching this
+    // port has already been claimed and must remain executable if an operator
+    // switches the Runtime to draining before dispatch reaches this process.
     const previous = this.executions.get(manifest.run_id)
     if (previous !== undefined && !previous.terminal) throw new Error(`Run already exists: ${manifest.run_id}`)
     if (previous?.terminal) this.executions.delete(manifest.run_id)
@@ -77,6 +85,14 @@ export class DshAcpRuntimeAdapter implements AgentRuntimePort {
     const outputDirectory = join(attemptDirectory, 'output')
     await mkdir(workspaceDirectory, { recursive: true })
     await mkdir(outputDirectory, { recursive: true })
+    for (const mount of compiled.manifest.input.file_mounts) {
+      const relativePath = mount.mount_path.slice('/workspace/'.length)
+      const target = resolve(workspaceDirectory, relativePath)
+      if (!target.startsWith(`${workspaceDirectory}/`)) throw new Error(`Unsafe file mount path: ${mount.mount_path}`)
+      await mkdir(dirname(target), { recursive: true })
+      await writeFile(target, mount.content, { flag: 'wx', mode: 0o400 })
+      await chmod(target, 0o400)
+    }
     await writeFile(join(attemptDirectory, 'manifest.json'), `${compiled.canonicalJson}\n`, { flag: 'wx' })
 
     let resolveDone: (snapshot: RuntimeExecutionSnapshot) => void = () => undefined
@@ -150,8 +166,16 @@ export class DshAcpRuntimeAdapter implements AgentRuntimePort {
         activeExecutions: [...this.executions.values()].filter(record => !record.terminal).length,
         acceptingRuns: this.acceptingRuns && !this.closed,
         dshRepository: this.configuration.dshRepository,
+        runtimeVersion: this.configuration.runtimeVersion,
+        runtimeCommit: this.configuration.runtimeCommit,
+        protocolVersion: this.configuration.protocolVersion,
+        launchMode: this.configuration.launchMode,
         transport: 'acp-stdio',
-        message: this.closed ? 'Runtime Adapter 已关闭' : 'DSH 仓库可访问，ACP Adapter 可用',
+        message: this.closed
+          ? 'Runtime Adapter 已关闭'
+          : this.acceptingRuns
+            ? 'DSH Runtime 已通过安装校验，ACP Adapter 可用并接收任务'
+            : 'DSH Runtime 已通过安装校验，ACP Adapter 当前不接收新任务',
       }
     } catch {
       return {
@@ -160,10 +184,19 @@ export class DshAcpRuntimeAdapter implements AgentRuntimePort {
         activeExecutions: 0,
         acceptingRuns: false,
         dshRepository: this.configuration.dshRepository,
+        runtimeVersion: this.configuration.runtimeVersion,
+        runtimeCommit: this.configuration.runtimeCommit,
+        protocolVersion: this.configuration.protocolVersion,
+        launchMode: this.configuration.launchMode,
         transport: 'acp-stdio',
-        message: 'DSH 仓库不可访问',
+        message: 'DSH Runtime 安装目录不可访问',
       }
     }
+  }
+
+  async configureScheduling(status: 'accepting' | 'draining' | 'disabled'): Promise<void> {
+    if (this.closed && status === 'accepting') throw new Error('已关闭的 Runtime Adapter 不能重新接收任务')
+    this.acceptingRuns = status === 'accepting' && !this.closed
   }
 
   async close(): Promise<void> {
@@ -194,10 +227,15 @@ export class DshAcpRuntimeAdapter implements AgentRuntimePort {
           ...this.configuration.process,
           shutdownGraceMs: this.configuration.shutdownGraceMs ?? this.configuration.process.shutdownGraceMs,
           env: {
+            ...this.configuration.process.env,
             DSH_PERMISSION_MODE: 'workspace-write',
             DSH_SNAPSHOT: 'record',
             DSH_SNAPSHOT_SESSIONS_ROOT: join(record.snapshot.attemptDirectory, 'sessions'),
-            ...this.configuration.process.env,
+            DSH_AGENT_SYSTEM_PROMPT: renderSystemPrompt(record.manifest),
+            DSH_ALLOWED_TOOLS_JSON: JSON.stringify(record.manifest.tools.map(tool => tool.id)),
+            DSH_WORKSPACE_ROOT: workspaceDirectory,
+            DSH_TOOL_APPROVAL_MODE: record.manifest.permission_policy.approval_mode,
+            DSH_TOOL_APPROVAL_LOG: join(record.snapshot.attemptDirectory, 'tool-approval-requests.jsonl'),
           },
         },
         {
@@ -212,8 +250,7 @@ export class DshAcpRuntimeAdapter implements AgentRuntimePort {
       await client.initialize()
       record.acpSessionId = await client.newSession(workspaceDirectory)
       if (record.cancelCause !== undefined) {
-        if (record.cancelCause === 'timeout') this.finishFailed(record, 'RUN_TIMEOUT', 'Runtime execution timed out')
-        else this.finishCancelled(record)
+        this.finishFromCancellationCause(record)
         return
       }
       this.setStatus(record, 'running')
@@ -225,12 +262,16 @@ export class DshAcpRuntimeAdapter implements AgentRuntimePort {
 
       const response = await client.prompt(record.acpSessionId, record.manifest.input.message)
       const stopReason = response['stopReason']
-      if (stopReason === 'cancelled' || record.cancelCause !== undefined) {
-        if (record.cancelCause === 'timeout') {
-          this.finishFailed(record, 'RUN_TIMEOUT', 'Runtime execution timed out')
-        } else {
-          this.finishCancelled(record)
-        }
+      if (record.cancelCause !== undefined) {
+        this.finishFromCancellationCause(record)
+        return
+      }
+      if (stopReason === 'cancelled') {
+        this.finishFailed(
+          record,
+          'RUNTIME_CANCELLED_UNEXPECTEDLY',
+          'DSH Runtime ended the Attempt without an explicit cancellation request',
+        )
         return
       }
 
@@ -249,9 +290,11 @@ export class DshAcpRuntimeAdapter implements AgentRuntimePort {
       })
       this.finish(record)
     } catch (error) {
-      if (record.cancelCause === 'timeout') this.finishFailed(record, 'RUN_TIMEOUT', 'Runtime execution timed out')
-      else if (record.cancelCause !== undefined) this.finishCancelled(record)
-      else this.finishFailed(record, 'RUNTIME_EXECUTION_FAILED', safeErrorMessage(error))
+      if (record.cancelCause !== undefined) this.finishFromCancellationCause(record)
+      else {
+        const failure = classifyRuntimeFailure(error)
+        this.finishFailed(record, failure.code, failure.message)
+      }
     } finally {
       if (record.timeout !== undefined) clearTimeout(record.timeout)
       await record.client?.close().catch(() => undefined)
@@ -277,26 +320,30 @@ export class DshAcpRuntimeAdapter implements AgentRuntimePort {
     record: ExecutionRecord,
     request: AcpPermissionRequest,
   ): Promise<{ outcome: Record<string, unknown> }> {
+    const toolCallId = typeof request.toolCall?.['toolCallId'] === 'string'
+      ? request.toolCall['toolCallId']
+      : null
+    const toolName = await resolvePermissionToolName(record, request, toolCallId)
     this.emit(record, 'approval.required', 'DSH 请求一次性工具权限', {
       option_kinds: request.options?.map(option => option.kind).filter(Boolean) ?? [],
-      tool_name: typeof request.toolCall?.['title'] === 'string'
-        ? request.toolCall['title']
-        : typeof request.toolCall?.['name'] === 'string' ? request.toolCall['name'] : 'dsh-runtime-tool',
-      tool_call_id: typeof request.toolCall?.['toolCallId'] === 'string'
-        ? request.toolCall['toolCallId']
-        : null,
+      tool_name: toolName,
+      tool_call_id: toolCallId,
     })
     const decision = record.manifest.permission_policy.approval_mode === 'never'
-      ? 'reject_once'
+      ? 'allow_once'
       : await this.configuration.permissionDecision?.(request, record.manifest) ?? 'reject_once'
     const desiredKind = decision
     const option = request.options?.find(candidate => candidate.kind === desiredKind)
     if (option?.optionId === undefined) {
-      this.emit(record, 'approval.resolved', '权限请求已安全拒绝', { decision: 'cancelled' })
+      this.emit(record, 'approval.resolved', '权限请求已安全拒绝', {
+        decision: 'cancelled', tool_name: toolName, tool_call_id: toolCallId,
+      })
       return { outcome: { outcome: 'cancelled' } }
     }
     this.emit(record, 'approval.resolved', decision === 'allow_once' ? '已允许本次操作' : '已拒绝本次操作', {
       decision,
+      tool_name: toolName,
+      tool_call_id: toolCallId,
     })
     return { outcome: { outcome: 'selected', optionId: option.optionId } }
   }
@@ -324,8 +371,18 @@ export class DshAcpRuntimeAdapter implements AgentRuntimePort {
   private finishCancelled(record: ExecutionRecord): void {
     if (record.terminal) return
     this.setStatus(record, 'cancelled')
-    this.emit(record, 'run.cancelled', '任务已取消', { cause: record.cancelCause ?? 'user' })
+    this.emit(record, 'run.cancelled', '任务已取消', { cause: 'user' })
     this.finish(record)
+  }
+
+  private finishFromCancellationCause(record: ExecutionRecord): void {
+    if (record.cancelCause === 'timeout') {
+      this.finishFailed(record, 'RUN_TIMEOUT', 'Runtime execution timed out')
+    } else if (record.cancelCause === 'shutdown') {
+      this.finishFailed(record, 'SERVICE_SHUTDOWN', 'Runtime stopped while the Attempt was active')
+    } else {
+      this.finishCancelled(record)
+    }
   }
 
   private finishFailed(record: ExecutionRecord, code: string, message: string): void {
@@ -358,7 +415,7 @@ export class DshAcpRuntimeAdapter implements AgentRuntimePort {
       event_type: eventType,
       occurred_at: this.now(),
       display_message: displayMessage,
-      safe_metadata: safeMetadata,
+      safe_metadata: sanitizeSafeMetadata(safeMetadata) as Record<string, unknown>,
       trace_id: record.manifest.trace_id ?? record.manifest.run_id,
       parent_event_id: record.events.at(-1)?.event_id ?? null,
     }
@@ -379,6 +436,73 @@ export class DshAcpRuntimeAdapter implements AgentRuntimePort {
   private now(): string {
     return (this.configuration.now?.() ?? new Date()).toISOString()
   }
+}
+
+export function renderSystemPrompt(manifest: RuntimeManifest) {
+  const sections = [manifest.agent_configuration.system_prompt.trim()]
+  if (manifest.input.file_mounts.length > 0) {
+    sections.push([
+      '# 当前 Run 输入文件',
+      '以下文件已经过权限校验，并以只读方式挂载到当前会话工作目录。需要读取附件时，必须直接使用给出的“读取路径”，不得猜测文件名或扫描未授权目录。',
+      ...manifest.input.file_mounts.map((file, index) => [
+        `${index + 1}. ${file.source_name}`,
+        `   - 读取路径：${file.mount_path.slice('/workspace/'.length)}`,
+        `   - 媒体类型：${file.media_type}`,
+      ].join('\n')),
+    ].join('\n'))
+  }
+  if (manifest.agent_configuration.skill_instructions.length > 0) {
+    sections.push([
+      '# 已启用 Skill',
+      ...manifest.agent_configuration.skill_instructions.map(skill =>
+        `## ${skill.id}@${skill.version}\n${skill.instructions.trim()}`,
+      ),
+    ].join('\n\n'))
+  }
+  if (manifest.knowledge_context.length > 0) {
+    sections.push([
+      '# 企业知识上下文',
+      '只能依据以下已授权知识片段回答相关问题。不得把知识片段之外的内容表述为企业事实。回答中的知识结论必须使用对应的【序号】标注来源；若片段不足，应明确说明无法从当前授权知识中确认。',
+      ...manifest.knowledge_context.map((document, index) => [
+        `## 【${index + 1}】${document.title} v${document.version}`,
+        `生效日期：${document.effectiveDate}；数据范围：${document.dataScope}；内容校验：${document.contentChecksum}`,
+        document.excerpt.trim(),
+      ].join('\n')),
+    ].join('\n\n'))
+  }
+  return sections.join('\n\n')
+}
+
+async function resolvePermissionToolName(
+  record: ExecutionRecord,
+  request: AcpPermissionRequest,
+  toolCallId: string | null,
+): Promise<string> {
+  const manifestToolIds = new Set(record.manifest.tools.map(tool => tool.id))
+  if (toolCallId !== null) {
+    try {
+      const approvalLog = await readFile(join(record.snapshot.attemptDirectory, 'tool-approval-requests.jsonl'), 'utf8')
+      const entries = approvalLog.trim().split('\n').reverse()
+      for (const entry of entries) {
+        const parsed = JSON.parse(entry) as unknown
+        if (!isRecord(parsed) || parsed['call_id'] !== toolCallId) continue
+        const toolName = parsed['tool_name']
+        if (typeof toolName === 'string' && manifestToolIds.has(toolName)) return toolName
+      }
+    } catch {
+      // Sandbox-only permission requests have no policy log entry. Continue
+      // with protocol metadata and the single-tool manifest fallback.
+    }
+  }
+
+  for (const candidate of [request.toolCall?.['name'], request.toolCall?.['title']]) {
+    if (typeof candidate !== 'string') continue
+    const exactId = record.manifest.tools.find(tool =>
+      tool.id === candidate || `${tool.id}@${tool.version}` === candidate,
+    )?.id
+    if (exactId) return exactId
+  }
+  return record.manifest.tools.length === 1 ? record.manifest.tools[0]!.id : 'dsh-runtime-tool'
 }
 
 function safeSegment(value: string): string {
@@ -402,7 +526,27 @@ function truncateUtf8(value: string, maxBytes: number): string {
 
 function safeErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
-  return message.replaceAll(/(sk-[A-Za-z0-9_-]{8,})/g, '[REDACTED]').slice(0, 1000)
+  return redactSensitiveText(message).slice(0, 1000)
+}
+
+export function classifyRuntimeFailure(error: unknown): { code: string; message: string } {
+  const message = safeErrorMessage(error)
+  const category = error instanceof AcpProtocolError && isRecord(error.data)
+    ? error.data['category']
+    : undefined
+  if (category === 'model' || /model (?:invocation|request|provider).*(?:failed|unavailable)/i.test(message)) {
+    return { code: 'MODEL_INVOCATION_FAILED', message }
+  }
+  if (category === 'tool_timeout' || /tool .*(?:timed out|timeout)/i.test(message)) {
+    return { code: 'TOOL_TIMEOUT', message }
+  }
+  if (category === 'network' || /network .*(?:unavailable|disconnected|failed)/i.test(message)) {
+    return { code: 'NETWORK_UNAVAILABLE', message }
+  }
+  if (/ACP process exited unexpectedly/i.test(message)) {
+    return { code: 'RUNTIME_WORKER_CRASH', message }
+  }
+  return { code: 'RUNTIME_EXECUTION_FAILED', message }
 }
 
 interface SessionEvidence {

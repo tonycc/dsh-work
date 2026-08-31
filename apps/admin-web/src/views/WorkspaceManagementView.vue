@@ -50,10 +50,10 @@ onMounted(() => contentStore.load())
       </div>
     </section>
 
-    <el-alert type="info" :closable="false" show-icon title="一期只支持团队工作空间。工作空间归属责任团队，不绑定创建人个人名下；负责人负责日常成员与数据范围维护。" />
+    <el-alert type="info" :closable="false" show-icon title="此处治理团队工作空间；每位用户的个人空间由系统自动创建且仅本人可访问，不在团队成员管理中开放。" />
 
     <section v-loading="contentStore.loading" class="metric-grid">
-      <article class="metric-card"><div class="metric-label">团队工作空间</div><div class="metric-value">{{ contentStore.workspaces.length }}</div><div class="metric-detail">一期不创建个人空间</div></article>
+      <article class="metric-card"><div class="metric-label">团队工作空间</div><div class="metric-value">{{ contentStore.workspaces.length }}</div><div class="metric-detail">个人空间由系统自动维护</div></article>
       <article class="metric-card"><div class="metric-label">成员席位</div><div class="metric-value">{{ memberTotal }}</div><div class="metric-detail">按工作空间成员关系累计</div></article>
       <article class="metric-card"><div class="metric-label">空间内 Session</div><div class="metric-value">{{ sessionTotal }}</div><div class="metric-detail">继承工作空间上下文</div></article>
       <article class="metric-card"><div class="metric-label">空间成果</div><div class="metric-value">{{ artifactTotal }}</div><div class="metric-detail">团队可复用交付物</div></article>

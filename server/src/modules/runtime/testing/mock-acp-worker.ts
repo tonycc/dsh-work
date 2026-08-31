@@ -6,6 +6,7 @@ interface JsonRpcMessage {
   method?: string
   params?: Record<string, unknown>
   result?: unknown
+  error?: { code: number; message: string; data?: Record<string, unknown> }
 }
 
 interface PendingPrompt {
@@ -51,7 +52,24 @@ lines.on('line', (line) => {
     const pending = { id: message.id, sessionId, answer: `Mock response: ${text}` }
     pendingPrompts.set(sessionId, pending)
 
+    if (text.includes('[crash]')) process.exit(17)
+    if (text.includes('[model-failure]')) {
+      failPrompt(pending, 'Model invocation failed', 'model')
+      return
+    }
+    if (text.includes('[tool-timeout]')) {
+      failPrompt(pending, 'Tool invocation timed out', 'tool_timeout')
+      return
+    }
+    if (text.includes('[network-failure]')) {
+      failPrompt(pending, 'Network connection unavailable', 'network')
+      return
+    }
     if (text.includes('[hang]')) return
+    if (text.includes('[unexpected-cancel]')) {
+      finishPrompt(pending, 'cancelled', false)
+      return
+    }
     if (text.includes('[permission]')) {
       const requestId = permissionSequence++
       permissionPrompts.set(requestId, pending)
@@ -104,6 +122,15 @@ function finishPrompt(pending: PendingPrompt, stopReason: string, includeAnswer 
     })
   }
   send({ jsonrpc: '2.0', id: pending.id, result: { stopReason } })
+}
+
+function failPrompt(pending: PendingPrompt, message: string, category: string): void {
+  pendingPrompts.delete(pending.sessionId)
+  send({
+    jsonrpc: '2.0',
+    id: pending.id,
+    error: { code: -32000, message, data: { category } },
+  })
 }
 
 function send(message: JsonRpcMessage): void {

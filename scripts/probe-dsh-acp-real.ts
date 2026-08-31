@@ -5,9 +5,11 @@ import { join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { AcpJsonRpcClient } from '../server/src/modules/runtime/acp-json-rpc-client.ts'
 import { createManagedDshAcpProcessConfiguration } from '../server/src/modules/runtime/dsh-acp-process-configuration.ts'
+import { resolveDshRuntimeInstallation } from '../server/src/modules/runtime/dsh-runtime-installation.ts'
 
 const dshRepository = resolve(process.env['DSH_REPOSITORY'] ?? resolve(process.cwd(), '../deepseek-harness'))
 const projectRoot = resolve(import.meta.dirname, '..')
+const deploymentConfig = process.env['DSH_DEPLOYMENT_CONFIG']
 const dshPackage = JSON.parse(await readFile(join(dshRepository, 'package.json'), 'utf8')) as { version?: string }
 const probeRoot = await mkdtemp(join(tmpdir(), 'dsh-work-dsh-real-model-probe-'))
 const workspace = join(probeRoot, 'workspace')
@@ -31,24 +33,43 @@ if (artifactProbe) {
 
 let assistantText = ''
 const diagnostics: string[] = []
+const updateTypes: string[] = []
+let permissionRequestCount = 0
+const processConfiguration = deploymentConfig === undefined
+  ? (await resolveDshRuntimeInstallation({
+      projectRoot,
+      env: { ...process.env, DSH_REPOSITORY: dshRepository },
+    })).process
+  : createManagedDshAcpProcessConfiguration({
+      dshRepository,
+      projectRoot,
+      deploymentConfig: resolve(deploymentConfig),
+    })
 const client = AcpJsonRpcClient.launch(
-  createManagedDshAcpProcessConfiguration({
-    dshRepository,
-    projectRoot,
+  {
+    ...processConfiguration,
     env: {
+      ...processConfiguration.env,
       DSH_PERMISSION_MODE: 'workspace-write',
       DSH_SNAPSHOT: 'record',
       DSH_SNAPSHOT_SESSIONS_ROOT: sessionsRoot,
+      DSH_ALLOWED_TOOLS_JSON: JSON.stringify(
+        artifactProbe ? ['read', 'write'] : toolProbe ? ['read'] : [],
+      ),
     },
     shutdownGraceMs: 5000,
-  }),
+  },
   {
     onSessionUpdate: ({ update }) => {
+      if (typeof update['sessionUpdate'] === 'string') updateTypes.push(update['sessionUpdate'])
       const content = update['content']
       if (update['sessionUpdate'] !== 'agent_message_chunk' || !isRecord(content)) return
       if (content['type'] === 'text' && typeof content['text'] === 'string') assistantText += content['text']
     },
-    onPermissionRequest: async () => ({ outcome: { outcome: 'cancelled' } }),
+    onPermissionRequest: async () => {
+      permissionRequestCount += 1
+      return { outcome: { outcome: 'cancelled' } }
+    },
     onDiagnostic: message => { diagnostics.push(message) },
   },
 )
@@ -73,7 +94,9 @@ try {
     }),
   ])
   const stopReason = response['stopReason']
-  if (assistantText.trim().length === 0) throw new Error('Real model probe received no committed assistant text')
+  if (assistantText.trim().length === 0) {
+    throw new Error(`Real model probe received no committed assistant text (stopReason=${String(stopReason ?? 'unknown')})`)
+  }
   if (toolProbe && !artifactProbe && !assistantText.includes(toolMarker)) {
     throw new Error('Real Tool probe response did not contain the workspace-only marker')
   }
@@ -108,7 +131,9 @@ try {
     ok: false,
     realModelPromptExecuted: true,
     error: message.slice(0, 1000),
-    diagnostic: diagnostics.at(-1)?.slice(0, 2000) ?? null,
+    diagnostic: diagnostics.slice(-8).join('\n').slice(-8000) || null,
+    updateTypes: [...new Set(updateTypes)].slice(0, 20),
+    permissionRequestCount,
   }))
   process.exitCode = 1
 } finally {

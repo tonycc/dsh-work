@@ -9,6 +9,7 @@ import type {
   CreateAgentDraftInput,
   CreateSkillInput,
   ManagedWorkspaceDefinition,
+  OperationsSummary,
   PublishStatus,
   RoleDefinition,
   SessionDefinition,
@@ -78,8 +79,8 @@ export class AdminQueryService {
     if (!Number.isInteger(input.maxConcurrentWorkers) || input.maxConcurrentWorkers < 1 || input.maxConcurrentWorkers > 128) {
       throw new Error('最大并发 Worker 数必须是 1～128 之间的整数')
     }
-    if (!Number.isInteger(input.attemptTimeoutMinutes) || input.attemptTimeoutMinutes < 1 || input.attemptTimeoutMinutes > 1440) {
-      throw new Error('单次执行超时时间必须是 1～1440 分钟之间的整数')
+    if (!Number.isInteger(input.attemptTimeoutMinutes) || input.attemptTimeoutMinutes < 1 || input.attemptTimeoutMinutes > 60) {
+      throw new Error('单次执行超时时间必须是 1～60 分钟之间的整数')
     }
     if (!['accepting', 'draining', 'disabled'].includes(input.schedulingStatus)) {
       throw new Error('Runtime 调度状态无效')
@@ -125,8 +126,8 @@ export class AdminQueryService {
       createdAt: task.createdAt,
       updatedAt: task.updatedAt,
       traceId: traceByRun[task.id] ?? `trace-${task.id.replace(/^run-/, '')}`,
-      dataScopes: task.workspaceId === 'standalone'
-        ? ['员工身份范围', '企业公开知识']
+      dataScopes: task.workspaceId.startsWith('ws-personal-')
+        ? ['个人空间范围', '员工业务数据范围']
         : ['工作空间成员范围', '员工业务数据范围'],
       summary: task.summary ?? task.error?.message ?? 'Session 运行元数据已记录，消息正文默认不向平台管理员展示。',
     }))
@@ -324,7 +325,10 @@ export class AdminQueryService {
   }
 
   getSkills() {
-    return this.repository.read('skills')
+    return this.repository.read('skills').then(skills => skills.map(skill => ({
+      ...skill,
+      ...(skill.status === 'published' ? { activeVersion: skill.version } : {}),
+    })))
   }
 
   async createSkill(input: CreateSkillInput) {
@@ -476,6 +480,24 @@ export class AdminQueryService {
 
   getAuditEvents() {
     return this.repository.read('auditEvents')
+  }
+
+  async getOperationsSummary(): Promise<OperationsSummary> {
+    const [tasks, auditEvents, modelUsage, artifacts] = await Promise.all([
+      this.repository.read('tasks'),
+      this.repository.read('auditEvents'),
+      this.repository.read('modelUsage'),
+      this.repository.read('artifacts'),
+    ])
+    return {
+      runs24h: tasks.length,
+      successfulRuns24h: tasks.filter(task => task.status === 'succeeded').length,
+      failedRuns24h: tasks.filter(task => task.status === 'failed').length,
+      modelTokens24h: modelUsage.reduce((total, record) => total + record.totalTokens, 0),
+      toolCalls24h: auditEvents.filter(event => event.category === 'tool').length,
+      artifacts24h: artifacts.length,
+      attentionEvents24h: auditEvents.filter(event => event.status === 'failed' || event.status === 'blocked').length,
+    }
   }
 
   getHealth() {

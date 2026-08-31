@@ -31,8 +31,10 @@ const rules: FormRules = {
   testPrompt: [{ required: true, min: 4, message: '请输入一个典型测试问题', trigger: 'blur' }],
 }
 
-const availableTools = computed(() => contentStore.tools.filter((tool) => tool.status !== 'disabled'))
-const title = computed(() => props.skill ? `编辑 Skill：${props.skill.name}` : '创建 Skill')
+const availableTools = computed(() => contentStore.tools.filter((tool) => tool.status === 'available'))
+const title = computed(() => props.skill
+  ? `${props.skill.status === 'draft' ? '编辑 Skill' : '创建 Skill 新版本'}：${props.skill.name}`
+  : '创建 Skill')
 const fingerprint = computed(() => JSON.stringify(form))
 const testIsCurrent = computed(() => Boolean(testResult.value) && testedFingerprint.value === fingerprint.value)
 const isDirty = computed(() => JSON.stringify(form) !== initialSnapshot.value)
@@ -59,7 +61,7 @@ function reset() {
         category: props.skill.category,
         description: props.skill.description,
         instructions: props.skill.instructions,
-        toolIds: [...props.skill.toolIds],
+        toolIds: props.skill.toolIds.map(toVersionedToolReference),
         testPrompt: props.skill.testPrompt,
       }
     : emptyForm()
@@ -79,11 +81,25 @@ async function runTest() {
   }
   testing.value = true
   await new Promise<void>((resolve) => setTimeout(resolve, 550))
-  const toolNames = form.toolIds.map((id) => contentStore.tools.find((tool) => tool.id === id)?.name ?? id)
+  const toolNames = form.toolIds.map((reference) => {
+    const id = toolReferenceId(reference)
+    return contentStore.tools.find((tool) => tool.id === id)?.name ?? reference
+  })
   testResult.value = `已按当前执行指令完成“${form.testPrompt.trim()}”的 Mock 验证，${toolNames.length} 个工具的参数与可用状态检查通过。`
   testedFingerprint.value = fingerprint.value
   testing.value = false
   ElMessage.success('Skill Mock 测试通过')
+}
+
+function toolReferenceId(reference: string) {
+  const separator = reference.lastIndexOf('@')
+  return separator > 0 ? reference.slice(0, separator) : reference
+}
+
+function toVersionedToolReference(reference: string) {
+  if (reference.lastIndexOf('@') > 0) return reference
+  const tool = contentStore.tools.find((item) => item.id === reference)
+  return `${reference}@${tool?.version ?? '1.0.0'}`
 }
 
 async function save() {
@@ -106,7 +122,9 @@ async function save() {
     initialSnapshot.value = JSON.stringify(form)
     dialogOpen.value = false
     emit('saved', saved)
-    ElMessage.success(props.skill ? 'Skill 草稿已保存' : 'Skill 已创建，当前为草稿状态')
+    ElMessage.success(props.skill?.status === 'draft'
+      ? 'Skill 草稿已保存'
+      : props.skill ? 'Skill 新版本草稿已创建' : 'Skill 已创建，当前为草稿状态')
   } catch (cause) {
     ElMessage.error(cause instanceof Error ? cause.message : 'Skill 保存失败')
   } finally {
@@ -161,7 +179,7 @@ function requestClose() {
       </el-form-item>
       <el-form-item label="引用工具" prop="toolIds">
         <el-select v-model="form.toolIds" multiple filterable collapse-tags :max-collapse-tags="3" placeholder="选择 Skill 运行时允许调用的工具">
-          <el-option v-for="tool in availableTools" :key="tool.id" :label="`${tool.name} · ${tool.system}`" :value="tool.id" />
+          <el-option v-for="tool in availableTools" :key="tool.id" :label="`${tool.name} · v${tool.version ?? '1.0.0'} · ${tool.system}`" :value="`${tool.id}@${tool.version ?? '1.0.0'}`" />
         </el-select>
       </el-form-item>
       <section class="mock-test-panel">

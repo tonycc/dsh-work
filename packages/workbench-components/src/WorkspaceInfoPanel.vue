@@ -6,6 +6,7 @@ import { StatusTag } from '@dsh-work/ui-core'
 interface WorkspaceInfo {
   name: string
   description: string
+  type: 'personal' | 'team'
   memberCount: number
   owner: string
   members: string[]
@@ -35,7 +36,7 @@ function memberInitial(name: string) {
   <div class="workspace-info-panel">
     <header class="workspace-info-panel__header">
       <div>
-        <span>团队上下文</span>
+        <span>{{ workspace.type === 'personal' ? '个人上下文' : '团队上下文' }}</span>
         <strong>工作空间信息</strong>
       </div>
       <button
@@ -52,7 +53,7 @@ function memberInitial(name: string) {
     <section class="workspace-info-panel__hero">
       <div class="workspace-info-panel__status">
         <span class="workspace-info-panel__folder"><el-icon><FolderOpened /></el-icon></span>
-        <StatusTag status="neutral" label="团队工作空间" />
+        <StatusTag status="neutral" :label="workspace.type === 'personal' ? '个人工作空间' : '团队工作空间'" />
       </div>
       <h2>{{ workspace.name }}</h2>
       <p>{{ workspace.description }}</p>
@@ -60,12 +61,12 @@ function memberInitial(name: string) {
 
     <dl class="workspace-info-panel__facts">
       <div>
-        <dt>责任团队</dt>
-        <dd>{{ workspace.owner }}</dd>
+        <dt>{{ workspace.type === 'personal' ? '空间归属' : '负责人' }}</dt>
+        <dd>{{ workspace.type === 'personal' ? '仅你本人' : workspace.owner }}</dd>
       </div>
       <div>
         <dt>我的访问</dt>
-        <dd>空间成员 · 可发起对话</dd>
+        <dd>{{ workspace.type === 'personal' ? '本人 · 可发起对话' : '空间成员 · 可发起对话' }}</dd>
       </div>
       <div>
         <dt>企业数据范围</dt>
@@ -75,10 +76,11 @@ function memberInitial(name: string) {
 
     <div class="workspace-info-panel__permission-note">
       <el-icon><Lock /></el-icon>
-      <span>此处发起的对话自动归入当前空间；工作空间只能收窄权限，不能扩大你的企业数据范围。</span>
+      <span v-if="workspace.type === 'personal'">此处发起的对话自动归入你的个人空间，仅你可以访问；企业数据仍按当前身份权限提供。</span>
+      <span v-else>此处发起的对话自动归入当前空间；工作空间只能收窄权限，不能扩大你的企业数据范围。</span>
     </div>
 
-    <section class="workspace-info-panel__section">
+    <section v-if="workspace.type === 'team'" class="workspace-info-panel__section">
       <div class="workspace-info-panel__section-heading">
         <div>
           <h3>成员</h3>
@@ -104,7 +106,7 @@ function memberInitial(name: string) {
 
     <footer class="workspace-info-panel__footer">
       <el-icon><UserFilled /></el-icon>
-      工作空间归属于责任团队，不绑定在创建人名下
+      {{ workspace.type === 'personal' ? '系统已为你创建唯一的默认个人空间' : '团队工作空间用于成员之间协作和内容归档' }}
     </footer>
   </div>
 </template>

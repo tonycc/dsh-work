@@ -9,6 +9,13 @@ import { useContentStore } from '@/stores/content'
 const contentStore = useContentStore()
 const healthyCount = computed(() => contentStore.health.filter((item) => item.status === 'healthy').length)
 const offlineCount = computed(() => contentStore.health.filter((item) => item.status === 'offline').length)
+const warningCount = computed(() => contentStore.health.filter((item) => item.status === 'warning').length)
+const summaryState = computed(() => offlineCount.value > 0 ? 'offline' : warningCount.value > 0 ? 'warning' : 'healthy')
+const summaryTitle = computed(() => {
+  if (summaryState.value === 'offline') return 'MVP 核心服务存在离线组件'
+  if (summaryState.value === 'warning') return 'MVP 核心服务处于降级状态'
+  return 'MVP 核心服务运行正常'
+})
 
 const icons = {
   'health-app': Service,
@@ -39,7 +46,7 @@ onMounted(() => contentStore.load())
     </section>
 
     <section class="health-summary content-panel">
-      <div class="health-summary__status"><span><i></i></span><div><strong>MVP 核心服务运行正常</strong><p>{{ healthyCount }} / {{ contentStore.health.length }} 个组件可用，{{ offlineCount }} 个组件未配置或未连接</p></div></div>
+      <div class="health-summary__status" :class="`health-summary__status--${summaryState}`"><span><i></i></span><div><strong>{{ summaryTitle }}</strong><p>{{ healthyCount }} / {{ contentStore.health.length }} 个组件健康，{{ warningCount }} 个降级，{{ offlineCount }} 个离线</p></div></div>
       <dl><div><dt>应用版本</dt><dd>dsh-work 0.3.0 MVP</dd></div><div><dt>部署形态</dt><dd>双接口门面 + Node.js 模块化单体</dd></div><div><dt>环境</dt><dd>本地 MVP 实施环境</dd></div><div><dt>持久化</dt><dd>PostgreSQL + 本地 Artifact Adapter</dd></div></dl>
     </section>
 
@@ -62,7 +69,7 @@ onMounted(() => contentStore.load())
         <div class="incident-list">
           <article><span class="incident-list__time">当前</span><i class="is-success"></i><div><strong>员工端接口与管理端接口已拆分</strong><p>两个前端使用独立数据传输对象、客户端和状态层访问 Node.js 服务端。</p></div><StatusTag status="success" label="已完成" /></article>
           <article><span class="incident-list__time">已接入</span><i></i><div><strong>DSH Runtime 与默认模型路由已接入</strong><p>员工对话由 PostgreSQL 编排并通过 ACP stdio 调用真实 DSH Runtime。</p></div><StatusTag status="healthy" label="正常" /></article>
-          <article><span class="incident-list__time">待办</span><i class="is-warning"></i><div><strong>PostgreSQL 与对象存储待配置</strong><p>当前数据来自服务端内存仓储，进程重启后不会保留写入。</p></div><StatusTag status="offline" label="未配置" /></article>
+          <article><span class="incident-list__time">已接入</span><i></i><div><strong>PostgreSQL 与本地 Artifact Adapter 已接入</strong><p>业务数据由 PostgreSQL 持久化；一期成果文件使用本地存储 Adapter，生产对象存储仍是部署升级项。</p></div><StatusTag status="healthy" label="正常" /></article>
         </div>
       </div>
 
@@ -71,7 +78,7 @@ onMounted(() => contentStore.load())
         <div class="boundary-diagram">
           <div class="boundary-node boundary-node--app"><strong>员工端 / 管理端接口</strong><span>Node.js 模块化单体</span><small>独立门面，共享内部业务模块</small></div>
           <span class="boundary-arrow">→</span>
-          <div class="boundary-node boundary-node--worker"><strong>DSH 执行进程</strong><span>独立进程池</span><small>目标边界 · 当前尚未接入</small></div>
+          <div class="boundary-node boundary-node--worker"><strong>DSH 执行进程</strong><span>独立受管进程</span><small>已通过 ACP stdio 接入 · 可独立扩展为进程池</small></div>
         </div>
         <p class="boundary-note">当前先保持一个模块化单体；DSH 执行进程只按运行隔离需要独立部署。模型、连接器、成果和治理模块不因领域名称而拆成微服务。</p>
       </aside>
@@ -86,6 +93,12 @@ onMounted(() => contentStore.load())
 .health-summary__status > span { display: grid; width: 44px; height: 44px; place-items: center; border-radius: 50%; background: var(--color-success-light); }
 .health-summary__status i { width: 16px; height: 16px; border: 4px solid var(--color-success); border-radius: 50%; }
 .health-summary__status strong { color: var(--color-success-strong); font-size: var(--font-size-title); }
+.health-summary__status--warning > span { background: var(--color-warning-light); }
+.health-summary__status--warning i { border-color: var(--color-warning); }
+.health-summary__status--warning strong { color: var(--color-warning-strong); }
+.health-summary__status--offline > span { background: var(--color-danger-light); }
+.health-summary__status--offline i { border-color: var(--color-danger); }
+.health-summary__status--offline strong { color: var(--color-danger); }
 .health-summary__status p { margin: 5px 0 0; color: var(--color-text-secondary); font-size: var(--font-size-badge); }
 .health-summary > dl { display: flex; align-items: center; gap: 0; margin: 0; }
 .health-summary > dl div { display: flex; min-width: 150px; flex-direction: column; padding: 0 18px; border-left: 1px solid var(--color-border); }

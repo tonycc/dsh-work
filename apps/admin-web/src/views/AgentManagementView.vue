@@ -75,8 +75,14 @@ async function publish(agent: AgentDefinition) {
       { confirmButtonText: '确认发布', cancelButtonText: '取消', type: 'warning' },
     )
     actionLoading.value = `publish:${agent.id}`
+    const test = await contentStore.testAgent(
+      agent.id,
+      agent.examplePrompts[0] ?? '请介绍你能提供哪些帮助',
+      authStore.user.name,
+    )
+    if (test.status !== 'passed') throw new Error(test.resultSummary)
     await contentStore.setAgentStatus(agent.id, 'published', authStore.user.name)
-    ElMessage.success('Agent 版本已发布，发布记录已生成')
+    ElMessage.success('服务端配置测试通过，Agent 版本已发布')
   } catch (cause) {
     if (cause instanceof Error) ElMessage.error(cause.message)
   } finally {
@@ -168,7 +174,7 @@ onMounted(() => contentStore.load())
         <el-table-column label="操作" width="260" fixed="right">
           <template #default="scope">
             <el-button link type="primary" :icon="View" data-action="view-agent" @click.stop="inspect(scope.row)">查看</el-button>
-            <el-button v-if="authStore.canManage && scope.row.status === 'draft'" link type="primary" data-action="edit-agent" @click.stop="openEdit(scope.row)">编辑</el-button>
+            <el-button v-if="authStore.canManage" link type="primary" data-action="edit-agent" @click.stop="openEdit(scope.row)">{{ scope.row.status === 'draft' ? '编辑' : '创建新版本' }}</el-button>
             <el-button v-if="authStore.canManage && scope.row.status === 'draft'" link type="primary" :loading="actionLoading === `publish:${scope.row.id}`" data-action="publish-agent" @click.stop="publish(scope.row)">发布</el-button>
             <el-button v-if="authStore.canManage && scope.row.status !== 'draft'" link type="primary" :loading="actionLoading === `status:${scope.row.id}`" :data-action="scope.row.status === 'published' ? 'disable-agent' : 'enable-agent'" @click.stop="changeAvailability(scope.row)">{{ scope.row.status === 'published' ? '停用' : '启用' }}</el-button>
           </template>
@@ -212,7 +218,7 @@ onMounted(() => contentStore.load())
           <el-timeline v-else><el-timeline-item v-for="record in selectedReleases" :key="record.id" :timestamp="record.time" placement="top"><article class="release-record"><div><strong>{{ releaseActionLabel(record) }} · v{{ record.version }}</strong><StatusTag :status="record.action === 'disabled' ? 'disabled' : 'published'" :label="releaseActionLabel(record)" /></div><p>{{ record.note }}</p><small>操作人：{{ record.actor }}</small></article></el-timeline-item></el-timeline>
         </section>
 
-        <div v-if="authStore.canManage" class="agent-detail__footer"><el-button v-if="selectedAgent.status === 'draft'" @click="openEdit(selectedAgent)">编辑 Agent</el-button><el-button v-if="selectedAgent.status === 'draft'" type="primary" @click="publish(selectedAgent)">发布当前版本</el-button><el-button v-else :type="selectedAgent.status === 'published' ? 'danger' : 'primary'" @click="changeAvailability(selectedAgent)">{{ selectedAgent.status === 'published' ? '停用 Agent' : '启用 Agent' }}</el-button></div>
+        <div v-if="authStore.canManage" class="agent-detail__footer"><el-button @click="openEdit(selectedAgent)">{{ selectedAgent.status === 'draft' ? '编辑 Agent' : '创建新版本' }}</el-button><el-button v-if="selectedAgent.status === 'draft'" type="primary" @click="publish(selectedAgent)">测试并发布当前版本</el-button><el-button v-else :type="selectedAgent.status === 'published' ? 'danger' : 'primary'" @click="changeAvailability(selectedAgent)">{{ selectedAgent.status === 'published' ? '停用 Agent' : '启用 Agent' }}</el-button></div>
       </template>
     </el-drawer>
 

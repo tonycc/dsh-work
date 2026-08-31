@@ -1,6 +1,6 @@
 # dsh-work MVP 数据模型（M0 基线）
 
-版本：V0.1
+版本：V0.2
 数据库：PostgreSQL
 状态：逻辑模型与 M2 物理 DDL 已冻结；迁移位于 `server/migrations`
 
@@ -8,7 +8,7 @@
 
 - 所有业务数据均带 `tenant_id`；任何查询必须先限定租户，再应用角色和数据范围。
 - 用户只来自企业 SSO，同一企业内通过稳定的 `external_subject` 关联；平台另保留独立超级管理员入口。
-- MVP 只创建团队工作空间，不创建个人工作空间。独立新对话的 `workspace_id` 为 `NULL`。
+- 每位用户自动拥有且只能拥有一个个人工作空间；所有 Session、文件和成果必须归属个人或团队工作空间，`workspace_id` 不可为空。
 - 对话是员工工作对象；管理端 Session 页面仅用于状态、用量、安全与审计治理，不建设可任意浏览全量消息的页面。
 - Agent、Skill 和 Runtime 配置使用不可变版本或变更快照；已运行任务可回溯到执行时配置。
 - 删除优先软删除或归档；审计事件和成果版本不可原地覆盖。
@@ -24,7 +24,7 @@ erDiagram
   WORKSPACE ||--o{ WORKSPACE_MEMBER : has
   USER ||--o{ WORKSPACE_MEMBER : joins
   USER ||--o{ SESSION : creates
-  WORKSPACE o|--o{ SESSION : scopes
+  WORKSPACE ||--o{ SESSION : scopes
   AGENT ||--o{ AGENT_VERSION : versions
   USER ||--o{ AGENT : owns
   AGENT_VERSION ||--o{ SESSION : selected_by
@@ -36,6 +36,9 @@ erDiagram
   ARTIFACT ||--o{ ARTIFACT_VERSION : versions
   WORKSPACE o|--o{ FILE_OBJECT : shares
   SESSION o|--o{ FILE_OBJECT : attaches
+  FILE_OBJECT ||--o{ FILE_EXTRACTION : parses
+  RUN_ATTEMPT ||--o{ RUN_INPUT_FILE : snapshots
+  FILE_OBJECT ||--o{ RUN_INPUT_FILE : mounted_as
   TENANT ||--o{ AUDIT_EVENT : records
 ```
 
@@ -49,19 +52,21 @@ erDiagram
 | `users` | `id`, `tenant_id`, `external_subject`, `display_name`, `department_id`, `status` | `unique(tenant_id, external_subject)`；不存 SSO 密码 |
 | `roles` | `id`, `tenant_id`, `code`, `name`, `permissions` | `code` 在租户内唯一；权限采用受控枚举 |
 | `user_roles` | `tenant_id`, `user_id`, `role_id`, `valid_until` | 联合主键；支持临时授权 |
-| `data_scope_grants` | `id`, `tenant_id`, `subject_type`, `subject_id`, `scope_code`, `scope_value` | 主体可为用户、角色或 Workspace |
+| `data_scope_grants` | `id`, `tenant_id`, `subject_type`, `subject_id`, `scope_code`, `scope_value` | 主体可为用户、角色或 Workspace；MVP 以 `scope_value` 保存受控完整范围代码 |
+
+服务端授权顺序固定为：启用租户/用户 → 未过期角色与入口权限 → 个人空间所有者或团队空间成员 → Session 锁定的 Agent 已发布版本/可见角色 → 数据范围覆盖 → 团队工作空间 Agent/Skill/Tool 精确版本授权 → Tool 状态、连接器健康和调用权限。个人空间只是用户内容边界，沿用用户与 Agent 的有效权限，不产生新的数据授权；任一环节失败都默认拒绝并写入 `audit_events`。
 
 独立超级管理员不复用企业用户登录入口。其凭据存放于外部身份系统或专用密钥系统，平台仅保存不可逆主体引用和审计标识。
 
-### 3.2 团队工作空间
+### 3.2 个人与团队工作空间
 
 | 表 | 关键字段 | 约束与说明 |
 |---|---|---|
-| `workspaces` | `id`, `tenant_id`, `name`, `description`, `created_by`, `status`, `archived_at` | `workspace_type` MVP 固定为 `team`；不绑定创建人所有权 |
-| `workspace_members` | `workspace_id`, `user_id`, `member_role`, `added_by`, `joined_at` | 联合主键；成员角色为 `owner/admin/member/viewer` |
-| `workspace_capability_grants` | `workspace_id`, `capability_type`, `capability_version_id` | 绑定允许使用的 Agent/Skill/工具版本 |
+| `workspaces` | `id`, `tenant_id`, `name`, `description`, `workspace_type`, `created_by`, `status`, `archived_at` | `workspace_type` 为 `personal/team`；每个用户最多一个始终启用的个人空间 |
+| `workspace_members` | `workspace_id`, `user_id`, `member_role`, `added_by`, `joined_at` | 联合主键；个人空间只允许所有者本人，团队成员角色为 `owner/admin/member/viewer` |
+| `workspace_capability_grants` | `workspace_id`, `capability_type`, `capability_version_id` | 团队空间绑定允许使用的 Agent/Skill/工具精确版本；无授权记录时默认拒绝 |
 
-创建者默认成为 Workspace `owner`，但 Workspace 属于企业租户。创建者离职或移除后必须先转移至少一个 owner。
+用户创建或首次使用时由服务端幂等确保默认“我的空间”，个人空间不能加入其他成员、归档或扩大企业权限。团队空间创建者默认成为 `owner`，但空间属于企业租户；创建者离职或移除前必须转移至少一个 owner。
 
 ### 3.3 Agent、Skill、工具与连接器
 
@@ -92,7 +97,7 @@ MVP 当前种子路由为 `deepseek-official / deepseek-v4-pro`，凭据引用�
 
 | 表 | 关键字段 | 约束与说明 |
 |---|---|---|
-| `sessions` | `id`, `tenant_id`, `workspace_id`, `created_by`, `agent_version_id`, `title`, `status`, `last_active_at` | `workspace_id` 可空；员工只能看到自己或所在 Workspace 可见 Session |
+| `sessions` | `id`, `tenant_id`, `workspace_id`, `created_by`, `agent_version_id`, `title`, `status`, `last_active_at` | `workspace_id` 非空；未显式选择团队空间时自动使用创建人的个人空间 |
 | `messages` | `id`, `session_id`, `role`, `content`, `content_classification`, `created_at` | `role` 为 `user/assistant/system/tool`；不持久化隐藏推理 |
 | `runs` | `id`, `session_id`, `requested_by`, `idempotency_key`, `status`, `current_attempt_id`, `created_at` | `unique(session_id, requested_by, idempotency_key)` |
 | `run_attempts` | `id`, `run_id`, `attempt_no`, `runtime_id`, `manifest`, `status`, `started_at`, `ended_at`, `error_code` | 每次重试新增记录；`unique(run_id, attempt_no)` |
@@ -115,20 +120,28 @@ queued ────────────────────────�
 | 表 | 关键字段 | 约束与说明 |
 |---|---|---|
 | `runtimes` | `id`, `tenant_id`, `node_name`, `runtime_version`, `status`, `capacity`, `last_heartbeat_at` | Runtime 是可调度执行实例，不等同于单个 DSH 子进程 |
-| `runtime_configurations` | `tenant_id`, `revision`, `concurrency_limit`, `timeout_seconds`, `sandbox_policy`, `updated_by` | 乐观锁更新；每次修改写审计 |
-| `file_objects` | `id`, `tenant_id`, `workspace_id`, `session_id`, `storage_key`, `original_name`, `mime_type`, `size_bytes`, `sha256`, `scan_status` | 二者至少一个上下文可见；下载前再鉴权 |
+| `runtime_configurations` | `tenant_id`, `runtime_id`, `revision`, `concurrency_limit`, `timeout_seconds`, `sandbox_policy`, `updated_by` | 每个 Runtime 独立追加配置版本；历史不覆盖；每次修改写审计 |
+| `operational_events`（只读视图） | `category`, `action`, `object_type`, `object_id`, `actor_id`, `result`, `trace_id`, `run_id`, `attempt_id`, `safe_context` | 合并管理、安全、运行、模型、工具和成果事件；严禁投影消息、提示词、回答正文和文件内容 |
+| `file_objects` | `id`, `tenant_id`, `workspace_id`, `session_id`, `storage_key`, `original_name`, `mime_type`, `size_bytes`, `sha256`, `scan_status` | `workspace_id` 非空，`session_id` 可选；下载前同时按个人所有者或团队成员关系鉴权 |
+| `file_extractions` | `id`, `file_id`, `extractor_version`, `detected_type`, `status`, `text_storage_key`, `text_sha256`, `character_count`, `page_count`, `sheet_count`, `row_count`, `error_code` | 原文件解析结果版本化；成功记录摘要和统计，失败记录可操作错误码 |
+| `run_input_files` | `id`, `run_id`, `attempt_id`, `file_id`, `extraction_id`, `mount_path` | 固化每个 Attempt 使用的原文件、解析版本和只读挂载路径；重试新增快照 |
 | `artifacts` | `id`, `tenant_id`, `workspace_id`, `session_id`, `name`, `artifact_type`, `created_by` | 成果逻辑对象 |
 | `artifact_versions` | `id`, `artifact_id`, `version_no`, `file_object_id`, `source_run_id`, `created_at` | 只新增版本，不覆盖 |
+| `knowledge_sources` | `id`, `tenant_id`, `key`, `source_type`, `status`, `synthetic` | 企业知识来源登记；合成基线必须显式标记 |
+| `knowledge_documents` | `id`, `source_id`, `document_key`, `version`, `effective_date`, `content_checksum`, `allowed_role_ids`, `allowed_workspace_ids`, `status` | 已发布知识版本不可原地修改，检索前执行权限过滤 |
+| `run_knowledge_sources` | `run_id`, `attempt_id`, `document_id`, `relevance_score`, `excerpt` | 固化每个 Attempt 实际使用的知识版本与摘要 |
 | `model_usage_events` | `id`, `tenant_id`, `run_id`, `provider`, `model`, `input_tokens`, `output_tokens`, `cost_amount`, `occurred_at` | Token 原始计量事件；费用币种另存 |
-| `audit_events` | `id`, `tenant_id`, `actor_type`, `actor_id`, `action`, `object_type`, `object_id`, `result`, `trace_id`, `safe_context`, `occurred_at` | 追加写；敏感值脱敏；不可由普通管理员删除 |
+| `audit_events` | `id`, `tenant_id`, `actor_type`, `actor_id`, `action`, `object_type`, `object_id`, `result`, `trace_id`, `safe_context`, `occurred_at` | 追加写；授权通过/拒绝使用 `object_type=authorization`；敏感值脱敏；不可由普通管理员删除 |
 
 ## 4. 索引基线
 
 - `sessions(tenant_id, created_by, last_active_at desc)` 与 `sessions(tenant_id, workspace_id, last_active_at desc)`。
 - `runs(session_id, created_at desc)`、`run_attempts(run_id, attempt_no desc)`。
 - `run_events(attempt_id, sequence)`，用于 SSE 断点续传。
+- `runtime_configurations(tenant_id, runtime_id, revision desc)` 与 `run_attempts(tenant_id, runtime_id, status, created_at)`，用于读取最新运维策略和原子容量调度。
 - `workspace_members(user_id, workspace_id)`，用于员工工作空间列表。
 - `artifacts(tenant_id, workspace_id, created_at desc)` 与 `artifacts(session_id, created_at desc)`。
+- `file_extractions(tenant_id, file_id, created_at desc)` 与 `run_input_files(tenant_id, run_id, attempt_id)`。
 - `audit_events(tenant_id, occurred_at desc)`、`audit_events(trace_id)`、`audit_events(object_type, object_id)`。
 - `model_usage_events(tenant_id, occurred_at)` 和 `model_usage_events(run_id)`。
 
@@ -138,15 +151,15 @@ queued ────────────────────────�
 
 | 页面 | 主要 API | 主要表 | MVP 验收点 |
 |---|---|---|---|
-| 员工工作台 | `GET /session`、`POST /sessions` | `users`, `sessions` | 可发起独立新对话，不自动创建个人 Workspace |
-| 对话页 | `POST /sessions/{id}/runs`、SSE Events、取消/重试 | `messages`, `runs`, `run_attempts`, `run_events` | 输入框固定底部；刷新可恢复；失败可重试 |
-| 工作空间页 | `/workspaces`、`/{id}`、文件上传 | `workspaces`, `workspace_members`, `file_objects` | 顶部页签切换对话/共享文件/成果 |
+| 员工工作台 | `GET /session`、`POST /sessions` | `users`, `workspaces`, `sessions` | 默认选择“我的空间”；服务端在未传空间时仍自动补齐个人空间 |
+| 对话页 | `POST /sessions/{id}/files`、`POST /sessions/{id}/runs`、SSE Events、取消/重试 | `messages`, `runs`, `run_attempts`, `run_events`, `file_objects`, `file_extractions`, `run_input_files` | 输入框固定底部；文件先解析再形成只读 Attempt 快照；刷新可恢复；失败可重试 |
+| 工作空间页 | `/workspaces`、`/{id}`、文件上传 | `workspaces`, `workspace_members`, `file_objects` | 同时展示唯一个人空间与已加入团队空间；顶部页签切换对话/文件/成果 |
 | 成果库 | `/artifacts`、下载 | `artifacts`, `artifact_versions` | 仅可下载有权限的版本 |
 | Agent 管理 | `/agents`、测试、发布 | `agents`, `agent_versions` | 负责人自动为创建者；欢迎语可空；无模型策略字段 |
 | 能力管理 | `/skills`、`/tools`、`/connectors` | Skill/工具/连接器表 | Skill 标识自动生成；一期工具和连接器只读 |
 | Runtimes | `/runtimes`、`/runtimes/configuration` | `runtimes`, `runtime_configurations` | 位于安全与运维；健康、容量和配置可追溯 |
 | Session 治理 | `/sessions`、`/{id}` | `sessions`, `runs`, `model_usage_events`, `audit_events` | 默认不展示完整业务消息正文 |
-| 工作空间管理 | `/workspaces`、成员接口 | Workspace 表 | Workspace 企业所有，支持 owner 转移 |
+| 工作空间管理 | `/workspaces`、成员接口 | Workspace 表 | 管理端治理团队空间；个人空间由系统自动维护且不开放成员管理 |
 
 ## 6. 保留与脱敏基线
 

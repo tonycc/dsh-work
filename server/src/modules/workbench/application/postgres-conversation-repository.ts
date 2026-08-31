@@ -3,12 +3,13 @@ import { randomUUID } from 'node:crypto'
 import type { ChatMessage, RunStep, TaskRun } from '../../../domain/types.ts'
 import type { DatabaseClient } from '../../../infrastructure/postgres/database.ts'
 import type { RunState } from '../../run/run-types.ts'
+import { PostgresWorkspaceService } from './postgres-workspace-service.ts'
 
 const tenantId = 'tenant-dsh-work'
 
 interface SessionRow {
   id: string
-  workspaceId: string | null
+  workspaceId: string
   agentVersionId: string
   title: string
   createdAt: Date
@@ -22,10 +23,11 @@ interface TaskRow {
   createdAt: Date
   updatedAt: Date
   title: string
-  workspaceId: string | null
-  workspaceName: string | null
+  workspaceId: string
+  workspaceName: string
   agentVersion: string
   owner: string
+  errorCode: string | null
 }
 
 interface MessageRow {
@@ -50,25 +52,45 @@ interface ArtifactRow {
   version: number
   sizeBytes: string | number
   createdAt: Date
-  workspaceId: string | null
+  workspaceId: string
+}
+
+interface SourceRow {
+  id: string
+  title: string
+  version: string
+  effectiveAt: Date
+  dataScope: string
+  excerpt: string
+  synthetic: boolean
+}
+
+interface AttachmentRow {
+  name: string
 }
 
 export class PostgresConversationRepository {
   private readonly database: DatabaseClient
+  private readonly workspaces: PostgresWorkspaceService
 
-  constructor(database: DatabaseClient) {
+  constructor(database: DatabaseClient, workspaces = new PostgresWorkspaceService(database)) {
     this.database = database
+    this.workspaces = workspaces
+  }
+
+  async resolveWorkspaceId(workspaceId: string | null | undefined, userId: string) {
+    return (await this.workspaces.resolveAccessibleWorkspace(workspaceId, userId)).id
   }
 
   async createSession(input: {
     userId: string
     title: string
-    workspaceId?: string | null
+    workspaceId?: string
     agentVersionId?: string
   }) {
     const id = `session-${randomUUID()}`
     const agentVersionId = input.agentVersionId ?? 'agent-version-dsh-work-assistant-1'
-    const workspaceId = input.workspaceId && input.workspaceId !== 'standalone' ? input.workspaceId : null
+    const workspaceId = await this.resolveWorkspaceId(input.workspaceId, input.userId)
     const [row] = await this.database<SessionRow[]>`
       insert into sessions (
         id, tenant_id, workspace_id, created_by, agent_version_id, title, status
@@ -130,11 +152,13 @@ export class PostgresConversationRepository {
       select r.id, r.session_id as "sessionId", r.status,
              r.current_attempt_id as "currentAttemptId", r.created_at as "createdAt",
              r.updated_at as "updatedAt", s.title, s.workspace_id as "workspaceId",
-             w.name as "workspaceName", av.version as "agentVersion", u.display_name as owner
+             w.name as "workspaceName", av.version as "agentVersion", u.display_name as owner,
+             ra.error_code as "errorCode"
         from runs r
         join sessions s on s.tenant_id = r.tenant_id and s.id = r.session_id
         join users u on u.tenant_id = r.tenant_id and u.id = r.requested_by
         join agent_versions av on av.tenant_id = s.tenant_id and av.id = s.agent_version_id
+        left join run_attempts ra on ra.tenant_id = r.tenant_id and ra.id = r.current_attempt_id
         left join workspaces w on w.tenant_id = s.tenant_id and w.id = s.workspace_id
        where r.tenant_id = ${tenantId} and r.requested_by = ${userId}
        order by r.created_at desc
@@ -148,11 +172,13 @@ export class PostgresConversationRepository {
       select r.id, r.session_id as "sessionId", r.status,
              r.current_attempt_id as "currentAttemptId", r.created_at as "createdAt",
              r.updated_at as "updatedAt", s.title, s.workspace_id as "workspaceId",
-             w.name as "workspaceName", av.version as "agentVersion", u.display_name as owner
+             w.name as "workspaceName", av.version as "agentVersion", u.display_name as owner,
+             ra.error_code as "errorCode"
         from runs r
         join sessions s on s.tenant_id = r.tenant_id and s.id = r.session_id
         join users u on u.tenant_id = r.tenant_id and u.id = r.requested_by
         join agent_versions av on av.tenant_id = s.tenant_id and av.id = s.agent_version_id
+        left join run_attempts ra on ra.tenant_id = r.tenant_id and ra.id = r.current_attempt_id
         left join workspaces w on w.tenant_id = s.tenant_id and w.id = s.workspace_id
        where r.tenant_id = ${tenantId} and r.id = ${runId} and r.requested_by = ${userId}
     `
@@ -186,14 +212,36 @@ export class PostgresConversationRepository {
        where av.tenant_id = ${tenantId} and av.source_run_id = ${row.id}
        order by av.version_no desc
     `
+    const sources = row.currentAttemptId
+      ? await this.database<SourceRow[]>`
+          select kd.id, kd.title, kd.version, kd.effective_date as "effectiveAt",
+                 kd.data_scope as "dataScope", rks.excerpt, ks.synthetic
+            from run_knowledge_sources rks
+            join knowledge_documents kd on kd.tenant_id = rks.tenant_id and kd.id = rks.document_id
+            join knowledge_sources ks on ks.tenant_id = kd.tenant_id and ks.id = kd.source_id
+           where rks.tenant_id = ${tenantId} and rks.run_id = ${row.id}
+             and rks.attempt_id = ${row.currentAttemptId}
+           order by rks.relevance_score desc, kd.effective_date desc
+        `
+      : []
+    const attachments = row.currentAttemptId
+      ? await this.database<AttachmentRow[]>`
+          select f.original_name as name from run_input_files rif
+          join file_objects f on f.tenant_id = rif.tenant_id and f.id = rif.file_id
+           where rif.tenant_id = ${tenantId} and rif.run_id = ${row.id}
+             and rif.attempt_id = ${row.currentAttemptId}
+           order by rif.created_at
+        `
+      : []
     const prompt = runMessages.find((message) => message.role === 'user')?.content ?? row.title
     return {
       id: row.id,
+      attemptId: row.currentAttemptId,
       title: row.title,
       prompt,
       status: mapStatus(row.status),
-      workspaceId: row.workspaceId ?? 'standalone',
-      workspaceName: row.workspaceName ?? '未加入工作空间',
+      workspaceId: row.workspaceId,
+      workspaceName: row.workspaceName,
       sessionId: row.sessionId,
       agentVersion: `dsh-work-assistant@${row.agentVersion}`,
       createdAt: formatDateTime(row.createdAt),
@@ -201,7 +249,17 @@ export class PostgresConversationRepository {
       owner: row.owner,
       messages: messages.map(mapMessage),
       steps: mapSteps(row.id, events, row.status),
-      sources: [],
+      sources: sources.map(source => ({
+        id: source.id,
+        type: 'knowledge' as const,
+        title: source.title,
+        description: source.excerpt,
+        version: source.version,
+        effectiveAt: formatDate(source.effectiveAt),
+        dataScope: source.dataScope,
+        synthetic: source.synthetic,
+        updatedAt: formatDate(source.effectiveAt),
+      })),
       artifacts: artifacts.map((artifact) => ({
         id: artifact.id,
         name: artifact.name,
@@ -210,16 +268,93 @@ export class PostgresConversationRepository {
         size: formatSize(Number(artifact.sizeBytes)),
         createdAt: formatDateTime(artifact.createdAt),
         runId: row.id,
-        workspaceId: artifact.workspaceId ?? 'standalone',
+        workspaceId: artifact.workspaceId,
         summary: '由 DSH Runtime 本轮回答发布，保留来源 Run 与不可覆盖版本。',
       })),
-      attachments: [],
+      attachments: attachments.map(attachment => attachment.name),
       summary: row.status === 'succeeded' ? '本轮对话已由 DSH Runtime 执行完成。' : undefined,
-      error: row.status === 'failed'
-        ? { code: 'RUNTIME_EXECUTION_FAILED', message: '本轮执行失败', suggestion: '可点击重试创建新的 Attempt。' }
-        : undefined,
+      error: row.status === 'failed' ? toRunError(row.id, row.errorCode) : undefined,
     }
   }
+}
+
+export function toRunError(runId: string, errorCode: string | null | undefined): NonNullable<TaskRun['error']> {
+  const code = errorCode ?? 'RUNTIME_EXECUTION_FAILED'
+  const catalog: Record<string, Omit<NonNullable<TaskRun['error']>, 'code' | 'object'>> = {
+    RUN_TIMEOUT: {
+      message: '本轮执行超时',
+      reason: '执行时间超过当前 Agent 与运行时配置中的较短时限。',
+      suggestion: '减少问题范围或文件数量后重新执行；若持续超时，请联系管理员检查运行时容量。',
+      retryable: true,
+    },
+    CONNECTOR_TIMEOUT: {
+      message: '企业系统连接超时',
+      reason: '连接器在规定时间内没有返回结果，本轮已安全停止。',
+      suggestion: '稍后重新执行；若持续失败，请管理员在连接器页面执行健康检查。',
+      retryable: true,
+    },
+    CONNECTOR_UNAVAILABLE: {
+      message: '企业系统连接器不可用',
+      reason: '本轮所需连接器离线、已停用或未通过健康检查。',
+      suggestion: '请管理员恢复连接器后再重新执行，本轮不会绕过连接器直接访问企业系统。',
+      retryable: true,
+    },
+    TOOL_PERMISSION_DENIED: {
+      message: '工具权限请求被拒绝',
+      reason: '当前角色、数据范围或审批策略不允许执行所请求的工具操作。',
+      suggestion: '调整问题范围，或联系管理员核对 Agent、工具和工作空间授权。',
+      retryable: false,
+    },
+    MODEL_INVOCATION_FAILED: {
+      message: '模型调用失败',
+      reason: '当前批准模型没有正常完成本轮生成。',
+      suggestion: '稍后重新执行；若持续失败，请管理员检查模型服务商和密钥引用状态。',
+      retryable: true,
+    },
+    TOOL_TIMEOUT: {
+      message: '工具调用超时',
+      reason: 'DSH Worker 调用当前工具时超过了允许时限，本轮已安全停止。',
+      suggestion: '稍后重新执行；若持续失败，请管理员检查工具健康状态和超时配置。',
+      retryable: true,
+    },
+    NETWORK_UNAVAILABLE: {
+      message: '运行网络暂时不可用',
+      reason: 'DSH Worker 与获准模型或服务之间的连接在本轮中断。',
+      suggestion: '网络恢复后重新执行；若持续失败，请管理员检查模型出口和代理配置。',
+      retryable: true,
+    },
+    RUNTIME_WORKER_CRASH: {
+      message: 'DSH Worker 异常退出',
+      reason: '负责当前 Attempt 的隔离 Worker 在完成前退出。',
+      suggestion: '可重新执行创建新的 Attempt；若再次发生，请管理员根据运行编号检查 Runtime 日志。',
+      retryable: true,
+    },
+    SERVICE_SHUTDOWN: {
+      message: '服务停止导致执行中断',
+      reason: 'dsh-work 或 Runtime 在当前 Attempt 执行期间停止。',
+      suggestion: '服务恢复后重新执行，本轮不会被误标为员工主动取消。',
+      retryable: true,
+    },
+    SERVICE_RESTARTED: {
+      message: '服务重启后执行已安全终止',
+      reason: '服务启动时发现上一个进程遗留的运行中 Attempt，无法安全续接原 Worker。',
+      suggestion: '重新执行以创建新的 Attempt；原 Attempt 和审计记录会继续保留。',
+      retryable: true,
+    },
+    RUNTIME_EXECUTION_FAILED: {
+      message: '本轮执行失败',
+      reason: 'DSH 运行时未能正常完成当前执行尝试。',
+      suggestion: '可重新执行创建新的 Attempt；若再次失败，请在对话详情中复制运行编号交给管理员排查。',
+      retryable: true,
+    },
+  }
+  const detail = catalog[code] ?? {
+    message: '本轮执行失败',
+    reason: `运行时返回错误码 ${code}。`,
+    suggestion: '可重新执行；若再次失败，请将运行编号和错误码交给管理员排查。',
+    retryable: true,
+  }
+  return { code, object: `运行 ${runId}`, ...detail }
 }
 
 function mapMessage(row: MessageRow): ChatMessage {
@@ -281,6 +416,10 @@ function formatDateTime(value: Date) {
   return new Intl.DateTimeFormat('zh-CN', {
     month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
   }).format(value)
+}
+
+function formatDate(value: Date) {
+  return value.toISOString().slice(0, 10)
 }
 
 function formatSize(bytes: number) {

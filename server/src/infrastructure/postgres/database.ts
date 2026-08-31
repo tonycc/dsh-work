@@ -1,6 +1,7 @@
-import postgres, { type Sql } from 'postgres'
+import postgres, { type Sql, type TransactionSql } from 'postgres'
 
 export type DatabaseClient = Sql<Record<string, unknown>>
+export type DatabaseTransaction = TransactionSql<Record<string, unknown>>
 
 export interface DatabaseConfiguration {
   url: string

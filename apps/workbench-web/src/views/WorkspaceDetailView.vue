@@ -18,7 +18,7 @@ import { useContentStore } from '@/stores/content'
 import type { Artifact, WorkspaceFile } from '@/types/domain'
 import ConversationStarter from '@/components/ConversationStarter.vue'
 import { WorkspaceInfoPanel } from '@dsh-work/workbench-components'
-import { workbenchApi } from '@/api/client'
+import { downloadArtifactFile, notifyActionFailure } from '@/utils/feedback'
 
 type WorkspaceTab = 'conversation' | 'files' | 'artifacts'
 
@@ -26,7 +26,7 @@ const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 const contentStore = useContentStore()
-const starterRef = ref<{ useWorkspaceFile: (name: string) => void }>()
+const starterRef = ref<{ useWorkspaceFile: (file: WorkspaceFile) => void }>()
 const tabButtonRefs = ref<HTMLButtonElement[]>([])
 const panelCollapsed = ref(false)
 const mobileInfoOpen = ref(false)
@@ -46,6 +46,7 @@ const workspaceId = computed(() => String(route.params.id ?? ''))
 const workspace = computed(() =>
   contentStore.workspaces.find((item) => item.id === workspaceId.value),
 )
+const isPersonal = computed(() => workspace.value?.type === 'personal')
 const workspaceArtifacts = computed(() =>
   contentStore.artifacts.filter((artifact) => artifact.workspaceId === workspaceId.value),
 )
@@ -58,7 +59,7 @@ const workspaceTabs = computed(() => [
   },
   {
     id: 'files' as const,
-    label: '共享文件',
+    label: isPersonal.value ? '文件' : '共享文件',
     count: workspace.value?.files.length ?? 0,
     icon: Files,
   },
@@ -98,7 +99,7 @@ function useWorkspaceFile(file: WorkspaceFile) {
   selectTab('conversation')
   mobileInfoOpen.value = false
   void nextTick(() => {
-    starterRef.value?.useWorkspaceFile(file.name)
+    starterRef.value?.useWorkspaceFile(file)
     ElMessage.success(`已将“${file.name}”带入新对话`)
   })
 }
@@ -116,7 +117,7 @@ async function onUploadSelected(event: Event) {
     await contentStore.uploadWorkspaceFile(workspace.value.id, file)
     ElMessage.success(`已上传“${file.name}”并完成安全检查`)
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '上传文件失败')
+    notifyActionFailure('文件上传', `工作空间“${workspace.value.name}”中的文件“${file.name}”`, error, '按支持的格式和 20 MB 限制调整文件后重新上传。')
   } finally {
     uploading.value = false
     input.value = ''
@@ -129,11 +130,7 @@ function preview(item: Artifact) {
 }
 
 function download(item: Artifact) {
-  const anchor = document.createElement('a')
-  anchor.href = workbenchApi.artifactDownloadUrl(item.id, item.version)
-  anchor.download = item.name
-  anchor.click()
-  ElMessage.success('已开始下载真实成果文件')
+  void downloadArtifactFile(item)
 }
 
 watch(
@@ -229,7 +226,6 @@ onMounted(() => {
           embedded
           role="tabpanel"
           aria-labelledby="workspace-tab-conversation"
-          :show-activity="false"
           :workspace-id="workspace.id"
           :workspace-name="workspace.name"
           workspace-locked
@@ -245,9 +241,9 @@ onMounted(() => {
         >
           <header class="workspace-tab-pane__header">
             <div>
-              <span class="workspace-tab-pane__eyebrow">团队资源</span>
-              <h1>共享文件</h1>
-              <p>查看团队在当前工作空间共享的资料，并将指定文件直接引用到新对话。</p>
+              <span class="workspace-tab-pane__eyebrow">{{ isPersonal ? '个人资料' : '团队资源' }}</span>
+              <h1>{{ isPersonal ? '文件' : '共享文件' }}</h1>
+              <p>{{ isPersonal ? '管理仅你可访问的资料，并将指定文件直接引用到新对话。' : '查看团队在当前工作空间共享的资料，并将指定文件直接引用到新对话。' }}</p>
             </div>
             <el-button type="primary" :icon="Plus" :loading="uploading" @click="uploadFile">上传文件</el-button>
             <input ref="uploadInput" class="visually-hidden" type="file" accept=".pdf,.docx,.xlsx,.csv,.txt,.md" @change="onUploadSelected" />
@@ -265,7 +261,7 @@ onMounted(() => {
             </article>
           </div>
 
-          <el-empty v-else description="当前工作空间暂无共享文件">
+          <el-empty v-else :description="isPersonal ? '我的空间暂无文件' : '当前工作空间暂无共享文件'">
             <el-button type="primary" :icon="Plus" @click="uploadFile">上传第一个文件</el-button>
           </el-empty>
         </section>

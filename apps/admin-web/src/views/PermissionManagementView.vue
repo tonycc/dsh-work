@@ -92,6 +92,7 @@ async function saveTool() {
       allowedRoles: [...toolForm.allowedRoles],
       dataScopes: [...toolForm.dataScopes],
       approvalPolicy: toolForm.approvalPolicy,
+      actor: authStore.user.name,
     })
     toolDialogOpen.value = false
     ElMessage.success('工具权限策略已保存')
