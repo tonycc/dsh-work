@@ -11,7 +11,6 @@ import type {
   ManagedWorkspaceDefinition,
   OperationsSummary,
   PublishStatus,
-  RoleDefinition,
   SessionDefinition,
   SkillConfiguration,
   SkillDefinition,
@@ -63,14 +62,13 @@ export class AdminQueryService {
       return this.repository.updateRuntime(input.runtimeId, {
         checkedAt: '刚刚',
         healthMessage: runtime.mode === 'prototype'
-          ? '原型执行模拟器当前不可用。'
+          ? '执行服务当前不可用。'
           : '健康检查失败：目标 DSH Worker 尚未安装或注册。',
       })
     }
     return this.repository.updateRuntime(input.runtimeId, {
       lastHeartbeat: '刚刚',
       checkedAt: '刚刚',
-      latency: runtime.status === 'degraded' ? '118 ms' : '12 ms',
     })
   }
 
@@ -111,13 +109,11 @@ export class AdminQueryService {
       id: task.sessionId,
       title: task.title,
       user: task.owner,
-      department: '供应链中心',
       workspaceId: task.workspaceId,
       workspaceName: task.workspaceName,
       agentId: task.agentVersion.split('@')[0] || 'dsh-work-assistant',
       agentName: 'dsh-work Assistant',
       agentVersion: task.agentVersion.split('@')[1] || '—',
-      runtimeId: 'runtime-prototype-01',
       runId: task.id,
       status: task.status,
       runCount: 1,
@@ -126,10 +122,6 @@ export class AdminQueryService {
       createdAt: task.createdAt,
       updatedAt: task.updatedAt,
       traceId: traceByRun[task.id] ?? `trace-${task.id.replace(/^run-/, '')}`,
-      dataScopes: task.workspaceId.startsWith('ws-personal-')
-        ? ['个人空间范围', '员工业务数据范围']
-        : ['工作空间成员范围', '员工业务数据范围'],
-      summary: task.summary ?? task.error?.message ?? 'Session 运行元数据已记录，消息正文默认不向平台管理员展示。',
     }))
   }
 
@@ -144,20 +136,11 @@ export class AdminQueryService {
           name: workspace.name,
           description: workspace.description,
           type: 'team' as const,
-          status: 'active' as const,
-          ownerDepartment: workspace.owner,
-          manager: workspace.members[0] ?? '待指定',
+          creator: workspace.members[0] ?? workspace.owner,
           memberCount: workspace.memberCount,
           sessionCount: workspace.sessionCount,
           artifactCount: workspace.artifactCount,
           fileCount: workspace.files.length,
-          members: workspace.members,
-          agentNames: supplyWorkspace
-            ? ['dsh-work Assistant', '经营分析助手']
-            : ['经营分析助手'],
-          dataScopes: supplyWorkspace
-            ? ['供应链中心', '工厂一', '华东仓']
-            : ['供应链中心', '本部门汇总数据'],
           createdAt: supplyWorkspace ? '2026-08-01' : '2026-08-05',
           updatedAt: workspace.updatedAt,
         }
@@ -440,28 +423,6 @@ export class AdminQueryService {
       status: 'healthy',
       latency: mockConnectorLatency(input.connectorId),
       lastCheckedAt: '刚刚',
-    })
-  }
-
-  getRoles() {
-    return this.repository.read('roles')
-  }
-
-  getMembers() {
-    return this.repository.read('members')
-  }
-
-  updateRole(input: {
-    roleId: string
-    agents: RoleDefinition['agents']
-    tools: RoleDefinition['tools']
-    dataScopes: RoleDefinition['dataScopes']
-  }) {
-    return this.repository.updateRole(input.roleId, {
-      agents: input.agents,
-      tools: input.tools,
-      dataScopes: input.dataScopes,
-      updatedAt: prototypeTimestamp().slice(0, 10),
     })
   }
 

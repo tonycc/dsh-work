@@ -43,9 +43,6 @@ export interface RuntimeDefinition {
   activeWorkers: number
   queuedRuns: number
   attemptTimeoutMinutes: number
-  cpuUsage: string
-  memoryUsage: string
-  latency: string
   lastHeartbeat: string
   checkedAt: string
   healthMessage: string
@@ -64,13 +61,11 @@ export interface SessionDefinition {
   id: string
   title: string
   user: string
-  department: string
   workspaceId: string
   workspaceName: string
   agentId: string
   agentName: string
   agentVersion: string
-  runtimeId: string
   runId: string
   status: RunStatus
   runCount: number
@@ -79,8 +74,6 @@ export interface SessionDefinition {
   createdAt: string
   updatedAt: string
   traceId: string
-  dataScopes: string[]
-  summary: string
 }
 
 export interface ManagedWorkspaceDefinition {
@@ -88,16 +81,11 @@ export interface ManagedWorkspaceDefinition {
   name: string
   description: string
   type: 'team'
-  status: 'active' | 'archived'
-  ownerDepartment: string
-  manager: string
+  creator: string
   memberCount: number
   sessionCount: number
   artifactCount: number
   fileCount: number
-  members: string[]
-  agentNames: string[]
-  dataScopes: string[]
   createdAt: string
   updatedAt: string
 }
@@ -283,30 +271,6 @@ export interface ConnectorDefinition {
   lastCheckedAt: string
 }
 
-export interface RoleDefinition {
-  id: string
-  name: string
-  userCount: number
-  agents: string[]
-  tools: string[]
-  dataScopes: string[]
-  updatedAt: string
-}
-
-export interface MemberDefinition {
-  id: string
-  name: string
-  title: string
-  department: string
-  avatarText: string
-  roleIds: string[]
-  roleNames: string[]
-  status: 'active' | 'suspended'
-  ssoStatus: 'synced' | 'pending'
-  dataScopes: string[]
-  lastActiveAt: string
-}
-
 export interface AuditEvent {
   id: string
   time: string
@@ -339,8 +303,7 @@ export interface HealthComponent {
   name: string
   category: 'application' | 'runtime' | 'dependency'
   status: 'healthy' | 'warning' | 'offline'
-  latency: string
-  availability: string
+  detail: string
   message: string
   checkedAt: string
 }
@@ -362,13 +325,11 @@ export interface ModelUsageRecord {
   provider: string
   model: string
   modelRoute: string
-  dataLevel: 'L0' | 'L1' | 'L2'
   status: 'success' | 'failed' | 'blocked'
   promptTokens: number
   completionTokens: number
   totalTokens: number
   latencyMs: number
-  costCny: number
   traceId: string
 }
 

@@ -5,7 +5,6 @@ import { useRoute, useRouter } from 'vue-router'
 import { AdminShell } from '@dsh-work/admin-components'
 import { roleLabels, useAuthStore } from '@/stores/auth'
 import { useContentStore } from '@/stores/content'
-import type { AdminRole } from '@/types/domain'
 
 const route = useRoute()
 const router = useRouter()
@@ -22,10 +21,6 @@ function openWorkbench() {
   window.location.assign(`${baseUrl}/workbench`)
 }
 
-function switchRole(role: AdminRole) {
-  authStore.switchRole(role)
-}
-
 onMounted(() => {
   void Promise.all([authStore.load(), contentStore.load()])
 })
@@ -37,12 +32,9 @@ onMounted(() => {
     :route-title="routeTitle"
     :user-name="authStore.user.name"
     :avatar-text="authStore.user.avatarText"
-    :role="authStore.previewRole"
-    :role-label="roleLabels[authStore.previewRole]"
-    environment-label="MVP 实施环境"
+    :role-label="roleLabels[authStore.user.role]"
     @navigate="navigate"
     @open-workbench="openWorkbench"
-    @switch-role="switchRole"
   >
     <router-view />
   </AdminShell>

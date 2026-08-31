@@ -19,6 +19,13 @@ const editorOpen = ref(false)
 const editingAgent = ref<AgentDefinition>()
 const activeDetailTab = ref<'config' | 'versions' | 'releases'>('config')
 const actionLoading = ref('')
+const agentRoleLabels: Record<string, string> = {
+  'role-platform-admin': '平台管理员',
+  'role-employee': '试点员工',
+  'role-supply': '供应链分析人员',
+  'role-manager': '部门负责人',
+  'role-auditor': '安全审计员',
+}
 
 const selectedAgent = computed(() =>
   contentStore.agents.find((agent) => agent.id === selectedAgentId.value),
@@ -63,7 +70,7 @@ function handleDraftSaved(agent: AgentDefinition) {
 
 function agentRoleNames(agent: AgentDefinition) {
   return agent.roleIds
-    .map((roleId) => contentStore.roles.find((role) => role.id === roleId)?.name ?? roleId)
+    .map((roleId) => agentRoleLabels[roleId] ?? roleId)
     .join('、')
 }
 
@@ -82,7 +89,7 @@ async function publish(agent: AgentDefinition) {
     )
     if (test.status !== 'passed') throw new Error(test.resultSummary)
     await contentStore.setAgentStatus(agent.id, 'published', authStore.user.name)
-    ElMessage.success('服务端配置测试通过，Agent 版本已发布')
+    ElMessage.success('服务端配置校验通过，Agent 版本已发布')
   } catch (cause) {
     if (cause instanceof Error) ElMessage.error(cause.message)
   } finally {
@@ -218,7 +225,7 @@ onMounted(() => contentStore.load())
           <el-timeline v-else><el-timeline-item v-for="record in selectedReleases" :key="record.id" :timestamp="record.time" placement="top"><article class="release-record"><div><strong>{{ releaseActionLabel(record) }} · v{{ record.version }}</strong><StatusTag :status="record.action === 'disabled' ? 'disabled' : 'published'" :label="releaseActionLabel(record)" /></div><p>{{ record.note }}</p><small>操作人：{{ record.actor }}</small></article></el-timeline-item></el-timeline>
         </section>
 
-        <div v-if="authStore.canManage" class="agent-detail__footer"><el-button @click="openEdit(selectedAgent)">{{ selectedAgent.status === 'draft' ? '编辑 Agent' : '创建新版本' }}</el-button><el-button v-if="selectedAgent.status === 'draft'" type="primary" @click="publish(selectedAgent)">测试并发布当前版本</el-button><el-button v-else :type="selectedAgent.status === 'published' ? 'danger' : 'primary'" @click="changeAvailability(selectedAgent)">{{ selectedAgent.status === 'published' ? '停用 Agent' : '启用 Agent' }}</el-button></div>
+        <div v-if="authStore.canManage" class="agent-detail__footer"><el-button @click="openEdit(selectedAgent)">{{ selectedAgent.status === 'draft' ? '编辑 Agent' : '创建新版本' }}</el-button><el-button v-if="selectedAgent.status === 'draft'" type="primary" @click="publish(selectedAgent)">校验并发布当前版本</el-button><el-button v-else :type="selectedAgent.status === 'published' ? 'danger' : 'primary'" @click="changeAvailability(selectedAgent)">{{ selectedAgent.status === 'published' ? '停用 Agent' : '启用 Agent' }}</el-button></div>
       </template>
     </el-drawer>
 

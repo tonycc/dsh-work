@@ -11,6 +11,8 @@ const basePath = '/api/workbench/v1'
  */
 export function registerUnavailableWorkbenchCommandRoutes(router: Router) {
   router.post(`${basePath}/sessions`, async () => unavailable('对话'))
+  router.delete(`${basePath}/sessions/:sessionId`, async (_request, context) =>
+    unavailable(`对话 ${context.params['sessionId'] ?? ''}`))
   router.post(`${basePath}/sessions/:sessionId/runs`, async (_request, context) =>
     unavailable(`对话 ${context.params['sessionId'] ?? ''}`))
   router.post(`${basePath}/sessions/:sessionId/files`, async (_request, context) =>
@@ -29,9 +31,9 @@ function unavailable(object: string) {
   return httpResult(503, {
     error: {
       code: 'workbench_runtime_not_configured',
-      message: '当前服务未连接 PostgreSQL 和 DSH 运行时，不能创建或执行真实对话',
+      message: '当前对话服务不可用，暂时不能创建或执行对话',
       object,
-      suggestion: '在项目根目录配置 DSH_WORK_DATABASE_URL 后重启服务端；健康接口应显示 postgres-foundation。',
+      suggestion: '请联系管理员检查对话服务配置后重试。',
       traceId: `trace-http-${randomUUID()}`,
     },
   })

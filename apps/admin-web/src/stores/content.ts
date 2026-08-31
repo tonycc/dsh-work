@@ -11,12 +11,10 @@ import type {
   AuditEvent,
   ConnectorDefinition,
   HealthComponent,
-  MemberDefinition,
   ManagedWorkspaceDefinition,
   ModelUsageRecord,
   OperationsSummary,
   PlatformStatus,
-  RoleDefinition,
   RuntimeDefinition,
   SessionDefinition,
   SkillConfiguration,
@@ -41,8 +39,6 @@ export const useContentStore = defineStore('admin-content', () => {
   const skillReleaseRecords = ref<SkillReleaseRecord[]>([])
   const tools = ref<ToolDefinition[]>([])
   const connectors = ref<ConnectorDefinition[]>([])
-  const roles = ref<RoleDefinition[]>([])
-  const members = ref<MemberDefinition[]>([])
   const auditEvents = ref<AuditEvent[]>([])
   const operationsSummary = ref<OperationsSummary | null>(null)
   const health = ref<HealthComponent[]>([])
@@ -71,8 +67,6 @@ export const useContentStore = defineStore('admin-content', () => {
         skillReleaseData,
         toolData,
         connectorData,
-        roleData,
-        memberData,
         auditData,
         operationsSummaryData,
         healthData,
@@ -92,8 +86,6 @@ export const useContentStore = defineStore('admin-content', () => {
         adminApi.getSkillReleaseRecords(),
         adminApi.getTools(),
         adminApi.getConnectors(),
-        adminApi.getRoles(),
-        adminApi.getMembers(),
         adminApi.getAuditEvents(),
         adminApi.getOperationsSummary(),
         adminApi.getHealth(),
@@ -113,8 +105,6 @@ export const useContentStore = defineStore('admin-content', () => {
       skillReleaseRecords.value = skillReleaseData
       tools.value = toolData
       connectors.value = connectorData
-      roles.value = roleData
-      members.value = memberData
       auditEvents.value = auditData
       operationsSummary.value = operationsSummaryData
       health.value = healthData
@@ -176,17 +166,6 @@ export const useContentStore = defineStore('admin-content', () => {
     )
     if (target) target.status = 'published'
     return result.agent
-  }
-
-  async function updateRole(input: {
-    roleId: string
-    agents: string[]
-    tools: string[]
-    dataScopes: string[]
-  }) {
-    const role = await adminApi.updateRole(input)
-    replaceById(roles.value, role)
-    return role
   }
 
   async function updateToolPermissions(input: {
@@ -292,8 +271,6 @@ export const useContentStore = defineStore('admin-content', () => {
     skillReleaseRecords,
     tools,
     connectors,
-    roles,
-    members,
     auditEvents,
     operationsSummary,
     health,
@@ -318,7 +295,6 @@ export const useContentStore = defineStore('admin-content', () => {
     checkConnector,
     checkRuntime,
     updateRuntimeConfiguration,
-    updateRole,
     updateToolPermissions,
   }
 })

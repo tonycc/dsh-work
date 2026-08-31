@@ -20,15 +20,15 @@ const contentStore = useContentStore()
 const formRef = ref<FormInstance>()
 const activeStep = ref(0)
 const saving = ref(false)
-const testing = ref(false)
-const testPrompt = ref('')
-const testedFingerprint = ref('')
-const testResult = ref<{
-  skill: string
-  tools: string[]
-  answer: string
-} | null>(null)
+const examplePrompt = ref('')
 const initialSnapshot = ref('')
+const roleLabels: Record<string, string> = {
+  'role-platform-admin': '平台管理员',
+  'role-employee': '试点员工',
+  'role-supply': '供应链分析人员',
+  'role-manager': '部门负责人',
+  'role-auditor': '安全审计员',
+}
 
 const form = reactive<AgentDraftConfiguration>(emptyDraft())
 
@@ -60,7 +60,8 @@ const dataScopeOptions = computed(() => unique([
   'workspace:authorized',
   'domain:supply-chain',
   'domain:operations',
-  ...contentStore.roles.flatMap((role) => role.dataScopes),
+  ...contentStore.agents.flatMap((agent) => agent.dataScopes),
+  ...contentStore.tools.flatMap((tool) => tool.dataScopes),
 ]))
 const dataScopeLabels: Record<string, string> = {
   'enterprise:authorized': '企业授权范围',
@@ -68,26 +69,14 @@ const dataScopeLabels: Record<string, string> = {
   'domain:supply-chain': '供应链业务范围',
   'domain:operations': '经营分析范围',
 }
-const selectedRoleNames = computed(() => form.roleIds.map((id) => contentStore.roles.find((role) => role.id === id)?.name ?? id))
-const selectedToolLabels = computed(() => form.tools.map((reference) => {
-  const id = toolReferenceId(reference)
-  return contentStore.tools.find((tool) => tool.id === id)?.name ?? reference
-}))
+const roleOptions = computed(() => unique([
+  'role-employee',
+  ...contentStore.agents.flatMap((agent) => agent.roleIds),
+  ...form.roleIds,
+]).map((id) => ({ id, name: roleName(id) })))
+const selectedRoleNames = computed(() => form.roleIds.map(roleName))
 const editorTitle = computed(() => props.agent ? `编辑 Agent：${props.agent.name}` : '创建 Agent')
 const employeeWelcome = computed(() => form.welcomeMessage.trim() || buildWelcomeMessage(form.name, form.description))
-const configurationFingerprint = computed(() => JSON.stringify({
-  name: form.name,
-  description: form.description,
-  owner: form.owner,
-  welcomeMessage: form.welcomeMessage,
-  systemPrompt: form.systemPrompt,
-  skills: form.skills,
-  tools: form.tools,
-  roleIds: form.roleIds,
-  dataScopes: form.dataScopes,
-  testPrompt: testPrompt.value,
-}))
-const testIsCurrent = computed(() => Boolean(testResult.value) && testedFingerprint.value === configurationFingerprint.value)
 const isDirty = computed(() => JSON.stringify(form) !== initialSnapshot.value)
 
 const stepFields: string[][] = [
@@ -153,9 +142,7 @@ function resetEditor() {
     : emptyDraft()
   Object.assign(form, source)
   activeStep.value = 0
-  testPrompt.value = source.examplePrompts[0] ?? '请介绍你能提供哪些帮助'
-  testResult.value = null
-  testedFingerprint.value = ''
+  examplePrompt.value = source.examplePrompts[0] ?? '请介绍你能提供哪些帮助'
   initialSnapshot.value = JSON.stringify(form)
   formRef.value?.clearValidate()
 }
@@ -165,7 +152,7 @@ async function nextStep() {
   try {
     if (fields.length) await formRef.value?.validateField(fields)
     activeStep.value += 1
-    if (activeStep.value === 2 && !testPrompt.value) testPrompt.value = '请介绍你能提供哪些帮助'
+    if (activeStep.value === 2 && !examplePrompt.value) examplePrompt.value = '请介绍你能提供哪些帮助'
   } catch {
     ElMessage.warning('请先完成当前步骤的必填配置')
   }
@@ -175,24 +162,6 @@ function previousStep() {
   activeStep.value = Math.max(0, activeStep.value - 1)
 }
 
-async function runTest() {
-  if (!testPrompt.value.trim()) {
-    ElMessage.warning('请输入测试问题')
-    return
-  }
-  testing.value = true
-  await new Promise<void>((resolve) => setTimeout(resolve, 650))
-  const matchedSkill = form.skills.find((skill) => testPrompt.value.includes(skill.slice(0, 2))) ?? form.skills[0]
-  testResult.value = {
-    skill: matchedSkill ?? '通用分析',
-    tools: selectedToolLabels.value,
-    answer: `已完成“${testPrompt.value.trim()}”的 Mock 验证。配置能够加载，角色与数据范围检查通过，实际发布前仍需连接模型和企业系统完成回归测试。`,
-  }
-  testedFingerprint.value = configurationFingerprint.value
-  testing.value = false
-  ElMessage.success('Mock 测试通过')
-}
-
 async function saveAgent() {
   try {
     await formRef.value?.validate()
@@ -200,12 +169,6 @@ async function saveAgent() {
     const firstInvalidStep = findFirstInvalidStep()
     if (firstInvalidStep >= 0) activeStep.value = firstInvalidStep
     ElMessage.warning('仍有必填配置未完成，请检查后再保存')
-    return
-  }
-
-  if (!testIsCurrent.value) {
-    activeStep.value = 2
-    ElMessage.warning('请先使用当前配置完成 Mock 测试')
     return
   }
 
@@ -271,7 +234,7 @@ function preparePayload(value: AgentDraftConfiguration): AgentDraftConfiguration
   }
   payload.visibility = buildVisibilityLabel(payload.roleIds)
   payload.welcomeMessage = employeeWelcome.value
-  payload.examplePrompts = [testPrompt.value.trim() || '请介绍你能提供哪些帮助']
+  payload.examplePrompts = [examplePrompt.value.trim() || '请介绍你能提供哪些帮助']
   payload.changeSummary = props.agent ? `更新 ${payload.name} 配置` : '创建 Agent 初始版本'
   return payload
 }
@@ -287,18 +250,17 @@ function buildWelcomeMessage(name: string, description: string) {
 }
 
 function buildVisibilityLabel(roleIds: string[]) {
-  const names = roleIds.map((id) => contentStore.roles.find((role) => role.id === id)?.name ?? id)
+  const names = roleIds.map(roleName)
   if (roleIds.includes('role-employee')) return '全体试点员工'
   return names.length > 1 ? `${names[0]}等 ${names.length} 个角色` : names[0] ?? '指定角色'
 }
 
-function unique(values: string[]) {
-  return [...new Set(values.filter(Boolean))]
+function roleName(roleId: string) {
+  return roleLabels[roleId] ?? roleId
 }
 
-function toolReferenceId(reference: string) {
-  const separator = reference.lastIndexOf('@')
-  return separator > 0 ? reference.slice(0, separator) : reference
+function unique(values: string[]) {
+  return [...new Set(values.filter(Boolean))]
 }
 
 function toVersionedToolReference(reference: string) {
@@ -323,7 +285,7 @@ function toVersionedToolReference(reference: string) {
       <el-steps :active="activeStep" finish-status="success" align-center>
         <el-step title="定义 Agent" description="名称、说明和欢迎语" />
         <el-step title="配置能力和权限" description="Prompt、Skill、工具和权限" />
-        <el-step :title="props.agent ? '测试并保存' : '测试并创建'" :description="props.agent ? '预览、Mock 测试并保存修改' : '预览、Mock 测试并完成创建'" />
+        <el-step :title="props.agent ? '确认并保存' : '确认并创建'" description="确认员工端展示和配置摘要" />
       </el-steps>
     </div>
 
@@ -382,7 +344,7 @@ function toVersionedToolReference(reference: string) {
         <div class="form-grid form-grid--two">
           <el-form-item label="可见角色" prop="roleIds">
             <el-select v-model="form.roleIds" multiple filterable placeholder="选择可以使用此 Agent 的角色">
-              <el-option v-for="role in contentStore.roles" :key="role.id" :label="`${role.name} · ${role.userCount} 人`" :value="role.id" />
+              <el-option v-for="role in roleOptions" :key="role.id" :label="role.name" :value="role.id" />
             </el-select>
             <p class="field-help">未选中的角色不会在员工工作台看到此 Agent。</p>
           </el-form-item>
@@ -396,13 +358,12 @@ function toVersionedToolReference(reference: string) {
         <el-alert type="info" :closable="false" show-icon title="涉及敏感数据或写操作时，工具自身的审批策略仍然生效。" />
       </section>
 
-      <section v-show="activeStep === 2" class="agent-editor__pane" aria-label="Agent 测试与创建">
+      <section v-show="activeStep === 2" class="agent-editor__pane" aria-label="Agent 配置确认">
         <header class="pane-heading">
-          <div><h3>{{ props.agent ? '测试并保存' : '测试并创建' }}</h3><p>先确认员工端展示，再使用典型问题完成 Mock 测试。</p></div>
+          <div><h3>{{ props.agent ? '确认并保存' : '确认并创建' }}</h3><p>确认员工端展示、示例问题和配置摘要。</p></div>
           <span class="step-badge">3 / 3</span>
         </header>
-        <el-alert class="mock-notice" type="warning" :closable="false" show-icon title="当前为 Mock 测试，不调用真实模型、工具或企业系统。正式发布前仍需完成真实回归测试。" />
-        <div class="test-grid">
+        <div class="review-grid">
           <section class="employee-preview">
             <h4>员工端展示预览</h4>
             <div class="employee-preview__frame">
@@ -419,30 +380,19 @@ function toVersionedToolReference(reference: string) {
               <small class="employee-preview__visibility">可见角色：{{ selectedRoleNames.join('、') || '未配置' }}</small>
             </div>
           </section>
-          <section class="test-console">
-            <h4>Mock 测试</h4>
-            <el-input v-model="testPrompt" type="textarea" :rows="4" placeholder="输入一个典型员工问题" />
-            <div class="test-console__action">
-              <span>{{ testIsCurrent ? '当前配置已通过 Mock 测试' : testResult ? '配置已变更，需要重新测试' : '尚未测试' }}</span>
-              <el-button type="primary" plain :loading="testing" @click="runTest">开始测试</el-button>
+          <section class="draft-summary">
+            <h4>{{ props.agent ? '修改内容确认' : '创建内容确认' }}</h4>
+            <el-form-item label="员工端示例问题">
+              <el-input v-model="examplePrompt" type="textarea" :rows="3" maxlength="160" show-word-limit placeholder="例如：请介绍你能提供哪些帮助" />
+            </el-form-item>
+            <div class="draft-summary__grid" :class="{ 'draft-summary__grid--create': !props.agent }">
+              <div><span>Agent</span><strong>{{ form.name }}</strong><small>{{ form.description }}</small></div>
+              <div v-if="props.agent"><span>负责人</span><strong>{{ form.owner }}</strong><small>负责配置维护与发布</small></div>
+              <div><span>能力</span><strong>{{ form.skills.length }} 个 Skill</strong><small>{{ form.tools.length }} 个工具</small></div>
+              <div><span>权限</span><strong>{{ selectedRoleNames.length }} 个可见角色</strong><small>{{ form.dataScopes.length }} 个数据范围</small></div>
             </div>
-            <article v-if="testResult" class="test-answer" :class="{ 'test-answer--stale': !testIsCurrent }">
-              <strong>{{ form.name || 'Agent' }}</strong>
-              <p>{{ testResult.answer }}</p>
-              <small>命中 Skill：{{ testResult.skill }} · 调用工具：{{ testResult.tools.join('、') || '无' }}</small>
-            </article>
-            <el-empty v-else :image-size="48" description="运行一次测试后在这里查看结果" />
           </section>
         </div>
-        <section class="draft-summary">
-          <h4>{{ props.agent ? '修改内容确认' : '创建内容确认' }}</h4>
-          <div class="draft-summary__grid" :class="{ 'draft-summary__grid--create': !props.agent }">
-            <div><span>Agent</span><strong>{{ form.name }}</strong><small>{{ form.description }}</small></div>
-            <div v-if="props.agent"><span>负责人</span><strong>{{ form.owner }}</strong><small>负责配置维护与发布</small></div>
-            <div><span>能力</span><strong>{{ form.skills.length }} 个 Skill</strong><small>{{ form.tools.length }} 个工具</small></div>
-            <div><span>权限</span><strong>{{ selectedRoleNames.length }} 个可见角色</strong><small>{{ form.dataScopes.length }} 个数据范围</small></div>
-          </div>
-        </section>
       </section>
     </el-form>
 
@@ -466,7 +416,7 @@ function toVersionedToolReference(reference: string) {
 .agent-editor__steps { padding: 4px 12px 22px; border-bottom: 1px solid var(--color-border); }
 .agent-editor__pane { min-height: 500px; padding: 22px 8px 4px; }
 .pane-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 22px; }
-.pane-heading h3, .test-console h4, .employee-preview h4, .draft-summary h4 { margin: 0; color: var(--color-text-heading); font-size: var(--font-size-title); }
+.pane-heading h3, .employee-preview h4, .draft-summary h4 { margin: 0; color: var(--color-text-heading); font-size: var(--font-size-title); }
 .pane-heading p { margin: 5px 0 0; color: var(--color-text-secondary); font-size: var(--font-size-caption); }
 .step-badge { padding: 4px 9px; border-radius: var(--radius-tag); color: var(--color-primary); background: var(--color-primary-light); font-size: var(--font-size-badge); font-weight: var(--font-weight-badge); }
 .form-grid { display: grid; gap: 0 20px; }
@@ -487,10 +437,9 @@ function toVersionedToolReference(reference: string) {
 .selection-overview span, .draft-summary span { color: var(--color-text-secondary); font-size: var(--font-size-caption); }
 .selection-overview strong { color: var(--color-text-heading); font-size: var(--font-size-heading); }
 .selection-overview small { grid-column: 1 / -1; color: var(--color-text-muted); font-size: var(--font-size-badge); }
-.mock-notice { margin-bottom: 16px; }
-.test-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
-.test-console, .employee-preview, .draft-summary { padding: 16px; border: 1px solid var(--color-border); border-radius: var(--radius-card); background: var(--color-bg-base); }
-.test-console h4, .employee-preview h4, .draft-summary h4 { margin-bottom: 14px; }
+.review-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.employee-preview, .draft-summary { padding: 16px; border: 1px solid var(--color-border); border-radius: var(--radius-card); background: var(--color-bg-base); }
+.employee-preview h4, .draft-summary h4 { margin-bottom: 14px; }
 .employee-preview__frame { min-height: 270px; padding: 18px; border: 1px solid var(--color-border); border-radius: var(--radius-card); background: var(--color-bg-subtle); }
 .employee-preview__identity { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; align-items: center; gap: 10px; }
 .employee-preview__avatar { display: grid; width: 40px; height: 40px; place-items: center; border-radius: var(--radius-button); color: var(--color-bg-base); background: var(--color-primary); font-size: var(--font-size-heading); font-weight: var(--font-weight-heading); font-style: italic; }
@@ -501,13 +450,7 @@ function toVersionedToolReference(reference: string) {
 .employee-preview__message { padding: 12px 14px; border: 1px solid var(--color-border); border-radius: var(--radius-card); color: var(--color-text-primary); background: var(--color-bg-base); font-size: var(--font-size-caption); line-height: 1.6; }
 .employee-preview__capabilities { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
 .employee-preview__capabilities span { padding: 4px 8px; border-radius: var(--radius-tag); color: var(--color-primary); background: var(--color-primary-light); font-size: var(--font-size-badge); }
-.test-console__action { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; color: var(--color-text-muted); font-size: var(--font-size-badge); }
-.test-answer { margin-top: 14px; padding: 14px; border: 1px solid var(--color-success); border-radius: var(--radius-button); background: var(--color-success-light); }
-.test-answer--stale { border-color: var(--color-warning); background: var(--color-warning-light); }
-.test-answer strong { color: var(--color-text-heading); font-size: var(--font-size-caption); }
-.test-answer p { margin: 7px 0 0; color: var(--color-text-primary); font-size: var(--font-size-caption); line-height: 1.65; }
-.test-answer small { display: block; margin-top: 9px; color: var(--color-text-secondary); font-size: var(--font-size-badge); }
-.draft-summary { margin-top: 16px; background: var(--color-bg-subtle); }
+.draft-summary { background: var(--color-bg-subtle); }
 .draft-summary__grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .draft-summary__grid--create { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .draft-summary__grid > div { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
@@ -522,7 +465,7 @@ function toVersionedToolReference(reference: string) {
 :deep(.el-step__description) { font-size: var(--font-size-badge); }
 :deep(.el-empty) { padding: 24px 0 8px; }
 @media (max-width: 800px) {
-  .form-grid--two, .test-grid, .draft-summary__grid { grid-template-columns: 1fr; }
+  .form-grid--two, .review-grid, .draft-summary__grid { grid-template-columns: 1fr; }
   .agent-editor__pane { min-height: 0; }
 }
 </style>

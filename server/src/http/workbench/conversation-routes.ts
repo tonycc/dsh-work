@@ -3,6 +3,7 @@ import type { RunOrchestrationService } from '../../modules/run/run-orchestratio
 import type { RunRepository } from '../../modules/run/run-repository.ts'
 import type { PostgresAgentService } from '../../modules/agent/postgres-agent-service.ts'
 import type { PostgresAuthorizationService } from '../../modules/authorization/postgres-authorization-service.ts'
+import type { PostgresOperationsService } from '../../modules/admin/application/postgres-operations-service.ts'
 import { envelope, httpResult, readJsonBody, type Router } from '../router.ts'
 
 const basePath = '/api/workbench/v1'
@@ -16,6 +17,7 @@ export function registerConversationRoutes(
   runs: RunRepository,
   agents: PostgresAgentService,
   authorization?: PostgresAuthorizationService,
+  operations?: PostgresOperationsService,
 ) {
   router.get(`${basePath}/tasks`, async () => {
     await authorization?.authorizeWorkbench({ userId })
@@ -32,6 +34,22 @@ export function registerConversationRoutes(
       agentVersionId,
     })
     return httpResult(201, envelope('workbench', session, 'postgres'))
+  })
+
+  router.delete(`${basePath}/sessions/:sessionId`, async (_request, context) => {
+    await authorization?.authorizeWorkbench({ userId })
+    const sessionId = context.params['sessionId'] ?? ''
+    const archived = await conversations.archiveSession(sessionId, userId)
+    await operations?.appendAudit(
+      userId,
+      'session.delete',
+      sessionId,
+      'success',
+      `trace-session-${crypto.randomUUID()}`,
+      '员工删除对话',
+      'session',
+    ).catch((error: unknown) => console.error('session deletion audit failed', error))
+    return envelope('workbench', archived, 'postgres')
   })
 
   router.get(`${basePath}/runs/:runId`, async (_request, context) => {

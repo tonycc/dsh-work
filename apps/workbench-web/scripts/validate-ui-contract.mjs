@@ -13,6 +13,20 @@ function read(path) {
   }
 }
 
+function forbidFragments(path, fragments) {
+  const content = read(path)
+  for (const fragment of fragments) {
+    if (content.includes(fragment)) failures.push(`${path} 不应包含：${fragment}`)
+  }
+}
+
+function requireFragments(path, fragments) {
+  const content = read(path)
+  for (const fragment of fragments) {
+    if (!content.includes(fragment)) failures.push(`${path} 缺少：${fragment}`)
+  }
+}
+
 function sourceFiles(directory) {
   const files = []
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
@@ -62,6 +76,23 @@ for (const alias of [
 ]) {
   if (!adminStyles.includes(alias)) failures.push(`管理端未对齐共享字体等级：${alias}`)
 }
+
+forbidFragments('src/layouts/EmployeeShell.vue', [
+  'prototype-tag',
+  '最小可行产品演示环境',
+  '真实运行链路',
+  'environment-status',
+])
+forbidFragments('src/views/SettingsView.vue', ['数据使用说明'])
+forbidFragments('src/components/ConversationStarter.vue', ['PostgreSQL 与 DSH Runtime 已连接'])
+forbidFragments('src/views/ArtifactsView.vue', ['PostgreSQL 索引'])
+forbidFragments('index.html', ['交互原型'])
+requireFragments('src/layouts/EmployeeShell.vue', [
+  'recent-conversation__menu',
+  'command="delete"',
+  'ElMessageBox.confirm',
+  'taskStore.deleteConversation',
+])
 
 if (failures.length) {
   console.error('员工工作台 UI 契约验证失败：')

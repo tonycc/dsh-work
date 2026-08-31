@@ -49,7 +49,6 @@ const filteredRecords = computed(() => {
 
 const employeeSummaries = computed(() => summarizeModelUsageByEmployee(filteredRecords.value))
 const totalTokens = computed(() => filteredRecords.value.reduce((sum, record) => sum + record.totalTokens, 0))
-const totalCost = computed(() => filteredRecords.value.reduce((sum, record) => sum + record.costCny, 0))
 const successfulRecords = computed(() => filteredRecords.value.filter((record) => record.status === 'success'))
 const averageLatency = computed(() => {
   if (!successfulRecords.value.length) return 0
@@ -94,7 +93,6 @@ onMounted(() => contentStore.load())
     <section class="metric-grid">
       <article class="metric-card"><div class="metric-label">模型调用</div><div class="metric-value">{{ filteredRecords.length }}</div><div class="metric-detail">涉及 {{ employeeSummaries.length }} 名员工</div></article>
       <article class="metric-card"><div class="metric-label">Token 用量</div><div class="metric-value">{{ formatTokens(totalTokens) }}</div><div class="metric-detail">输入与输出 Token 合计</div></article>
-      <article class="metric-card"><div class="metric-label">估算成本</div><div class="metric-value">¥{{ totalCost.toFixed(2) }}</div><div class="metric-detail">MVP 暂按估算口径记录</div></article>
       <article class="metric-card"><div class="metric-label">平均模型延迟</div><div class="metric-value">{{ formatLatency(averageLatency) }}</div><div class="metric-detail">只统计成功调用</div></article>
     </section>
 
@@ -136,10 +134,8 @@ onMounted(() => contentStore.load())
           <template #default="scope"><div class="stack-cell"><span class="mono">{{ scope.row.runId }}</span><span>{{ scope.row.agentId }}</span></div></template>
         </el-table-column>
         <el-table-column prop="department" label="部门" min-width="125" />
-        <el-table-column label="数据等级" width="95"><template #default="scope"><span class="level-tag">{{ scope.row.dataLevel }}</span></template></el-table-column>
         <el-table-column label="Token" width="110"><template #default="scope">{{ formatTokens(scope.row.totalTokens) }}</template></el-table-column>
         <el-table-column label="延迟" width="95"><template #default="scope">{{ formatLatency(scope.row.latencyMs) }}</template></el-table-column>
-        <el-table-column label="成本" width="90"><template #default="scope">¥{{ scope.row.costCny.toFixed(2) }}</template></el-table-column>
         <el-table-column label="结果" width="100"><template #default="scope"><StatusTag :status="scope.row.status" dot /></template></el-table-column>
         <el-table-column label="操作" width="90" fixed="right"><template #default="scope"><el-button link type="primary" :icon="View" data-action="view-model-usage" @click.stop="inspect(scope.row)">详情</el-button></template></el-table-column>
       </el-table>
@@ -156,7 +152,7 @@ onMounted(() => contentStore.load())
         <el-table-column label="Token 用量" min-width="160">
           <template #default="scope"><div class="token-cell"><strong>{{ formatTokens(scope.row.totalTokens) }}</strong><small>输入 {{ formatTokens(scope.row.promptTokens) }} · 输出 {{ formatTokens(scope.row.completionTokens) }}</small></div></template>
         </el-table-column>
-        <el-table-column label="成本 / 延迟" min-width="140"><template #default="scope"><div class="usage-metric-cell"><strong>¥{{ scope.row.costCny.toFixed(2) }}</strong><small>平均 {{ scope.row.successCount ? formatLatency(scope.row.averageLatencyMs) : '—' }}</small></div></template></el-table-column>
+        <el-table-column label="平均延迟" min-width="140"><template #default="scope"><div class="usage-metric-cell"><strong>{{ scope.row.successCount ? formatLatency(scope.row.averageLatencyMs) : '—' }}</strong><small>只统计成功调用</small></div></template></el-table-column>
         <el-table-column label="操作" width="100" fixed="right"><template #default="scope"><el-button link type="primary" data-action="view-employee-model-usage" @click.stop="showEmployeeRecords(scope.row)">查看明细</el-button></template></el-table-column>
       </el-table>
     </section>
@@ -164,7 +160,7 @@ onMounted(() => contentStore.load())
     <el-drawer v-model="drawerOpen" size="min(580px, 100vw)" title="模型调用详情">
       <template v-if="selectedRecord">
         <div class="model-detail__hero">
-          <div><small>{{ selectedRecord.provider }}</small><h2>{{ selectedRecord.model }}</h2><p>{{ selectedRecord.modelRoute }} · 数据等级 {{ selectedRecord.dataLevel }}</p></div>
+          <div><small>{{ selectedRecord.provider }}</small><h2>{{ selectedRecord.model }}</h2><p>{{ selectedRecord.modelRoute }}</p></div>
           <StatusTag :status="selectedRecord.status" />
         </div>
         <dl class="model-detail__rows">
@@ -177,10 +173,9 @@ onMounted(() => contentStore.load())
           <div><dt>输出 Token</dt><dd>{{ formatTokens(selectedRecord.completionTokens) }}</dd></div>
           <div><dt>总 Token</dt><dd>{{ formatTokens(selectedRecord.totalTokens) }}</dd></div>
           <div><dt>模型延迟</dt><dd>{{ formatLatency(selectedRecord.latencyMs) }}</dd></div>
-          <div><dt>估算成本</dt><dd>¥{{ selectedRecord.costCny.toFixed(2) }}</dd></div>
           <div><dt>链路编号</dt><dd class="mono">{{ selectedRecord.traceId }}</dd></div>
         </dl>
-        <el-alert type="info" :closable="false" show-icon title="Token 与成本为 MVP 估算值；生产版本由模型网关按实际账单口径记录。" />
+        <el-alert type="info" :closable="false" show-icon title="模型未返回精确计量时，Token 由服务端按文本长度估算。" />
         <div class="model-detail__footer"><el-button type="primary" @click="openAudit">查看关联审计</el-button></div>
       </template>
     </el-drawer>
@@ -204,7 +199,6 @@ onMounted(() => contentStore.load())
 .model-cell strong { color: var(--color-text-heading); font-size: var(--font-size-caption); }
 .model-cell small { margin-top: 4px; color: var(--color-text-muted); font-size: var(--font-size-badge); }
 .rate-value { color: var(--color-text-heading); font-weight: var(--font-weight-title); }
-.level-tag { display: inline-flex; padding: 3px 7px; border-radius: var(--radius-tag); color: var(--color-primary); background: var(--color-primary-light); font-size: var(--font-size-badge); font-weight: var(--font-weight-badge); }
 .model-detail__hero { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: var(--spacing-card); border-radius: var(--radius-card); background: var(--color-bg-subtle); }
 .model-detail__hero small { color: var(--color-text-muted); font-size: var(--font-size-badge); }
 .model-detail__hero h2 { margin: 4px 0 0; color: var(--color-text-heading); font-size: var(--font-size-title); }

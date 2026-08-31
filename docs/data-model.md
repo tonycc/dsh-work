@@ -153,13 +153,13 @@ queued ────────────────────────�
 |---|---|---|---|
 | 员工工作台 | `GET /session`、`POST /sessions` | `users`, `workspaces`, `sessions` | 默认选择“我的空间”；服务端在未传空间时仍自动补齐个人空间 |
 | 对话页 | `POST /sessions/{id}/files`、`POST /sessions/{id}/runs`、SSE Events、取消/重试 | `messages`, `runs`, `run_attempts`, `run_events`, `file_objects`, `file_extractions`, `run_input_files` | 输入框固定底部；文件先解析再形成只读 Attempt 快照；刷新可恢复；失败可重试 |
-| 工作空间页 | `/workspaces`、`/{id}`、文件上传 | `workspaces`, `workspace_members`, `file_objects` | 同时展示唯一个人空间与已加入团队空间；顶部页签切换对话/文件/成果 |
+| 工作空间页 | `GET /workspaces`、文件上传 | `workspaces`, `workspace_members`, `file_objects` | 同时展示唯一个人空间与已加入团队空间；详情使用列表响应中的空间、文件和用量数据 |
 | 成果库 | `/artifacts`、下载 | `artifacts`, `artifact_versions` | 仅可下载有权限的版本 |
 | Agent 管理 | `/agents`、测试、发布 | `agents`, `agent_versions` | 负责人自动为创建者；欢迎语可空；无模型策略字段 |
 | 能力管理 | `/skills`、`/tools`、`/connectors` | Skill/工具/连接器表 | Skill 标识自动生成；一期工具和连接器只读 |
 | Runtimes | `/runtimes`、`/runtimes/configuration` | `runtimes`, `runtime_configurations` | 位于安全与运维；健康、容量和配置可追溯 |
-| Session 治理 | `/sessions`、`/{id}` | `sessions`, `runs`, `model_usage_events`, `audit_events` | 默认不展示完整业务消息正文 |
-| 工作空间管理 | `/workspaces`、成员接口 | Workspace 表 | 管理端治理团队空间；个人空间由系统自动维护且不开放成员管理 |
+| Session 治理 | `GET /sessions` | `sessions`, `runs`, `model_usage_events`, `audit_events` | 只展示列表响应中的治理元数据，不提供完整业务消息浏览或单 Session 详情接口 |
+| 工作空间管理 | `GET /workspaces` | `workspaces`, `workspace_members`, `sessions`, `artifacts`, `file_objects` | 管理端只读查看团队空间与真实用量；个人空间和成员关系不在管理端开放管理 |
 
 ## 6. 保留与脱敏基线
 

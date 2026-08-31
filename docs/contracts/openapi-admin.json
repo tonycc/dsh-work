@@ -74,21 +74,10 @@
     "/sessions": {
       "get": { "operationId": "listSessions", "summary": "按治理条件查询 Session 摘要，不建设独立全量消息浏览器", "responses": { "200": { "$ref": "#/components/responses/Ok" } } }
     },
-    "/sessions/{sessionId}": {
-      "parameters": [{ "$ref": "#/components/parameters/SessionId" }],
-      "get": { "operationId": "getSessionGovernanceView", "summary": "按权限查看 Session 运行、用量和审计摘要", "responses": { "200": { "$ref": "#/components/responses/Ok" }, "403": { "$ref": "#/components/responses/Error" } } }
-    },
     "/workspaces": {
-      "get": { "operationId": "listWorkspaces", "summary": "查询团队工作空间", "responses": { "200": { "$ref": "#/components/responses/Ok" } } },
-      "post": { "operationId": "createWorkspace", "summary": "创建团队工作空间", "responses": { "201": { "$ref": "#/components/responses/Ok" } } }
+      "get": { "operationId": "listWorkspaces", "summary": "查询团队工作空间", "responses": { "200": { "$ref": "#/components/responses/Ok" } } }
     },
-    "/workspaces/{workspaceId}/members": {
-      "parameters": [{ "$ref": "#/components/parameters/WorkspaceId" }],
-      "get": { "operationId": "listWorkspaceMembers", "summary": "查询工作空间成员和角色", "responses": { "200": { "$ref": "#/components/responses/Ok" } } },
-      "put": { "operationId": "replaceWorkspaceMembers", "summary": "变更成员与角色", "responses": { "200": { "$ref": "#/components/responses/Ok" } } }
-    },
-    "/roles": { "get": { "operationId": "listRoles", "summary": "查询平台角色和权限", "responses": { "200": { "$ref": "#/components/responses/Ok" } } } },
-    "/model-usage": { "get": { "operationId": "getModelUsage", "summary": "查询包含员工归属的 Token、延迟和费用明细", "responses": { "200": { "$ref": "#/components/responses/Ok" } } } },
+    "/model-usage": { "get": { "operationId": "getModelUsage", "summary": "查询包含员工归属的 Token 和延迟明细", "responses": { "200": { "$ref": "#/components/responses/Ok" } } } },
     "/model-providers": {
       "get": { "operationId": "listModelProviders", "summary": "查询 Provider、模型和密钥引用状态，不返回密钥正文", "responses": { "200": { "$ref": "#/components/responses/Ok" } } },
       "post": { "operationId": "createModelProvider", "summary": "创建平台级模型 Provider", "responses": { "200": { "$ref": "#/components/responses/Ok" } } }
@@ -107,15 +96,13 @@
       "parameters": [{ "$ref": "#/components/parameters/RunId" }],
       "get": { "operationId": "getRunOperations", "summary": "按 Run 下钻运行、模型、工具和成果安全时间线", "responses": { "200": { "$ref": "#/components/responses/Ok" }, "404": { "$ref": "#/components/responses/Error" } } }
     },
-    "/health": { "get": { "operationId": "getPlatformHealth", "summary": "查询控制面、Runtime、模型和存储健康度", "responses": { "200": { "$ref": "#/components/responses/Ok" } } } }
+    "/health": { "get": { "operationId": "getPlatformHealth", "summary": "查询服务端、PostgreSQL 和 Runtime 当前状态", "responses": { "200": { "$ref": "#/components/responses/Ok" } } } }
   },
   "components": {
     "securitySchemes": { "adminSession": { "type": "apiKey", "in": "cookie", "name": "dsh_work_admin_session" } },
     "parameters": {
       "AgentId": { "name": "agentId", "in": "path", "required": true, "schema": { "type": "string" } },
-      "SessionId": { "name": "sessionId", "in": "path", "required": true, "schema": { "type": "string" } },
-      "RunId": { "name": "runId", "in": "path", "required": true, "schema": { "type": "string" } },
-      "WorkspaceId": { "name": "workspaceId", "in": "path", "required": true, "schema": { "type": "string" } }
+      "RunId": { "name": "runId", "in": "path", "required": true, "schema": { "type": "string" } }
     },
     "requestBodies": {
       "Agent": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AgentInput" } } } }

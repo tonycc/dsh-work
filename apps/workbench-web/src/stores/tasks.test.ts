@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   startRun: vi.fn(),
   cancelRun: vi.fn(),
   retryRun: vi.fn(),
+  deleteSession: vi.fn(),
   getRun: vi.fn(),
   runEventsUrl: vi.fn((runId: string) => `/events/${runId}`),
 }))
@@ -20,6 +21,7 @@ class FakeEventSource {
   static instances: FakeEventSource[] = []
   readonly listeners = new Map<string, (event: MessageEvent<string>) => void>()
   onerror: (() => void) | null = null
+  closed = false
 
   constructor(readonly url: string) {
     FakeEventSource.instances.push(this)
@@ -29,7 +31,7 @@ class FakeEventSource {
     this.listeners.set(type, listener as (event: MessageEvent<string>) => void)
   }
 
-  close() {}
+  close() { this.closed = true }
 
   emit(type: string, payload: unknown) {
     this.listeners.get(type)?.({ data: JSON.stringify(payload) } as MessageEvent<string>)
@@ -58,10 +60,12 @@ const baseTask: TaskRun = {
 
 describe('task store', () => {
   beforeEach(() => {
+    vi.clearAllMocks()
     setActivePinia(createPinia())
     FakeEventSource.instances = []
     vi.stubGlobal('EventSource', FakeEventSource)
     api.getTasks.mockResolvedValue([])
+    api.deleteSession.mockResolvedValue({ sessionId: 'session-001', title: '库存分析', archived: true })
   })
 
   it('creates a server Session and Run, then subscribes to persisted events', async () => {
@@ -188,5 +192,26 @@ describe('task store', () => {
 
     expect(api.getRun).toHaveBeenCalledWith(baseTask.id)
     expect(store.tasks[0]?.status).toBe('succeeded')
+  })
+
+  it('deletes every Run in the archived conversation and closes their event streams', async () => {
+    const { useTaskStore } = await import('./tasks')
+    const secondRun = { ...structuredClone(baseTask), id: 'run-002', attemptId: 'attempt-002' }
+    const otherConversation = {
+      ...structuredClone(baseTask),
+      id: 'run-003',
+      attemptId: 'attempt-003',
+      sessionId: 'session-002',
+    }
+    api.getTasks.mockResolvedValue([structuredClone(baseTask), secondRun, otherConversation])
+    const store = useTaskStore()
+    await store.load()
+
+    await store.deleteConversation('session-001')
+
+    expect(api.deleteSession).toHaveBeenCalledWith('session-001')
+    expect(store.tasks.map(task => task.id)).toEqual(['run-003'])
+    expect(FakeEventSource.instances.slice(0, 2).every(stream => stream.closed)).toBe(true)
+    expect(FakeEventSource.instances[2]?.closed).toBe(false)
   })
 })

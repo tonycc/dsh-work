@@ -179,7 +179,6 @@ defineExpose({ useWorkspaceFile })
         <el-skeleton v-else class="workbench-composer" :rows="3" animated />
 
         <footer class="workbench-trust">
-          <span><i></i> PostgreSQL 与 DSH Runtime 已连接</span>
           <span>支持 PDF、DOCX、XLSX、CSV，单文件不超过 20 MB</span>
           <span>Enter 发送 · Shift + Enter 换行</span>
         </footer>
@@ -296,13 +295,6 @@ defineExpose({ useWorkspaceFile })
   display: inline-flex;
   align-items: center;
   gap: 5px;
-}
-
-.workbench-trust i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #58b397;
 }
 
 .conversation-starter--embedded .workbench-stage {

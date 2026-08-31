@@ -6,9 +6,7 @@ import {
   mockAuditEvents,
   mockConnectors,
   mockHealth,
-  mockMembers,
   mockModelUsage,
-  mockRoles,
   mockRuntimes,
   mockSkills,
   mockTasks,
@@ -22,7 +20,6 @@ import type {
   AgentReleaseRecord,
   AgentVersionRecord,
   ConnectorDefinition,
-  RoleDefinition,
   RuntimeDefinition,
   SkillDefinition,
   ToolDefinition,
@@ -130,17 +127,6 @@ export class PrototypeRepository {
     return copy(connector)
   }
 
-  async updateRole(
-    roleId: string,
-    patch: Pick<RoleDefinition, 'agents' | 'tools' | 'dataScopes' | 'updatedAt'>,
-  ): Promise<RoleDefinition> {
-    await simulateIo()
-    const role = prototypeData.roles.find((item) => item.id === roleId)
-    if (!role) throw new Error(`角色不存在：${roleId}`)
-    Object.assign(role, copy(patch))
-    return copy(role)
-  }
-
   async updateToolPermissions(
     toolId: string,
     patch: Pick<ToolDefinition, 'allowedRoles' | 'dataScopes' | 'approvalPolicy'>,
@@ -175,8 +161,6 @@ const prototypeData = {
   tools: mockTools,
   connectors: mockConnectors,
   runtimes: mockRuntimes,
-  roles: mockRoles,
-  members: mockMembers,
   auditEvents: mockAuditEvents,
   health: mockHealth,
   usage: mockUsage,

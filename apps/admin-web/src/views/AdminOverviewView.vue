@@ -47,13 +47,13 @@ onMounted(() => contentStore.load())
 
     <section class="content-panel filter-panel">
       <div class="filter-bar">
-        <p class="page-note">查看试点范围内的对话与运行、模型用量、工具可用性和需关注事件。</p>
+        <p class="page-note">查看对话与运行、模型用量、工具可用性和需关注事件。</p>
         <div class="overview-time"><span></span>数据更新于刚刚</div>
       </div>
     </section>
 
     <section v-loading="contentStore.loading" class="metric-grid">
-      <article class="metric-card"><div class="metric-label">近 7 日运行</div><div class="metric-value">{{ totalRuns }}</div><div class="metric-detail">来自真实运行记录</div></article>
+      <article class="metric-card"><div class="metric-label">近 7 日运行</div><div class="metric-value">{{ totalRuns }}</div><div class="metric-detail">近 7 日累计</div></article>
       <article class="metric-card"><div class="metric-label">运行成功率</div><div class="metric-value">{{ successRate }}</div><div class="metric-detail">不含取消与排队运行</div></article>
       <article class="metric-card"><div class="metric-label">模型 Token</div><div class="metric-value">{{ totalTokens.toLocaleString() }}</div><div class="metric-detail"><button class="metric-link" type="button" @click="router.push('/model-usage')">查看用量明细</button></div></article>
       <article class="metric-card"><div class="metric-label">近 24 小时需关注</div><div class="metric-value">{{ contentStore.operationsSummary?.attentionEvents24h ?? 0 }}</div><div class="metric-detail"><button class="metric-link" type="button" @click="router.push('/audit')">查看失败与阻止事件</button></div></article>

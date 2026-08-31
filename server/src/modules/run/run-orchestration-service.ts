@@ -422,28 +422,6 @@ export class RunOrchestrationService {
     } else if (event.event_type === 'run.completed') {
       const attempt = await this.runs.getAttempt(tenantId, event.attempt_id)
       const assistantOutput = this.assistantOutputs.get(event.attempt_id) ?? ''
-      const workspaceId = attempt?.manifest['workspace_id']
-      if (this.content && assistantOutput && typeof workspaceId === 'string') {
-        try {
-          await this.content.publishAssistantResult({
-            runId: run.id,
-            attemptId: event.attempt_id,
-            sessionId: run.sessionId,
-            workspaceId,
-            content: assistantOutput,
-          })
-        } catch (error) {
-          console.error('assistant result publication failed', error)
-          await this.operations?.appendAudit(
-            'system',
-            'artifact.publish',
-            run.id,
-            'failed',
-            event.trace_id,
-            'Runtime 已完成，但对话成果发布失败',
-          ).catch(() => undefined)
-        }
-      }
       await this.runs.transitionAttempt(tenantId, event.attempt_id, 'succeeded')
       await this.runs.transitionRun(tenantId, run.id, 'succeeded')
       if (attempt) await this.operations?.recordModelUsage({

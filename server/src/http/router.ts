@@ -59,6 +59,10 @@ export class Router {
     this.register('PATCH', path, handler)
   }
 
+  delete(path: string, handler: RouteHandler) {
+    this.register('DELETE', path, handler)
+  }
+
   private register(method: string, path: string, handler: RouteHandler) {
     const parameterNames: string[] = []
     const source = path
@@ -74,7 +78,7 @@ export class Router {
 
   async handle(request: IncomingMessage, response: ServerResponse) {
     if (request.method === 'OPTIONS') {
-      response.writeHead(204, { Allow: 'GET, POST, PATCH, OPTIONS' })
+      response.writeHead(204, { Allow: 'GET, POST, PATCH, DELETE, OPTIONS' })
       response.end()
       return
     }

@@ -54,7 +54,7 @@ after(async () => {
   await database.end()
 })
 
-test('real PostgreSQL orchestration persists events, assistant result, Artifact and usage', async () => {
+test('real PostgreSQL orchestration persists the assistant result without publishing an Artifact', async () => {
   const session = await orchestration.createSession({ userId: 'U00001', title: 'M3 自动化闭环' })
   const created = await orchestration.startRun({
     userId: 'U00001', sessionId: session.id, prompt: '生成 M3 自动化回答', idempotencyKey: randomUUID(),
@@ -62,9 +62,7 @@ test('real PostgreSQL orchestration persists events, assistant result, Artifact 
   assert.ok(created)
   const task = await waitForTask(created.id, 'succeeded')
   assert.match(task.messages.at(-1)?.content ?? '', /真实回答/)
-  assert.equal(task.artifacts.length, 1)
-  assert.equal(task.artifacts[0]?.runId, created.id)
-  assert.equal(task.artifacts[0]?.version, 1)
+  assert.equal(task.artifacts.length, 0)
 
   const events = await runs.readEventsAfterEvent('tenant-dsh-work', created.id)
   assert.deepEqual(events.map((event) => event.eventType), [
@@ -97,6 +95,88 @@ test('cancel and retry keep one Run and create a new immutable Attempt', async (
      where tenant_id = 'tenant-dsh-work' and run_id = ${created.id}
   `
   assert.equal(count?.count, 2)
+})
+
+test('deleting a conversation archives it only after active Runs stop', async () => {
+  const session = await orchestration.createSession({ userId: 'U00001', title: 'M3 删除对话' })
+  const created = await orchestration.startRun({
+    userId: 'U00001', sessionId: session.id, prompt: '等待取消', idempotencyKey: randomUUID(),
+  })
+  assert.ok(created)
+  await waitForTask(created.id, 'running')
+
+  await assert.rejects(
+    conversations.archiveSession(session.id, 'U00001'),
+    /请先停止当前运行/,
+  )
+
+  await orchestration.cancel(created.id, 'U00001')
+  await waitForTask(created.id, 'cancelled')
+  const archived = await conversations.archiveSession(session.id, 'U00001')
+
+  assert.deepEqual(archived, { sessionId: session.id, title: 'M3 删除对话', archived: true })
+  assert.equal(await conversations.getTask(created.id, 'U00001'), null)
+  assert.equal((await conversations.listTasks('U00001')).some(task => task.sessionId === session.id), false)
+  await assert.rejects(conversations.requireSession(session.id, 'U00001'), /不存在或不可访问/)
+})
+
+test('archiving a conversation and creating a Run are serialized by the Session lock', async () => {
+  const session = await orchestration.createSession({ userId: 'U00001', title: 'M3 删除并发保护' })
+  const archive = beginSessionArchive(session.id)
+
+  await archive.checkedActiveRuns
+  const rejectedCreation = assert.rejects(
+    runs.createRun({
+      tenantId: 'tenant-dsh-work',
+      sessionId: session.id,
+      requestedBy: 'U00001',
+      idempotencyKey: randomUUID(),
+    }),
+    /Session 不存在或不可访问/,
+  )
+  archive.continueArchive()
+  await archive.done
+  await rejectedCreation
+
+  const [persisted] = await database<{ count: number }[]>`
+    select count(*)::integer as count from runs
+     where tenant_id = 'tenant-dsh-work' and session_id = ${session.id}
+  `
+  assert.equal(persisted?.count, 0)
+})
+
+test('archiving a conversation and retrying a Run are serialized by the Session lock', async () => {
+  const session = await orchestration.createSession({ userId: 'U00001', title: 'M3 重试并发保护' })
+  const run = await runs.createRun({
+    tenantId: 'tenant-dsh-work',
+    sessionId: session.id,
+    requestedBy: 'U00001',
+    idempotencyKey: randomUUID(),
+  })
+  await runs.transitionRun(run.tenantId, run.id, 'cancelled')
+  const archive = beginSessionArchive(session.id)
+
+  await archive.checkedActiveRuns
+  const rejectedAttempt = assert.rejects(
+    runs.createAttempt({
+      tenantId: run.tenantId,
+      runId: run.id,
+      manifest: { runId: run.id },
+      manifestSha256: 'c'.repeat(64),
+      modelRouteSnapshot: {},
+    }),
+    /所属 Session 已归档/,
+  )
+  archive.continueArchive()
+  await archive.done
+  await rejectedAttempt
+
+  assert.equal((await runs.getRun(run.tenantId, run.id))?.status, 'cancelled')
+  const [persisted] = await database<{ count: number }[]>`
+    select count(*)::integer as count from run_attempts
+     where tenant_id = 'tenant-dsh-work' and run_id = ${run.id}
+  `
+  assert.equal(persisted?.count, 0)
 })
 
 test('file safety gate blocks executable signatures and Tool audit is persisted', async () => {
@@ -133,6 +213,34 @@ async function waitForTask(runId: string, expected: 'running' | 'succeeded' | 'c
     await new Promise((resolve) => setTimeout(resolve, 20))
   }
   throw new Error(`等待 Run 状态超时：${expected}`)
+}
+
+function beginSessionArchive(sessionId: string) {
+  let notifyChecked: () => void = () => undefined
+  let continueArchive: () => void = () => undefined
+  const checkedActiveRuns = new Promise<void>((resolve) => { notifyChecked = resolve })
+  const continueSignal = new Promise<void>((resolve) => { continueArchive = resolve })
+  const done = database.begin(async (transaction) => {
+    await transaction`
+      select id from sessions
+       where tenant_id = 'tenant-dsh-work' and id = ${sessionId}
+       for update
+    `
+    const [activeRun] = await transaction<{ id: string }[]>`
+      select id from runs
+       where tenant_id = 'tenant-dsh-work' and session_id = ${sessionId}
+         and status in ('queued', 'running', 'cancel_requested')
+       limit 1
+    `
+    if (activeRun) throw new Error(`测试前置条件失败，仍有活动 Run：${activeRun.id}`)
+    notifyChecked()
+    await continueSignal
+    await transaction`
+      update sessions set status = 'archived', last_active_at = now()
+       where tenant_id = 'tenant-dsh-work' and id = ${sessionId}
+    `
+  })
+  return { checkedActiveRuns, continueArchive, done }
 }
 
 interface Execution {

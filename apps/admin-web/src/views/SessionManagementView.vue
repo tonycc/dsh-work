@@ -64,16 +64,16 @@ onMounted(() => contentStore.load())
     <el-alert type="info" :closable="false" show-icon title="本页用于运行治理，只展示 Session、用户、工作空间、Agent、Token 和链路等元数据；消息正文需要专项审计授权。" />
 
     <section v-loading="contentStore.loading" class="metric-grid">
-      <article class="metric-card"><div class="metric-label">Session 总数</div><div class="metric-value">{{ contentStore.sessions.length }}</div><div class="metric-detail">PostgreSQL 实时记录</div></article>
+      <article class="metric-card"><div class="metric-label">Session 总数</div><div class="metric-value">{{ contentStore.sessions.length }}</div><div class="metric-detail">全部治理记录</div></article>
       <article class="metric-card"><div class="metric-label">活动 Session</div><div class="metric-value">{{ activeCount }}</div><div class="metric-detail">执行中或排队中</div></article>
-      <article class="metric-card"><div class="metric-label">等待确认</div><div class="metric-value">{{ approvalCount }}</div><div class="metric-detail">等待员工授权后继续</div></article>
+      <article class="metric-card"><div class="metric-label">等待确认</div><div class="metric-value">{{ approvalCount }}</div><div class="metric-detail">服务端自动确认处理中</div></article>
       <article class="metric-card"><div class="metric-label">失败 Session</div><div class="metric-value">{{ failedCount }}</div><div class="metric-detail">需要检查运行或依赖</div></article>
     </section>
 
     <section class="content-panel content-panel--flush session-table">
       <el-table class="data-table" v-loading="contentStore.loading" :data="filteredSessions" empty-text="暂无匹配的 Session" @row-click="inspect">
         <el-table-column label="Session" min-width="235"><template #default="scope"><div class="session-cell"><strong>{{ scope.row.title }}</strong><small class="mono">{{ scope.row.id }}</small></div></template></el-table-column>
-        <el-table-column label="用户与空间" min-width="180"><template #default="scope"><div class="stack-cell"><strong>{{ scope.row.user }} · {{ scope.row.department }}</strong><span>{{ scope.row.workspaceName }}</span></div></template></el-table-column>
+        <el-table-column label="用户与空间" min-width="180"><template #default="scope"><div class="stack-cell"><strong>{{ scope.row.user }}</strong><span>{{ scope.row.workspaceName }}</span></div></template></el-table-column>
         <el-table-column label="Agent" min-width="150"><template #default="scope"><div class="stack-cell"><strong>{{ scope.row.agentName }}</strong><span>v{{ scope.row.agentVersion }}</span></div></template></el-table-column>
         <el-table-column label="状态" width="100"><template #default="scope"><StatusTag :status="scope.row.status" dot /></template></el-table-column>
         <el-table-column label="用量" width="130"><template #default="scope"><div class="stack-cell"><strong>{{ scope.row.messageCount }} 条消息</strong><span>{{ formatTokens(scope.row.tokenUsage) }} Token</span></div></template></el-table-column>
@@ -87,10 +87,9 @@ onMounted(() => contentStore.load())
       <template v-if="selectedSession">
         <div class="session-detail__hero"><div><small class="mono">{{ selectedSession.id }}</small><h2>{{ selectedSession.title }}</h2></div><StatusTag :status="selectedSession.status" /></div>
         <dl class="session-detail__rows">
-          <div><dt>发起用户</dt><dd>{{ selectedSession.user }} · {{ selectedSession.department }}</dd></div>
+          <div><dt>发起用户</dt><dd>{{ selectedSession.user }}</dd></div>
           <div><dt>工作空间</dt><dd>{{ selectedSession.workspaceName }}</dd></div>
           <div><dt>使用 Agent</dt><dd>{{ selectedSession.agentName }} · v{{ selectedSession.agentVersion }}</dd></div>
-          <div><dt>Runtime</dt><dd class="mono">{{ selectedSession.runtimeId }}</dd></div>
           <div><dt>运行编号</dt><dd class="mono">{{ selectedSession.runId }}</dd></div>
           <div><dt>链路编号</dt><dd class="mono">{{ selectedSession.traceId }}</dd></div>
           <div><dt>运行次数</dt><dd>{{ selectedSession.runCount }}</dd></div>
@@ -98,8 +97,6 @@ onMounted(() => contentStore.load())
           <div><dt>Token</dt><dd>{{ formatTokens(selectedSession.tokenUsage) }}</dd></div>
           <div><dt>创建时间</dt><dd>{{ selectedSession.createdAt }}</dd></div>
           <div><dt>最近活动</dt><dd>{{ selectedSession.updatedAt }}</dd></div>
-          <div><dt>有效数据范围</dt><dd>{{ selectedSession.dataScopes.join('、') }}</dd></div>
-          <div class="session-detail__wide"><dt>运行摘要</dt><dd>{{ selectedSession.summary }}</dd></div>
         </dl>
         <el-alert type="info" :closable="false" show-icon title="平台管理员默认不能查看消息正文；需要排障时应通过审计流程获取最小必要信息。" />
         <div class="session-detail__actions"><el-button type="primary" data-action="view-session-audit" @click="openAudit(selectedSession)">查看审计链路</el-button></div>
@@ -126,7 +123,6 @@ onMounted(() => contentStore.load())
 .session-detail__rows div { padding: 11px 0; border-bottom: 1px solid var(--color-border); }
 .session-detail__rows dt { color: var(--color-text-muted); font-size: var(--font-size-badge); }
 .session-detail__rows dd { margin: 5px 0 0; color: var(--color-text-primary); font-size: var(--font-size-caption); line-height: 1.55; overflow-wrap: anywhere; }
-.session-detail__wide { grid-column: 1 / -1; }
 .session-detail__actions { display: flex; justify-content: flex-end; margin-top: 22px; }
 @media (max-width: 760px) { .filter-bar, .filter-bar .el-input, .filter-bar .el-select { width: 100%; } }
 </style>

@@ -41,6 +41,10 @@ interface AgentTestEnvelope {
   meta: { adapter: string }
 }
 
+interface RecordListEnvelope {
+  data: Array<Record<string, unknown>>
+}
+
 before(async () => {
   const repository = new PrototypeRepository()
   const router = new Router()
@@ -80,6 +84,38 @@ test('audience-specific routes do not leak into the other API namespace', async 
   assert.equal(result.body.error.code, 'route_not_found')
   assert.equal(result.body.error.object, '当前接口')
   assert.match(result.body.error.traceId, /^trace-http-/)
+})
+
+test('removed management and detail routes stay unavailable', async () => {
+  const removedRoutes = [
+    '/api/admin/v1/roles',
+    '/api/admin/v1/members',
+    '/api/admin/v1/sessions/session-demo-001',
+    '/api/workbench/v1/sessions',
+    '/api/workbench/v1/workspaces/ws-supply',
+  ]
+  for (const path of removedRoutes) {
+    const result = await getJson<ErrorEnvelope>(path)
+    assert.equal(result.response.status, 404, path)
+    assert.equal(result.body.error.code, 'route_not_found', path)
+  }
+})
+
+test('operations DTOs omit metrics that are not collected', async () => {
+  const runtimes = await getJson<RecordListEnvelope>('/api/admin/v1/runtimes')
+  assert.equal(runtimes.response.status, 200)
+  for (const runtime of runtimes.body.data) {
+    assert.equal('cpuUsage' in runtime, false)
+    assert.equal('memoryUsage' in runtime, false)
+    assert.equal('latency' in runtime, false)
+  }
+
+  const health = await getJson<RecordListEnvelope>('/api/admin/v1/health')
+  assert.equal(health.response.status, 200)
+  for (const component of health.body.data) {
+    assert.equal('latency' in component, false)
+    assert.equal('availability' in component, false)
+  }
 })
 
 test('prototype workbench Agent DTO exposes only published employee-safe fields', async () => {
@@ -125,7 +161,7 @@ test('prototype admin can validate a draft Agent before publishing', async () =>
   assert.equal(body.data.status, 'passed')
 })
 
-test('prototype mode explains that conversation commands require PostgreSQL instead of returning a route 404', async () => {
+test('unavailable conversation commands return an actionable 503 instead of a route 404', async () => {
   const response = await fetch(`${baseUrl}/api/workbench/v1/sessions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -136,9 +172,17 @@ test('prototype mode explains that conversation commands require PostgreSQL inst
   assert.equal(response.status, 503)
   assert.equal(body.error.code, 'workbench_runtime_not_configured')
   assert.equal(body.error.object, '对话')
-  assert.match(body.error.message, /PostgreSQL|运行时/)
-  assert.match(body.error.suggestion, /DSH_WORK_DATABASE_URL/)
+  assert.match(body.error.message, /对话服务不可用/)
+  assert.match(body.error.suggestion, /联系管理员/)
   assert.match(body.error.traceId, /^trace-http-/)
+
+  const deleteResponse = await fetch(`${baseUrl}/api/workbench/v1/sessions/session-demo-001`, {
+    method: 'DELETE',
+  })
+  const deleteBody = await deleteResponse.json() as ErrorEnvelope
+  assert.equal(deleteResponse.status, 503)
+  assert.equal(deleteBody.error.code, 'workbench_runtime_not_configured')
+  assert.equal(deleteBody.error.object, '对话 session-demo-001')
 })
 
 test('malformed management payloads use the shared actionable error contract', async () => {

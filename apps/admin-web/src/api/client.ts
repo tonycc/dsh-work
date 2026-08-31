@@ -9,7 +9,6 @@ import type {
   AuditEvent,
   ConnectorDefinition,
   HealthComponent,
-  MemberDefinition,
   ModelUsageRecord,
   ManagedWorkspaceDefinition,
   ModelProvider,
@@ -17,7 +16,6 @@ import type {
   ModelRoutePurpose,
   OperationsSummary,
   PlatformStatus,
-  RoleDefinition,
   RuntimeDefinition,
   SessionDefinition,
   SkillDefinition,
@@ -151,10 +149,6 @@ export const adminApi = {
   getConnectors: () => request<ConnectorDefinition[]>('/connectors'),
   checkConnector: (input: { connectorId: string; actor: string }) =>
     request<ConnectorDefinition>('/connectors/check', { method: 'POST', body: JSON.stringify(input) }),
-  getRoles: () => request<RoleDefinition[]>('/roles'),
-  getMembers: () => request<MemberDefinition[]>('/members'),
-  updateRole: (input: { roleId: string; agents: string[]; tools: string[]; dataScopes: string[] }) =>
-    request<RoleDefinition>('/roles', { method: 'PATCH', body: JSON.stringify(input) }),
   updateToolPermissions: (input: {
     toolId: string
     allowedRoles: string[]

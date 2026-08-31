@@ -76,6 +76,10 @@ export const workbenchApi = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
+  deleteSession: (sessionId: string) => request<{ sessionId: string; title: string; archived: true }>(
+    `/sessions/${encodeURIComponent(sessionId)}`,
+    { method: 'DELETE' },
+  ),
   startRun: (sessionId: string, input: { prompt: string; idempotencyKey: string; fileIds?: string[] }) =>
     request<TaskRun>(`/sessions/${encodeURIComponent(sessionId)}/runs`, {
       method: 'POST',

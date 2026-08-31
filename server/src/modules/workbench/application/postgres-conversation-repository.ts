@@ -117,6 +117,32 @@ export class PostgresConversationRepository {
     return { ...row, createdAt: row.createdAt.toISOString() }
   }
 
+  async archiveSession(sessionId: string, userId: string) {
+    return this.database.begin(async (transaction) => {
+      const [session] = await transaction<{ id: string; title: string }[]>`
+        select id, title from sessions
+         where tenant_id = ${tenantId} and id = ${sessionId} and created_by = ${userId}
+           and status = 'active'
+         for update
+      `
+      if (!session) throw new Error(`Session 不存在或不可访问：${sessionId}`)
+
+      const [activeRun] = await transaction<{ id: string }[]>`
+        select id from runs
+         where tenant_id = ${tenantId} and session_id = ${sessionId}
+           and status in ('queued', 'running', 'cancel_requested')
+         limit 1
+      `
+      if (activeRun) throw new Error('对话当前状态不能删除：仍有运行正在执行，请先停止当前运行')
+
+      await transaction`
+        update sessions set status = 'archived', last_active_at = now()
+         where tenant_id = ${tenantId} and id = ${sessionId}
+      `
+      return { sessionId: session.id, title: session.title, archived: true as const }
+    })
+  }
+
   async appendMessage(input: {
     sessionId: string
     runId: string
@@ -161,6 +187,7 @@ export class PostgresConversationRepository {
         left join run_attempts ra on ra.tenant_id = r.tenant_id and ra.id = r.current_attempt_id
         left join workspaces w on w.tenant_id = s.tenant_id and w.id = s.workspace_id
        where r.tenant_id = ${tenantId} and r.requested_by = ${userId}
+         and s.status = 'active'
        order by r.created_at desc
        limit 50
     `
@@ -181,6 +208,7 @@ export class PostgresConversationRepository {
         left join run_attempts ra on ra.tenant_id = r.tenant_id and ra.id = r.current_attempt_id
         left join workspaces w on w.tenant_id = s.tenant_id and w.id = s.workspace_id
        where r.tenant_id = ${tenantId} and r.id = ${runId} and r.requested_by = ${userId}
+         and s.status = 'active'
     `
     return row ? this.mapTask(row) : null
   }
@@ -368,7 +396,7 @@ function mapMessage(row: MessageRow): ChatMessage {
 
 function mapSteps(runId: string, events: EventRow[], status: RunState): RunStep[] {
   if (events.length === 0) {
-    return [{ id: `${runId}-queued`, title: '等待 DSH Runtime 调度', detail: '任务已写入 PostgreSQL 队列。', status: 'pending' }]
+    return [{ id: `${runId}-queued`, title: '等待执行调度', detail: '任务已进入执行队列。', status: 'pending' }]
   }
   return events
     .filter((event) => !['assistant.delta', 'assistant.completed'].includes(event.eventType))
@@ -382,8 +410,8 @@ function mapSteps(runId: string, events: EventRow[], status: RunState): RunStep[
 
 function eventTitle(eventType: string) {
   const titles: Record<string, string> = {
-    'run.queued': '进入 Runtime 队列',
-    'run.started': 'DSH Worker 开始执行',
+    'run.queued': '进入执行队列',
+    'run.started': '执行服务开始运行',
     'approval.required': '等待权限确认',
     'approval.resolved': '权限确认完成',
     'run.cancel_requested': '正在取消',

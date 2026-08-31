@@ -12,9 +12,9 @@ const offlineCount = computed(() => contentStore.health.filter((item) => item.st
 const warningCount = computed(() => contentStore.health.filter((item) => item.status === 'warning').length)
 const summaryState = computed(() => offlineCount.value > 0 ? 'offline' : warningCount.value > 0 ? 'warning' : 'healthy')
 const summaryTitle = computed(() => {
-  if (summaryState.value === 'offline') return 'MVP 核心服务存在离线组件'
-  if (summaryState.value === 'warning') return 'MVP 核心服务处于降级状态'
-  return 'MVP 核心服务运行正常'
+  if (summaryState.value === 'offline') return '系统存在离线组件'
+  if (summaryState.value === 'warning') return '系统处于降级状态'
+  return '系统运行正常'
 })
 
 const icons = {
@@ -28,7 +28,7 @@ const icons = {
 
 async function refresh() {
   await contentStore.load(true)
-  ElMessage.success('已通过管理端接口刷新实时状态')
+  ElMessage.success('系统状态已刷新')
 }
 
 onMounted(() => contentStore.load())
@@ -40,14 +40,12 @@ onMounted(() => contentStore.load())
 
     <section class="content-panel filter-panel">
       <div class="filter-bar">
-        <p class="page-note">查看模块化单体、DSH 执行进程池和外部依赖的运行状态。各卡片是逻辑或进程边界，不代表业务微服务。</p>
         <el-button class="refresh-button" :icon="Refresh" :loading="contentStore.loading" data-action="refresh-health" @click="refresh">立即刷新</el-button>
       </div>
     </section>
 
     <section class="health-summary content-panel">
       <div class="health-summary__status" :class="`health-summary__status--${summaryState}`"><span><i></i></span><div><strong>{{ summaryTitle }}</strong><p>{{ healthyCount }} / {{ contentStore.health.length }} 个组件健康，{{ warningCount }} 个降级，{{ offlineCount }} 个离线</p></div></div>
-      <dl><div><dt>应用版本</dt><dd>dsh-work 0.3.0 MVP</dd></div><div><dt>部署形态</dt><dd>双接口门面 + Node.js 模块化单体</dd></div><div><dt>环境</dt><dd>本地 MVP 实施环境</dd></div><div><dt>持久化</dt><dd>PostgreSQL + 本地 Artifact Adapter</dd></div></dl>
     </section>
 
     <section v-loading="contentStore.loading" class="health-grid">
@@ -57,38 +55,18 @@ onMounted(() => contentStore.load())
           <div class="health-card__top"><span class="health-card__icon"><el-icon><component :is="icons[component.id as keyof typeof icons] ?? Service" /></el-icon></span><StatusTag :status="component.status" dot /></div>
           <h2>{{ component.name }}</h2>
           <p>{{ component.message }}</p>
-          <dl><div><dt>{{ component.id === 'health-worker' ? '容量' : '响应延迟' }}</dt><dd>{{ component.latency }}</dd></div><div><dt>近 30 天可用性</dt><dd>{{ component.availability }}</dd></div></dl>
+          <dl><div><dt>当前状态</dt><dd>{{ component.detail }}</dd></div></dl>
           <footer><span>{{ component.category === 'application' ? 'dsh-work 应用' : component.category === 'runtime' ? '独立执行进程' : '外部/共享依赖' }}</span><small>{{ component.checkedAt }}</small></footer>
         </article>
       </template>
     </section>
 
-    <section class="health-bottom-grid">
-      <div class="content-panel content-panel--flush incident-panel">
-        <div class="panel-header"><div><h2 class="panel-title">接入状态</h2><p class="panel-subtitle">当前 MVP 边界与后续实施项</p></div></div>
-        <div class="incident-list">
-          <article><span class="incident-list__time">当前</span><i class="is-success"></i><div><strong>员工端接口与管理端接口已拆分</strong><p>两个前端使用独立数据传输对象、客户端和状态层访问 Node.js 服务端。</p></div><StatusTag status="success" label="已完成" /></article>
-          <article><span class="incident-list__time">已接入</span><i></i><div><strong>DSH Runtime 与默认模型路由已接入</strong><p>员工对话由 PostgreSQL 编排并通过 ACP stdio 调用真实 DSH Runtime。</p></div><StatusTag status="healthy" label="正常" /></article>
-          <article><span class="incident-list__time">已接入</span><i></i><div><strong>PostgreSQL 与本地 Artifact Adapter 已接入</strong><p>业务数据由 PostgreSQL 持久化；一期成果文件使用本地存储 Adapter，生产对象存储仍是部署升级项。</p></div><StatusTag status="healthy" label="正常" /></article>
-        </div>
-      </div>
-
-      <aside class="content-panel content-panel--flush boundary-panel">
-        <div class="panel-header"><div><h2 class="panel-title">运行边界</h2><p class="panel-subtitle">MVP 与生产架构决策一致</p></div></div>
-        <div class="boundary-diagram">
-          <div class="boundary-node boundary-node--app"><strong>员工端 / 管理端接口</strong><span>Node.js 模块化单体</span><small>独立门面，共享内部业务模块</small></div>
-          <span class="boundary-arrow">→</span>
-          <div class="boundary-node boundary-node--worker"><strong>DSH 执行进程</strong><span>独立受管进程</span><small>已通过 ACP stdio 接入 · 可独立扩展为进程池</small></div>
-        </div>
-        <p class="boundary-note">当前先保持一个模块化单体；DSH 执行进程只按运行隔离需要独立部署。模型、连接器、成果和治理模块不因领域名称而拆成微服务。</p>
-      </aside>
-    </section>
   </div>
 </template>
 
 <style scoped>
 .refresh-button { margin-left: auto; }
-.health-summary { display: flex; align-items: center; justify-content: space-between; gap: 30px; padding: 18px 20px; }
+.health-summary { display: flex; align-items: center; gap: 30px; padding: 18px 20px; }
 .health-summary__status { display: flex; align-items: center; gap: 13px; }
 .health-summary__status > span { display: grid; width: 44px; height: 44px; place-items: center; border-radius: 50%; background: var(--color-success-light); }
 .health-summary__status i { width: 16px; height: 16px; border: 4px solid var(--color-success); border-radius: 50%; }
@@ -100,10 +78,6 @@ onMounted(() => contentStore.load())
 .health-summary__status--offline i { border-color: var(--color-danger); }
 .health-summary__status--offline strong { color: var(--color-danger); }
 .health-summary__status p { margin: 5px 0 0; color: var(--color-text-secondary); font-size: var(--font-size-badge); }
-.health-summary > dl { display: flex; align-items: center; gap: 0; margin: 0; }
-.health-summary > dl div { display: flex; min-width: 150px; flex-direction: column; padding: 0 18px; border-left: 1px solid var(--color-border); }
-.health-summary dt { color: var(--color-text-muted); font-size: var(--font-size-badge); }
-.health-summary dd { margin: 4px 0 0; color: var(--color-text-primary); font-size: var(--font-size-caption); font-weight: var(--font-weight-badge); }
 .health-grid { display: grid; min-height: 160px; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 .health-grid > .el-empty { grid-column: 1 / -1; }
 .health-card { position: relative; overflow: hidden; padding: 17px; }
@@ -114,29 +88,12 @@ onMounted(() => contentStore.load())
 .health-card__icon { display: grid; width: 36px; height: 36px; place-items: center; border-radius: var(--radius-button); color: var(--color-primary); background: var(--color-primary-light); font-size: var(--font-size-header); }
 .health-card h2 { margin: 15px 0 0; color: var(--color-text-heading); font-size: var(--font-size-title); }
 .health-card > p { min-height: 31px; margin: 6px 0 0; color: var(--color-text-secondary); font-size: var(--font-size-badge); line-height: 1.55; }
-.health-card dl { display: grid; grid-template-columns: repeat(2, 1fr); margin: 15px 0 0; padding: 11px 0; border-top: 1px solid var(--color-border); border-bottom: 1px solid var(--color-border); }
+.health-card dl { display: grid; grid-template-columns: 1fr; margin: 15px 0 0; padding: 11px 0; border-top: 1px solid var(--color-border); border-bottom: 1px solid var(--color-border); }
 .health-card dl div { display: flex; flex-direction: column; }
 .health-card dt { color: var(--color-text-muted); font-size: var(--font-size-badge); }
 .health-card dd { margin: 4px 0 0; color: var(--color-text-primary); font-size: var(--font-size-caption); font-weight: var(--font-weight-title); }
 .health-card footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 12px; color: var(--color-text-secondary); font-size: var(--font-size-badge); }
 .health-card footer small { color: var(--color-text-muted); font-size: var(--font-size-badge); }
-.health-bottom-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(360px, 0.75fr); gap: 14px; }
-.incident-list article { display: grid; grid-template-columns: 42px 8px minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 66px; padding: 9px 18px; border-bottom: 1px solid var(--color-border); }
-.incident-list article:last-child { border-bottom: 0; }
-.incident-list__time { color: var(--color-text-muted); font-size: var(--font-size-badge); }
-.incident-list i { width: 7px; height: 7px; border-radius: 50%; background: var(--color-success); }
-.incident-list i.is-warning { background: var(--color-warning); box-shadow: 0 0 0 4px var(--color-warning-light); }
-.incident-list strong { color: var(--color-text-heading); font-size: var(--font-size-caption); }
-.incident-list p { margin: 4px 0 0; color: var(--color-text-secondary); font-size: var(--font-size-badge); }
-.boundary-diagram { display: grid; grid-template-columns: 1fr 22px 1fr; align-items: center; gap: 7px; padding: 23px 18px 15px; }
-.boundary-node { display: flex; min-height: 104px; flex-direction: column; align-items: center; justify-content: center; padding: 12px; border: 1px solid var(--color-border); border-radius: var(--radius-card); color: var(--color-primary); background: var(--color-primary-light); text-align: center; }
-.boundary-node--worker { color: var(--color-success-strong); background: var(--color-success-light); }
-.boundary-node strong { font-size: var(--font-size-caption); }
-.boundary-node span { margin-top: 5px; font-size: var(--font-size-badge); }
-.boundary-node small { margin-top: 8px; color: var(--color-text-muted); font-size: var(--font-size-badge); }
-.boundary-arrow { color: var(--color-text-muted); text-align: center; }
-.boundary-note { margin: 0 18px 18px; padding: 10px; border-radius: var(--radius-button); color: var(--color-text-secondary); background: var(--color-bg-subtle); font-size: var(--font-size-badge); line-height: 1.6; }
-@media (max-width: 1180px) { .health-summary { align-items: flex-start; flex-direction: column; } .health-summary > dl { width: 100%; } .health-summary > dl div:first-child { padding-left: 0; border-left: 0; } }
-@media (max-width: 960px) { .health-grid { grid-template-columns: repeat(2, 1fr); } .health-bottom-grid { grid-template-columns: 1fr; } }
-@media (max-width: 640px) { .health-grid { grid-template-columns: 1fr; } .health-summary > dl { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; } .health-summary > dl div { min-width: 0; padding: 0; border-left: 0; } }
+@media (max-width: 960px) { .health-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 640px) { .health-grid { grid-template-columns: 1fr; } }
 </style>

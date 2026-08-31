@@ -47,7 +47,7 @@ requireFragments('../../packages/admin-components/src/AdminShell.vue', [
   '运营概览',
   'Agent 治理',
   '组织与权限',
-  '成员管理',
+  '工具权限',
   '模型用量',
   '模型治理',
   '运行治理',
@@ -57,6 +57,12 @@ requireFragments('../../packages/admin-components/src/AdminShell.vue', [
   '安全与运维',
   '返回员工工作台',
 ])
+forbidFragments('../../packages/admin-components/src/AdminShell.vue', [
+  'environmentLabel',
+  'environment-status',
+  '原型接口',
+])
+forbidFragments('index.html', ['交互原型'])
 
 const adminShell = read('../../packages/admin-components/src/AdminShell.vue')
 const securityGroupIndex = adminShell.indexOf("label: '安全与运维'")
@@ -75,8 +81,7 @@ requireFragments('src/router/index.ts', [
   "meta: { title: 'Runtimes'",
   "meta: { title: 'Session 列表'",
   "meta: { title: '工作空间'",
-  "meta: { title: '成员管理'",
-  "meta: { title: '权限与数据范围'",
+  "meta: { title: '工具权限'",
   "meta: { title: '审计记录'",
   "meta: { title: '系统健康'",
 ])
@@ -86,7 +91,6 @@ const businessViews = [
   'AgentManagementView.vue',
   'CapabilityManagementView.vue',
   'ModelUsageView.vue',
-  'MemberManagementView.vue',
   'PermissionManagementView.vue',
   'AuditView.vue',
   'SystemHealthView.vue',
@@ -99,7 +103,6 @@ const listViews = [
   'AgentManagementView.vue',
   'CapabilityManagementView.vue',
   'ModelUsageView.vue',
-  'MemberManagementView.vue',
   'PermissionManagementView.vue',
   'AuditView.vue',
   'RuntimeManagementView.vue',
@@ -124,16 +127,15 @@ requireFragments('src/views/CapabilityManagementView.vue', [
   'data-action="view-connector"',
   '工具目录',
   '连接器状态',
-  '一期由实施团队预置',
-  '一期由实施团队配置',
 ])
 forbidFragments('src/views/CapabilityManagementView.vue', [
   'data-action="edit-tool"',
   'data-action="edit-connector"',
   'data-action="create-tools"',
   'data-action="create-connectors"',
+  '一期由实施团队预置',
+  '一期由实施团队配置',
 ])
-requireFragments('src/views/MemberManagementView.vue', ['data-action="view-member"'])
 requireFragments('src/views/ModelUsageView.vue', [
   'data-action="view-model-usage"',
   'data-action="view-employee-model-usage"',
@@ -148,9 +150,15 @@ requireFragments('src/views/ModelGovernanceView.vue', [
   '密钥正文未进入 dsh-work',
   'Agent 不单独配置模型',
 ])
-requireFragments('src/views/PermissionManagementView.vue', ['data-action="configure-role"', 'data-action="configure-tool-permission"'])
+requireFragments('src/views/PermissionManagementView.vue', ['data-action="configure-tool-permission"'])
 requireFragments('src/views/AuditView.vue', ['data-action="view-audit"'])
 requireFragments('src/views/SystemHealthView.vue', ['data-action="refresh-health"'])
+forbidFragments('src/views/SystemHealthView.vue', [
+  'MVP',
+  '模块化单体',
+  '接入状态',
+  '运行边界',
+])
 requireFragments('src/views/RuntimeManagementView.vue', [
   'data-action="view-runtime"',
   'data-action="check-runtime"',

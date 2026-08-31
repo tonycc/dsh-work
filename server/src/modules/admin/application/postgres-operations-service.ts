@@ -64,7 +64,7 @@ export class PostgresOperationsService {
     return rows.map((row) => ({
       id: row.id,
       name: row.nodeName,
-      environment: '本地 MVP',
+      environment: '本地环境',
       mode: 'dsh-worker',
       status: liveHealth?.runtimeId === row.id ? liveHealth.status : row.healthStatus,
       schedulingStatus: row.schedulingStatus,
@@ -76,9 +76,6 @@ export class PostgresOperationsService {
       activeWorkers: row.activeWorkers,
       queuedRuns: row.queuedRuns,
       attemptTimeoutMinutes: Math.ceil(row.timeoutSeconds / 60),
-      cpuUsage: '由主机监控采集',
-      memoryUsage: '由主机监控采集',
-      latency: '本地 stdio',
       lastHeartbeat: row.lastHeartbeatAt ? formatDateTime(row.lastHeartbeatAt) : '—',
       checkedAt: '刚刚',
       healthMessage: liveHealth?.runtimeId === row.id
@@ -198,13 +195,13 @@ export class PostgresOperationsService {
 
   async getSessions(): Promise<SessionDefinition[]> {
     const rows = await this.database<{
-      id: string; title: string; user: string; workspaceId: string; workspaceName: string; workspaceType: 'personal' | 'team';
+      id: string; title: string; user: string; workspaceId: string; workspaceName: string;
       agentId: string; agentName: string; agentVersion: string; runId: string | null; status: SessionDefinition['status'] | null;
       runCount: number; messageCount: number; tokenUsage: number; createdAt: Date; updatedAt: Date;
       traceId: string | null
     }[]>`
       select s.id, s.title, u.display_name as "user", s.workspace_id as "workspaceId",
-             w.name as "workspaceName", w.workspace_type as "workspaceType",
+             w.name as "workspaceName",
              a.id as "agentId", a.name as "agentName", av.version as "agentVersion",
              latest.id as "runId", latest.status, count(distinct r.id)::integer as "runCount",
              count(distinct m.id)::integer as "messageCount",
@@ -221,20 +218,18 @@ export class PostgresOperationsService {
         left join model_usage_events mu on mu.tenant_id = s.tenant_id and mu.run_id = r.id
         left join lateral (select trace_id from run_events where tenant_id = s.tenant_id and run_id = latest.id order by stream_position desc limit 1) ev on true
        where s.tenant_id = ${tenantId}
-       group by s.id, u.display_name, w.name, w.workspace_type, a.id, a.name, av.version, latest.id, latest.status, ev.trace_id
+       group by s.id, u.display_name, w.name, a.id, a.name, av.version, latest.id, latest.status, ev.trace_id
        order by s.last_active_at desc
     `
     return rows.map((row) => ({
       id: row.id,
       title: row.title,
       user: row.user,
-      department: '供应链中心',
       workspaceId: row.workspaceId,
       workspaceName: row.workspaceName,
       agentId: row.agentId,
       agentName: row.agentName,
       agentVersion: row.agentVersion,
-      runtimeId: 'runtime-local-01',
       runId: row.runId ?? '—',
       status: row.status ?? 'queued',
       runCount: row.runCount,
@@ -243,19 +238,15 @@ export class PostgresOperationsService {
       createdAt: formatDateTime(row.createdAt),
       updatedAt: formatDateTime(row.updatedAt),
       traceId: row.traceId ?? '—',
-      dataScopes: row.workspaceType === 'personal'
-        ? ['个人空间范围', '员工业务数据范围']
-        : ['工作空间成员范围', '员工业务数据范围'],
-      summary: '真实 Session/Run 元数据；平台管理员默认不查看消息正文。',
     }))
   }
 
   async getManagedWorkspaces(): Promise<ManagedWorkspaceDefinition[]> {
     const rows = await this.database<{
-      id: string; name: string; description: string; manager: string; memberCount: number;
+      id: string; name: string; description: string; creator: string; memberCount: number;
       sessionCount: number; artifactCount: number; fileCount: number; createdAt: Date; updatedAt: Date
     }[]>`
-      select w.id, w.name, w.description, u.display_name as manager,
+      select w.id, w.name, w.description, u.display_name as creator,
              count(distinct wm.user_id)::integer as "memberCount", count(distinct s.id)::integer as "sessionCount",
              count(distinct a.id)::integer as "artifactCount", count(distinct f.id)::integer as "fileCount",
              w.created_at as "createdAt", greatest(w.created_at, coalesce(max(s.last_active_at), w.created_at)) as "updatedAt"
@@ -268,10 +259,9 @@ export class PostgresOperationsService {
        group by w.id, u.display_name order by w.created_at desc
     `
     return rows.map((row) => ({
-      id: row.id, name: row.name, description: row.description, type: 'team', status: 'active',
-      ownerDepartment: '团队工作空间', manager: row.manager, memberCount: row.memberCount,
+      id: row.id, name: row.name, description: row.description, type: 'team',
+      creator: row.creator, memberCount: row.memberCount,
       sessionCount: row.sessionCount, artifactCount: row.artifactCount, fileCount: row.fileCount,
-      members: [row.manager], agentNames: ['dsh-work 助手'], dataScopes: ['成员企业授权范围'],
       createdAt: formatDateTime(row.createdAt), updatedAt: formatDateTime(row.updatedAt),
     }))
   }
@@ -366,15 +356,14 @@ export class PostgresOperationsService {
       ? '尚无最近执行样本'
       : `最近 ${sampleSize} 次完成中 ${quality?.succeeded ?? 0} 次成功、${failed} 次失败`
     return [
-      { id: 'server', name: 'dsh-work 服务端', category: 'application', status: 'healthy', latency: '本机', availability: '当前可用', message: 'Node.js 模块化单体运行正常', checkedAt: '刚刚' },
-      { id: 'postgres', name: 'PostgreSQL', category: 'dependency', status: 'healthy', latency: '本机', availability: '当前可用', message: '真实持久化已连接', checkedAt: '刚刚' },
+      { id: 'server', name: 'dsh-work 服务端', category: 'application', status: 'healthy', detail: '当前可用', message: '服务端响应正常', checkedAt: '刚刚' },
+      { id: 'postgres', name: 'PostgreSQL', category: 'dependency', status: 'healthy', detail: '当前可用', message: '数据服务连接正常', checkedAt: '刚刚' },
       {
         id: runtime?.id ?? 'runtime',
         name: 'DSH Runtime',
         category: 'runtime',
         status: runtimeStatus,
-        latency: runtime?.latency ?? '—',
-        availability: executionQuality,
+        detail: executionQuality,
         message: runtime ? `${runtime.healthMessage}；调度：${runtime.schedulingStatus}` : 'Runtime 未注册',
         checkedAt: '刚刚',
       },
@@ -396,12 +385,12 @@ export class PostgresOperationsService {
   async getModelUsage(): Promise<ModelUsageRecord[]> {
     const rows = await this.database<{
       id: string; occurredAt: Date; runId: string; provider: string; model: string; status: ModelUsageRecord['status'];
-      inputTokens: number; outputTokens: number; latencyMs: number | null; costAmount: string | null; traceId: string;
+      inputTokens: number; outputTokens: number; latencyMs: number | null; traceId: string;
       employeeId: string; employeeName: string; departmentId: string | null; agentId: string; modelRoute: string
     }[]>`
       select mu.id, mu.occurred_at as "occurredAt", mu.run_id as "runId", mu.provider, mu.model, mu.status,
              mu.input_tokens::integer as "inputTokens", mu.output_tokens::integer as "outputTokens",
-             mu.latency_ms as "latencyMs", mu.cost_amount::text as "costAmount", mu.trace_id as "traceId",
+             mu.latency_ms as "latencyMs", mu.trace_id as "traceId",
              u.id as "employeeId", u.display_name as "employeeName", u.department_id as "departmentId",
              a.id as "agentId", coalesce(ra.model_route_snapshot ->> 'routeKey', 'default') as "modelRoute"
         from model_usage_events mu
@@ -418,10 +407,10 @@ export class PostgresOperationsService {
       id: row.id, time: formatDateTime(row.occurredAt), runId: row.runId,
       agentId: row.agentId, employeeId: row.employeeId, employeeName: row.employeeName,
       department: departmentLabel(row.departmentId), provider: row.provider,
-      model: row.model, modelRoute: row.modelRoute, dataLevel: 'L1', status: row.status,
+      model: row.model, modelRoute: row.modelRoute, status: row.status,
       promptTokens: row.inputTokens, completionTokens: row.outputTokens,
       totalTokens: row.inputTokens + row.outputTokens, latencyMs: row.latencyMs ?? 0,
-      costCny: Number(row.costAmount ?? 0), traceId: row.traceId,
+      traceId: row.traceId,
     }))
   }
 

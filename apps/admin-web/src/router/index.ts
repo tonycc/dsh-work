@@ -17,7 +17,6 @@ const router = createRouter({
     { path: '/admin/workspaces', redirect: '/workspaces' },
     { path: '/admin/model-usage', redirect: '/model-usage' },
     { path: '/admin/model-governance', redirect: '/model-governance' },
-    { path: '/admin/members', redirect: '/members' },
     { path: '/admin/permissions', redirect: '/permissions' },
     { path: '/admin/audit', redirect: '/audit' },
     { path: '/admin/health', redirect: '/health' },
@@ -70,16 +69,10 @@ const router = createRouter({
       meta: { title: '工作空间', requiresAdmin: true },
     },
     {
-      path: '/members',
-      name: 'members',
-      component: () => import('@/views/MemberManagementView.vue'),
-      meta: { title: '成员管理', requiresAdmin: true },
-    },
-    {
       path: '/permissions',
       name: 'permissions',
       component: () => import('@/views/PermissionManagementView.vue'),
-      meta: { title: '权限与数据范围', requiresAdmin: true },
+      meta: { title: '工具权限', requiresAdmin: true },
     },
     {
       path: '/audit',

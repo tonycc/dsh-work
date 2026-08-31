@@ -186,8 +186,6 @@ onMounted(() => contentStore.load())
       </div>
     </section>
 
-    <el-alert type="info" :closable="false" show-icon title="Runtime 是长期存在的执行环境，可管理多个临时 DSH Worker；一期仅开放最大并发、单次超时和调度状态配置。" />
-
     <section v-loading="contentStore.loading" class="metric-grid">
       <article class="metric-card"><div class="metric-label">登记 Runtime</div><div class="metric-value">{{ contentStore.runtimes.length }}</div><div class="metric-detail">{{ healthyCount }} 个当前健康</div></article>
       <article class="metric-card"><div class="metric-label">最大并发 Worker</div><div class="metric-value">{{ totalCapacity }}</div><div class="metric-detail">所有 Runtime 配置容量之和</div></article>
@@ -198,10 +196,10 @@ onMounted(() => contentStore.load())
     <section class="content-panel content-panel--flush runtime-table">
       <el-table class="data-table" v-loading="contentStore.loading" :data="filteredRuntimes" empty-text="暂无匹配的 Runtime" @row-click="inspect">
         <el-table-column label="Runtime" min-width="205">
-          <template #default="scope"><div class="runtime-cell"><span><el-icon><Cpu /></el-icon></span><div><strong>{{ scope.row.name }}</strong><small class="mono">{{ scope.row.id }} · {{ scope.row.mode === 'prototype' ? '原型模拟' : 'DSH Worker 环境' }}</small></div></div></template>
+          <template #default="scope"><div class="runtime-cell"><span><el-icon><Cpu /></el-icon></span><div><strong>{{ scope.row.name }}</strong><small class="mono">{{ scope.row.id }}</small></div></div></template>
         </el-table-column>
         <el-table-column prop="environment" label="环境" min-width="105" />
-        <el-table-column label="健康" width="92"><template #default="scope"><StatusTag :status="scope.row.status" :label="scope.row.mode === 'prototype' && scope.row.status === 'healthy' ? '模拟正常' : undefined" dot /></template></el-table-column>
+        <el-table-column label="健康" width="92"><template #default="scope"><StatusTag :status="scope.row.status" dot /></template></el-table-column>
         <el-table-column label="调度" width="105"><template #default="scope"><StatusTag :status="schedulingTone(scope.row.schedulingStatus)" :label="schedulingLabel(scope.row.schedulingStatus)" /></template></el-table-column>
         <el-table-column prop="version" label="版本" min-width="105" />
         <el-table-column label="Worker 负载" width="122"><template #default="scope">{{ scope.row.activeWorkers }} / {{ scope.row.maxConcurrentWorkers }} · 排队 {{ scope.row.queuedRuns }}</template></el-table-column>
@@ -217,11 +215,10 @@ onMounted(() => contentStore.load())
 
     <el-drawer v-model="drawerOpen" size="min(590px, 100vw)" title="Runtime 详情">
       <template v-if="selectedRuntime">
-        <div class="runtime-detail__hero"><span><el-icon><Cpu /></el-icon></span><div><h2>{{ selectedRuntime.name }}</h2><p class="mono">{{ selectedRuntime.id }}</p></div><StatusTag :status="selectedRuntime.status" :label="selectedRuntime.mode === 'prototype' && selectedRuntime.status === 'healthy' ? '模拟正常' : undefined" /></div>
+        <div class="runtime-detail__hero"><span><el-icon><Cpu /></el-icon></span><div><h2>{{ selectedRuntime.name }}</h2><p class="mono">{{ selectedRuntime.id }}</p></div><StatusTag :status="selectedRuntime.status" /></div>
         <el-alert :type="selectedRuntime.status === 'offline' ? 'warning' : 'info'" :closable="false" show-icon :title="selectedRuntime.healthMessage" />
         <dl class="runtime-detail__rows">
           <div><dt>运行环境</dt><dd>{{ selectedRuntime.environment }}</dd></div>
-          <div><dt>Runtime 类型</dt><dd>{{ selectedRuntime.mode === 'prototype' ? '原型运行环境' : 'DSH Worker 运行环境' }}</dd></div>
           <div><dt>健康状态</dt><dd><StatusTag :status="selectedRuntime.status" /></dd></div>
           <div><dt>调度状态</dt><dd><StatusTag :status="schedulingTone(selectedRuntime.schedulingStatus)" :label="schedulingLabel(selectedRuntime.schedulingStatus)" /></dd></div>
           <div><dt>Runtime 版本</dt><dd>{{ selectedRuntime.version }}</dd></div>
@@ -229,8 +226,6 @@ onMounted(() => contentStore.load())
           <div><dt>Worker 容量</dt><dd>{{ selectedRuntime.activeWorkers }} / {{ selectedRuntime.maxConcurrentWorkers }}</dd></div>
           <div><dt>单次执行超时</dt><dd>{{ selectedRuntime.attemptTimeoutMinutes }} 分钟</dd></div>
           <div><dt>排队运行</dt><dd>{{ selectedRuntime.queuedRuns }}</dd></div>
-          <div><dt>资源占用</dt><dd>CPU {{ selectedRuntime.cpuUsage }} · 内存 {{ selectedRuntime.memoryUsage }}</dd></div>
-          <div><dt>响应延迟</dt><dd>{{ selectedRuntime.latency }}</dd></div>
           <div><dt>最后心跳</dt><dd>{{ selectedRuntime.lastHeartbeat }}</dd></div>
           <div><dt>检查时间</dt><dd>{{ selectedRuntime.checkedAt }}</dd></div>
         </dl>
@@ -251,7 +246,7 @@ onMounted(() => contentStore.load())
         </el-form-item>
         <el-form-item label="单次执行超时时间" prop="attemptTimeoutMinutes">
           <el-input-number v-model="configurationForm.attemptTimeoutMinutes" class="configuration-number" :min="1" :max="60" :step="5" controls-position="right" aria-label="单次执行超时时间（分钟）" />
-          <p class="field-help">这是 Runtime 硬上限；若 Agent 超时更短则取较短值，超过后 Adapter 将终止当前 Attempt。</p>
+          <p class="field-help">这是 Runtime 硬上限；若 Agent 超时更短则取较短值，超过后系统将终止当前 Attempt。</p>
         </el-form-item>
         <el-form-item label="调度状态" prop="schedulingStatus">
           <el-radio-group v-model="configurationForm.schedulingStatus" aria-label="Runtime 调度状态">

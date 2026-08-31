@@ -13,30 +13,21 @@ import {
   PieChart,
   Tickets,
   Tools,
-  User,
 } from '@element-plus/icons-vue'
 
 import { AppLogo } from '@dsh-work/ui-core'
 
-type AdminRole = 'platform_admin' | 'auditor'
-
-const props = withDefaults(
-  defineProps<{
-    currentPath: string
-    routeTitle: string
-    userName: string
-    avatarText: string
-    role: AdminRole
-    roleLabel: string
-    environmentLabel?: string
-  }>(),
-  { environmentLabel: '原型接口' },
-)
+const props = defineProps<{
+  currentPath: string
+  routeTitle: string
+  userName: string
+  avatarText: string
+  roleLabel: string
+}>()
 
 const emit = defineEmits<{
   navigate: [path: string]
   openWorkbench: []
-  switchRole: [role: AdminRole]
 }>()
 const mobileOpen = ref(false)
 const collapsedGroups = ref<Record<string, boolean>>({})
@@ -65,8 +56,7 @@ const navigationGroups = [
     label: '组织与权限',
     items: [
       { label: '工作空间', path: '/workspaces', icon: FolderOpened },
-      { label: '成员管理', path: '/members', icon: User },
-      { label: '权限与数据范围', path: '/permissions', icon: Key },
+      { label: '工具权限', path: '/permissions', icon: Key },
     ],
   },
   {
@@ -94,9 +84,6 @@ function navigate(path: string) {
 function onRoleCommand(command: string | number | object) {
   const value = String(command)
   if (value === 'workbench') emit('openWorkbench')
-  if (value.startsWith('role:')) {
-    emit('switchRole', value.replace('role:', '') as AdminRole)
-  }
 }
 
 watch(
@@ -150,7 +137,6 @@ watch(
           <strong>{{ routeTitle }}</strong>
         </div>
         <div class="admin-topbar__actions">
-          <span class="environment-status"><i></i>{{ environmentLabel }}</span>
           <el-dropdown trigger="click" placement="bottom-end" @command="onRoleCommand">
             <button class="header-user-button" type="button">
               <span class="header-user-button__avatar">{{ avatarText }}</span>
@@ -159,10 +145,7 @@ watch(
             </button>
             <template #dropdown>
               <el-dropdown-menu>
-                <div class="role-menu__heading">管理角色预览</div>
-                <el-dropdown-item command="role:platform_admin"><el-icon><User /></el-icon>平台管理员</el-dropdown-item>
-                <el-dropdown-item command="role:auditor"><el-icon><User /></el-icon>安全审计员</el-dropdown-item>
-                <el-dropdown-item divided command="workbench"><el-icon><Grid /></el-icon>返回员工工作台</el-dropdown-item>
+                <el-dropdown-item command="workbench"><el-icon><Grid /></el-icon>返回员工工作台</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -196,8 +179,6 @@ watch(
 .admin-topbar { position: sticky; z-index: 20; top: 0; display: flex; min-height: var(--dsh-topbar-height); align-items: center; justify-content: space-between; gap: 18px; padding: 0 20px; border-bottom: 1px solid var(--color-border); background: var(--color-bg-base); }
 .admin-topbar__context, .admin-topbar__actions { display: flex; align-items: center; gap: 10px; }
 .admin-topbar__context strong { color: var(--color-text-heading); font-size: var(--font-size-header); font-weight: var(--font-weight-heading); }
-.environment-status { display: inline-flex; align-items: center; gap: 6px; color: var(--color-text-muted); font-size: var(--font-size-badge); }
-.environment-status i { width: 6px; height: 6px; border-radius: 50%; background: var(--color-success); }
 .header-user-button { display: flex; min-width: 0; align-items: center; gap: 8px; padding: 3px 7px; border: 0; border-radius: var(--radius-tag); color: var(--color-text-primary); background: transparent; cursor: pointer; text-align: left; }
 .header-user-button:hover { background: var(--color-bg-subtle); }
 .header-user-button__avatar { display: grid; width: 28px; height: 28px; flex: 0 0 auto; place-items: center; border-radius: 50%; color: var(--color-text-primary); background: var(--color-bg-subtle); font-size: var(--font-size-caption); font-weight: var(--font-weight-title); }

@@ -23,6 +23,19 @@ for (const capability of ['Last-Event-ID', '/cancel', '/retry']) {
   const token = capability === 'Last-Event-ID' ? 'last-event-id' : capability
   if (!routes.includes(token)) failures.push(`M3 对话路由缺少 ${capability}`)
 }
+if (!routes.includes('router.delete(`${basePath}/sessions/:sessionId`')) {
+  failures.push('M3 对话路由缺少删除 Session 能力')
+}
+
+const orchestration = readFileSync(resolve(root, 'server/src/modules/run/run-orchestration-service.ts'), 'utf8')
+if (orchestration.includes('publishAssistantResult')) {
+  failures.push('普通回答完成时不得自动发布 Artifact')
+}
+
+const orchestrationTest = readFileSync(resolve(root, 'server/src/infrastructure/postgres/m3-orchestration.integration.test.ts'), 'utf8')
+if (!orchestrationTest.includes('assert.equal(task.artifacts.length, 0)')) {
+  failures.push('M3 集成测试必须覆盖普通回答不生成 Artifact')
+}
 
 const packageJson = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'))
 for (const script of ['verify:m3', 'test:m3:integration']) {

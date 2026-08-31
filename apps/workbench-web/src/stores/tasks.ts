@@ -108,6 +108,13 @@ export const useTaskStore = defineStore('tasks', () => {
     return task
   }
 
+  async function deleteConversation(sessionId: string) {
+    await workbenchApi.deleteSession(sessionId)
+    const removed = tasks.value.filter((task) => task.sessionId === sessionId)
+    for (const task of removed) closeStream(task.id)
+    tasks.value = tasks.value.filter((task) => task.sessionId !== sessionId)
+  }
+
   function subscribe(runId: string, replace = false) {
     if (replace) closeStream(runId)
     if (streams.has(runId)) return
@@ -204,7 +211,7 @@ export const useTaskStore = defineStore('tasks', () => {
 
   return {
     tasks, loading, initialized, activeTasks, recentTasks, load, getTask,
-    createTask, sendMessage, cancelTask, retryTask, refreshRun,
+    createTask, sendMessage, cancelTask, retryTask, deleteConversation, refreshRun,
   }
 })
 

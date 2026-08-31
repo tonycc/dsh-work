@@ -37,11 +37,7 @@ export const useContentStore = defineStore('workbench-content', () => {
   async function createTeamWorkspace(input: {
     name: string
     description: string
-    owningTeam: string
-    creator: string
   }) {
-    void input.owningTeam
-    void input.creator
     const workspace = await workbenchApi.createWorkspace({
       name: input.name,
       description: input.description || '团队共享的对话、文件与成果协作空间。',

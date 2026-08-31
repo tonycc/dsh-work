@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Download, Document, View } from '@element-plus/icons-vue'
+import { Download, Document } from '@element-plus/icons-vue'
 
 interface ArtifactCardItem {
   name: string
@@ -16,7 +16,6 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  preview: []
   download: []
 }>()
 
@@ -41,7 +40,6 @@ const typeLabel = computed(() => props.artifact.type.toUpperCase())
       </div>
     </div>
     <div class="artifact-card__actions">
-      <el-button text :icon="View" @click="emit('preview')">预览</el-button>
       <el-button text :icon="Download" @click="emit('download')">下载</el-button>
     </div>
   </article>

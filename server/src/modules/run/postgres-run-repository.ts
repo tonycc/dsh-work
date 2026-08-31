@@ -75,28 +75,38 @@ export class PostgresRunRepository implements RunRepository {
 
   async createRun(input: CreateRunInput): Promise<RunRecord> {
     const runId = `run-${randomUUID()}`
-    const [created] = await this.database<RunRow[]>`
-      insert into runs (
-        id, tenant_id, session_id, requested_by, idempotency_key, status
-      ) values (
-        ${runId}, ${input.tenantId}, ${input.sessionId}, ${input.requestedBy}, ${input.idempotencyKey}, 'queued'
-      )
-      on conflict (tenant_id, session_id, requested_by, idempotency_key) do nothing
-      returning id, tenant_id as "tenantId", session_id as "sessionId", requested_by as "requestedBy",
-                idempotency_key as "idempotencyKey", status, current_attempt_id as "currentAttemptId",
-                created_at as "createdAt", updated_at as "updatedAt"
-    `
-    if (created) return mapRun(created)
-    const [existing] = await this.database<RunRow[]>`
-      select id, tenant_id as "tenantId", session_id as "sessionId", requested_by as "requestedBy",
-             idempotency_key as "idempotencyKey", status, current_attempt_id as "currentAttemptId",
-             created_at as "createdAt", updated_at as "updatedAt"
-        from runs
-       where tenant_id = ${input.tenantId} and session_id = ${input.sessionId}
-         and requested_by = ${input.requestedBy} and idempotency_key = ${input.idempotencyKey}
-    `
-    if (!existing) throw new Error('幂等 Run 查询失败')
-    return mapRun(existing)
+    return this.database.begin(async (transaction) => {
+      const [session] = await transaction<{ id: string }[]>`
+        select id from sessions
+         where tenant_id = ${input.tenantId} and id = ${input.sessionId}
+           and created_by = ${input.requestedBy} and status = 'active'
+         for update
+      `
+      if (!session) throw new Error(`Session 不存在或不可访问：${input.sessionId}`)
+
+      const [created] = await transaction<RunRow[]>`
+        insert into runs (
+          id, tenant_id, session_id, requested_by, idempotency_key, status
+        ) values (
+          ${runId}, ${input.tenantId}, ${input.sessionId}, ${input.requestedBy}, ${input.idempotencyKey}, 'queued'
+        )
+        on conflict (tenant_id, session_id, requested_by, idempotency_key) do nothing
+        returning id, tenant_id as "tenantId", session_id as "sessionId", requested_by as "requestedBy",
+                  idempotency_key as "idempotencyKey", status, current_attempt_id as "currentAttemptId",
+                  created_at as "createdAt", updated_at as "updatedAt"
+      `
+      if (created) return mapRun(created)
+      const [existing] = await transaction<RunRow[]>`
+        select id, tenant_id as "tenantId", session_id as "sessionId", requested_by as "requestedBy",
+               idempotency_key as "idempotencyKey", status, current_attempt_id as "currentAttemptId",
+               created_at as "createdAt", updated_at as "updatedAt"
+          from runs
+         where tenant_id = ${input.tenantId} and session_id = ${input.sessionId}
+           and requested_by = ${input.requestedBy} and idempotency_key = ${input.idempotencyKey}
+      `
+      if (!existing) throw new Error('幂等 Run 查询失败')
+      return mapRun(existing)
+    })
   }
 
   async getRun(tenantId: string, runId: string) {
@@ -123,9 +133,12 @@ export class PostgresRunRepository implements RunRepository {
   async createAttempt(input: CreateAttemptInput): Promise<RunAttemptRecord> {
     return this.database.begin(async (transaction) => {
       const [run] = await transaction<{ status: RunState }[]>`
-        select status from runs where tenant_id = ${input.tenantId} and id = ${input.runId} for update
+        select r.status from runs r
+        join sessions s on s.tenant_id = r.tenant_id and s.id = r.session_id
+        where r.tenant_id = ${input.tenantId} and r.id = ${input.runId} and s.status = 'active'
+        for update of s, r
       `
-      if (!run) throw new Error(`Run 不存在：${input.runId}`)
+      if (!run) throw new Error(`Run 不存在或所属 Session 已归档：${input.runId}`)
       if (!['queued', 'failed', 'cancelled'].includes(run.status)) {
         throw new Error(`Run 当前状态不能创建 Attempt：${run.status}`)
       }

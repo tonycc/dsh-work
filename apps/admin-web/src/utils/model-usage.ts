@@ -12,7 +12,6 @@ export interface EmployeeModelUsageSummary {
   promptTokens: number
   completionTokens: number
   totalTokens: number
-  costCny: number
   averageLatencyMs: number
   lastUsedAt: string
 }
@@ -34,7 +33,6 @@ export function summarizeModelUsageByEmployee(records: ModelUsageRecord[]): Empl
       promptTokens: 0,
       completionTokens: 0,
       totalTokens: 0,
-      costCny: 0,
       averageLatencyMs: 0,
       lastUsedAt: record.time,
     }
@@ -43,7 +41,6 @@ export function summarizeModelUsageByEmployee(records: ModelUsageRecord[]): Empl
     current.promptTokens += record.promptTokens
     current.completionTokens += record.completionTokens
     current.totalTokens += record.totalTokens
-    current.costCny += record.costCny
 
     if (record.status === 'success') {
       current.successCount += 1

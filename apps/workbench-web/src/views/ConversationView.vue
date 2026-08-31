@@ -5,14 +5,11 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   ArrowDown,
   ArrowLeft,
-  CircleCheck,
   Close,
   CopyDocument,
   DataLine,
   Document,
-  Download,
   Lock,
-  MoreFilled,
   RefreshRight,
   Share,
   VideoPause,
@@ -29,14 +26,11 @@ const router = useRouter()
 const taskStore = useTaskStore()
 
 const detailsOpen = ref(false)
-const previewArtifact = ref<Artifact>()
-const previewOpen = ref(false)
 const conversationScroll = ref<HTMLElement>()
 const showJumpToLatest = ref(false)
-const messageFeedback = ref<Record<string, 'up' | 'down'>>({})
 
 const task = computed(() => taskStore.getTask(String(route.params.id)))
-const canStop = computed(() => task.value && ['queued', 'running'].includes(task.value.status))
+const canStop = computed(() => task.value && ['queued', 'running', 'awaiting_approval'].includes(task.value.status))
 const canRetry = computed(() => task.value && ['failed', 'cancelled'].includes(task.value.status)
   && (task.value.error?.retryable ?? true))
 const currentStep = computed(() =>
@@ -105,15 +99,6 @@ function copyAnswer(content: string) {
   ElMessage.success('回答已复制')
 }
 
-function setFeedback(messageId: string, value: 'up' | 'down') {
-  if (messageFeedback.value[messageId] === value) {
-    delete messageFeedback.value[messageId]
-    return
-  }
-  messageFeedback.value[messageId] = value
-  ElMessage.success(value === 'up' ? '感谢反馈' : '已记录问题反馈')
-}
-
 function speakAnswer(content: string) {
   window.speechSynthesis.cancel()
   const utterance = new SpeechSynthesisUtterance(content)
@@ -125,32 +110,6 @@ function speakAnswer(content: string) {
 function copyConversationLink() {
   void navigator.clipboard.writeText(window.location.href)
   ElMessage.success('对话链接已复制')
-}
-
-function exportRun() {
-  if (!task.value) return
-  const content = task.value.messages
-    .map((message) => `${message.role === 'user' ? '我' : 'dsh-work'}：${message.content}`)
-    .join('\n\n')
-  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = `${task.value.title}-对话记录.txt`
-  anchor.click()
-  URL.revokeObjectURL(url)
-  ElMessage.success('对话记录已导出')
-}
-
-function onMoreCommand(command: string | number | object) {
-  const value = String(command)
-  if (value === 'copy-link') copyConversationLink()
-  if (value === 'export') exportRun()
-}
-
-function preview(item: Artifact) {
-  previewArtifact.value = item
-  previewOpen.value = true
 }
 
 function download(item: Artifact) {
@@ -230,22 +189,6 @@ watch(
             aria-label="重新执行本轮"
             @click="retryRun"
           />
-          <el-dropdown @command="onMoreCommand">
-            <el-button text :icon="MoreFilled" aria-label="更多对话操作" />
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item command="copy-link">
-                  <el-icon><Share /></el-icon>
-                  复制对话链接
-                </el-dropdown-item>
-                <el-dropdown-item command="export">
-                  <el-icon><Download /></el-icon>
-                  导出对话记录
-                </el-dropdown-item>
-                <el-dropdown-item disabled>移动到其他工作空间</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
         </div>
       </header>
 
@@ -292,7 +235,7 @@ watch(
                     v-for="artifact in task.artifacts"
                     :key="artifact.id"
                     type="button"
-                    @click="preview(artifact)"
+                    @click="download(artifact)"
                   >
                     <span><el-icon><Document /></el-icon></span>
                     <span>
@@ -306,22 +249,6 @@ watch(
                 <div class="assistant-actions">
                   <button type="button" aria-label="复制回答" @click="copyAnswer(message.content)">
                     <el-icon><CopyDocument /></el-icon>
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="回答有帮助"
-                    :class="{ 'is-active': messageFeedback[message.id] === 'up' }"
-                    @click="setFeedback(message.id, 'up')"
-                  >
-                    <span aria-hidden="true">♡</span>
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="回答需要改进"
-                    :class="{ 'is-active': messageFeedback[message.id] === 'down' }"
-                    @click="setFeedback(message.id, 'down')"
-                  >
-                    <span aria-hidden="true">◇</span>
                   </button>
                   <button type="button" aria-label="朗读回答" @click="speakAnswer(message.content)">
                     <span aria-hidden="true">◖</span>
@@ -456,7 +383,7 @@ watch(
               v-for="artifact in task.artifacts"
               :key="artifact.id"
               type="button"
-              @click="preview(artifact)"
+              @click="download(artifact)"
             >
               <el-icon><Document /></el-icon>
               <span><strong>{{ artifact.name }}</strong><small>{{ artifact.size }}</small></span>
@@ -466,37 +393,6 @@ watch(
         </section>
       </el-drawer>
 
-      <el-dialog
-        v-model="previewOpen"
-        width="min(720px, calc(100vw - 32px))"
-        title="成果预览"
-      >
-        <div v-if="previewArtifact" class="artifact-preview">
-          <span class="artifact-preview__icon"><el-icon><Document /></el-icon></span>
-          <h3>{{ previewArtifact.name }}</h3>
-          <p>{{ previewArtifact.summary }}</p>
-          <dl>
-            <div><dt>版本</dt><dd>V{{ previewArtifact.version }}</dd></div>
-            <div><dt>大小</dt><dd>{{ previewArtifact.size }}</dd></div>
-            <div><dt>来源运行</dt><dd class="mono">{{ previewArtifact.runId }}</dd></div>
-          </dl>
-          <div class="artifact-preview__placeholder">
-            <el-icon><CircleCheck /></el-icon>
-            原型已验证预览入口；真实版本将接入文件预览服务。
-          </div>
-        </div>
-        <template #footer>
-          <el-button @click="previewOpen = false">关闭</el-button>
-          <el-button
-            v-if="previewArtifact"
-            type="primary"
-            :icon="Download"
-            @click="download(previewArtifact)"
-          >
-            下载
-          </el-button>
-        </template>
-      </el-dialog>
     </template>
   </div>
 </template>
@@ -697,8 +593,7 @@ watch(
   cursor: pointer;
 }
 
-.assistant-actions button:hover,
-.assistant-actions button.is-active {
+.assistant-actions button:hover {
   color: #175e4d;
   background: #eff6f3;
 }
@@ -1072,73 +967,6 @@ watch(
   margin-top: 3px;
   color: #929692;
   font-size: var(--dsh-font-size-micro);
-}
-
-.artifact-preview {
-  padding: 18px 10px 8px;
-  text-align: center;
-}
-
-.artifact-preview__icon {
-  display: grid;
-  width: 52px;
-  height: 52px;
-  margin: 0 auto;
-  place-items: center;
-  border-radius: 14px;
-  color: #356858;
-  background: #eaf4f0;
-  font-size: var(--dsh-font-size-page-title);
-}
-
-.artifact-preview h3 {
-  margin: 13px 0 0;
-  font-size: var(--dsh-font-size-subheading);
-}
-
-.artifact-preview > p {
-  max-width: 520px;
-  margin: 8px auto 0;
-  color: #737873;
-  font-size: var(--dsh-font-size-caption);
-  line-height: 1.6;
-}
-
-.artifact-preview dl {
-  display: flex;
-  justify-content: center;
-  gap: 28px;
-  margin: 19px 0 0;
-}
-
-.artifact-preview dl div {
-  display: flex;
-  flex-direction: column;
-}
-
-.artifact-preview dt {
-  color: #979b97;
-  font-size: var(--dsh-font-size-micro);
-}
-
-.artifact-preview dd {
-  margin: 4px 0 0;
-  color: #3f443f;
-  font-size: var(--dsh-font-size-badge);
-}
-
-.artifact-preview__placeholder {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 120px;
-  gap: 8px;
-  margin-top: 20px;
-  border: 1px dashed #dfe2de;
-  border-radius: 11px;
-  color: #8a8f8a;
-  background: #fafbfa;
-  font-size: var(--dsh-font-size-badge);
 }
 
 @media (max-width: 720px) {

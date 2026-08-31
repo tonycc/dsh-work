@@ -5,18 +5,15 @@ import { ElMessage } from 'element-plus'
 import { ArrowRight, Plus, Search, User, UserFilled } from '@element-plus/icons-vue'
 
 import { StatusTag } from '@dsh-work/ui-core'
-import { useAuthStore } from '@/stores/auth'
 import { useContentStore } from '@/stores/content'
 import type { Workspace } from '@/types/domain'
 
 const contentStore = useContentStore()
-const authStore = useAuthStore()
 const router = useRouter()
 const query = ref('')
 const createDialogOpen = ref(false)
 const newWorkspaceName = ref('')
 const newWorkspaceDescription = ref('')
-const newWorkspaceTeam = ref('供应链中心')
 const creating = ref(false)
 
 const filteredWorkspaces = computed(() => {
@@ -28,7 +25,7 @@ const filteredWorkspaces = computed(() => {
     .sort((left, right) => Number(right.type === 'personal') - Number(left.type === 'personal'))
 })
 
-const canCreate = computed(() => Boolean(newWorkspaceName.value.trim() && newWorkspaceTeam.value))
+const canCreate = computed(() => Boolean(newWorkspaceName.value.trim()))
 
 function openWorkspace(workspace: Workspace) {
   void router.push(`/workspaces/${workspace.id}`)
@@ -41,13 +38,10 @@ async function createWorkspace() {
     const workspace = await contentStore.createTeamWorkspace({
       name: newWorkspaceName.value.trim(),
       description: newWorkspaceDescription.value.trim(),
-      owningTeam: newWorkspaceTeam.value,
-      creator: authStore.user.name,
     })
     ElMessage.success(`已创建团队工作空间“${newWorkspaceName.value.trim()}”`)
     newWorkspaceName.value = ''
     newWorkspaceDescription.value = ''
-    newWorkspaceTeam.value = '供应链中心'
     createDialogOpen.value = false
     await router.push(`/workspaces/${workspace.id}`)
   } catch (error) {
@@ -71,7 +65,7 @@ onMounted(() => contentStore.refresh())
     </header>
 
     <div class="workspace-toolbar">
-      <el-input v-model="query" :prefix-icon="Search" clearable placeholder="搜索工作空间或责任团队" />
+      <el-input v-model="query" :prefix-icon="Search" clearable placeholder="搜索工作空间名称或负责人" />
       <span>{{ filteredWorkspaces.length }} 个可访问工作空间</span>
     </div>
 
@@ -121,13 +115,6 @@ onMounted(() => contentStore.refresh())
         <el-form-item label="工作空间名称" required>
           <el-input v-model="newWorkspaceName" maxlength="40" show-word-limit placeholder="例如：九月交付风险分析" />
         </el-form-item>
-        <el-form-item label="责任团队" required>
-          <el-select v-model="newWorkspaceTeam" style="width: 100%">
-            <el-option label="供应链中心" value="供应链中心" />
-            <el-option label="生产运营部" value="生产运营部" />
-            <el-option label="数字化中心" value="数字化中心" />
-          </el-select>
-        </el-form-item>
         <el-form-item label="说明">
           <el-input
             v-model="newWorkspaceDescription"
@@ -138,7 +125,6 @@ onMounted(() => contentStore.refresh())
             placeholder="说明团队将围绕什么业务主题开展协作"
           />
         </el-form-item>
-        <el-alert type="info" :closable="false" show-icon title="工作空间归属于责任团队；创建人仅记录为初始成员和审计信息。" />
       </el-form>
       <template #footer>
         <el-button @click="createDialogOpen = false">取消</el-button>

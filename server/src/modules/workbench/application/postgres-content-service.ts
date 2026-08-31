@@ -339,55 +339,6 @@ export class PostgresContentService {
     }
   }
 
-  async publishAssistantResult(input: {
-    runId: string
-    attemptId: string
-    sessionId: string
-    workspaceId: string
-    content: string
-  }) {
-    const fileId = `file-result-${input.attemptId}`
-    const artifactId = `artifact-${input.runId}`
-    const bytes = Buffer.from(`# dsh-work 对话成果\n\n${input.content}\n`, 'utf8')
-    const storageKey = join('artifacts', input.runId, `${input.attemptId}.md`)
-    await this.writeStorage(storageKey, bytes)
-    const [attempt] = await this.database<{ attemptNo: number }[]>`
-      select attempt_no as "attemptNo" from run_attempts
-       where tenant_id = ${tenantId} and id = ${input.attemptId}
-    `
-    const [session] = await this.database<{ title: string }[]>`
-      select title from sessions where tenant_id = ${tenantId} and id = ${input.sessionId}
-    `
-    await this.database.begin(async (transaction) => {
-      await transaction`
-        insert into file_objects (
-          id, tenant_id, workspace_id, session_id, storage_key, original_name,
-          mime_type, size_bytes, sha256, scan_status
-        ) values (
-          ${fileId}, ${tenantId}, ${input.workspaceId}, ${input.sessionId}, ${storageKey},
-          ${`${session?.title ?? '对话成果'}.md`}, 'text/markdown', ${bytes.length},
-          ${createHash('sha256').update(bytes).digest('hex')}, 'clean'
-        ) on conflict (id) do nothing
-      `
-      await transaction`
-        insert into artifacts (
-          id, tenant_id, workspace_id, session_id, name, artifact_type, created_by
-        ) values (
-          ${artifactId}, ${tenantId}, ${input.workspaceId}, ${input.sessionId},
-          ${`${session?.title ?? '对话成果'}.md`}, 'markdown', ${userId}
-        ) on conflict (id) do nothing
-      `
-      await transaction`
-        insert into artifact_versions (
-          id, tenant_id, artifact_id, version_no, file_object_id, source_run_id
-        ) values (
-          ${`artifact-version-${input.attemptId}`}, ${tenantId}, ${artifactId}, ${attempt?.attemptNo ?? 1},
-          ${fileId}, ${input.runId}
-        ) on conflict (tenant_id, artifact_id, version_no) do nothing
-      `
-    })
-  }
-
   async readFile(fileId: string, actorUserId = userId) {
     const [row] = await this.database<FileRow[]>`
       select f.id, f.storage_key as "storageKey", f.original_name as "originalName",

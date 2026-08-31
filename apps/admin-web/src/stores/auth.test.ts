@@ -15,16 +15,28 @@ describe('admin auth store', () => {
     })
   })
 
-  it('derives write visibility from the active management role', async () => {
+  it('derives write visibility from the server session role', async () => {
     const { useAuthStore } = await import('./auth')
     const store = useAuthStore()
     await store.load()
     expect(store.canManage).toBe(true)
     expect(store.user.id).toBe('U00008')
 
-    store.switchRole('auditor')
+    expect(store.isAuditor).toBe(false)
+  })
+
+  it('keeps an auditor session read-only', async () => {
+    api.getSession.mockResolvedValueOnce({
+      user: {
+        id: 'U00019', name: '安全审计员', title: '审计员', department: '信息安全部',
+        avatarText: '审', role: 'auditor', dataScopes: ['审计记录'],
+      },
+    })
+    const { useAuthStore } = await import('./auth')
+    const store = useAuthStore()
+    await store.load()
     expect(store.isAuditor).toBe(true)
     expect(store.canManage).toBe(false)
-    expect(store.user.role).toBe('auditor')
+    expect(store.user.id).toBe('U00019')
   })
 })

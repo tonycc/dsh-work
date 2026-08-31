@@ -37,7 +37,7 @@ export function registerAdminRoutes(router: Router, service: AdminQueryService) 
       agentId: agent.id,
       version: agent.version,
       status: 'passed',
-      resultSummary: `原型配置校验通过：${agent.skills.length} 个 Skill、${agent.tools.length} 个工具引用。`,
+      resultSummary: `配置校验通过：${agent.skills.length} 个 Skill、${agent.tools.length} 个工具引用。`,
       testedAt: new Date().toISOString(),
     })
   })
@@ -70,7 +70,7 @@ export function registerAdminRoutes(router: Router, service: AdminQueryService) 
       skillId: skill.id,
       version: skill.version,
       status: 'passed',
-      resultSummary: `原型配置校验通过：${skill.toolIds.length} 个工具引用。`,
+      resultSummary: `配置校验通过：${skill.toolIds.length} 个工具引用。`,
       testedAt: new Date().toISOString(),
     })
   })
@@ -89,7 +89,7 @@ export function registerAdminRoutes(router: Router, service: AdminQueryService) 
   router.post(`${basePath}/skills/rollback`, async (request) => {
     const input = await readJsonBody<{ skillId: string; version: string; actor: string }>(request)
     const skill = (await service.getSkills()).find(item => item.id === input.skillId && item.version === input.version)
-    if (!skill) throw new Error(`原型模式仅保留当前 Skill Version：${input.skillId}@${input.version}`)
+    if (!skill) throw new Error(`未找到指定 Skill Version：${input.skillId}@${input.version}`)
     return envelope('admin', { skill, release: prototypeSkillRelease(skill, input.actor, 'rollback') })
   })
   router.get(`${basePath}/tools`, async () => envelope('admin', await service.getTools()))
@@ -99,11 +99,6 @@ export function registerAdminRoutes(router: Router, service: AdminQueryService) 
   router.get(`${basePath}/connectors`, async () => envelope('admin', await service.getConnectors()))
   router.post(`${basePath}/connectors/check`, async (request) =>
     envelope('admin', await service.checkConnector(await readJsonBody(request))),
-  )
-  router.get(`${basePath}/roles`, async () => envelope('admin', await service.getRoles()))
-  router.get(`${basePath}/members`, async () => envelope('admin', await service.getMembers()))
-  router.patch(`${basePath}/roles`, async (request) =>
-    envelope('admin', await service.updateRole(await readJsonBody(request))),
   )
   router.patch(`${basePath}/tools/permissions`, async (request) =>
     envelope('admin', await service.updateToolPermissions(await readJsonBody(request))),
@@ -130,7 +125,7 @@ function prototypeSkillVersion(skill: SkillDefinition): SkillVersionRecord {
     status: skill.status,
     createdAt: skill.updatedAt,
     createdBy: skill.owner,
-    summary: '原型模式当前版本',
+    summary: '当前版本',
   }
 }
 
@@ -146,6 +141,6 @@ function prototypeSkillRelease(
     action,
     actor,
     time: new Date().toISOString().slice(0, 16).replace('T', ' '),
-    note: '原型模式发布记录；接入 PostgreSQL 后持久化。',
+    note: '版本状态已更新。',
   }
 }

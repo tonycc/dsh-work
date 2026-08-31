@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Collection,
+  Delete as DeleteIcon,
+  Download,
   Files,
   HomeFilled,
   Menu,
@@ -11,15 +13,15 @@ import {
   MoreFilled,
   Plus,
   Setting,
-  SwitchButton,
-  User,
+  Share,
 } from '@element-plus/icons-vue'
 
 import { AppLogo } from '@dsh-work/ui-core'
 import { roleLabels, useAuthStore } from '@/stores/auth'
 import { useContentStore } from '@/stores/content'
 import { useTaskStore } from '@/stores/tasks'
-import type { UserRole } from '@/types/domain'
+import type { TaskRun } from '@/types/domain'
+import { notifyActionFailure } from '@/utils/feedback'
 
 const route = useRoute()
 const router = useRouter()
@@ -28,6 +30,7 @@ const taskStore = useTaskStore()
 const contentStore = useContentStore()
 
 const mobileOpen = ref(false)
+const deletingSessionId = ref<string>()
 
 const navigation = [
   { label: '工作台', path: '/workbench', icon: HomeFilled },
@@ -50,15 +53,73 @@ function openAdmin() {
   window.location.assign(`${baseUrl}/overview`)
 }
 
-function onRoleCommand(command: string | number | object) {
+function onAccountCommand(command: string | number | object) {
   const value = String(command)
-  if (value.startsWith('role:')) {
-    const role = value.replace('role:', '') as UserRole
-    authStore.switchRole(role)
-    ElMessage.success(`已切换为${roleLabels[role]}视图`)
-  }
   if (value === 'user-center') navigate('/settings')
   if (value === 'admin') openAdmin()
+}
+
+function copyConversationLink(task: TaskRun) {
+  const path = router.resolve(`/conversations/${task.id}`).href
+  void navigator.clipboard.writeText(new URL(path, window.location.origin).toString())
+  ElMessage.success('对话链接已复制')
+}
+
+function exportConversation(task: TaskRun) {
+  const content = task.messages
+    .map((message) => `${message.role === 'user' ? '我' : 'dsh-work'}：${message.content}`)
+    .join('\n\n')
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = `${task.title}-对话记录.txt`
+  anchor.click()
+  URL.revokeObjectURL(url)
+  ElMessage.success('对话记录已导出')
+}
+
+async function deleteConversation(task: TaskRun) {
+  if (deletingSessionId.value) return
+  if (['queued', 'running', 'awaiting_approval'].includes(task.status)) {
+    ElMessage.warning('请先停止当前运行，再删除对话')
+    return
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      '删除后，对话将从工作台和最近对话中移除，已发布成果仍保留在成果库。该对话无法在工作台恢复。',
+      `删除对话“${task.title}”？`,
+      {
+        confirmButtonText: '删除对话',
+        cancelButtonText: '取消',
+        type: 'warning',
+        confirmButtonClass: 'el-button--danger',
+      },
+    )
+  } catch {
+    return
+  }
+
+  const currentTask = taskStore.getTask(String(route.params.id))
+  const deletingCurrentConversation = currentTask?.sessionId === task.sessionId
+  deletingSessionId.value = task.sessionId
+  try {
+    await taskStore.deleteConversation(task.sessionId)
+    ElMessage.success(`已删除对话“${task.title}”`)
+    if (deletingCurrentConversation) await router.replace('/workbench')
+  } catch (error) {
+    notifyActionFailure('删除对话', `对话“${task.title}”`, error, '刷新对话状态；若仍在执行，请先停止后再删除。')
+  } finally {
+    deletingSessionId.value = undefined
+  }
+}
+
+function onRecentConversationCommand(command: string | number | object, task: TaskRun) {
+  const value = String(command)
+  if (value === 'copy-link') copyConversationLink(task)
+  if (value === 'export') exportConversation(task)
+  if (value === 'delete') void deleteConversation(task)
 }
 
 watch(
@@ -86,7 +147,6 @@ onMounted(() => {
     <aside class="employee-sidebar" :class="{ 'employee-sidebar--mobile-open': mobileOpen }">
       <div class="employee-sidebar__logo">
         <AppLogo dark />
-        <el-tag class="prototype-tag" size="small" effect="plain">原型</el-tag>
       </div>
 
       <button class="new-conversation-button" type="button" @click="navigate('/workbench')">
@@ -111,31 +171,62 @@ onMounted(() => {
 
       <section class="employee-sidebar__recent">
         <div class="employee-sidebar__recent-title">最近对话</div>
-        <button
+        <div
           v-for="task in taskStore.recentTasks"
           :key="task.id"
           class="recent-conversation"
-          type="button"
-          @click="navigate(`/conversations/${task.id}`)"
         >
-          <span class="recent-conversation__dot" :class="`recent-conversation__dot--${task.status}`"></span>
-          <span class="recent-conversation__title">{{ task.title }}</span>
-          <span class="recent-conversation__time">{{ task.updatedAt }}</span>
-        </button>
+          <button
+            class="recent-conversation__link"
+            type="button"
+            @click="navigate(`/conversations/${task.id}`)"
+          >
+            <span class="recent-conversation__dot" :class="`recent-conversation__dot--${task.status}`"></span>
+            <span class="recent-conversation__title">{{ task.title }}</span>
+            <span class="recent-conversation__time">{{ task.updatedAt }}</span>
+          </button>
+          <el-dropdown
+            class="recent-conversation__menu"
+            trigger="click"
+            placement="bottom-end"
+            :disabled="deletingSessionId === task.sessionId"
+            @command="onRecentConversationCommand($event, task)"
+          >
+            <button
+              class="recent-conversation__more"
+              type="button"
+              :aria-label="`打开对话“${task.title}”的更多操作`"
+              :disabled="deletingSessionId === task.sessionId"
+            >
+              <el-icon><MoreFilled /></el-icon>
+            </button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="copy-link">
+                  <el-icon><Share /></el-icon>
+                  复制对话链接
+                </el-dropdown-item>
+                <el-dropdown-item command="export">
+                  <el-icon><Download /></el-icon>
+                  导出对话记录
+                </el-dropdown-item>
+                <el-dropdown-item class="recent-conversation-delete-item" divided command="delete">
+                  <el-icon><DeleteIcon /></el-icon>
+                  删除对话
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </div>
       </section>
 
       <div class="employee-sidebar__footer">
-        <div class="environment-status">
-          <span class="environment-status__dot"></span>
-          <span>最小可行产品演示环境</span>
-          <span>真实运行链路</span>
-        </div>
-        <el-dropdown trigger="click" placement="top-start" @command="onRoleCommand">
+        <el-dropdown trigger="click" placement="top-start" @command="onAccountCommand">
           <button class="profile-button" type="button" aria-label="打开用户中心">
             <span class="profile-button__avatar">{{ authStore.user.avatarText }}</span>
             <span class="profile-button__copy">
               <strong>{{ authStore.user.name }}</strong>
-              <small>{{ roleLabels[authStore.previewRole] }}</small>
+              <small>{{ roleLabels[authStore.user.role] }}</small>
             </span>
             <el-icon><MoreFilled /></el-icon>
           </button>
@@ -146,23 +237,9 @@ onMounted(() => {
                 <el-icon><Setting /></el-icon>
                 个人资料与设置
               </el-dropdown-item>
-              <div class="role-menu__heading">原型角色预览</div>
-              <el-dropdown-item
-                v-for="(label, role) in roleLabels"
-                :key="role"
-                :command="`role:${role}`"
-                :class="{ 'is-current-role': authStore.previewRole === role }"
-              >
-                <el-icon><User /></el-icon>
-                {{ label }}
-              </el-dropdown-item>
               <el-dropdown-item v-if="authStore.canAccessAdmin" divided command="admin">
                 <el-icon><Monitor /></el-icon>
                 打开管理后台
-              </el-dropdown-item>
-              <el-dropdown-item disabled>
-                <el-icon><SwitchButton /></el-icon>
-                退出登录（原型）
               </el-dropdown-item>
             </el-dropdown-menu>
           </template>
@@ -207,15 +284,8 @@ onMounted(() => {
 .employee-sidebar__logo {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   min-height: 64px;
   padding: 14px 15px 12px 18px;
-}
-
-.prototype-tag {
-  --el-tag-border-color: #d9d9d6;
-  --el-tag-bg-color: #ededeb;
-  --el-tag-text-color: #73736f;
 }
 
 .new-conversation-button {
@@ -276,6 +346,16 @@ onMounted(() => {
 }
 
 .recent-conversation {
+  position: relative;
+  width: 100%;
+  min-height: 34px;
+  border-radius: 7px;
+  color: #4d4e4b;
+  background: transparent;
+}
+
+.recent-conversation:hover { color: #181918; background: #e9e9e6; }
+.recent-conversation__link {
   display: flex;
   align-items: center;
   width: 100%;
@@ -283,26 +363,56 @@ onMounted(() => {
   gap: 7px;
   padding: 0 10px;
   border: 0;
-  border-radius: 7px;
-  color: #4d4e4b;
+  border-radius: inherit;
+  color: inherit;
   background: transparent;
   cursor: pointer;
   text-align: left;
 }
 
-.recent-conversation:hover { color: #181918; background: #e9e9e6; }
+.recent-conversation__link:focus-visible,
+.recent-conversation__more:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: -2px;
+}
+
 .recent-conversation__dot { width: 5px; height: 5px; flex: 0 0 auto; border-radius: 50%; background: #858580; }
 .recent-conversation__dot--running { background: #527ce2; }
 .recent-conversation__dot--succeeded { background: #31a47d; }
 .recent-conversation__dot--failed { background: #d05c67; }
 .recent-conversation__dot--awaiting_approval { background: #d18a37; }
 .recent-conversation__title { min-width: 0; flex: 1; overflow: hidden; font-size: var(--dsh-font-size-caption); text-overflow: ellipsis; white-space: nowrap; }
-.recent-conversation__time { flex: 0 0 auto; color: #9a9a95; font-size: var(--dsh-font-size-micro); }
+.recent-conversation__time { flex: 0 0 auto; color: #9a9a95; font-size: var(--dsh-font-size-micro); transition: opacity 120ms ease; }
+.recent-conversation__menu {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%);
+  transition: opacity 120ms ease;
+}
+
+.recent-conversation__more {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  color: #686965;
+  background: transparent;
+  cursor: pointer;
+}
+
+.recent-conversation__more:hover { color: #20211f; background: #ddddda; }
+.recent-conversation:hover .recent-conversation__time,
+.recent-conversation:focus-within .recent-conversation__time { opacity: 0; }
+.recent-conversation:hover .recent-conversation__menu,
+.recent-conversation:focus-within .recent-conversation__menu { opacity: 1; pointer-events: auto; }
 
 .employee-sidebar__footer { padding: 9px 9px 11px; border-top: 1px solid #e3e3e0; }
-.environment-status { display: flex; align-items: center; gap: 7px; margin: 0 10px 8px; color: #858580; font-size: var(--dsh-font-size-badge); }
-.environment-status span:last-child { margin-left: auto; }
-.environment-status__dot { width: 6px; height: 6px; border-radius: 50%; background: #44bd92; }
 .profile-button { display: flex; align-items: center; width: 100%; min-height: 48px; gap: 10px; padding: 6px 8px; border: 0; border-radius: 9px; color: #272825; background: transparent; cursor: pointer; text-align: left; }
 .profile-button:hover { background: #e7e7e4; }
 .profile-button__avatar { display: grid; width: 31px; height: 31px; flex: 0 0 auto; place-items: center; border-radius: 9px; color: #124d3f; background: #bcebdc; font-size: var(--dsh-font-size-body); font-weight: 700; }
@@ -315,7 +425,12 @@ onMounted(() => {
 .sidebar-scrim { position: fixed; z-index: 25; inset: 0; display: none; border: 0; background: rgb(5 12 24 / 52%); }
 
 :global(.role-menu__heading) { padding: 8px 16px 6px; color: #8a94a5; font-size: var(--dsh-font-size-caption); font-weight: 650; }
-:global(.role-menu .is-current-role) { color: var(--dsh-color-brand); background: var(--dsh-color-brand-soft); }
+:global(.recent-conversation-delete-item) { color: var(--el-color-danger); }
+
+@media (hover: none) {
+  .recent-conversation__time { opacity: 0; }
+  .recent-conversation__menu { opacity: 1; pointer-events: auto; }
+}
 
 @media (max-width: 820px) {
   .employee-sidebar { transform: translateX(-100%); box-shadow: 16px 0 40px rgb(5 12 24 / 22%); transition: transform 180ms ease; }
