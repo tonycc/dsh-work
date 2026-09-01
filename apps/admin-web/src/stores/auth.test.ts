@@ -8,6 +8,9 @@ describe('admin auth store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     api.getSession.mockResolvedValue({
+      identityProvider: 'prototype-sso',
+      apiAudience: 'admin',
+      permissions: ['admin:*', 'admin:read', 'admin:write', 'audit:read'],
       user: {
         id: 'U00008', name: '平台管理员', title: '管理员', department: '数字化中心',
         avatarText: '管', role: 'platform_admin', dataScopes: ['平台配置'],
@@ -20,6 +23,8 @@ describe('admin auth store', () => {
     const store = useAuthStore()
     await store.load()
     expect(store.canManage).toBe(true)
+    expect(store.canReadAdmin).toBe(true)
+    expect(store.canReadAudit).toBe(true)
     expect(store.user.id).toBe('U00008')
 
     expect(store.isAuditor).toBe(false)
@@ -27,6 +32,9 @@ describe('admin auth store', () => {
 
   it('keeps an auditor session read-only', async () => {
     api.getSession.mockResolvedValueOnce({
+      identityProvider: 'prototype-sso',
+      apiAudience: 'admin',
+      permissions: ['dsh_work.audit.read'],
       user: {
         id: 'U00019', name: '安全审计员', title: '审计员', department: '信息安全部',
         avatarText: '审', role: 'auditor', dataScopes: ['审计记录'],
@@ -37,6 +45,8 @@ describe('admin auth store', () => {
     await store.load()
     expect(store.isAuditor).toBe(true)
     expect(store.canManage).toBe(false)
+    expect(store.canReadAdmin).toBe(false)
+    expect(store.canReadAudit).toBe(true)
     expect(store.user.id).toBe('U00019')
   })
 })

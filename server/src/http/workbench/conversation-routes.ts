@@ -4,11 +4,17 @@ import type { RunRepository } from '../../modules/run/run-repository.ts'
 import type { PostgresAgentService } from '../../modules/agent/postgres-agent-service.ts'
 import type { PostgresAuthorizationService } from '../../modules/authorization/postgres-authorization-service.ts'
 import type { PostgresOperationsService } from '../../modules/admin/application/postgres-operations-service.ts'
-import { envelope, httpResult, readJsonBody, type Router } from '../router.ts'
+import {
+  envelope,
+  httpResult,
+  readJsonBody,
+  requireRequestIdentity,
+  sessionAuthorizationContext,
+  type Router,
+} from '../router.ts'
 
 const basePath = '/api/workbench/v1'
 const tenantId = 'tenant-dsh-work'
-const userId = 'U00001'
 
 export function registerConversationRoutes(
   router: Router,
@@ -19,25 +25,38 @@ export function registerConversationRoutes(
   authorization?: PostgresAuthorizationService,
   operations?: PostgresOperationsService,
 ) {
-  router.get(`${basePath}/tasks`, async () => {
-    await authorization?.authorizeWorkbench({ userId })
+  router.get(`${basePath}/tasks`, async (_request, context) => {
+    const identity = requireRequestIdentity(context, 'workbench')
+    const userId = identity.userId
+    await authorization?.authorizeWorkbench({ userId, ...sessionAuthorizationContext(identity) })
     return envelope('workbench', await conversations.listTasks(userId), 'postgres')
   })
 
-  router.post(`${basePath}/sessions`, async (request) => {
+  router.post(`${basePath}/sessions`, async (request, context) => {
+    const identity = requireRequestIdentity(context, 'workbench')
+    const userId = identity.userId
+    const authorizationContext = sessionAuthorizationContext(identity)
     const body = await readJsonBody<{ title: string; workspaceId?: string; agentId?: string }>(request)
-    const agentVersionId = await agents.resolveWorkbenchAgentVersion(body.agentId, userId)
+    const access = await authorization?.authorizeWorkbench({ userId, ...authorizationContext })
+    const agentVersionId = await agents.resolveWorkbenchAgentVersion(
+      body.agentId,
+      userId,
+      access?.roleIds ?? identity.roleIds,
+    )
     const session = await orchestration.createSession({
       userId,
       title: body.title,
       workspaceId: body.workspaceId,
       agentVersionId,
+      authorizationContext,
     })
     return httpResult(201, envelope('workbench', session, 'postgres'))
   })
 
   router.delete(`${basePath}/sessions/:sessionId`, async (_request, context) => {
-    await authorization?.authorizeWorkbench({ userId })
+    const identity = requireRequestIdentity(context, 'workbench')
+    const userId = identity.userId
+    await authorization?.authorizeWorkbench({ userId, ...sessionAuthorizationContext(identity) })
     const sessionId = context.params['sessionId'] ?? ''
     const archived = await conversations.archiveSession(sessionId, userId)
     await operations?.appendAudit(
@@ -53,7 +72,9 @@ export function registerConversationRoutes(
   })
 
   router.get(`${basePath}/runs/:runId`, async (_request, context) => {
-    await authorization?.authorizeWorkbench({ userId })
+    const identity = requireRequestIdentity(context, 'workbench')
+    const userId = identity.userId
+    await authorization?.authorizeWorkbench({ userId, ...sessionAuthorizationContext(identity) })
     const task = await conversations.getTask(context.params['runId'] ?? '', userId)
     return task
       ? envelope('workbench', task, 'postgres')
@@ -61,6 +82,8 @@ export function registerConversationRoutes(
   })
 
   router.post(`${basePath}/sessions/:sessionId/runs`, async (request, context) => {
+    const identity = requireRequestIdentity(context, 'workbench')
+    const userId = identity.userId
     const body = await readJsonBody<{ prompt: string; idempotencyKey?: string; fileIds?: string[] }>(request)
     if (body.fileIds !== undefined && (!Array.isArray(body.fileIds) || body.fileIds.some(id => typeof id !== 'string'))) {
       throw new Error('fileIds 必须是文件标识数组')
@@ -73,6 +96,7 @@ export function registerConversationRoutes(
       prompt: body.prompt,
       idempotencyKey: body.idempotencyKey ?? (Array.isArray(headerKey) ? headerKey[0] : headerKey) ?? crypto.randomUUID(),
       fileIds: body.fileIds ?? [],
+      authorizationContext: sessionAuthorizationContext(identity),
     })
     if (!run) throw new Error('Run 创建失败')
     const task = await conversations.getTask(run.id, userId)
@@ -80,19 +104,33 @@ export function registerConversationRoutes(
   })
 
   router.post(`${basePath}/runs/:runId/cancel`, async (_request, context) => {
-    await orchestration.cancel(context.params['runId'] ?? '', userId)
+    const identity = requireRequestIdentity(context, 'workbench')
+    const userId = identity.userId
+    await orchestration.cancel(
+      context.params['runId'] ?? '',
+      userId,
+      sessionAuthorizationContext(identity),
+    )
     const task = await conversations.getTask(context.params['runId'] ?? '', userId)
     return httpResult(202, envelope('workbench', task, 'postgres'))
   })
 
   router.post(`${basePath}/runs/:runId/retry`, async (_request, context) => {
-    await orchestration.retry(context.params['runId'] ?? '', userId)
+    const identity = requireRequestIdentity(context, 'workbench')
+    const userId = identity.userId
+    await orchestration.retry(
+      context.params['runId'] ?? '',
+      userId,
+      sessionAuthorizationContext(identity),
+    )
     const task = await conversations.getTask(context.params['runId'] ?? '', userId)
     return httpResult(202, envelope('workbench', task, 'postgres'))
   })
 
   router.get(`${basePath}/runs/:runId/events`, async (request, context, response) => {
-    await authorization?.authorizeWorkbench({ userId })
+    const identity = requireRequestIdentity(context, 'workbench')
+    const userId = identity.userId
+    await authorization?.authorizeWorkbench({ userId, ...sessionAuthorizationContext(identity) })
     const runId = context.params['runId'] ?? ''
     const task = await conversations.getTask(runId, userId)
     if (!task) return httpResult(404, { error: { code: 'run_not_found', message: 'Run 不存在或不可访问' } })

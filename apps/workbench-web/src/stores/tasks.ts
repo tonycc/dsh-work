@@ -118,7 +118,7 @@ export const useTaskStore = defineStore('tasks', () => {
   function subscribe(runId: string, replace = false) {
     if (replace) closeStream(runId)
     if (streams.has(runId)) return
-    const stream = new EventSource(workbenchApi.runEventsUrl(runId))
+    const stream = new EventSource(workbenchApi.runEventsUrl(runId), { withCredentials: true })
     streams.set(runId, stream)
     for (const eventType of runtimeEventTypes) {
       stream.addEventListener(eventType, (message) => {

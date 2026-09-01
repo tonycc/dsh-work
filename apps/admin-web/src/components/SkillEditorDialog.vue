@@ -2,7 +2,6 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 
-import { useAuthStore } from '@/stores/auth'
 import { useContentStore } from '@/stores/content'
 import type { SkillConfiguration, SkillDefinition } from '@/types/domain'
 
@@ -12,7 +11,6 @@ const props = defineProps<{ skill?: SkillDefinition }>()
 const emit = defineEmits<{ saved: [skill: SkillDefinition] }>()
 const dialogOpen = defineModel<boolean>({ default: false })
 
-const authStore = useAuthStore()
 const contentStore = useContentStore()
 const formRef = ref<FormInstance>()
 const saving = ref(false)
@@ -82,8 +80,8 @@ async function save() {
   try {
     const payload: SkillFormData = { ...form, toolIds: [...form.toolIds] }
     const saved = props.skill
-      ? await contentStore.updateSkill({ id: props.skill.id, ...payload }, authStore.user.name)
-      : await contentStore.createSkill(payload, authStore.user.name)
+      ? await contentStore.updateSkill({ id: props.skill.id, ...payload })
+      : await contentStore.createSkill(payload)
     initialSnapshot.value = JSON.stringify(form)
     dialogOpen.value = false
     emit('saved', saved)

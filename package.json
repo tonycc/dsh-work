@@ -31,6 +31,8 @@
     "test:m5:security": "pnpm --filter @dsh-work/server test:m5:security",
     "test:m5:security:integration": "pnpm --filter @dsh-work/server test:m5:security:integration",
     "test:m5:faults": "pnpm --filter @dsh-work/server test:m5:faults",
+    "test:sso": "pnpm --filter @dsh-work/server test:sso",
+    "test:sso:integration": "pnpm --filter @dsh-work/server test:sso:integration",
     "test:m5:faults:integration": "pnpm --filter @dsh-work/server test:m5:faults:integration",
     "test:m5:capacity:integration": "pnpm --filter @dsh-work/server test:m5:capacity:integration",
     "test:e2e": "playwright test",
@@ -59,7 +61,8 @@
     "verify:m5:security": "node scripts/verify-m5-security.mjs",
     "verify:m5:faults": "node scripts/verify-m5-faults.mjs",
     "verify:m5:capacity": "node scripts/verify-m5-capacity.mjs",
-    "ci:check": "pnpm verify:m0 && pnpm verify:m1 && pnpm verify:m2 && pnpm verify:m3 && pnpm verify:m4:agent && pnpm verify:m4:skill && pnpm verify:m4:tool && pnpm verify:m4:knowledge && pnpm verify:m4:file && pnpm verify:m4:authorization && pnpm verify:m4:runtime && pnpm verify:m4:audit && pnpm verify:m4:error && pnpm verify:m4 && pnpm verify:m5:test && pnpm verify:m5:security && pnpm verify:m5:faults && pnpm verify:m5:capacity && pnpm check:secrets && pnpm typecheck && pnpm test:m1 && pnpm test:m2 && pnpm test:m4:file && pnpm test:m4:error && pnpm test:m5:frontend && pnpm test:m5:api && pnpm test:m5:security && pnpm test:m5:faults && pnpm lint && pnpm build",
+    "verify:m6:sso": "node scripts/verify-m6-sso.mjs",
+    "ci:check": "pnpm verify:m0 && pnpm verify:m1 && pnpm verify:m2 && pnpm verify:m3 && pnpm verify:m4:agent && pnpm verify:m4:skill && pnpm verify:m4:tool && pnpm verify:m4:knowledge && pnpm verify:m4:file && pnpm verify:m4:authorization && pnpm verify:m4:runtime && pnpm verify:m4:audit && pnpm verify:m4:error && pnpm verify:m4 && pnpm verify:m5:test && pnpm verify:m5:security && pnpm verify:m5:faults && pnpm verify:m5:capacity && pnpm verify:m6:sso && pnpm check:secrets && pnpm typecheck && pnpm test:m1 && pnpm test:m2 && pnpm test:m4:file && pnpm test:m4:error && pnpm test:m5:frontend && pnpm test:m5:api && pnpm test:m5:security && pnpm test:m5:faults && pnpm test:sso && pnpm lint && pnpm build",
     "check:architecture": "node scripts/check-architecture.mjs",
     "validate:ui": "pnpm --filter @dsh-work/admin-web --filter @dsh-work/workbench-web validate:ui",
     "lint": "pnpm check:architecture && pnpm validate:ui && eslint apps packages server scripts --max-warnings=0"

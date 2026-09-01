@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "dsh-work 管理平台 API",
-    "version": "0.4.2-m4",
-    "description": "M4 管理面契约基线。Agent、Skill、预置只读 Tool/Connector、Runtime、Session、工作空间、模型用量、审计和健康使用真实 PostgreSQL 投影。"
+    "version": "0.6.0-m6",
+    "description": "M6 管理面契约基线。请求使用 AI Hub OIDC 登录后由 dsh-work 签发的 HttpOnly 服务端 Session；普通读取要求 dsh_work.admin.read，审计读取要求 dsh_work.audit.read，写操作要求 dsh_work.admin.write 并默认执行 AI Hub 在线授权。操作人由服务端 Session 注入，请求体不接受 actor。"
   },
   "servers": [{ "url": "/api/admin/v1" }],
   "security": [{ "adminSession": [] }],
@@ -99,7 +99,7 @@
     "/health": { "get": { "operationId": "getPlatformHealth", "summary": "查询服务端、PostgreSQL 和 Runtime 当前状态", "responses": { "200": { "$ref": "#/components/responses/Ok" } } } }
   },
   "components": {
-    "securitySchemes": { "adminSession": { "type": "apiKey", "in": "cookie", "name": "dsh_work_admin_session" } },
+    "securitySchemes": { "adminSession": { "type": "apiKey", "in": "cookie", "name": "dsh_work_admin_session", "description": "AI Hub OIDC 回调后由 dsh-work 设置的不透明 HttpOnly Session Cookie；生产名称使用 __Host- 前缀。" } },
     "parameters": {
       "AgentId": { "name": "agentId", "in": "path", "required": true, "schema": { "type": "string" } },
       "RunId": { "name": "runId", "in": "path", "required": true, "schema": { "type": "string" } }
@@ -114,7 +114,7 @@
     "schemas": {
       "AgentConfiguration": {
         "type": "object",
-        "required": ["name", "description", "owner", "department", "visibility", "welcomeMessage", "examplePrompts", "roleIds", "dataScopes", "systemPrompt", "maxTokens", "timeoutSeconds", "skills", "tools", "changeSummary", "actor"],
+        "required": ["name", "description", "owner", "department", "visibility", "welcomeMessage", "examplePrompts", "roleIds", "dataScopes", "systemPrompt", "maxTokens", "timeoutSeconds", "skills", "tools", "changeSummary"],
         "properties": {
           "name": { "type": "string", "minLength": 1, "maxLength": 80 },
           "description": { "type": "string", "minLength": 1, "maxLength": 500 },
@@ -130,8 +130,7 @@
           "dataScopes": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
           "maxTokens": { "type": "integer", "minimum": 1 },
           "timeoutSeconds": { "type": "integer", "minimum": 1 },
-          "changeSummary": { "type": "string" },
-          "actor": { "type": "string" }
+          "changeSummary": { "type": "string" }
         }
       },
       "CreateAgentInput": {
@@ -150,15 +149,14 @@
       },
       "SkillConfiguration": {
         "type": "object",
-        "required": ["name", "category", "description", "instructions", "toolIds", "testPrompt", "actor"],
+        "required": ["name", "category", "description", "instructions", "toolIds", "testPrompt"],
         "properties": {
           "name": { "type": "string", "minLength": 2, "maxLength": 40 },
           "category": { "type": "string", "minLength": 1, "maxLength": 40 },
           "description": { "type": "string", "minLength": 10, "maxLength": 200 },
           "instructions": { "type": "string", "minLength": 20, "maxLength": 10000 },
           "toolIds": { "type": "array", "minItems": 1, "items": { "type": "string" }, "uniqueItems": true },
-          "testPrompt": { "type": "string", "minLength": 4, "maxLength": 500 },
-          "actor": { "type": "string" }
+          "testPrompt": { "type": "string", "minLength": 4, "maxLength": 500 }
         }
       },
       "CreateSkillInput": {
@@ -201,5 +199,5 @@
       }
     }
   },
-  "x-contract-status": "m4-implemented"
+  "x-contract-status": "m6-implemented"
 }

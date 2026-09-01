@@ -19,7 +19,7 @@ for (const file of checklists) {
   if (!existsSync(resolve(root, 'docs/project', file))) failures.push(`docs/project/${file} 文件不存在`)
 }
 
-const plan = readFileSync(resolve(root, 'dsh-work MVP 实施方案与计划.md'), 'utf8')
+const plan = readFileSync(resolve(root, 'docs/project/mvp-roadmap.md'), 'utf8')
 for (let index = 1; index <= 9; index += 1) {
   const id = `M4-${String(index).padStart(2, '0')}`
   if (!plan.includes(`${id} `)) failures.push(`实施方案缺少 ${id} 完成说明`)

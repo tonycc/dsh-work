@@ -11,6 +11,7 @@ import type { PostgresKnowledgeService } from '../knowledge/postgres-knowledge-s
 import type {
   PostgresAuthorizationService,
   RuntimeAuthorizationDecision,
+  SessionAuthorizationContext,
 } from '../authorization/postgres-authorization-service.ts'
 import type { RunRepository } from './run-repository.ts'
 import type { JsonObject, RunRecord, StoredRunEvent } from './run-types.ts'
@@ -57,7 +58,13 @@ export class RunOrchestrationService {
     this.authorization = authorization
   }
 
-  async createSession(input: { userId: string; title: string; workspaceId?: string; agentVersionId?: string }) {
+  async createSession(input: {
+    userId: string
+    title: string
+    workspaceId?: string
+    agentVersionId?: string
+    authorizationContext?: SessionAuthorizationContext
+  }) {
     assertPrompt(input.title)
     const workspaceId = await this.conversations.resolveWorkspaceId(input.workspaceId, input.userId)
     if (this.authorization && input.agentVersionId) {
@@ -65,11 +72,21 @@ export class RunOrchestrationService {
         userId: input.userId,
         workspaceId,
         agentVersionId: input.agentVersionId,
+        ...input.authorizationContext,
       })
     } else {
-      await this.authorization?.authorizeWorkbench({ userId: input.userId, workspaceId })
+      await this.authorization?.authorizeWorkbench({
+        userId: input.userId,
+        workspaceId,
+        ...input.authorizationContext,
+      })
     }
-    return this.conversations.createSession({ ...input, workspaceId })
+    return this.conversations.createSession({
+      userId: input.userId,
+      title: input.title,
+      workspaceId,
+      agentVersionId: input.agentVersionId,
+    })
   }
 
   async startRun(input: {
@@ -78,6 +95,7 @@ export class RunOrchestrationService {
     prompt: string
     idempotencyKey: string
     fileIds?: string[]
+    authorizationContext?: SessionAuthorizationContext
   }) {
     assertPrompt(input.prompt)
     const session = await this.conversations.requireSession(input.sessionId, input.userId)
@@ -85,6 +103,7 @@ export class RunOrchestrationService {
       userId: input.userId,
       workspaceId: session.workspaceId,
       agentVersionId: session.agentVersionId,
+      ...input.authorizationContext,
     })
     const preparedFiles = this.content
       ? await this.content.prepareRuntimeFiles({
@@ -120,8 +139,8 @@ export class RunOrchestrationService {
     return this.runs.getRun(tenantId, run.id)
   }
 
-  async cancel(runId: string, userId: string) {
-    await this.authorization?.authorizeWorkbench({ userId })
+  async cancel(runId: string, userId: string, authorizationContext?: SessionAuthorizationContext) {
+    await this.authorization?.authorizeWorkbench({ userId, ...authorizationContext })
     const run = await this.requireOwnedRun(runId, userId)
     if (!['queued', 'running', 'cancel_requested'].includes(run.status)) return run
     const result = await this.runtime.cancel(runId, userId)
@@ -133,7 +152,7 @@ export class RunOrchestrationService {
     return this.runs.getRun(tenantId, runId)
   }
 
-  async retry(runId: string, userId: string) {
+  async retry(runId: string, userId: string, authorizationContext?: SessionAuthorizationContext) {
     const run = await this.requireOwnedRun(runId, userId)
     if (!['failed', 'cancelled'].includes(run.status)) throw new Error('只有失败或已取消的 Run 可以重试')
     const session = await this.conversations.requireSession(run.sessionId, userId)
@@ -141,6 +160,7 @@ export class RunOrchestrationService {
       userId,
       workspaceId: session.workspaceId,
       agentVersionId: session.agentVersionId,
+      ...authorizationContext,
     })
     const prompt = await this.conversations.getRunPrompt(run.id)
     const fileIds = this.content ? await this.content.getRunInputFileIds(run.id) : []
@@ -224,6 +244,7 @@ export class RunOrchestrationService {
           userId: input.userId,
           workspaceId: input.workspaceId,
           dataScopes: effectiveDataScopes,
+          roleIds: authorization?.roleIds,
         })
       : []
     const preparedFiles = input.preparedFiles ?? (this.content

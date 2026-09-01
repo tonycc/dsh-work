@@ -125,7 +125,7 @@ export interface Workspace {
 
 export interface WorkbenchSession {
   user: UserProfile
-  identityProvider: 'prototype-sso'
+  identityProvider: 'prototype-sso' | 'ai-hub-oidc'
   apiAudience: 'workbench'
 }
 

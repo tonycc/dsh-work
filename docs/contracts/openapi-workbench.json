@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "dsh-work 员工工作台 API",
-    "version": "0.5.0-m5",
-    "description": "M5 契约基线。每位用户具有唯一默认个人工作空间，所有 Session、文件与成果均归属个人或团队工作空间；运行仍通过 PostgreSQL 编排、服务端权限过滤、DSH Runtime 与 SSE 执行。"
+    "version": "0.6.0-m6",
+    "description": "M6 契约基线。请求使用 AI Hub OIDC 登录后由 dsh-work 签发的 HttpOnly 服务端 Session；用户标识和数据范围不接受浏览器传入。每位用户具有唯一默认个人工作空间，所有 Session、文件与成果均归属个人或团队工作空间。"
   },
   "servers": [{ "url": "/api/workbench/v1" }],
   "security": [{ "enterpriseSession": [] }],
@@ -193,7 +193,7 @@
   },
   "components": {
     "securitySchemes": {
-      "enterpriseSession": { "type": "apiKey", "in": "cookie", "name": "dsh_work_session" }
+      "enterpriseSession": { "type": "apiKey", "in": "cookie", "name": "dsh_work_session", "description": "AI Hub OIDC 回调后由 dsh-work 设置的不透明 HttpOnly Session Cookie；生产名称使用 __Host- 前缀。" }
     },
     "parameters": {
       "WorkspaceId": { "name": "workspaceId", "in": "path", "required": true, "schema": { "type": "string" } },
@@ -247,5 +247,5 @@
       }
     }
   },
-  "x-contract-status": "m0-review"
+  "x-contract-status": "m6-implemented"
 }

@@ -85,10 +85,9 @@ async function publish(agent: AgentDefinition) {
     const test = await contentStore.testAgent(
       agent.id,
       agent.examplePrompts[0] ?? '请介绍你能提供哪些帮助',
-      authStore.user.name,
     )
     if (test.status !== 'passed') throw new Error(test.resultSummary)
-    await contentStore.setAgentStatus(agent.id, 'published', authStore.user.name)
+    await contentStore.setAgentStatus(agent.id, 'published')
     ElMessage.success('服务端配置校验通过，Agent 版本已发布')
   } catch (cause) {
     if (cause instanceof Error) ElMessage.error(cause.message)
@@ -110,7 +109,7 @@ async function changeAvailability(agent: AgentDefinition) {
       { confirmButtonText: `确认${actionLabel}`, cancelButtonText: '取消', type: 'warning' },
     )
     actionLoading.value = `status:${agent.id}`
-    await contentStore.setAgentStatus(agent.id, nextStatus, authStore.user.name)
+    await contentStore.setAgentStatus(agent.id, nextStatus)
     ElMessage.success(`Agent 已${actionLabel}，操作已写入发布记录`)
   } catch (cause) {
     if (cause instanceof Error) ElMessage.error(cause.message)
@@ -129,7 +128,7 @@ async function rollback(version: AgentVersionRecord) {
       { confirmButtonText: '确认回滚', cancelButtonText: '取消', type: 'warning' },
     )
     actionLoading.value = `rollback:${version.id}`
-    await contentStore.rollbackAgent(agent.id, version.version, authStore.user.name)
+    await contentStore.rollbackAgent(agent.id, version.version)
     activeDetailTab.value = 'releases'
     ElMessage.success(`已回滚到 v${version.version}，发布记录已生成`)
   } catch (cause) {

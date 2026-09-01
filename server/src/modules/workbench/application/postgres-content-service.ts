@@ -10,7 +10,6 @@ import { extractDocument } from './document-extractor.ts'
 import { PostgresWorkspaceService, type WorkspaceType } from './postgres-workspace-service.ts'
 
 const tenantId = 'tenant-dsh-work'
-const userId = 'U00001'
 const allowedExtensions = new Set(['.pdf', '.docx', '.xlsx', '.csv', '.txt', '.md'])
 
 interface FileRow {
@@ -56,7 +55,7 @@ export class PostgresContentService {
     this.workspaces = workspaces
   }
 
-  async listWorkspaces(actorUserId = userId): Promise<Workspace[]> {
+  async listWorkspaces(actorUserId: string): Promise<Workspace[]> {
     await this.workspaces.ensurePersonalWorkspace(actorUserId)
     const rows = await this.database<{
       id: string
@@ -107,7 +106,7 @@ export class PostgresContentService {
                f.mime_type as "mimeType", f.size_bytes as "sizeBytes", f.created_at as "createdAt",
                u.display_name as "uploadedBy"
           from file_objects f
-          join users u on u.tenant_id = f.tenant_id and u.id = ${actorUserId}
+          join users u on u.tenant_id = f.tenant_id and u.id = f.uploaded_by
          where f.tenant_id = ${tenantId} and f.workspace_id = ${row.id} and f.scan_status = 'clean'
            and f.session_id is null
          order by f.created_at desc
@@ -135,7 +134,7 @@ export class PostgresContentService {
     }))
   }
 
-  async createWorkspace(input: { name: string; description: string }, actorUserId = userId) {
+  async createWorkspace(input: { name: string; description: string }, actorUserId: string) {
     const id = `ws-${randomUUID()}`
     await this.database.begin(async (transaction) => {
       await transaction`
@@ -150,7 +149,7 @@ export class PostgresContentService {
     return (await this.listWorkspaces(actorUserId)).find((workspace) => workspace.id === id)
   }
 
-  async listArtifacts(actorUserId = userId): Promise<Artifact[]> {
+  async listArtifacts(actorUserId: string): Promise<Artifact[]> {
     const rows = await this.database<{
       id: string
       name: string
@@ -184,18 +183,18 @@ export class PostgresContentService {
     }))
   }
 
-  async storeWorkspaceFile(workspaceId: string, name: string, mimeType: string, bytes: Buffer, actorUserId = userId) {
+  async storeWorkspaceFile(workspaceId: string, name: string, mimeType: string, bytes: Buffer, actorUserId: string) {
     await this.requireWorkspaceAccess(workspaceId, actorUserId)
-    return this.storeInputFile({ workspaceId, sessionId: null, name, mimeType, bytes })
+    return this.storeInputFile({ workspaceId, sessionId: null, name, mimeType, bytes, actorUserId })
   }
 
-  async storeSessionFile(sessionId: string, name: string, mimeType: string, bytes: Buffer, actorUserId = userId) {
+  async storeSessionFile(sessionId: string, name: string, mimeType: string, bytes: Buffer, actorUserId: string) {
     const [session] = await this.database<{ id: string; workspaceId: string }[]>`
       select id, workspace_id as "workspaceId" from sessions
        where tenant_id = ${tenantId} and id = ${sessionId} and created_by = ${actorUserId} and status = 'active'
     `
     if (!session) throw new Error('Session 不存在或不可访问')
-    return this.storeInputFile({ workspaceId: session.workspaceId, sessionId, name, mimeType, bytes })
+    return this.storeInputFile({ workspaceId: session.workspaceId, sessionId, name, mimeType, bytes, actorUserId })
   }
 
   async prepareRuntimeFiles(input: {
@@ -278,8 +277,9 @@ export class PostgresContentService {
     name: string
     mimeType: string
     bytes: Buffer
+    actorUserId: string
   }) {
-    const { workspaceId, sessionId, name, mimeType, bytes } = input
+    const { workspaceId, sessionId, name, mimeType, bytes, actorUserId } = input
     const extension = extname(name).toLowerCase()
     if (!allowedExtensions.has(extension)) throw new Error('仅支持 PDF、DOCX、XLSX、CSV、TXT 和 Markdown 文件')
     if (bytes.length < 1 || bytes.length > 20 * 1024 * 1024) throw new Error('文件大小必须为 1 B～20 MB')
@@ -292,10 +292,10 @@ export class PostgresContentService {
     await this.database`
       insert into file_objects (
         id, tenant_id, workspace_id, session_id, storage_key, original_name, mime_type,
-        size_bytes, sha256, scan_status
+        size_bytes, sha256, scan_status, uploaded_by
       ) values (
         ${id}, ${tenantId}, ${workspaceId}, ${sessionId}, ${storageKey}, ${name}, ${mimeType || 'application/octet-stream'},
-        ${bytes.length}, ${sha256}, 'clean'
+        ${bytes.length}, ${sha256}, 'clean', ${actorUserId}
       )
     `
     const extractionId = `extraction-${randomUUID()}`
@@ -320,7 +320,7 @@ export class PostgresContentService {
         name,
         size: formatSize(bytes.length),
         type: extension.slice(1).toUpperCase(),
-        uploadedBy: '林岚',
+        uploadedBy: await this.userDisplayName(actorUserId),
         uploadedAt: '刚刚',
         extractionStatus: 'succeeded' as const,
       }
@@ -339,13 +339,13 @@ export class PostgresContentService {
     }
   }
 
-  async readFile(fileId: string, actorUserId = userId) {
+  async readFile(fileId: string, actorUserId: string) {
     const [row] = await this.database<FileRow[]>`
       select f.id, f.storage_key as "storageKey", f.original_name as "originalName",
              f.mime_type as "mimeType", f.size_bytes as "sizeBytes", f.created_at as "createdAt",
              u.display_name as "uploadedBy"
         from file_objects f
-        join users u on u.tenant_id = f.tenant_id and u.id = ${actorUserId}
+        join users u on u.tenant_id = f.tenant_id and u.id = f.uploaded_by
        where f.tenant_id = ${tenantId} and f.id = ${fileId} and f.scan_status = 'clean'
          and (
            f.session_id in (select id from sessions where tenant_id = ${tenantId} and created_by = ${actorUserId})
@@ -370,7 +370,7 @@ export class PostgresContentService {
     return { name: row.originalName, mimeType: row.mimeType, bytes: await readFile(this.resolveStorage(row.storageKey)) }
   }
 
-  async artifactFileId(artifactId: string, version?: number, actorUserId = userId) {
+  async artifactFileId(artifactId: string, version: number | undefined, actorUserId: string) {
     const [row] = await this.database<{ fileId: string }[]>`
       select av.file_object_id as "fileId" from artifact_versions av
       join artifacts a on a.tenant_id = av.tenant_id and a.id = av.artifact_id
@@ -385,6 +385,14 @@ export class PostgresContentService {
 
   private async requireWorkspaceAccess(workspaceId: string, actorUserId: string) {
     await this.workspaces.resolveAccessibleWorkspace(workspaceId, actorUserId)
+  }
+
+  private async userDisplayName(userId: string) {
+    const [user] = await this.database<{ displayName: string }[]>`
+      select display_name as "displayName" from users
+       where tenant_id = ${tenantId} and id = ${userId}
+    `
+    return user?.displayName ?? userId
   }
 
   private async writeStorage(storageKey: string, bytes: Buffer) {

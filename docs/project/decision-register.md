@@ -1,6 +1,6 @@
 # MVP 决策台账
 
-**更新时间：** 2026-08-31
+**更新时间：** 2026-09-01
 **项目治理方式：** 个人项目，项目 Owner 同时承担产品、技术、开发、测试、安全和运维决策；表中的专业角色仅表示评审视角，不代表需要额外人员。
 
 **状态说明：** `已确认`、`已替代`、`待确定`、`阻塞`
@@ -21,14 +21,15 @@
 | A-10 | 不 Fork DSH；固定 Commit 并通过 ACP、权威 Session Log 和 Session Telemetry 集成 | 已确认 | 项目 Owner | dsh-work 维护 Adapter 和脱敏投影，不修改 DSH 核心 |
 | A-11 | DSH 作为受管 Runtime 制品独立交付；不把 DSH 源码并入 dsh-work | 已确认 | 项目 Owner | 本地可使用经校验的源码 checkout；integration、staging、pilot 使用固定版本制品 |
 | A-12 | 每位用户自动拥有唯一默认个人工作空间；所有对话、文件和成果必须归属个人或团队空间 | 已确认 | 项目 Owner | 取消“未加入工作空间”；个人空间仅本人访问且不扩大企业权限 |
+| A-13 | 企业身份统一使用 AI Hub OIDC；dsh-work 采用 PKCE 和服务端加密 Session，高风险管理写操作在线决策 | 已确认 | 项目 Owner | 禁止生产回退 Prototype 身份；浏览器不持有 AI Hub Token |
 
 ## 2. 启动外部决策
 
 | 编号 | 决策事项 | 当前结论/候选 | 状态 | 责任角色 | 截止时间 | 阻塞影响 |
 |---|---|---|---|---|---|---|
-| D-01 | DSH Runtime 版本和入口 | 本地开发使用 `/Users/max/projects/deepseek-harness`；版本 `0.1.1-rc.2`；Commit `b150a551b8d465e31e418e1b2eaf5e79bbb7d28e`。integration、staging、pilot 使用包含元数据的受管制品和正式 ACP 入口；Headless CLI 仅作诊断 | 已确认 | 项目 Owner | 2026-08-30 | 服务端启动前校验安装、版本、Commit 和 ACP v1；DSH 不并入 dsh-work 源码 |
+| D-01 | DSH Runtime 版本和入口 | 本地开发通过 `DSH_RUNTIME_HOME` 指向经校验的源码 checkout；版本 `0.1.1-rc.2`；Commit `b150a551b8d465e31e418e1b2eaf5e79bbb7d28e`。integration、staging、pilot 使用包含元数据的受管制品和正式 ACP 入口；Headless CLI 仅作诊断 | 已确认 | 项目 Owner | 2026-08-30 | 服务端启动前校验安装、版本、Commit 和 ACP v1；DSH 不并入 dsh-work 源码 |
 | D-02 | 模型 Provider 和预算 | M1/M2 默认使用 `deepseek-official / deepseek-v4-pro`；dsh-work 管理 Provider、模型和平台路由，但不在 Agent 中配置模型策略。运行参数仍继承 DSH 默认配置，正式企业数据出口由 D-09 控制 | 已确认 | 项目 Owner | 2026-08-30 | M2 已增加模型治理表、API、管理页和 Attempt 路由快照；M3 接入真实运行解析 |
-| D-03 | 企业身份 | SSO、LDAP 或受控内部账号待确定 | 待确定 | 项目 Owner | M2 身份接入前 | 阻塞真实授权，不阻塞 M0 |
+| D-03 | 企业身份 | 使用 AI Hub OIDC Authorization Code + PKCE；员工/管理两个 API Audience 共用应用环境凭据，使用独立回调和 Session Cookie；权限使用 `dsh_work.*` | 工程已确认，AI Hub 配置/联调待完成 | 项目 Owner | 2026-09-01 | 代码不再阻塞；真实凭据、用户授权和 API_ONLY 认证仍阻塞试点 |
 | D-04 | 试点部门 | 原型使用供应链合成场景，正式试点待确定 | 待确定 | 项目 Owner | M6 数据准备前 | 阻塞正式 UAT，不阻塞 M0 |
 | D-05 | 首批 Tool | M4-03 已将 DSH `read`、`glob`、`grep` 三个本地工作空间只读 Tool 纳入版本、权限、健康和 Manifest Allowlist 治理；一期企业 Tool 仍从知识查询、订单、工单、库存和采购到货中按真实接口就绪情况预置，不开放自定义 Tool | 工程基线已确认，企业接入待确定 | 项目 Owner | 2026-08-30 | M1/M4 本地 Tool Gate 不再阻塞；首个企业 Connector 仍是联合试点准入项 |
 | D-06 | 企业知识来源 | M4-04 已用 PostgreSQL 受控知识目录和两份明确标记的合成文档验证版本、角色/工作空间过滤、Runtime 注入和来源引用；真实知识库 API 或文档目录、文档 Owner、版本及更新口径仍待确定 | 工程基线已确认，真实来源待确定 | 项目 Owner | 真实知识 UAT 前 | 不再阻塞 M4 工程闭环；仍阻塞真实知识验收 |
@@ -60,4 +61,4 @@
 - 每个待确定项由项目 Owner 补充结论日期和证据链接；涉及外部系统时再记录对应联系人；
 - 决策变化必须记录影响的 WBS、接口、数据、测试和排期；
 - 不得删除已作废决策，改为增加状态和替代决策；
-- 影响 MVP 范围的决策必须同步修改产品方案和实施计划。
+- 影响 MVP 范围的决策必须同步修改 `docs/architecture/overview.md`、`docs/project/mvp-roadmap.md` 及相关契约和检查表。

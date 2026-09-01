@@ -2,7 +2,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 
 import { workbenchApi } from '../api/client'
-import type { UserProfile, UserRole } from '../types/domain'
+import type { UserProfile, UserRole, WorkbenchSession } from '../types/domain'
 
 export const roleLabels: Record<UserRole, string> = {
   employee: '普通员工',
@@ -25,21 +25,47 @@ export const useAuthStore = defineStore('workbench-auth', () => {
   const sessionUser = ref<UserProfile | null>(null)
   const initialized = ref(false)
   const loading = ref(false)
+  const error = ref('')
+  const identityProvider = ref<WorkbenchSession['identityProvider'] | null>(null)
   const user = computed(() => sessionUser.value ?? loadingUser)
   const canAccessAdmin = computed(() =>
     ['platform_admin', 'auditor'].includes(user.value.role),
   )
+  let pendingLoad: Promise<void> | undefined
 
   async function load() {
     if (initialized.value) return
-    loading.value = true
-    try {
-      const session = await workbenchApi.getSession()
-      sessionUser.value = session.user
-      initialized.value = true
-    } finally {
-      loading.value = false
-    }
+    if (pendingLoad) return pendingLoad
+    pendingLoad = (async () => {
+      loading.value = true
+      error.value = ''
+      try {
+        const session = await workbenchApi.getSession()
+        sessionUser.value = session.user
+        identityProvider.value = session.identityProvider
+        initialized.value = true
+      } catch (cause) {
+        sessionUser.value = null
+        identityProvider.value = null
+        error.value = cause instanceof Error ? cause.message : '登录会话加载失败'
+        throw cause
+      } finally {
+        loading.value = false
+        pendingLoad = undefined
+      }
+    })()
+    return pendingLoad
+  }
+
+  function login(returnTo = currentReturnTo()) {
+    window.location.assign(`/auth/workbench/login?return_to=${encodeURIComponent(returnTo)}`)
+  }
+
+  function logout() {
+    sessionUser.value = null
+    identityProvider.value = null
+    initialized.value = false
+    window.location.assign('/auth/workbench/logout')
   }
 
   return {
@@ -47,6 +73,14 @@ export const useAuthStore = defineStore('workbench-auth', () => {
     canAccessAdmin,
     initialized,
     loading,
+    error,
+    identityProvider,
     load,
+    login,
+    logout,
   }
 })
+
+function currentReturnTo() {
+  return `${window.location.pathname}${window.location.search}${window.location.hash}`
+}

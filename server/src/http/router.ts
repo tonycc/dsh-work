@@ -1,6 +1,13 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { randomUUID } from 'node:crypto'
 
+import type {
+  ApiAudience,
+  ApiAuthenticator,
+  RequestIdentity,
+} from '../modules/identity/types.ts'
+import { AI_HUB_PERMISSIONS } from '../modules/identity/types.ts'
+
 export interface ApiMeta {
   api: 'workbench' | 'admin' | 'system'
   adapter: 'prototype-memory' | 'postgres'
@@ -15,6 +22,7 @@ export interface ApiEnvelope<T> {
 export interface RouteContext {
   params: Record<string, string>
   url: URL
+  identity?: RequestIdentity
 }
 
 export interface HttpResult {
@@ -46,6 +54,11 @@ function writeJson(response: ServerResponse, status: number, payload: unknown) {
 
 export class Router {
   private readonly routes: RouteDefinition[] = []
+  private readonly authenticateApi?: ApiAuthenticator
+
+  constructor(options: { authenticateApi?: ApiAuthenticator } = {}) {
+    this.authenticateApi = options.authenticateApi
+  }
 
   get(path: string, handler: RouteHandler) {
     this.register('GET', path, handler)
@@ -105,7 +118,12 @@ export class Router {
       const params = Object.fromEntries(
         route.parameterNames.map((name, index) => [name, decodeURIComponent(match?.[index + 1] ?? '')]),
       )
-      const result = await route.handler(request, { params, url }, response)
+      const audience = apiAudience(url.pathname)
+      const identity = audience && this.authenticateApi
+        ? await this.authenticateApi(request, audience)
+        : undefined
+      if (identity) assertApiRouteAccess(identity, url.pathname, request.method)
+      const result = await route.handler(request, { params, url, identity }, response)
       if (response.headersSent || response.writableEnded) return
       if (isHttpResult(result)) writeJson(response, result.status, result.body)
       else writeJson(response, 200, result)
@@ -133,6 +151,25 @@ export function classifyHttpError(error: unknown, path: string): { status: numbe
   const normalized = original.toLowerCase()
   const object = inferRequestObject(path)
   const traceId = `trace-http-${randomUUID()}`
+
+  if (isIdentityAccessError(error)) {
+    const status = error.status
+    const suggestion = status === 401
+      ? '请重新登录后继续；若仍失败，请确认 AI Hub 应用与回调配置。'
+      : status === 403
+        ? '确认当前账号已获得对应应用权限；需要时联系管理员授权。'
+        : '稍后重试；若问题持续，请检查 AI Hub 与身份服务健康状态。'
+    return {
+      status,
+      error: {
+        code: error.code,
+        message: error.message,
+        object,
+        suggestion,
+        traceId,
+      },
+    }
+  }
 
   if (error instanceof SyntaxError) {
     return { status: 422, error: { code: 'invalid_request', message: `${object}请求内容不是有效 JSON`, object, suggestion: '检查请求字段和 JSON 格式后重新提交。', traceId } }
@@ -175,6 +212,61 @@ export function httpResult(status: number, body: unknown): HttpResult {
   return { status, body }
 }
 
+export function requireRequestIdentity(
+  context: RouteContext,
+  audience?: ApiAudience,
+): RequestIdentity {
+  const identity = context.identity
+  if (!identity || (audience && identity.audience !== audience)) {
+    const error = new Error('请先登录') as Error & { status: number; code: string }
+    error.status = 401
+    error.code = 'authentication_required'
+    throw error
+  }
+  return identity
+}
+
+export function sessionAuthorizationContext(identity: RequestIdentity) {
+  return {
+    roleIds: [...identity.roleIds],
+    dataScopes: [...identity.dataScopes],
+  }
+}
+
+export function assertApiRouteAccess(
+  identity: RequestIdentity,
+  path: string,
+  method: string | undefined,
+) {
+  if (identity.audience !== 'admin') return
+  const permissions = new Set(identity.permissions)
+  const isPrototypeAdmin = permissions.has('admin:*')
+  if (path === '/api/admin/v1/session') return
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(method ?? 'GET')) {
+    if (!isPrototypeAdmin
+      && !permissions.has('admin:write')
+      && !permissions.has(AI_HUB_PERMISSIONS.adminWrite)) {
+      throw routePermissionDenied('当前用户没有管理写权限')
+    }
+    return
+  }
+  const auditRoute = path === '/api/admin/v1/audit-events'
+    || path === '/api/admin/v1/operations/summary'
+    || path.startsWith('/api/admin/v1/operations/runs/')
+  const allowed = auditRoute
+    ? isPrototypeAdmin
+      || permissions.has('audit:read')
+      || permissions.has(AI_HUB_PERMISSIONS.auditRead)
+    : isPrototypeAdmin
+      || permissions.has('admin:read')
+      || permissions.has(AI_HUB_PERMISSIONS.adminRead)
+  if (!allowed) {
+    throw routePermissionDenied(
+      auditRoute ? '当前用户没有审计读取权限' : '当前用户没有管理读取权限',
+    )
+  }
+}
+
 export async function readJsonBody<T>(request: IncomingMessage): Promise<T> {
   let body = ''
   for await (const chunk of request) {
@@ -202,4 +294,27 @@ function isHttpResult(value: unknown): value is HttpResult {
 
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function apiAudience(path: string): ApiAudience | null {
+  if (path.startsWith('/api/workbench/v1/')) return 'workbench'
+  if (path.startsWith('/api/admin/v1/')) return 'admin'
+  return null
+}
+
+function isIdentityAccessError(
+  error: unknown,
+): error is Error & { status: 401 | 403 | 503; code: string } {
+  if (!(error instanceof Error)) return false
+  const candidate = error as Error & { status?: unknown; code?: unknown }
+  return [401, 403, 503].includes(Number(candidate.status))
+    && typeof candidate.code === 'string'
+    && /^[a-z0-9_]{1,80}$/i.test(candidate.code)
+}
+
+function routePermissionDenied(message: string) {
+  const error = new Error(message) as Error & { status: number; code: string }
+  error.status = 403
+  error.code = 'permission_denied'
+  return error
 }

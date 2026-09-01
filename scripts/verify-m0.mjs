@@ -5,9 +5,11 @@ const root = resolve(import.meta.dirname, '..')
 const failures = []
 
 const requiredFiles = [
+  'README.md',
   '.github/workflows/ci.yml',
-  'dsh-work MVP 实施方案与计划.md',
-  '前端原型评审说明.md',
+  'docs/README.md',
+  'docs/architecture/overview.md',
+  'docs/project/mvp-roadmap.md',
   'docs/baselines/m0-prototype-baseline.md',
   'docs/contracts/openapi-workbench.json',
   'docs/contracts/openapi-admin.json',
@@ -97,14 +99,24 @@ for (const collection of ['users', 'roles', 'workspaces', 'businessRecords', 'kn
   if (fixtures && !Array.isArray(fixtures[collection])) failures.push(`测试数据缺少数组：${collection}`)
 }
 
-const productPlan = read('dsh-work 产品设计方案.md')
-for (const forbidden of ['每名员工默认拥有个人 Workspace', '个人 Workspace、文件和 Session', '历史任务。']) {
-  if (productPlan.includes(forbidden)) failures.push(`产品方案仍包含已废弃范围：${forbidden}`)
+const legacyRootDocuments = [
+  'dsh-work 产品设计方案.md',
+  'dsh-work 产品架构方案（简化版）.md',
+  'dsh-work MVP 实施方案与计划.md',
+  '前端原型评审说明.md',
+]
+for (const file of legacyRootDocuments) {
+  if (existsSync(resolve(root, file))) failures.push(`根目录仍存在已归并的历史文档：${file}`)
 }
 
-const implementationPlan = read('dsh-work MVP 实施方案与计划.md')
-for (const required of ['M0 实施基线冻结', 'M1 Runtime 技术 POC', 'D-01', 'Mock 替换顺序', 'MVP 必测业务用例']) {
-  if (!implementationPlan.includes(required)) failures.push(`实施计划缺少：${required}`)
+const architecture = read('docs/architecture/overview.md')
+for (const required of ['Node.js 模块化单体', '独立 DSH Worker', 'AI Hub OIDC', 'PostgreSQL 是产品运行事实来源']) {
+  if (!architecture.includes(required)) failures.push(`架构总览缺少：${required}`)
+}
+
+const implementationPlan = read('docs/project/mvp-roadmap.md')
+for (const required of ['M0 实施基线冻结', 'M1 Runtime 技术 POC', 'M4-01', 'M4-09', 'MVP 必测业务用例']) {
+  if (!implementationPlan.includes(required)) failures.push(`MVP 路线图缺少：${required}`)
 }
 
 const githubCi = read('.github/workflows/ci.yml')

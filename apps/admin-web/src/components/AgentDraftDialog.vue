@@ -176,8 +176,8 @@ async function saveAgent() {
   try {
     const payload = preparePayload(form)
     const saved = props.agent
-      ? await contentStore.updateAgentDraft(payload, authStore.user.name)
-      : await contentStore.createAgentDraft(payload, authStore.user.name)
+      ? await contentStore.updateAgentDraft(payload)
+      : await contentStore.createAgentDraft(payload)
     initialSnapshot.value = JSON.stringify(form)
     dialogOpen.value = false
     emit('saved', saved)

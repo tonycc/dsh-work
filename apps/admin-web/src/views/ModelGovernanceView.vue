@@ -83,7 +83,7 @@ function openRouteDialog() {
 
 async function createProvider() {
   try {
-    await adminApi.createModelProvider({ ...providerForm, actor: authStore.user.id })
+    await adminApi.createModelProvider({ ...providerForm })
     providerDialogOpen.value = false
     ElMessage.success('Provider 已创建')
     await load()
@@ -98,7 +98,6 @@ async function createModel() {
     await adminApi.createProviderModel({
       providerId: selectedProvider.value.id,
       ...modelForm,
-      actor: authStore.user.id,
     })
     modelDialogOpen.value = false
     ElMessage.success('模型已添加')
@@ -114,7 +113,6 @@ async function saveCredentialReference() {
     await adminApi.updateCredentialReference({
       providerId: selectedProvider.value.id,
       ...credentialForm,
-      actor: authStore.user.id,
     })
     credentialDialogOpen.value = false
     ElMessage.success('密钥引用已更新；密钥正文未进入 dsh-work')
@@ -126,7 +124,7 @@ async function saveCredentialReference() {
 
 async function createRoute() {
   try {
-    await adminApi.createModelRoute({ ...routeForm, actor: authStore.user.id })
+    await adminApi.createModelRoute({ ...routeForm })
     routeDialogOpen.value = false
     ElMessage.success('模型路由已创建')
     await load()
@@ -141,7 +139,7 @@ async function toggleProvider(provider: ModelProvider) {
     if (status === 'disabled') {
       await ElMessageBox.confirm('停用后，新 Run 不再解析到该 Provider。已启动 Attempt 不受影响。', `停用 ${provider.name}`, { type: 'warning' })
     }
-    await adminApi.setModelProviderStatus({ providerId: provider.id, status, actor: authStore.user.id })
+    await adminApi.setModelProviderStatus({ providerId: provider.id, status })
     ElMessage.success(status === 'active' ? 'Provider 已启用' : 'Provider 已停用')
     await load()
   } catch (cause) {

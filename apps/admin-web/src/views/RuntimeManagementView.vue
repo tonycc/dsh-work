@@ -94,7 +94,7 @@ function openConfiguration(runtime: RuntimeDefinition) {
 async function check(runtime: RuntimeDefinition) {
   checkingId.value = runtime.id
   try {
-    const result = await contentStore.checkRuntime(runtime.id, authStore.user.name)
+    const result = await contentStore.checkRuntime(runtime.id)
     if (selectedRuntime.value?.id === result.id) selectedRuntime.value = result
     if (configuringRuntime.value?.id === result.id) configuringRuntime.value = result
     if (result.status === 'offline') ElMessage.warning(result.healthMessage)
@@ -136,7 +136,6 @@ async function saveConfiguration() {
       maxConcurrentWorkers: configurationForm.maxConcurrentWorkers,
       attemptTimeoutMinutes: configurationForm.attemptTimeoutMinutes,
       schedulingStatus: configurationForm.schedulingStatus,
-      actor: authStore.user.name,
     })
     configuringRuntime.value = result
     if (selectedRuntime.value?.id === result.id) selectedRuntime.value = result

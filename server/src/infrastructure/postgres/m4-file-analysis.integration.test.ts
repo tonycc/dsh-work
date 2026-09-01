@@ -61,6 +61,7 @@ test('uploaded Session file is extracted, snapshotted and injected as an immutab
     'inventory.csv',
     'text/csv',
     Buffer.from('物料,区域,库存\nA-01,华东,120\nB-02,华南,8\n'),
+    'U00001',
   )
   assert.equal(uploaded.extractionStatus, 'succeeded')
 
@@ -98,14 +99,14 @@ test('uploaded Session file is extracted, snapshotted and injected as an immutab
 
 test('file authorization and parser failures are fail-closed and traceable', async () => {
   const session = await orchestration.createSession({ userId: 'U00001', title: '失败文件验证' })
-  const uploaded = await content.storeSessionFile(session.id, 'notes.txt', 'text/plain', Buffer.from('仅当前用户可读'))
+  const uploaded = await content.storeSessionFile(session.id, 'notes.txt', 'text/plain', Buffer.from('仅当前用户可读'), 'U00001')
   await assert.rejects(
     content.prepareRuntimeFiles({ sessionId: session.id, fileIds: [uploaded.id], userId: 'U00008' }),
     /不存在、不可访问或解析未成功/,
   )
 
   await assert.rejects(
-    content.storeSessionFile(session.id, 'disguised.pdf', 'application/pdf', Buffer.from('not a real pdf')),
+    content.storeSessionFile(session.id, 'disguised.pdf', 'application/pdf', Buffer.from('not a real pdf'), 'U00001'),
     /PDF_SIGNATURE_INVALID/,
   )
   const [failure] = await database<{ status: string; errorCode: string }[]>`

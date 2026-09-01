@@ -99,7 +99,7 @@ test('Runtime configuration controls timeout, capacity and scheduling with versi
     maxConcurrentWorkers: 2,
     attemptTimeoutMinutes: 2,
     schedulingStatus: 'accepting',
-    actor: '陈默',
+    actor: 'U00008',
   })
   assert.equal(accepting?.maxConcurrentWorkers, 2)
   assert.equal(accepting?.attemptTimeoutMinutes, 2)
@@ -137,7 +137,7 @@ test('Runtime configuration controls timeout, capacity and scheduling with versi
       maxConcurrentWorkers: 1,
       attemptTimeoutMinutes: 2,
       schedulingStatus: 'accepting',
-      actor: '陈默',
+      actor: 'U00008',
     }),
     /不能小于当前活动 Worker 数/,
   )
@@ -149,7 +149,7 @@ test('Runtime configuration controls timeout, capacity and scheduling with versi
     maxConcurrentWorkers: 2,
     attemptTimeoutMinutes: 3,
     schedulingStatus: 'draining',
-    actor: '陈默',
+    actor: 'U00008',
   })
   assert.equal(draining?.schedulingStatus, 'draining')
   assert.equal(runtime.acceptingRuns, false)
@@ -161,7 +161,7 @@ test('Runtime configuration controls timeout, capacity and scheduling with versi
     maxConcurrentWorkers: 2,
     attemptTimeoutMinutes: 3,
     schedulingStatus: 'accepting',
-    actor: '陈默',
+    actor: 'U00008',
   })
   assert.equal(runtime.acceptingRuns, true)
   assert.equal(await runs.claimAttempt('tenant-dsh-work', queued.attemptId, 'runtime-local-01'), true)
@@ -172,12 +172,12 @@ test('Runtime configuration controls timeout, capacity and scheduling with versi
     maxConcurrentWorkers: 2,
     attemptTimeoutMinutes: 3,
     schedulingStatus: 'disabled',
-    actor: '陈默',
+    actor: 'U00008',
   })
   assert.equal(disabled?.schedulingStatus, 'disabled')
   assert.equal(runtime.acceptingRuns, false)
 
-  const checked = await operations.checkRuntime({ runtimeId: 'runtime-local-01', actor: '陈默' })
+  const checked = await operations.checkRuntime({ runtimeId: 'runtime-local-01', actor: 'U00008' })
   assert.equal(checked?.status, 'healthy')
   const [history] = await database<{ revisions: number; audits: number }[]>`
     select

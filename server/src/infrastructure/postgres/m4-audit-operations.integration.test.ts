@@ -80,10 +80,10 @@ before(async () => {
   await database`
     insert into file_objects (
       id, tenant_id, workspace_id, session_id, storage_key, original_name,
-      mime_type, size_bytes, sha256, scan_status
+      mime_type, size_bytes, sha256, scan_status, uploaded_by
     ) values (
       ${fileId}, 'tenant-dsh-work', 'ws-supply', ${session.id}, ${`audit/${fileId}`},
-      '运营验证.txt', 'text/plain', 16, ${randomUUID().replaceAll('-', '')}, 'clean'
+      '运营验证.txt', 'text/plain', 16, ${randomUUID().replaceAll('-', '')}, 'clean', 'U00008'
     )
   `
   await database`

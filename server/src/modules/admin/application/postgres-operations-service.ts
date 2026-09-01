@@ -23,15 +23,18 @@ export class PostgresOperationsService {
   private readonly database: DatabaseClient
   private readonly runtime?: AgentRuntimePort
   private readonly authorization?: PostgresAuthorizationService
+  private readonly sso: 'mock' | 'ai-hub-oidc'
 
   constructor(
     database: DatabaseClient,
     runtime?: AgentRuntimePort,
     authorization?: PostgresAuthorizationService,
+    sso: 'mock' | 'ai-hub-oidc' = 'mock',
   ) {
     this.database = database
     this.runtime = runtime
     this.authorization = authorization
+    this.sso = sso
   }
 
   async getTaskSummaries() {
@@ -415,7 +418,7 @@ export class PostgresOperationsService {
   }
 
   getPlatformStatus() {
-    return { architecture: 'node-modular-monolith', persistence: 'postgres', sso: 'mock', dshRuntime: 'connected', database: 'configured', artifactStorage: 'local-mvp' }
+    return { architecture: 'node-modular-monolith', persistence: 'postgres', sso: this.sso, dshRuntime: 'connected', database: 'configured', artifactStorage: 'local-mvp' }
   }
 
   async recordModelUsage(input: {
@@ -528,20 +531,20 @@ export class PostgresOperationsService {
     `.then(() => undefined)
   }
 
-  private async requirePlatformAdmin(displayName: string) {
-    if (this.authorization) return this.authorization.requirePlatformAdmin(displayName)
+  private async requirePlatformAdmin(userId: string) {
+    if (this.authorization) return this.authorization.requirePlatformAdmin(userId)
     const [actor] = await this.database<{ id: string; displayName: string }[]>`
       select u.id, u.display_name as "displayName" from users u
-       where u.tenant_id = ${tenantId} and u.display_name = ${displayName.trim()} and u.status = 'active'
+       where u.tenant_id = ${tenantId} and u.id = ${userId} and u.status = 'active'
          and exists (
            select 1 from user_roles ur
            join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id
             where ur.tenant_id = u.tenant_id and ur.user_id = u.id
               and (ur.valid_until is null or ur.valid_until > now())
-              and r.permissions ? 'admin:*'
+              and (r.permissions ? 'admin:*' or r.permissions ? 'admin:write')
          )
     `
-    if (!actor) throw new Error(`操作人不存在、已停用或不是平台管理员：${displayName}`)
+    if (!actor) throw new Error(`操作人不存在、已停用或不是平台管理员：${userId}`)
     return actor
   }
 

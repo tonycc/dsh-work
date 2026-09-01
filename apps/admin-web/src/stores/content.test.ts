@@ -4,6 +4,25 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SkillDefinition, SkillReleaseRecord, SkillVersionRecord } from '../types/domain'
 
 const api = vi.hoisted(() => ({
+  getAgentReleaseRecords: vi.fn(),
+  getAgents: vi.fn(),
+  getAgentVersions: vi.fn(),
+  getAuditEvents: vi.fn(),
+  getConnectors: vi.fn(),
+  getHealth: vi.fn(),
+  getModelUsage: vi.fn(),
+  getOperationsSummary: vi.fn(),
+  getPlatformStatus: vi.fn(),
+  getRuntimes: vi.fn(),
+  getSession: vi.fn(),
+  getSessions: vi.fn(),
+  getSkillReleaseRecords: vi.fn(),
+  getSkills: vi.fn(),
+  getSkillVersions: vi.fn(),
+  getTasks: vi.fn(),
+  getTools: vi.fn(),
+  getUsage: vi.fn(),
+  getWorkspaces: vi.fn(),
   rollbackSkill: vi.fn(),
   setSkillStatus: vi.fn(),
 }))
@@ -12,6 +31,7 @@ vi.mock('../api/client', () => ({ adminApi: api }))
 describe('admin content store Skill version state', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    vi.clearAllMocks()
   })
 
   it('marks the published draft in version history without a page reload', async () => {
@@ -27,7 +47,7 @@ describe('admin content store Skill version state', () => {
       release,
     })
 
-    await store.setSkillStatus('skill-reporting', 'published', '平台管理员')
+    await store.setSkillStatus('skill-reporting', 'published')
 
     expect(store.skillVersions[0]).toMatchObject({
       status: 'published',
@@ -53,11 +73,41 @@ describe('admin content store Skill version state', () => {
       release,
     })
 
-    await store.rollbackSkill('skill-reporting', '0.1.0', '平台管理员')
+    await store.rollbackSkill('skill-reporting', '0.1.0')
 
     expect(store.skillVersions.find(item => item.id === 'skill-version-draft')?.status).toBe('disabled')
     expect(store.skillVersions.find(item => item.id === 'skill-version-target')?.status).toBe('published')
     expect(store.skillReleaseRecords).toEqual([release])
+  })
+
+  it('loads only audit endpoints for an audit-only session', async () => {
+    const { useAuthStore } = await import('./auth')
+    const { useContentStore } = await import('./content')
+    const authStore = useAuthStore()
+    api.getSession.mockResolvedValue({
+      identityProvider: 'ai-hub-oidc',
+      apiAudience: 'admin',
+      permissions: ['dsh_work.audit.read'],
+      user: {
+        id: 'U00019', name: '安全审计员', title: '审计员', department: '信息安全部',
+        avatarText: '审', role: 'auditor', dataScopes: [],
+      },
+    })
+    await authStore.load()
+    api.getAuditEvents.mockResolvedValue([])
+    api.getOperationsSummary.mockResolvedValue({
+      runs24h: 0,
+      modelTokens24h: 0,
+      attentionEvents24h: 0,
+    })
+
+    const store = useContentStore()
+    await store.load()
+
+    expect(api.getAuditEvents).toHaveBeenCalledOnce()
+    expect(api.getOperationsSummary).toHaveBeenCalledOnce()
+    expect(api.getTasks).not.toHaveBeenCalled()
+    expect(api.getAgents).not.toHaveBeenCalled()
   })
 })
 

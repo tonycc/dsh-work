@@ -14,6 +14,7 @@ import {
   Plus,
   Setting,
   Share,
+  SwitchButton,
 } from '@element-plus/icons-vue'
 
 import { AppLogo } from '@dsh-work/ui-core'
@@ -57,6 +58,7 @@ function onAccountCommand(command: string | number | object) {
   const value = String(command)
   if (value === 'user-center') navigate('/settings')
   if (value === 'admin') openAdmin()
+  if (value === 'logout') authStore.logout()
 }
 
 function copyConversationLink(task: TaskRun) {
@@ -240,6 +242,10 @@ onMounted(() => {
               <el-dropdown-item v-if="authStore.canAccessAdmin" divided command="admin">
                 <el-icon><Monitor /></el-icon>
                 打开管理后台
+              </el-dropdown-item>
+              <el-dropdown-item v-if="authStore.identityProvider === 'ai-hub-oidc'" divided command="logout">
+                <el-icon><SwitchButton /></el-icon>
+                退出登录
               </el-dropdown-item>
             </el-dropdown-menu>
           </template>

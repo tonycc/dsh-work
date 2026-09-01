@@ -40,6 +40,7 @@ export class WorkbenchApiError extends Error {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,
+    credentials: 'include',
     headers: {
       Accept: 'application/json',
       ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
@@ -48,7 +49,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   })
 
   if (!response.ok) {
-    throw await parseApiError(response, `员工工作台接口请求失败（${response.status}）`)
+    const error = await parseApiError(response, `员工工作台接口请求失败（${response.status}）`)
+    if (response.status === 401 && path !== '/session') redirectToLogin()
+    throw error
   }
 
   const payload = (await response.json()) as ApiEnvelope<T>
@@ -56,9 +59,22 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 async function requestBlob(path: string) {
-  const response = await fetch(`${baseUrl}${path}`, { headers: { Accept: 'application/octet-stream' } })
-  if (!response.ok) throw await parseApiError(response, `文件下载失败（${response.status}）`)
+  const response = await fetch(`${baseUrl}${path}`, {
+    credentials: 'include',
+    headers: { Accept: 'application/octet-stream' },
+  })
+  if (!response.ok) {
+    const error = await parseApiError(response, `文件下载失败（${response.status}）`)
+    if (response.status === 401) redirectToLogin()
+    throw error
+  }
   return response.blob()
+}
+
+function redirectToLogin() {
+  if (typeof window === 'undefined') return
+  const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`
+  window.location.assign(`/auth/workbench/login?return_to=${encodeURIComponent(returnTo)}`)
 }
 
 async function parseApiError(response: Response, fallback: string) {

@@ -68,6 +68,7 @@ export class AdminApiError extends Error {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,
+    credentials: 'include',
     headers: {
       Accept: 'application/json',
       ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
@@ -78,18 +79,26 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     const fallback = `管理后台接口请求失败（${response.status}）`
     const payload = await response.json().catch(() => undefined) as { error?: ApiErrorPayload } | undefined
-    throw new AdminApiError(payload?.error ?? {}, response.status, fallback)
+    const error = new AdminApiError(payload?.error ?? {}, response.status, fallback)
+    if (response.status === 401 && path !== '/session') redirectToLogin()
+    throw error
   }
 
   const payload = (await response.json()) as ApiEnvelope<T>
   return payload.data
 }
 
+function redirectToLogin() {
+  if (typeof window === 'undefined') return
+  const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`
+  window.location.assign(`/auth/admin/login?return_to=${encodeURIComponent(returnTo)}`)
+}
+
 export const adminApi = {
   getSession: () => request<AdminSession>('/session'),
   getTasks: () => request<AdminTaskSummary[]>('/tasks'),
   getRuntimes: () => request<RuntimeDefinition[]>('/runtimes'),
-  checkRuntime: (input: { runtimeId: string; actor: string }) =>
+  checkRuntime: (input: { runtimeId: string }) =>
     request<RuntimeDefinition>('/runtimes/check', { method: 'POST', body: JSON.stringify(input) }),
   updateRuntimeConfiguration: (input: UpdateRuntimeConfigurationInput) =>
     request<RuntimeDefinition>('/runtimes/configuration', { method: 'PATCH', body: JSON.stringify(input) }),
@@ -108,7 +117,7 @@ export const adminApi = {
       method: 'PATCH',
       body: JSON.stringify(input),
     }),
-  testAgent: (input: { agentId: string; prompt: string; actor: string }) =>
+  testAgent: (input: { agentId: string; prompt: string }) =>
     request<{
       id: string
       agentId: string
@@ -120,12 +129,12 @@ export const adminApi = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
-  setAgentStatus: (input: { agentId: string; status: 'published' | 'disabled'; actor: string }) =>
+  setAgentStatus: (input: { agentId: string; status: 'published' | 'disabled' }) =>
     request<{ agent: AgentDefinition; release: AgentReleaseRecord }>('/agents/status', {
       method: 'PATCH',
       body: JSON.stringify(input),
     }),
-  rollbackAgent: (input: { agentId: string; version: string; actor: string }) =>
+  rollbackAgent: (input: { agentId: string; version: string }) =>
     request<{ agent: AgentDefinition; release: AgentReleaseRecord }>('/agents/rollback', {
       method: 'POST',
       body: JSON.stringify(input),
@@ -137,24 +146,23 @@ export const adminApi = {
     request<{ skill: SkillDefinition; version: SkillVersionRecord }>('/skills', { method: 'POST', body: JSON.stringify(input) }),
   updateSkill: (input: UpdateSkillInput) =>
     request<{ skill: SkillDefinition; version: SkillVersionRecord }>('/skills', { method: 'PATCH', body: JSON.stringify(input) }),
-  testSkill: (input: { skillId: string; prompt?: string; actor: string }) =>
+  testSkill: (input: { skillId: string; prompt?: string }) =>
     request<{ id: string; skillId: string; version: string; status: 'passed' | 'failed'; resultSummary: string; testedAt: string }>('/skills/test', { method: 'POST', body: JSON.stringify(input) }),
-  setSkillStatus: (input: { skillId: string; status: 'published' | 'disabled'; actor: string }) =>
+  setSkillStatus: (input: { skillId: string; status: 'published' | 'disabled' }) =>
     request<{ skill: SkillDefinition; release: SkillReleaseRecord }>('/skills/status', { method: 'PATCH', body: JSON.stringify(input) }),
-  rollbackSkill: (input: { skillId: string; version: string; actor: string }) =>
+  rollbackSkill: (input: { skillId: string; version: string }) =>
     request<{ skill: SkillDefinition; release: SkillReleaseRecord }>('/skills/rollback', { method: 'POST', body: JSON.stringify(input) }),
   getTools: () => request<ToolDefinition[]>('/tools'),
-  setToolStatus: (input: { toolId: string; status: 'available' | 'disabled'; actor: string }) =>
+  setToolStatus: (input: { toolId: string; status: 'available' | 'disabled' }) =>
     request<ToolDefinition>('/tools/status', { method: 'PATCH', body: JSON.stringify(input) }),
   getConnectors: () => request<ConnectorDefinition[]>('/connectors'),
-  checkConnector: (input: { connectorId: string; actor: string }) =>
+  checkConnector: (input: { connectorId: string }) =>
     request<ConnectorDefinition>('/connectors/check', { method: 'POST', body: JSON.stringify(input) }),
   updateToolPermissions: (input: {
     toolId: string
     allowedRoles: string[]
     dataScopes: string[]
     approvalPolicy: ToolDefinition['approvalPolicy']
-    actor: string
   }) => request<ToolDefinition>('/tools/permissions', { method: 'PATCH', body: JSON.stringify(input) }),
   getAuditEvents: () => request<AuditEvent[]>('/audit-events'),
   getOperationsSummary: () => request<OperationsSummary>('/operations/summary'),
@@ -168,23 +176,20 @@ export const adminApi = {
     name: string
     providerType: string
     baseUrl: string
-    actor: string
   }) => request<ModelProvider>('/model-providers', { method: 'POST', body: JSON.stringify(input) }),
-  setModelProviderStatus: (input: { providerId: string; status: 'active' | 'disabled'; actor: string }) =>
+  setModelProviderStatus: (input: { providerId: string; status: 'active' | 'disabled' }) =>
     request<ModelProvider>('/model-providers/status', { method: 'PATCH', body: JSON.stringify(input) }),
   createProviderModel: (input: {
     providerId: string
     modelKey: string
     displayName: string
     capabilities: string[]
-    actor: string
   }) => request<ModelProvider>('/provider-models', { method: 'POST', body: JSON.stringify(input) }),
   updateCredentialReference: (input: {
     providerId: string
     backend: 'dsh-managed' | 'keychain' | 'secret-manager'
     externalRef: string
     status: 'configured' | 'missing' | 'revoked'
-    actor: string
   }) => request<ModelProvider>('/model-providers/credential-reference', {
     method: 'PATCH',
     body: JSON.stringify(input),
@@ -197,7 +202,6 @@ export const adminApi = {
     providerModelId: string
     priority: number
     enabled: boolean
-    actor: string
   }) => request<ModelRoute>('/model-routes', { method: 'POST', body: JSON.stringify(input) }),
   getPlatformStatus: () => request<PlatformStatus>('/platform-status'),
 }

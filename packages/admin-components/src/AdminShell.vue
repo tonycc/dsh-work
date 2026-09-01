@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import {
   ArrowRight,
   ChatDotRound,
@@ -11,6 +11,7 @@ import {
   Menu,
   Monitor,
   PieChart,
+  SwitchButton,
   Tickets,
   Tools,
 } from '@element-plus/icons-vue'
@@ -23,11 +24,15 @@ const props = defineProps<{
   userName: string
   avatarText: string
   roleLabel: string
+  canLogout: boolean
+  canReadAdmin: boolean
+  canReadAudit: boolean
 }>()
 
 const emit = defineEmits<{
   navigate: [path: string]
   openWorkbench: []
+  logout: []
 }>()
 const mobileOpen = ref(false)
 const collapsedGroups = ref<Record<string, boolean>>({})
@@ -35,39 +40,48 @@ const collapsedGroups = ref<Record<string, boolean>>({})
 const navigationGroups = [
   {
     label: '概览',
-    items: [{ label: '运营概览', path: '/overview', icon: DataAnalysis }],
+    items: [{ label: '运营概览', path: '/overview', icon: DataAnalysis, permission: 'admin' }],
   },
   {
     label: 'Agent 治理',
     items: [
-      { label: 'Agent 管理', path: '/agents', icon: Grid },
-      { label: 'Skill 与工具', path: '/capabilities', icon: Tools },
+      { label: 'Agent 管理', path: '/agents', icon: Grid, permission: 'admin' },
+      { label: 'Skill 与工具', path: '/capabilities', icon: Tools, permission: 'admin' },
     ],
   },
   {
     label: '运行治理',
     items: [
-      { label: 'Session 列表', path: '/sessions', icon: ChatDotRound },
-      { label: '模型治理', path: '/model-governance', icon: Key },
-      { label: '模型用量', path: '/model-usage', icon: PieChart },
+      { label: 'Session 列表', path: '/sessions', icon: ChatDotRound, permission: 'admin' },
+      { label: '模型治理', path: '/model-governance', icon: Key, permission: 'admin' },
+      { label: '模型用量', path: '/model-usage', icon: PieChart, permission: 'admin' },
     ],
   },
   {
     label: '组织与权限',
     items: [
-      { label: '工作空间', path: '/workspaces', icon: FolderOpened },
-      { label: '工具权限', path: '/permissions', icon: Key },
+      { label: '工作空间', path: '/workspaces', icon: FolderOpened, permission: 'admin' },
+      { label: '工具权限', path: '/permissions', icon: Key, permission: 'admin' },
     ],
   },
   {
     label: '安全与运维',
     items: [
-      { label: 'Runtimes', path: '/runtimes', icon: Cpu },
-      { label: '审计记录', path: '/audit', icon: Tickets },
-      { label: '系统健康', path: '/health', icon: Monitor },
+      { label: 'Runtimes', path: '/runtimes', icon: Cpu, permission: 'admin' },
+      { label: '审计记录', path: '/audit', icon: Tickets, permission: 'audit' },
+      { label: '系统健康', path: '/health', icon: Monitor, permission: 'admin' },
     ],
   },
 ]
+
+const visibleNavigationGroups = computed(() => navigationGroups
+  .map(group => ({
+    ...group,
+    items: group.items.filter(item => item.permission === 'audit'
+      ? props.canReadAudit
+      : props.canReadAdmin),
+  }))
+  .filter(group => group.items.length > 0))
 
 function toggleGroup(label: string) {
   collapsedGroups.value = {
@@ -84,6 +98,7 @@ function navigate(path: string) {
 function onRoleCommand(command: string | number | object) {
   const value = String(command)
   if (value === 'workbench') emit('openWorkbench')
+  if (value === 'logout') emit('logout')
 }
 
 watch(
@@ -103,7 +118,7 @@ watch(
         <span class="brand-context">管理平台</span>
       </div>
       <nav class="admin-sidebar__nav" aria-label="管理后台主导航">
-        <section v-for="group in navigationGroups" :key="group.label" class="admin-nav-group">
+        <section v-for="group in visibleNavigationGroups" :key="group.label" class="admin-nav-group">
           <button
             class="admin-nav-group__label"
             type="button"
@@ -146,6 +161,7 @@ watch(
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item command="workbench"><el-icon><Grid /></el-icon>返回员工工作台</el-dropdown-item>
+                <el-dropdown-item v-if="canLogout" divided command="logout"><el-icon><SwitchButton /></el-icon>退出登录</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>

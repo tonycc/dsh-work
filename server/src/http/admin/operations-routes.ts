@@ -1,5 +1,5 @@
 import type { PostgresOperationsService } from '../../modules/admin/application/postgres-operations-service.ts'
-import { envelope, readJsonBody, type Router } from '../router.ts'
+import { envelope, readJsonBody, requireRequestIdentity, type Router } from '../router.ts'
 
 const basePath = '/api/admin/v1'
 
@@ -8,10 +8,14 @@ export function registerOperationsRoutes(router: Router, service: PostgresOperat
   router.get(`${basePath}/runtimes`, async () => envelope('admin', await service.getRuntimes(), 'postgres'))
   router.get(`${basePath}/runtimes/configuration`, async () =>
     envelope('admin', await service.getRuntimePolicy('runtime-local-01'), 'postgres'))
-  router.post(`${basePath}/runtimes/check`, async (request) =>
-    envelope('admin', await service.checkRuntime(await readJsonBody(request)), 'postgres'))
-  router.patch(`${basePath}/runtimes/configuration`, async (request) =>
-    envelope('admin', await service.updateRuntimeConfiguration(await readJsonBody(request)), 'postgres'))
+  router.post(`${basePath}/runtimes/check`, async (request, context) => {
+    const input = await readJsonBody<{ runtimeId: string }>(request)
+    return envelope('admin', await service.checkRuntime({ ...input, actor: requireRequestIdentity(context, 'admin').userId }), 'postgres')
+  })
+  router.patch(`${basePath}/runtimes/configuration`, async (request, context) => {
+    const input = await readJsonBody<Omit<Parameters<PostgresOperationsService['updateRuntimeConfiguration']>[0], 'actor'>>(request)
+    return envelope('admin', await service.updateRuntimeConfiguration({ ...input, actor: requireRequestIdentity(context, 'admin').userId }), 'postgres')
+  })
   router.get(`${basePath}/sessions`, async () => envelope('admin', await service.getSessions(), 'postgres'))
   router.get(`${basePath}/workspaces`, async () => envelope('admin', await service.getManagedWorkspaces(), 'postgres'))
   router.get(`${basePath}/audit-events`, async () => envelope('admin', await service.getAuditEvents(), 'postgres'))

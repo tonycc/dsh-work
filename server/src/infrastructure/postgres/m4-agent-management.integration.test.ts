@@ -42,19 +42,19 @@ test('Agent lifecycle persists test evidence, publishes, versions, rolls back an
     skills: ['skill-document@1.0.0'],
     tools: ['tool-runtime-file-read@1.0.0'],
     changeSummary: '创建集成测试 Agent',
-    actor: '陈默',
+    actor: 'U00008',
   })
   assert.equal(created.agent.owner, '陈默')
   assert.equal(created.agent.status, 'draft')
   assert.equal(created.agent.version, '0.1.0')
 
   await assert.rejects(
-    agents.setStatus({ agentId, status: 'published', actor: '陈默' }),
+    agents.setStatus({ agentId, status: 'published', actor: 'U00008' }),
     /服务端测试/,
   )
-  const tested = await agents.testAgent({ agentId, prompt: '请介绍你的能力', actor: '陈默' })
+  const tested = await agents.testAgent({ agentId, prompt: '请介绍你的能力', actor: 'U00008' })
   assert.equal(tested.status, 'passed')
-  const firstPublished = await agents.setStatus({ agentId, status: 'published', actor: '陈默' })
+  const firstPublished = await agents.setStatus({ agentId, status: 'published', actor: 'U00008' })
   assert.equal(firstPublished.agent.status, 'published')
 
   const employeeAgents = await agents.listWorkbenchAgents('U00001')
@@ -81,22 +81,22 @@ test('Agent lifecycle persists test evidence, publishes, versions, rolls back an
     skills: ['skill-document@1.0.0'],
     tools: ['tool-runtime-file-read@1.0.0'],
     changeSummary: '创建二版配置',
-    actor: '陈默',
+    actor: 'U00008',
   })
   assert.equal(draft.agent.status, 'draft')
   assert.equal(draft.agent.version, '0.2.0')
   assert.equal((await agents.listWorkbenchAgents('U00001')).find(agent => agent.id === agentId)?.version, '0.1.0')
 
-  await agents.testAgent({ agentId, prompt: '请验证二版能力', actor: '陈默' })
-  const secondPublished = await agents.setStatus({ agentId, status: 'published', actor: '陈默' })
+  await agents.testAgent({ agentId, prompt: '请验证二版能力', actor: 'U00008' })
+  const secondPublished = await agents.setStatus({ agentId, status: 'published', actor: 'U00008' })
   assert.equal(secondPublished.agent.version, '0.2.0')
 
-  const rolledBack = await agents.rollback({ agentId, version: '0.1.0', actor: '陈默' })
+  const rolledBack = await agents.rollback({ agentId, version: '0.1.0', actor: 'U00008' })
   assert.equal(rolledBack.agent.version, '0.1.0')
-  const disabled = await agents.setStatus({ agentId, status: 'disabled', actor: '陈默' })
+  const disabled = await agents.setStatus({ agentId, status: 'disabled', actor: 'U00008' })
   assert.equal(disabled.agent.status, 'disabled')
   assert.ok(!(await agents.listWorkbenchAgents('U00001')).some(agent => agent.id === agentId))
-  const enabled = await agents.setStatus({ agentId, status: 'published', actor: '陈默' })
+  const enabled = await agents.setStatus({ agentId, status: 'published', actor: 'U00008' })
   assert.equal(enabled.agent.status, 'published')
 
   const postRollbackDraft = await agents.updateAgent({
@@ -116,7 +116,7 @@ test('Agent lifecycle persists test evidence, publishes, versions, rolls back an
     skills: ['skill-document@1.0.0'],
     tools: ['tool-runtime-file-read@1.0.0'],
     changeSummary: '验证回滚后的版本单调递增',
-    actor: '陈默',
+    actor: 'U00008',
   })
   assert.equal(postRollbackDraft.agent.version, '0.3.0')
 

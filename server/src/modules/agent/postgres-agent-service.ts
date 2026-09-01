@@ -408,24 +408,38 @@ export class PostgresAgentService {
     return { agent: await this.requireAgent(input.agentId), release }
   }
 
-  async listWorkbenchAgents(userId: string): Promise<WorkbenchAgentDefinition[]> {
+  async listWorkbenchAgents(userId: string, sessionRoleIds?: string[]): Promise<WorkbenchAgentDefinition[]> {
+    const roleIds = sessionRoleIds === undefined
+      ? (await this.database<{ roleId: string }[]>`
+          select role_id as "roleId" from user_roles
+           where tenant_id = ${tenantId} and user_id = ${userId}
+             and (valid_until is null or valid_until > now())
+        `).map(row => row.roleId)
+      : unique(sessionRoleIds)
+    if (roleIds.length === 0) return []
     return this.database<WorkbenchAgentDefinition[]>`
       select a.id, av.name, av.description, av.welcome_message as "welcomeMessage",
              av.version, av.example_prompts as "examplePrompts"
         from agents a
         join agent_versions av on av.tenant_id = a.tenant_id and av.id = a.active_version_id
         join users u on u.tenant_id = a.tenant_id and u.id = ${userId} and u.status = 'active'
-        join user_roles ur on ur.tenant_id = a.tenant_id and ur.user_id = ${userId}
        where a.tenant_id = ${tenantId} and a.status = 'published'
-         and av.status = 'published' and av.visible_role_ids ? ur.role_id
-         and (ur.valid_until is null or ur.valid_until > now())
-       group by a.id, av.id
+         and av.status = 'published'
+         and exists (
+           select 1 from roles r
+            where r.tenant_id = a.tenant_id and r.id in ${this.database(roleIds)}
+              and av.visible_role_ids ? r.id
+         )
        order by a.updated_at desc
     `
   }
 
-  async resolveWorkbenchAgentVersion(agentId: string | undefined, userId: string): Promise<string> {
-    const agents = await this.listWorkbenchAgents(userId)
+  async resolveWorkbenchAgentVersion(
+    agentId: string | undefined,
+    userId: string,
+    sessionRoleIds?: string[],
+  ): Promise<string> {
+    const agents = await this.listWorkbenchAgents(userId, sessionRoleIds)
     const selected = agentId ? agents.find(agent => agent.id === agentId) : agents[0]
     if (!selected) throw new Error(agentId ? 'Agent 不存在或当前用户不可用' : '当前用户没有可用 Agent')
     const [row] = await this.database<{ activeVersionId: string }[]>`
@@ -553,19 +567,19 @@ export class PostgresAgentService {
     return { id, agentId, version: row.version, action, actor: row.actor, time: formatDateTime(row.time), note }
   }
 
-  private async requireActor(name: string) {
+  private async requireActor(userId: string) {
     const [actor] = await this.database<{ id: string; displayName: string; department: string }[]>`
       select u.id, u.display_name as "displayName", coalesce(u.department_id, '未分配部门') as department
-        from users u where u.tenant_id = ${tenantId} and u.display_name = ${name.trim()} and u.status = 'active'
+        from users u where u.tenant_id = ${tenantId} and u.id = ${userId} and u.status = 'active'
          and exists (
            select 1 from user_roles ur
            join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id
             where ur.tenant_id = u.tenant_id and ur.user_id = u.id
               and (ur.valid_until is null or ur.valid_until > now())
-              and r.permissions ? 'admin:*'
+              and (r.permissions ? 'admin:*' or r.permissions ? 'admin:write')
          )
     `
-    if (!actor) throw new Error(`操作人不存在、已停用或不是平台管理员：${name}`)
+    if (!actor) throw new Error(`操作人不存在、已停用或不是平台管理员：${userId}`)
     return actor
   }
 

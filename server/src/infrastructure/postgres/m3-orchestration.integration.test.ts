@@ -181,7 +181,7 @@ test('archiving a conversation and retrying a Run are serialized by the Session 
 
 test('file safety gate blocks executable signatures and Tool audit is persisted', async () => {
   await assert.rejects(
-    content.storeWorkspaceFile('ws-supply', '伪装文档.md', 'text/markdown', Buffer.from('MZ unsafe executable')),
+    content.storeWorkspaceFile('ws-supply', '伪装文档.md', 'text/markdown', Buffer.from('MZ unsafe executable'), 'U00001'),
     /安全检查未通过/,
   )
   const run = await database<{ runId: string; attemptId: string }[]>`

@@ -34,7 +34,7 @@ test('Skill lifecycle auto-generates identity, gates publishing, versions and pr
     instructions: '读取当前输入中的订单事实，先说明分析口径，再按风险等级输出问题、证据和建议动作；不得补充输入中不存在的数据。',
     toolIds: ['read@1.0.0'],
     testPrompt: '分析当前订单的交付风险。',
-    actor: '陈默',
+    actor: 'U00008',
   })
   const skillId = created.skill.id
   assert.match(skillId, /^skill-[a-z0-9-]{6,48}$/)
@@ -43,10 +43,10 @@ test('Skill lifecycle auto-generates identity, gates publishing, versions and pr
   assert.equal(created.skill.owner, '陈默')
 
   await assert.rejects(
-    skills.setStatus({ skillId, status: 'published', actor: '陈默' }),
+    skills.setStatus({ skillId, status: 'published', actor: 'U00008' }),
     /服务端测试/,
   )
-  await skills.testSkill({ skillId, actor: '陈默' })
+  await skills.testSkill({ skillId, actor: 'U00008' })
   await skills.updateSkill({
     skillId,
     name: '订单风险归纳',
@@ -55,14 +55,14 @@ test('Skill lifecycle auto-generates identity, gates publishing, versions and pr
     instructions: '读取当前输入中的订单事实，明确说明分析口径，再按风险等级输出问题、证据、影响和建议动作；不得补充输入中不存在的数据。',
     toolIds: ['read@1.0.0'],
     testPrompt: '分析当前订单的交付风险。',
-    actor: '陈默',
+    actor: 'U00008',
   })
   await assert.rejects(
-    skills.setStatus({ skillId, status: 'published', actor: '陈默' }),
+    skills.setStatus({ skillId, status: 'published', actor: 'U00008' }),
     /服务端测试/,
   )
-  await skills.testSkill({ skillId, actor: '陈默' })
-  const firstPublished = await skills.setStatus({ skillId, status: 'published', actor: '陈默' })
+  await skills.testSkill({ skillId, actor: 'U00008' })
+  const firstPublished = await skills.setStatus({ skillId, status: 'published', actor: 'U00008' })
   assert.equal(firstPublished.skill.status, 'published')
   assert.equal(firstPublished.skill.activeVersion, '0.1.0')
   await skills.assertPublishedReferences([`${skillId}@0.1.0`])
@@ -85,10 +85,10 @@ test('Skill lifecycle auto-generates identity, gates publishing, versions and pr
     skills: [`${skillId}@0.1.0`],
     tools: ['read@1.0.0'],
     changeSummary: '验证 Skill Version 引用',
-    actor: '陈默',
+    actor: 'U00008',
   })
-  await agents.testAgent({ agentId, prompt: '分析当前订单风险', actor: '陈默' })
-  await agents.setStatus({ agentId, status: 'published', actor: '陈默' })
+  await agents.testAgent({ agentId, prompt: '分析当前订单风险', actor: 'U00008' })
+  await agents.setStatus({ agentId, status: 'published', actor: 'U00008' })
   const firstAgentSnapshot = await agents.getRuntimeSnapshot(agentDraft.version.id)
   assert.equal(firstAgentSnapshot.skillInstructions[0]?.version, '0.1.0')
   assert.match(firstAgentSnapshot.skillInstructions[0]?.instructions ?? '', /风险等级/)
@@ -101,25 +101,25 @@ test('Skill lifecycle auto-generates identity, gates publishing, versions and pr
     instructions: '读取当前输入中的订单事实，说明分析口径，按风险等级和影响程度排序，输出证据、负责人建议和处理优先级；禁止虚构业务数据。',
     toolIds: ['read@1.0.0'],
     testPrompt: '按优先级分析当前订单风险。',
-    actor: '陈默',
+    actor: 'U00008',
   })
   assert.equal(secondDraft.skill.version, '0.2.0')
   assert.equal(secondDraft.skill.activeVersion, '0.1.0')
   await skills.assertPublishedReferences([`${skillId}@0.1.0`])
 
-  await skills.testSkill({ skillId, actor: '陈默' })
-  const secondPublished = await skills.setStatus({ skillId, status: 'published', actor: '陈默' })
+  await skills.testSkill({ skillId, actor: 'U00008' })
+  const secondPublished = await skills.setStatus({ skillId, status: 'published', actor: 'U00008' })
   assert.equal(secondPublished.skill.activeVersion, '0.2.0')
   await skills.assertPublishedReferences([`${skillId}@0.2.0`])
   assert.equal((await agents.getRuntimeSnapshot(agentDraft.version.id)).skillInstructions[0]?.version, '0.1.0')
 
-  const rolledBack = await skills.rollback({ skillId, version: '0.1.0', actor: '陈默' })
+  const rolledBack = await skills.rollback({ skillId, version: '0.1.0', actor: 'U00008' })
   assert.equal(rolledBack.skill.activeVersion, '0.1.0')
-  const disabled = await skills.setStatus({ skillId, status: 'disabled', actor: '陈默' })
+  const disabled = await skills.setStatus({ skillId, status: 'disabled', actor: 'U00008' })
   assert.equal(disabled.skill.status, 'disabled')
   await assert.rejects(skills.assertPublishedReferences([`${skillId}@0.1.0`]), /已停用/)
   assert.equal((await skills.resolveRuntimeSkills([`${skillId}@0.1.0`]))[0]?.version, '0.1.0')
-  const enabled = await skills.setStatus({ skillId, status: 'published', actor: '陈默' })
+  const enabled = await skills.setStatus({ skillId, status: 'published', actor: 'U00008' })
   assert.equal(enabled.skill.status, 'published')
 
   const postRollbackDraft = await skills.updateSkill({
@@ -130,7 +130,7 @@ test('Skill lifecycle auto-generates identity, gates publishing, versions and pr
     instructions: '读取当前输入中的订单事实，说明分析口径，按风险等级、影响程度和处理优先级输出证据与建议；不得虚构业务数据。',
     toolIds: ['read@1.0.0'],
     testPrompt: '验证回滚后的订单风险分析版本。',
-    actor: '陈默',
+    actor: 'U00008',
   })
   assert.equal(postRollbackDraft.skill.version, '0.3.0')
 

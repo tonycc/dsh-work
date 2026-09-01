@@ -1,7 +1,8 @@
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 
 import { adminApi } from '../api/client'
+import { useAuthStore } from './auth'
 import type {
   AdminTaskSummary,
   AgentDefinition,
@@ -27,6 +28,7 @@ import type {
 } from '../types/domain'
 
 export const useContentStore = defineStore('admin-content', () => {
+  const authStore = useAuthStore()
   const tasks = ref<AdminTaskSummary[]>([])
   const runtimes = ref<RuntimeDefinition[]>([])
   const sessions = ref<SessionDefinition[]>([])
@@ -47,84 +49,107 @@ export const useContentStore = defineStore('admin-content', () => {
   const platformStatus = ref<PlatformStatus | null>(null)
   const loading = ref(false)
   const error = ref('')
-  const initialized = ref(false)
+  const adminInitialized = ref(false)
+  const auditInitialized = ref(false)
+  const initialized = computed(() =>
+    (!authStore.canReadAdmin || adminInitialized.value)
+    && (!authStore.canReadAudit || auditInitialized.value),
+  )
+  let pendingLoad: Promise<void> | undefined
 
   async function load(force = false) {
-    if (initialized.value && !force) return
-    loading.value = true
-    error.value = ''
-    try {
-      const [
-        taskData,
-        runtimeData,
-        sessionData,
-        workspaceData,
-        agentData,
-        agentVersionData,
-        agentReleaseData,
-        skillData,
-        skillVersionData,
-        skillReleaseData,
-        toolData,
-        connectorData,
-        auditData,
-        operationsSummaryData,
-        healthData,
-        usageData,
-        modelUsageData,
-        statusData,
-      ] = await Promise.all([
-        adminApi.getTasks(),
-        adminApi.getRuntimes(),
-        adminApi.getSessions(),
-        adminApi.getWorkspaces(),
-        adminApi.getAgents(),
-        adminApi.getAgentVersions(),
-        adminApi.getAgentReleaseRecords(),
-        adminApi.getSkills(),
-        adminApi.getSkillVersions(),
-        adminApi.getSkillReleaseRecords(),
-        adminApi.getTools(),
-        adminApi.getConnectors(),
-        adminApi.getAuditEvents(),
-        adminApi.getOperationsSummary(),
-        adminApi.getHealth(),
-        adminApi.getUsage(),
-        adminApi.getModelUsage(),
-        adminApi.getPlatformStatus(),
-      ])
-      tasks.value = taskData
-      runtimes.value = runtimeData
-      sessions.value = sessionData
-      workspaces.value = workspaceData
-      agents.value = agentData
-      agentVersions.value = agentVersionData
-      agentReleaseRecords.value = agentReleaseData
-      skills.value = skillData
-      skillVersions.value = skillVersionData
-      skillReleaseRecords.value = skillReleaseData
-      tools.value = toolData
-      connectors.value = connectorData
-      auditEvents.value = auditData
-      operationsSummary.value = operationsSummaryData
-      health.value = healthData
-      usage.value = usageData
-      modelUsage.value = modelUsageData
-      platformStatus.value = statusData
-      initialized.value = true
-    } catch (cause) {
-      error.value = cause instanceof Error ? cause.message : '管理数据加载失败，请稍后重试'
-    } finally {
-      loading.value = false
-    }
+    const needsAdmin = authStore.canReadAdmin && (force || !adminInitialized.value)
+    const needsAudit = authStore.canReadAudit && (force || !auditInitialized.value)
+    if (!needsAdmin && !needsAudit) return
+    if (pendingLoad) return pendingLoad
+    pendingLoad = (async () => {
+      loading.value = true
+      error.value = ''
+      try {
+        await Promise.all([
+          ...(needsAdmin ? [loadAdminData()] : []),
+          ...(needsAudit ? [loadAuditData()] : []),
+        ])
+      } catch (cause) {
+        error.value = cause instanceof Error ? cause.message : '管理数据加载失败，请稍后重试'
+      } finally {
+        loading.value = false
+        pendingLoad = undefined
+      }
+    })()
+    return pendingLoad
+  }
+
+  async function loadAdminData() {
+    const [
+      taskData,
+      runtimeData,
+      sessionData,
+      workspaceData,
+      agentData,
+      agentVersionData,
+      agentReleaseData,
+      skillData,
+      skillVersionData,
+      skillReleaseData,
+      toolData,
+      connectorData,
+      healthData,
+      usageData,
+      modelUsageData,
+      statusData,
+    ] = await Promise.all([
+      adminApi.getTasks(),
+      adminApi.getRuntimes(),
+      adminApi.getSessions(),
+      adminApi.getWorkspaces(),
+      adminApi.getAgents(),
+      adminApi.getAgentVersions(),
+      adminApi.getAgentReleaseRecords(),
+      adminApi.getSkills(),
+      adminApi.getSkillVersions(),
+      adminApi.getSkillReleaseRecords(),
+      adminApi.getTools(),
+      adminApi.getConnectors(),
+      adminApi.getHealth(),
+      adminApi.getUsage(),
+      adminApi.getModelUsage(),
+      adminApi.getPlatformStatus(),
+    ])
+    tasks.value = taskData
+    runtimes.value = runtimeData
+    sessions.value = sessionData
+    workspaces.value = workspaceData
+    agents.value = agentData
+    agentVersions.value = agentVersionData
+    agentReleaseRecords.value = agentReleaseData
+    skills.value = skillData
+    skillVersions.value = skillVersionData
+    skillReleaseRecords.value = skillReleaseData
+    tools.value = toolData
+    connectors.value = connectorData
+    health.value = healthData
+    usage.value = usageData
+    modelUsage.value = modelUsageData
+    platformStatus.value = statusData
+    adminInitialized.value = true
+  }
+
+  async function loadAuditData() {
+    const [auditData, operationsSummaryData] = await Promise.all([
+      adminApi.getAuditEvents(),
+      adminApi.getOperationsSummary(),
+    ])
+    auditEvents.value = auditData
+    operationsSummary.value = operationsSummaryData
+    auditInitialized.value = true
   }
 
   async function setAgentStatus(
     agentId: string,
     status: 'published' | 'disabled',
-    actor: string,
   ) {
-    const result = await adminApi.setAgentStatus({ agentId, status, actor })
+    const result = await adminApi.setAgentStatus({ agentId, status })
     replaceById(agents.value, result.agent)
     agentReleaseRecords.value.unshift(result.release)
     const version = agentVersions.value.find(
@@ -134,22 +159,21 @@ export const useContentStore = defineStore('admin-content', () => {
     return result.agent
   }
 
-  function testAgent(agentId: string, prompt: string, actor: string) {
-    return adminApi.testAgent({ agentId, prompt, actor })
+  function testAgent(agentId: string, prompt: string) {
+    return adminApi.testAgent({ agentId, prompt })
   }
 
-  async function createAgentDraft(input: AgentDraftConfiguration, actor: string) {
-    const result = await adminApi.createAgentDraft({ ...input, actor })
+  async function createAgentDraft(input: AgentDraftConfiguration) {
+    const result = await adminApi.createAgentDraft(input)
     agents.value.unshift(result.agent)
     agentVersions.value.unshift(result.version)
     return result.agent
   }
 
-  async function updateAgentDraft(input: AgentDraftConfiguration, actor: string) {
+  async function updateAgentDraft(input: AgentDraftConfiguration) {
     const { id, ...configuration } = input
     const result = await adminApi.updateAgentDraft({
       agentId: id,
-      actor,
       ...configuration,
     })
     replaceById(agents.value, result.agent)
@@ -157,8 +181,8 @@ export const useContentStore = defineStore('admin-content', () => {
     return result.agent
   }
 
-  async function rollbackAgent(agentId: string, version: string, actor: string) {
-    const result = await adminApi.rollbackAgent({ agentId, version, actor })
+  async function rollbackAgent(agentId: string, version: string) {
+    const result = await adminApi.rollbackAgent({ agentId, version })
     replaceById(agents.value, result.agent)
     agentReleaseRecords.value.unshift(result.release)
     const target = agentVersions.value.find(
@@ -173,38 +197,36 @@ export const useContentStore = defineStore('admin-content', () => {
     allowedRoles: string[]
     dataScopes: string[]
     approvalPolicy: ToolDefinition['approvalPolicy']
-    actor: string
   }) {
     const tool = await adminApi.updateToolPermissions(input)
     replaceById(tools.value, tool)
     return tool
   }
 
-  async function createSkill(input: Omit<SkillConfiguration, 'id'>, actor: string) {
-    const result = await adminApi.createSkill({ ...input, actor })
+  async function createSkill(input: Omit<SkillConfiguration, 'id'>) {
+    const result = await adminApi.createSkill(input)
     skills.value.unshift(result.skill)
     skillVersions.value.unshift(result.version)
     return result.skill
   }
 
-  async function updateSkill(input: SkillConfiguration, actor: string) {
+  async function updateSkill(input: SkillConfiguration) {
     const { id, ...configuration } = input
-    const result = await adminApi.updateSkill({ skillId: id, actor, ...configuration })
+    const result = await adminApi.updateSkill({ skillId: id, ...configuration })
     replaceById(skills.value, result.skill)
     replaceById(skillVersions.value, result.version)
     return result.skill
   }
 
-  function testSkill(skillId: string, prompt: string, actor: string) {
-    return adminApi.testSkill({ skillId, prompt, actor })
+  function testSkill(skillId: string, prompt: string) {
+    return adminApi.testSkill({ skillId, prompt })
   }
 
   async function setSkillStatus(
     skillId: string,
     status: 'published' | 'disabled',
-    actor: string,
   ) {
-    const result = await adminApi.setSkillStatus({ skillId, status, actor })
+    const result = await adminApi.setSkillStatus({ skillId, status })
     replaceById(skills.value, result.skill)
     skillReleaseRecords.value.unshift(result.release)
     if (result.release.action === 'published') {
@@ -220,8 +242,8 @@ export const useContentStore = defineStore('admin-content', () => {
     return result.skill
   }
 
-  async function rollbackSkill(skillId: string, version: string, actor: string) {
-    const result = await adminApi.rollbackSkill({ skillId, version, actor })
+  async function rollbackSkill(skillId: string, version: string) {
+    const result = await adminApi.rollbackSkill({ skillId, version })
     replaceById(skills.value, result.skill)
     skillReleaseRecords.value.unshift(result.release)
     for (const item of skillVersions.value) {
@@ -233,21 +255,20 @@ export const useContentStore = defineStore('admin-content', () => {
   async function setToolStatus(
     toolId: string,
     status: 'available' | 'disabled',
-    actor: string,
   ) {
-    const tool = await adminApi.setToolStatus({ toolId, status, actor })
+    const tool = await adminApi.setToolStatus({ toolId, status })
     replaceById(tools.value, tool)
     return tool
   }
 
-  async function checkConnector(connectorId: string, actor: string) {
-    const connector = await adminApi.checkConnector({ connectorId, actor })
+  async function checkConnector(connectorId: string) {
+    const connector = await adminApi.checkConnector({ connectorId })
     replaceById(connectors.value, connector)
     return connector
   }
 
-  async function checkRuntime(runtimeId: string, actor: string) {
-    const runtime = await adminApi.checkRuntime({ runtimeId, actor })
+  async function checkRuntime(runtimeId: string) {
+    const runtime = await adminApi.checkRuntime({ runtimeId })
     replaceById(runtimes.value, runtime)
     return runtime
   }

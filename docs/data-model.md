@@ -1,13 +1,13 @@
 # dsh-work MVP 数据模型（M0 基线）
 
-版本：V0.2
+版本：V0.3
 数据库：PostgreSQL
 状态：逻辑模型与 M2 物理 DDL 已冻结；迁移位于 `server/migrations`
 
 ## 1. 建模原则
 
 - 所有业务数据均带 `tenant_id`；任何查询必须先限定租户，再应用角色和数据范围。
-- 用户只来自企业 SSO，同一企业内通过稳定的 `external_subject` 关联；平台另保留独立超级管理员入口。
+- 用户只来自 AI Hub OIDC，同一企业内通过稳定的 `external_subject` 关联；员工端与管理端使用独立的本地 Session 受众。
 - 每位用户自动拥有且只能拥有一个个人工作空间；所有 Session、文件和成果必须归属个人或团队工作空间，`workspace_id` 不可为空。
 - 对话是员工工作对象；管理端 Session 页面仅用于状态、用量、安全与审计治理，不建设可任意浏览全量消息的页面。
 - Agent、Skill 和 Runtime 配置使用不可变版本或变更快照；已运行任务可回溯到执行时配置。
@@ -19,6 +19,7 @@
 erDiagram
   TENANT ||--o{ USER : contains
   USER ||--o{ USER_ROLE : assigned
+  USER ||--o{ AUTHENTICATION_SESSION : authenticates
   ROLE ||--o{ USER_ROLE : grants
   TENANT ||--o{ WORKSPACE : owns
   WORKSPACE ||--o{ WORKSPACE_MEMBER : has
@@ -51,12 +52,14 @@ erDiagram
 | `tenants` | `id`, `name`, `status` | 企业租户根对象 |
 | `users` | `id`, `tenant_id`, `external_subject`, `display_name`, `department_id`, `status` | `unique(tenant_id, external_subject)`；不存 SSO 密码 |
 | `roles` | `id`, `tenant_id`, `code`, `name`, `permissions` | `code` 在租户内唯一；权限采用受控枚举 |
-| `user_roles` | `tenant_id`, `user_id`, `role_id`, `valid_until` | 联合主键；支持临时授权 |
+| `user_roles` | `tenant_id`, `user_id`, `role_id`, `source_key`, `valid_until` | 联合主键包含授权来源；本地授权使用 `local`，AI Hub 授权按 Audience 与应用隔离 |
 | `data_scope_grants` | `id`, `tenant_id`, `subject_type`, `subject_id`, `scope_code`, `scope_value` | 主体可为用户、角色或 Workspace；MVP 以 `scope_value` 保存受控完整范围代码 |
+| `oidc_login_transactions` | `transaction_hash`, `audience`, `state_hash`, `code_verifier_encrypted`, `nonce`, `return_to`, `expires_at` | 一次性 OIDC 登录交易；使用后原子删除 |
+| `authentication_sessions` | `session_hash`, `tenant_id`, `audience`, `user_id`, `access_token_encrypted`, `refresh_token_encrypted`, `token_expires_at`, `authorization_version`, `permissions`, `data_scopes`, `expires_at`, `revoked_at` | 浏览器只保存不透明 Cookie；AI Hub Token 加密存储，不返回前端 |
 
-服务端授权顺序固定为：启用租户/用户 → 未过期角色与入口权限 → 个人空间所有者或团队空间成员 → Session 锁定的 Agent 已发布版本/可见角色 → 数据范围覆盖 → 团队工作空间 Agent/Skill/Tool 精确版本授权 → Tool 状态、连接器健康和调用权限。个人空间只是用户内容边界，沿用用户与 Agent 的有效权限，不产生新的数据授权；任一环节失败都默认拒绝并写入 `audit_events`。
+服务端授权顺序固定为：启用租户/用户 → 当前 Session 所属 AI Hub 应用的未过期角色与入口权限 → 个人空间所有者或团队空间成员 → Session 锁定的 Agent 已发布版本/可见角色 → 当前应用数据范围覆盖 → 团队工作空间 Agent/Skill/Tool 精确版本授权 → Tool 状态、连接器健康和调用权限。个人空间只是用户内容边界，沿用用户与 Agent 的有效权限，不产生新的数据授权；任一环节失败都默认拒绝并写入 `audit_events`。
 
-独立超级管理员不复用企业用户登录入口。其凭据存放于外部身份系统或专用密钥系统，平台仅保存不可逆主体引用和审计标识。
+管理员与审计员仍使用 AI Hub 统一登录，但只有应用授权快照含 `dsh_work.admin.read` / `dsh_work.admin.write` / `dsh_work.audit.read` 时才能进入对应能力。
 
 ### 3.2 个人与团队工作空间
 
@@ -122,7 +125,7 @@ queued ────────────────────────�
 | `runtimes` | `id`, `tenant_id`, `node_name`, `runtime_version`, `status`, `capacity`, `last_heartbeat_at` | Runtime 是可调度执行实例，不等同于单个 DSH 子进程 |
 | `runtime_configurations` | `tenant_id`, `runtime_id`, `revision`, `concurrency_limit`, `timeout_seconds`, `sandbox_policy`, `updated_by` | 每个 Runtime 独立追加配置版本；历史不覆盖；每次修改写审计 |
 | `operational_events`（只读视图） | `category`, `action`, `object_type`, `object_id`, `actor_id`, `result`, `trace_id`, `run_id`, `attempt_id`, `safe_context` | 合并管理、安全、运行、模型、工具和成果事件；严禁投影消息、提示词、回答正文和文件内容 |
-| `file_objects` | `id`, `tenant_id`, `workspace_id`, `session_id`, `storage_key`, `original_name`, `mime_type`, `size_bytes`, `sha256`, `scan_status` | `workspace_id` 非空，`session_id` 可选；下载前同时按个人所有者或团队成员关系鉴权 |
+| `file_objects` | `id`, `tenant_id`, `workspace_id`, `session_id`, `uploaded_by`, `storage_key`, `original_name`, `mime_type`, `size_bytes`, `sha256`, `scan_status` | `uploaded_by` 只由服务端 Session 注入；下载前同时按个人所有者或团队成员关系鉴权 |
 | `file_extractions` | `id`, `file_id`, `extractor_version`, `detected_type`, `status`, `text_storage_key`, `text_sha256`, `character_count`, `page_count`, `sheet_count`, `row_count`, `error_code` | 原文件解析结果版本化；成功记录摘要和统计，失败记录可操作错误码 |
 | `run_input_files` | `id`, `run_id`, `attempt_id`, `file_id`, `extraction_id`, `mount_path` | 固化每个 Attempt 使用的原文件、解析版本和只读挂载路径；重试新增快照 |
 | `artifacts` | `id`, `tenant_id`, `workspace_id`, `session_id`, `name`, `artifact_type`, `created_by` | 成果逻辑对象 |
@@ -173,4 +176,4 @@ queued ────────────────────────�
 
 M2 创建迁移脚本前，必须完成 D-03（SSO）、D-06（数据分级）、D-07（保留周期）和 D-08（超级管理员入口）的企业确认；未确认项使用配置占位，不得形成不可逆硬编码。
 
-M2 已按上述规则使用可替换引用和配置字段承接未决项：身份只保存 `external_subject`，文件只保存 `storage_key`，保留周期进入 `system_settings`，超级管理员不在业务用户表保存密码。未决企业参数不阻塞物理结构与 Repository 工程验证，但在接入真实企业数据前仍须关闭对应决策。
+M2 已按上述规则使用可替换引用和配置字段承接未决项：身份只保存 `external_subject`，文件只保存 `storage_key`，保留周期进入 `system_settings`，业务用户表不保存密码。M6 已用 AI Hub OIDC 和服务端加密 Session 关闭 D-03 的代码实现项；真实应用凭据、权限分配和生产参数仍按部署环境注入。

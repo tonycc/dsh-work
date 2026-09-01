@@ -33,6 +33,11 @@ export interface RuntimeAuthorizationDecision {
   agentVersionId: string
 }
 
+export interface SessionAuthorizationContext {
+  roleIds: string[]
+  dataScopes: string[]
+}
+
 export class PostgresAuthorizationService {
   private readonly database: DatabaseClient
 
@@ -40,17 +45,22 @@ export class PostgresAuthorizationService {
     this.database = database
   }
 
-  async authorizeWorkbench(input: { userId: string; workspaceId?: string | null }) {
+  async authorizeWorkbench(input: {
+    userId: string
+    workspaceId?: string | null
+    roleIds?: string[]
+    dataScopes?: string[]
+  }) {
     const workspaceId = normalizeWorkspaceId(input.workspaceId)
     try {
-      const identity = await this.requireIdentity(input.userId)
+      const identity = await this.requireIdentity(input.userId, input.roleIds)
       if (!identity.permissions.includes('workbench:use')) {
         throw new Error('当前用户没有员工工作台使用权限')
       }
       const workspaceType = workspaceId
         ? await this.requireWorkspaceMembership(input.userId, workspaceId)
         : null
-      const dataScopes = await this.resolveDataScopes(identity, workspaceId)
+      const dataScopes = await this.resolveDataScopes(identity, workspaceId, input.dataScopes)
       return { ...identity, workspaceId, workspaceType, dataScopes }
     } catch (error) {
       await this.recordDecision(input.userId, workspaceId ?? 'standalone', 'authorization.workbench', 'blocked', error)
@@ -62,10 +72,17 @@ export class PostgresAuthorizationService {
     userId: string
     workspaceId?: string | null
     agentVersionId: string
+    roleIds?: string[]
+    dataScopes?: string[]
   }): Promise<RuntimeAuthorizationDecision> {
     const workspaceId = normalizeWorkspaceId(input.workspaceId)
     try {
-      const context = await this.authorizeWorkbench({ userId: input.userId, workspaceId })
+      const context = await this.authorizeWorkbench({
+        userId: input.userId,
+        workspaceId,
+        roleIds: input.roleIds,
+        dataScopes: input.dataScopes,
+      })
       const agent = await this.requireAgentVersion(input.agentVersionId)
       if (!intersects(context.roleIds, agent.visibleRoleIds)) {
         throw new Error('当前用户角色不可使用所选 Agent')
@@ -102,26 +119,49 @@ export class PostgresAuthorizationService {
     }
   }
 
-  async requirePlatformAdmin(displayName: string) {
+  async requirePlatformAdmin(userId: string) {
     const [row] = await this.database<{ id: string; displayName: string; department: string }[]>`
       select u.id, u.display_name as "displayName",
              coalesce(u.department_id, '未分配部门') as department
         from users u
-       where u.tenant_id = ${tenantId} and u.display_name = ${displayName.trim()}
+       where u.tenant_id = ${tenantId} and u.id = ${userId}
          and u.status = 'active'
          and exists (
            select 1 from user_roles ur
            join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id
             where ur.tenant_id = u.tenant_id and ur.user_id = u.id
               and (ur.valid_until is null or ur.valid_until > now())
-              and r.permissions ? 'admin:*'
+              and (r.permissions ? 'admin:*' or r.permissions ? 'admin:write')
          )
     `
-    if (!row) throw new Error(`操作人不存在、已停用或不是平台管理员：${displayName}`)
+    if (!row) throw new Error(`操作人不存在、已停用或不是平台管理员：${userId}`)
     return row
   }
 
-  private async requireIdentity(userId: string): Promise<IdentityRow> {
+  private async requireIdentity(userId: string, sessionRoleIds?: string[]): Promise<IdentityRow> {
+    if (sessionRoleIds !== undefined) {
+      const [user] = await this.database<{ id: string }[]>`
+        select u.id from users u
+         where u.tenant_id = ${tenantId} and u.id = ${userId} and u.status = 'active'
+           and exists (select 1 from tenants t where t.id = u.tenant_id and t.status = 'active')
+      `
+      if (!user) throw new Error('当前用户不存在、已停用或所属企业不可用')
+      const requestedRoleIds = unique(sessionRoleIds)
+      if (requestedRoleIds.length === 0) return { id: user.id, roleIds: [], permissions: [] }
+      const rows = await this.database<{ id: string; permissions: string[] }[]>`
+        select r.id,
+               coalesce(array_agg(distinct permission.value) filter (where permission.value is not null), '{}') as permissions
+          from roles r
+          left join lateral jsonb_array_elements_text(coalesce(r.permissions, '[]')) permission(value) on true
+         where r.tenant_id = ${tenantId} and r.id in ${this.database(requestedRoleIds)}
+         group by r.id
+      `
+      return {
+        id: user.id,
+        roleIds: rows.map(row => row.id),
+        permissions: unique(rows.flatMap(row => row.permissions)),
+      }
+    }
     const [row] = await this.database<{ id: string; roleIds: string[]; permissions: string[] }[]>`
       select u.id,
              coalesce(jsonb_agg(distinct r.id) filter (where r.id is not null), '[]') as "roleIds",
@@ -159,18 +199,26 @@ export class PostgresAuthorizationService {
     return row.type
   }
 
-  private async resolveDataScopes(identity: IdentityRow, workspaceId: string | null) {
+  private async resolveDataScopes(
+    identity: IdentityRow,
+    workspaceId: string | null,
+    sessionDataScopes?: string[],
+  ) {
+    const roleIds = identity.roleIds.length > 0 ? identity.roleIds : ['__no_role__']
     const grants = await this.database<{ scopeValue: string }[]>`
       select distinct scope_value as "scopeValue" from data_scope_grants
        where tenant_id = ${tenantId}
          and (
-           (subject_type = 'user' and subject_id = ${identity.id})
-           or (subject_type = 'role' and subject_id in ${this.database(identity.roleIds)})
+           (${sessionDataScopes === undefined} and subject_type = 'user' and subject_id = ${identity.id})
+           or (subject_type = 'role' and subject_id in ${this.database(roleIds)})
            or (${workspaceId ?? ''} <> '' and subject_type = 'workspace' and subject_id = ${workspaceId ?? ''})
          )
        order by scope_value
     `
-    return grants.map(grant => grant.scopeValue)
+    return unique([
+      ...(sessionDataScopes ?? []),
+      ...grants.map(grant => grant.scopeValue),
+    ]).sort()
   }
 
   private async requireAgentVersion(versionId: string): Promise<AgentAuthorizationRow> {

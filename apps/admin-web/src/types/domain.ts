@@ -13,8 +13,9 @@ export interface AdminUserProfile {
 
 export interface AdminSession {
   user: AdminUserProfile
-  identityProvider: 'prototype-sso'
+  identityProvider: 'prototype-sso' | 'ai-hub-oidc'
   apiAudience: 'admin'
+  permissions: string[]
 }
 
 export type RunStatus =
@@ -54,7 +55,6 @@ export interface UpdateRuntimeConfigurationInput {
   maxConcurrentWorkers: number
   attemptTimeoutMinutes: number
   schedulingStatus: RuntimeDefinition['schedulingStatus']
-  actor: string
 }
 
 export interface SessionDefinition {
@@ -132,13 +132,10 @@ export interface AgentDraftConfiguration {
   changeSummary: string
 }
 
-export interface CreateAgentDraftInput extends AgentDraftConfiguration {
-  actor: string
-}
+export type CreateAgentDraftInput = AgentDraftConfiguration
 
 export interface UpdateAgentDraftInput extends Omit<AgentDraftConfiguration, 'id'> {
   agentId: string
-  actor: string
 }
 
 export interface AgentVersionRecord {
@@ -228,13 +225,10 @@ export interface SkillConfiguration {
   testPrompt: string
 }
 
-export interface CreateSkillInput extends Omit<SkillConfiguration, 'id'> {
-  actor: string
-}
+export type CreateSkillInput = Omit<SkillConfiguration, 'id'>
 
 export interface UpdateSkillInput extends Omit<SkillConfiguration, 'id'> {
   skillId: string
-  actor: string
 }
 
 export interface ToolDefinition {
@@ -386,7 +380,7 @@ export interface ModelRoute {
 export interface PlatformStatus {
   architecture: 'node-modular-monolith'
   persistence: 'prototype-memory' | 'postgres-foundation' | 'postgres'
-  sso: 'mock'
+  sso: 'mock' | 'ai-hub-oidc'
   dshRuntime: 'not-connected' | 'poc-validated' | 'connected'
   database: 'not-configured' | 'configured' | Record<string, unknown>
   artifactStorage: 'not-configured' | 'local-mvp'

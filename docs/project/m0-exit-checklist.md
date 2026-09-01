@@ -5,9 +5,9 @@
 
 | M0 工作项 | 状态 | 证据 | 剩余事项 |
 |---|---|---|---|
-| M0-01 原型确认归档 | 已完成 | `docs/baselines/m0-prototype-baseline.md`、`前端原型评审说明.md`、`prototype-confirmed-v0.2` | 无 |
-| M0-02 源码与发布基线 | 已完成 | Git `main` 根提交 `3434c39`，M0 标签 `m0-complete-v1.0` | 创建 GitHub 远程仓库后配置 remote 并推送，不阻塞本地基线 |
-| M0-03 工程质量基线 | 已完成 | 本地 `pnpm ci:check` 完整通过；GitHub Actions 工作流已建立 | 推送远程后补充首次托管运行证据，不阻塞 M0 |
+| M0-01 原型确认归档 | 已完成 | `docs/baselines/m0-prototype-baseline.md`、`prototype-confirmed-v0.2` | 无 |
+| M0-02 源码与发布基线 | 已完成 | Git `main` 根提交 `3434c39`，M0 标签 `m0-complete-v1.0`，GitHub `tonycc/dsh-work` | 无 |
+| M0-03 工程质量基线 | 已完成 | 本地 `pnpm ci:check` 完整通过；`.github/workflows/ci.yml` 已建立 | 托管运行状态按 GitHub Actions 持续复验 |
 | M0-04 API 契约基线 | 已完成 | 两份 OpenAPI、内部端口、Runtime Manifest 和 Run Event Schema；项目 Owner 于 2026-08-29 确认评审通过 | M1 POC 若发现 DSH 差异，按契约变更流程处理 |
 | M0-05 数据模型评审 | 已完成 | `docs/data-model.md`；项目 Owner 于 2026-08-29 确认评审通过 | D-12 在 M2 前确定，不影响逻辑模型基线 |
 | M0-06 测试数据基线 | 已完成 | 合成 fixture、五类角色、访问矩阵和 S-01 至 S-06；项目 Owner 自动确认 | 正式试点确定后增加企业验收数据，不覆盖合成基线 |
@@ -17,7 +17,7 @@
 
 | 退出条件 | 当前状态 | 阻塞项 |
 |---|---|---|
-| 原型、产品、架构和实施计划一致 | 已满足 | 无 |
+| 原型、架构和实施计划一致 | 已满足 | 当前入口为 `docs/architecture/overview.md` 与 `docs/project/mvp-roadmap.md` |
 | 每个页面映射到 API、数据表和验收用例 | 已满足 | 项目 Owner 已评审 |
 | P0 外部依赖具备具体 Owner | 已满足 | 个人项目统一 Owner；不存在额外角色负责人 |
 | 统一质量命令可重复执行 | 已满足 | 本地已通过，GitHub 工作流已建立 |
@@ -26,4 +26,4 @@
 | 测试用户、角色、数据范围和业务样例齐全 | 已满足 | 项目 Owner 自动确认合成测试基线 |
 | 无一期范围回退 | 已满足 | 持续检查 |
 
-M0 Gate 已关闭。D-02 至 D-10 没有被默认为已确认；它们分别在 M1 至 M6 的对应真实能力实施前关闭，不能用 Mock 结果替代正式验收。
+M0 Gate 已关闭。本文件保留 2026-08-29 的退出证据；D-02 至 D-10 的后续状态以 [决策台账](decision-register.md) 和 [MVP 路线图与交付状态](mvp-roadmap.md) 为准，不能用 Mock 结果替代正式验收。

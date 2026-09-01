@@ -9,6 +9,7 @@ import { registerAdminRoutes } from './admin/routes.ts'
 import { Router } from './router.ts'
 import { registerWorkbenchRoutes } from './workbench/routes.ts'
 import { registerUnavailableWorkbenchCommandRoutes } from './workbench/unavailable-routes.ts'
+import { prototypeApiAuthenticator } from '../modules/identity/prototype-authenticator.ts'
 
 let server: Server
 let baseUrl = ''
@@ -47,7 +48,7 @@ interface RecordListEnvelope {
 
 before(async () => {
   const repository = new PrototypeRepository()
-  const router = new Router()
+  const router = new Router({ authenticateApi: prototypeApiAuthenticator })
   registerUnavailableWorkbenchCommandRoutes(router)
   registerWorkbenchRoutes(router, new WorkbenchQueryService(repository))
   registerAdminRoutes(router, new AdminQueryService(repository))
@@ -151,7 +152,6 @@ test('prototype admin can validate a draft Agent before publishing', async () =>
     body: JSON.stringify({
       agentId: 'operations-analyst',
       prompt: '分析本月订单交付情况',
-      actor: '陈默',
     }),
   })
   const body = await response.json() as AgentTestEnvelope

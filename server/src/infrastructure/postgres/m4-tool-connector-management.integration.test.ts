@@ -70,7 +70,7 @@ test('Tool and Connector management gates immutable Agent and Skill references',
     allowedRoles: ['普通员工', '平台管理员'],
     dataScopes: ['workspace:authorized'],
     approvalPolicy: 'always',
-    actor: '陈默',
+    actor: 'U00008',
   })
   assert.equal(await tools.resolveRuntimeApprovalMode(['read@1.0.0']), 'always')
   await tools.updateToolPermissions({
@@ -78,7 +78,7 @@ test('Tool and Connector management gates immutable Agent and Skill references',
     allowedRoles: ['普通员工', '平台管理员'],
     dataScopes: ['workspace:authorized'],
     approvalPolicy: 'sensitive',
-    actor: '陈默',
+    actor: 'U00008',
   })
   assert.equal(await tools.resolveRuntimeApprovalMode(['read@1.0.0']), 'risk_based')
 
@@ -87,20 +87,20 @@ test('Tool and Connector management gates immutable Agent and Skill references',
     allowedRoles: ['普通员工', '平台管理员'],
     dataScopes: ['workspace:authorized'],
     approvalPolicy: 'none',
-    actor: '陈默',
+    actor: 'U00008',
   })
   assert.deepEqual(permissionUpdated.allowedRoles, ['普通员工', '平台管理员'])
 
-  await tools.setToolStatus({ toolId: 'read', status: 'disabled', actor: '陈默' })
+  await tools.setToolStatus({ toolId: 'read', status: 'disabled', actor: 'U00008' })
   await assert.rejects(tools.assertAvailableReferences(['read@1.0.0']), /不可用/)
-  await tools.setToolStatus({ toolId: 'read', status: 'available', actor: '陈默' })
+  await tools.setToolStatus({ toolId: 'read', status: 'available', actor: 'U00008' })
 
   runtimeStatus = 'degraded'
-  const degraded = await tools.checkConnector({ connectorId: 'connector-dsh-workspace', actor: '陈默' })
+  const degraded = await tools.checkConnector({ connectorId: 'connector-dsh-workspace', actor: 'U00008' })
   assert.equal(degraded.status, 'degraded')
   await assert.rejects(tools.assertAvailableReferences(['read@1.0.0']), /不可用/)
   runtimeStatus = 'healthy'
-  const healthy = await tools.checkConnector({ connectorId: 'connector-dsh-workspace', actor: '陈默' })
+  const healthy = await tools.checkConnector({ connectorId: 'connector-dsh-workspace', actor: 'U00008' })
   assert.equal(healthy.status, 'healthy')
   await tools.assertAvailableReferences(['read@1.0.0'])
 
@@ -121,12 +121,12 @@ test('Tool and Connector management gates immutable Agent and Skill references',
     timeoutSeconds: 300,
     skills: ['skill-document@1.0.0'],
     changeSummary: '验证 Tool 和 Skill 的强引用约束',
-    actor: '陈默',
+    actor: 'U00008',
   }
   await assert.rejects(agents.createAgent({ ...baseInput, tools: ['glob@1.0.0'] }), /必须显式授权/)
   const created = await agents.createAgent({ ...baseInput, tools: ['read@1.0.0'] })
-  await agents.testAgent({ agentId: created.agent.id, prompt: '整理当前工作空间文档', actor: '陈默' })
-  await agents.setStatus({ agentId: created.agent.id, status: 'published', actor: '陈默' })
+  await agents.testAgent({ agentId: created.agent.id, prompt: '整理当前工作空间文档', actor: 'U00008' })
+  await agents.setStatus({ agentId: created.agent.id, status: 'published', actor: 'U00008' })
   const snapshot = await agents.getRuntimeSnapshot(created.version.id)
   assert.deepEqual(snapshot.tools, ['read@1.0.0'])
   assert.deepEqual(snapshot.runtimeTools, ['read@1.0.0'])

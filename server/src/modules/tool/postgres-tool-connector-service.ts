@@ -131,9 +131,9 @@ export class PostgresToolConnectorService {
     allowedRoles: string[]
     dataScopes: string[]
     approvalPolicy: ToolDefinition['approvalPolicy']
-    actor?: string
+    actor: string
   }) {
-    const actor = await this.requireActor(input.actor ?? '陈默')
+    const actor = await this.requireActor(input.actor)
     if (!input.allowedRoles.length || !input.dataScopes.length) throw new Error('工具必须配置授权角色和数据范围')
     const roleIds: string[] = []
     for (const value of unique(input.allowedRoles)) {
@@ -286,19 +286,19 @@ export class PostgresToolConnectorService {
     return connector
   }
 
-  private async requireActor(name: string) {
+  private async requireActor(userId: string) {
     const [actor] = await this.database<{ id: string }[]>`
       select u.id from users u
-       where u.tenant_id = ${tenantId} and u.display_name = ${name.trim()} and u.status = 'active'
+       where u.tenant_id = ${tenantId} and u.id = ${userId} and u.status = 'active'
          and exists (
            select 1 from user_roles ur
            join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id
             where ur.tenant_id = u.tenant_id and ur.user_id = u.id
               and (ur.valid_until is null or ur.valid_until > now())
-              and r.permissions ? 'admin:*'
+              and (r.permissions ? 'admin:*' or r.permissions ? 'admin:write')
          )
     `
-    if (!actor) throw new Error(`操作人不存在、已停用或不是平台管理员：${name}`)
+    if (!actor) throw new Error(`操作人不存在、已停用或不是平台管理员：${userId}`)
     return actor
   }
 

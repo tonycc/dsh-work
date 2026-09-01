@@ -75,10 +75,10 @@ test('malicious content and database-injected traversal paths never reach storag
   await database`
     insert into file_objects (
       id, tenant_id, workspace_id, storage_key, original_name, mime_type,
-      size_bytes, sha256, scan_status
+      size_bytes, sha256, scan_status, uploaded_by
     ) values (
       ${fileId}, 'tenant-dsh-work', 'ws-supply', '../../outside-security.txt',
-      'outside-security.txt', 'text/plain', 8, ${'f'.repeat(64)}, 'clean'
+      'outside-security.txt', 'text/plain', 8, ${'f'.repeat(64)}, 'clean', 'U00001'
     )
   `
   await assert.rejects(content.readFile(fileId, 'U00001'), /非法存储路径/)

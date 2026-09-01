@@ -39,9 +39,11 @@ export class PostgresKnowledgeService {
     userId: string
     workspaceId: string | null
     dataScopes: string[]
+    roleIds?: string[]
   }): Promise<ResolvedKnowledgeDocument[]> {
     const dataScopes = [...new Set(input.dataScopes)]
     if (dataScopes.length === 0) return []
+    const roleIds = input.roleIds?.length ? [...new Set(input.roleIds)] : ['__no_role__']
     const rows = await this.database<KnowledgeRow[]>`
       select kd.id, kd.source_id as "sourceId", ks.name as "sourceName",
              kd.title, kd.version, kd.effective_date as "effectiveDate",
@@ -57,11 +59,20 @@ export class PostgresKnowledgeService {
          )
          and (
            jsonb_array_length(kd.allowed_role_ids) = 0
+           or (
+             ${input.roleIds !== undefined}
+             and exists (
+               select 1 from roles r
+                where r.tenant_id = kd.tenant_id and r.id in ${this.database(roleIds)}
+                  and kd.allowed_role_ids ? r.id
+             )
+           )
            or exists (
              select 1 from user_roles ur
               where ur.tenant_id = kd.tenant_id and ur.user_id = ${input.userId}
                 and kd.allowed_role_ids ? ur.role_id
                 and (ur.valid_until is null or ur.valid_until > now())
+                and ${input.roleIds === undefined}
            )
          )
          and (

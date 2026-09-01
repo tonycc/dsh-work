@@ -26,6 +26,8 @@
     "test:m5:security": "node --experimental-strip-types --test src/security/safe-observability.test.ts config/dsh/dsh-work-tool-policy.test.js",
     "test:m5:security:integration": "node --experimental-strip-types --test src/infrastructure/postgres/m5-security-regression.integration.test.ts",
     "test:m5:faults": "node --experimental-strip-types --test src/http/sse-reconnect.test.ts",
+    "test:sso": "node --experimental-strip-types --test src/modules/identity/identity.test.ts",
+    "test:sso:integration": "node --experimental-strip-types --test src/modules/identity/identity.integration.test.ts",
     "test:m5:faults:integration": "node --experimental-strip-types --test src/infrastructure/postgres/m5-runtime-faults.integration.test.ts",
     "test:m5:capacity:integration": "node --experimental-strip-types --test src/infrastructure/postgres/m5-capacity.integration.test.ts",
     "test:runtime": "node --experimental-strip-types --test src/modules/runtime/runtime-adapter.test.ts config/dsh/dsh-work-tool-policy.test.js",

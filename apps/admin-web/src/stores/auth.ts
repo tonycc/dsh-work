@@ -2,7 +2,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 
 import { adminApi } from '../api/client'
-import type { AdminRole, AdminUserProfile } from '../types/domain'
+import type { AdminRole, AdminSession, AdminUserProfile } from '../types/domain'
 
 export const roleLabels: Record<AdminRole, string> = {
   platform_admin: '平台管理员',
@@ -23,30 +23,92 @@ export const useAuthStore = defineStore('admin-auth', () => {
   const sessionUser = ref<AdminUserProfile | null>(null)
   const initialized = ref(false)
   const loading = ref(false)
+  const error = ref('')
+  const identityProvider = ref<AdminSession['identityProvider'] | null>(null)
+  const permissions = ref<string[]>([])
   const user = computed(() => sessionUser.value ?? loadingUser)
-  const canAccessAdmin = computed(() => true)
-  const canManage = computed(() => user.value.role === 'platform_admin')
-  const isAuditor = computed(() => user.value.role === 'auditor')
+  const canReadAdmin = computed(() => hasPermission(
+    permissions.value,
+    'dsh_work.admin.read',
+    'admin:read',
+  ))
+  const canReadAudit = computed(() => hasPermission(
+    permissions.value,
+    'dsh_work.audit.read',
+    'audit:read',
+  ))
+  const canManage = computed(() => hasPermission(
+    permissions.value,
+    'dsh_work.admin.write',
+    'admin:write',
+  ))
+  const canAccessAdmin = computed(() =>
+    sessionUser.value !== null && (canReadAdmin.value || canReadAudit.value || canManage.value),
+  )
+  const isAuditor = computed(() => canReadAudit.value && !canManage.value)
+  let pendingLoad: Promise<void> | undefined
 
   async function load() {
     if (initialized.value) return
-    loading.value = true
-    try {
-      const session = await adminApi.getSession()
-      sessionUser.value = session.user
-      initialized.value = true
-    } finally {
-      loading.value = false
-    }
+    if (pendingLoad) return pendingLoad
+    pendingLoad = (async () => {
+      loading.value = true
+      error.value = ''
+      try {
+        const session = await adminApi.getSession()
+        sessionUser.value = session.user
+        identityProvider.value = session.identityProvider
+        permissions.value = [...session.permissions]
+        initialized.value = true
+      } catch (cause) {
+        sessionUser.value = null
+        identityProvider.value = null
+        permissions.value = []
+        error.value = cause instanceof Error ? cause.message : '登录会话加载失败'
+        throw cause
+      } finally {
+        loading.value = false
+        pendingLoad = undefined
+      }
+    })()
+    return pendingLoad
+  }
+
+  function login(returnTo = currentReturnTo()) {
+    window.location.assign(`/auth/admin/login?return_to=${encodeURIComponent(returnTo)}`)
+  }
+
+  function logout() {
+    sessionUser.value = null
+    identityProvider.value = null
+    permissions.value = []
+    initialized.value = false
+    window.location.assign('/auth/admin/logout')
   }
 
   return {
     user,
     canAccessAdmin,
+    canReadAdmin,
+    canReadAudit,
     canManage,
     isAuditor,
     initialized,
     loading,
+    error,
+    identityProvider,
+    permissions,
     load,
+    login,
+    logout,
   }
 })
+
+function currentReturnTo() {
+  return `${window.location.pathname}${window.location.search}${window.location.hash}`
+}
+
+function hasPermission(permissions: string[], ...expected: string[]) {
+  const granted = new Set(permissions)
+  return granted.has('admin:*') || expected.some(permission => granted.has(permission))
+}

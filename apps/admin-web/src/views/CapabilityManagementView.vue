@@ -145,10 +145,10 @@ async function changeSkillStatus(skill: SkillDefinition) {
     )
     actionLoading.value = `skill:${skill.id}`
     if (skill.status === 'draft') {
-      const test = await contentStore.testSkill(skill.id, skill.testPrompt, authStore.user.name)
+      const test = await contentStore.testSkill(skill.id, skill.testPrompt)
       if (test.status !== 'passed') throw new Error(test.resultSummary)
     }
-    const updated = await contentStore.setSkillStatus(skill.id, nextStatus, authStore.user.name)
+    const updated = await contentStore.setSkillStatus(skill.id, nextStatus)
     if (detailOpen.value && detailTargetId.value === skill.id) inspectSkill(updated)
     ElMessage.success(skill.status === 'draft' ? '服务端配置校验通过，Skill 已发布' : `Skill 已${action}`)
   } catch (cause) {
@@ -168,7 +168,7 @@ async function rollbackSkill(version: SkillVersionRecord) {
       { confirmButtonText: '确认回滚', cancelButtonText: '取消', type: 'warning' },
     )
     actionLoading.value = `skill-rollback:${version.id}`
-    const updated = await contentStore.rollbackSkill(skill.id, version.version, authStore.user.name)
+    const updated = await contentStore.rollbackSkill(skill.id, version.version)
     inspectSkill(updated)
     skillDetailTab.value = 'releases'
     ElMessage.success(`Skill 已回滚到 v${version.version}`)
@@ -199,7 +199,7 @@ async function changeToolStatus(tool: ToolDefinition) {
       { confirmButtonText: `确认${action}`, cancelButtonText: '取消', type: 'warning' },
     )
     actionLoading.value = `tool:${tool.id}`
-    await contentStore.setToolStatus(tool.id, nextStatus, authStore.user.name)
+    await contentStore.setToolStatus(tool.id, nextStatus)
     ElMessage.success(`工具已${action}`)
   } catch (cause) {
     if (cause instanceof Error) ElMessage.error(cause.message)
@@ -211,7 +211,7 @@ async function changeToolStatus(tool: ToolDefinition) {
 async function checkConnector(connector: ConnectorDefinition) {
   actionLoading.value = `connector:${connector.id}`
   try {
-    const updated = await contentStore.checkConnector(connector.id, authStore.user.name)
+    const updated = await contentStore.checkConnector(connector.id)
     if (updated.status === 'healthy') ElMessage.success(`${connector.name}健康检查通过`)
     else ElNotification.error({
       title: `连接器异常：${connector.name}`,
@@ -233,7 +233,7 @@ async function checkConnector(connector: ConnectorDefinition) {
 async function refreshHealth() {
   healthRefreshing.value = true
   try {
-    const results = await Promise.all(contentStore.connectors.map((connector) => contentStore.checkConnector(connector.id, authStore.user.name)))
+    const results = await Promise.all(contentStore.connectors.map((connector) => contentStore.checkConnector(connector.id)))
     const abnormal = results.filter((connector) => connector.status !== 'healthy')
     if (!abnormal.length) ElMessage.success(`全部 ${results.length} 个连接器健康检查通过`)
     else ElNotification.warning({
