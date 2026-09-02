@@ -50,8 +50,15 @@ function navigate(path: string) {
 }
 
 function openAdmin() {
-  const baseUrl = (import.meta.env.VITE_ADMIN_URL || 'http://localhost:4180').replace(/\/$/, '')
+  const baseUrl = siblingApplicationUrl(import.meta.env.VITE_ADMIN_URL, '4180')
   window.location.assign(`${baseUrl}/overview`)
+}
+
+function siblingApplicationUrl(configured: string | undefined, port: string) {
+  if (configured) return configured.replace(/\/$/, '')
+  const url = new URL(window.location.href)
+  url.port = port
+  return url.origin
 }
 
 function onAccountCommand(command: string | number | object) {

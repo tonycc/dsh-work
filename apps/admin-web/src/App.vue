@@ -17,8 +17,15 @@ function navigate(path: string) {
 }
 
 function openWorkbench() {
-  const baseUrl = (import.meta.env.VITE_WORKBENCH_URL || 'http://localhost:4174').replace(/\/$/, '')
+  const baseUrl = siblingApplicationUrl(import.meta.env.VITE_WORKBENCH_URL, '4174')
   window.location.assign(`${baseUrl}/workbench`)
+}
+
+function siblingApplicationUrl(configured: string | undefined, port: string) {
+  if (configured) return configured.replace(/\/$/, '')
+  const url = new URL(window.location.href)
+  url.port = port
+  return url.origin
 }
 
 function logout() {

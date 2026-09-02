@@ -1,0 +1,92 @@
+name: Manual release
+
+"on":
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Stable version from server/package.json, without the v prefix
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  checks: read
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: manual-release
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Build approved Mac mini release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Require the main branch
+        env:
+          SELECTED_REF: ${{ github.ref }}
+        run: test "${SELECTED_REF}" = "refs/heads/main"
+
+      - name: Require a stable release version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          [[ "${RELEASE_VERSION}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+
+      - name: Check out the selected commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Require the commit CI gate to have passed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          conclusion=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100" \
+            --jq '[.check_runs[] | select(.name == "M6 quality gate")][0].conclusion // ""')
+          test "${conclusion}" = "success"
+
+      - name: Set up locked pnpm and Node.js
+        uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+        with:
+          runtime: node@24.18.1
+          cache: true
+          install: false
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build immutable release archive
+        id: build
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          bash scripts/release/build-release.sh "${RELEASE_VERSION}"
+          echo "archive=${GITHUB_WORKSPACE}/dist/releases/dsh-work-v${RELEASE_VERSION}.tar.gz" >> "${GITHUB_OUTPUT}"
+
+      - name: Attest GitHub-hosted build provenance
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: ${{ steps.build.outputs.archive }}
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          tag="v${RELEASE_VERSION}"
+          archive="dist/releases/dsh-work-${tag}.tar.gz"
+          checksum="${archive}.sha256"
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            echo "GitHub Release already exists: ${tag}" >&2
+            exit 1
+          fi
+          gh release create "${tag}" \
+            --draft \
+            --target "${GITHUB_SHA}" \
+            --title "dsh-work ${tag}" \
+            --notes "Manually approved, attested Mac mini release for commit ${GITHUB_SHA}. The Mac mini public Release watcher deploys it automatically after publication."
+          gh release upload "${tag}" "${archive}" "${checksum}"
+          gh release edit "${tag}" --draft=false --latest

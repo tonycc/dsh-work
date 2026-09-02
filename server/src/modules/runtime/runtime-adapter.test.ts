@@ -114,12 +114,16 @@ describe('DSH ACP Runtime Adapter', () => {
 
   it('verifies a managed DSH distribution against the runtime lock', async () => {
     const fixture = await createManagedDistributionFixture()
+    const dataRoot = join(fixture.projectRoot, 'persistent-data')
+    const sessionsRoot = join(dataRoot, 'managed-dsh-sessions')
     const installation = await resolveDshRuntimeInstallation({
       projectRoot: fixture.projectRoot,
       env: {
         DSH_RUNTIME_HOME: fixture.runtimeHome,
         DSH_RUNTIME_COMMAND: process.execPath,
         DSH_RUNTIME_ARGS_JSON: '["--version"]',
+        DSH_WORK_DATA_ROOT: dataRoot,
+        DSH_WORK_DSH_SESSIONS_ROOT: sessionsRoot,
       },
     })
 
@@ -127,6 +131,8 @@ describe('DSH ACP Runtime Adapter', () => {
     assert.equal(installation.commit, fixture.commit)
     assert.equal(installation.launchMode, 'managed-distribution')
     assert.deepEqual(installation.process.args.slice(0, 1), ['--version'])
+    assert.equal(installation.process.env?.['DSH_WORK_DSH_SESSIONS_ROOT'], sessionsRoot)
+    await stat(join(dataRoot, 'dsh-config/acp-managed-credentials.cordis.yml'))
   })
 
   it('fails closed when the managed DSH version differs from the runtime lock', async () => {

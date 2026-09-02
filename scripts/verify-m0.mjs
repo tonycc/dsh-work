@@ -120,7 +120,14 @@ for (const required of ['M0 实施基线冻结', 'M1 Runtime 技术 POC', 'M4-01
 }
 
 const githubCi = read('.github/workflows/ci.yml')
-for (const required of ['actions/checkout@v6', 'pnpm/setup@v2', 'pnpm install --frozen-lockfile', 'pnpm ci:check']) {
+const pinnedActions = [
+  ['actions/checkout', /actions\/checkout@[0-9a-f]{40}\s+# v6(?:\.|\s|$)/],
+  ['pnpm/setup', /pnpm\/setup@[0-9a-f]{40}\s+# v2(?:\.|\s|$)/],
+]
+for (const [action, pattern] of pinnedActions) {
+  if (!pattern.test(githubCi)) failures.push(`GitHub CI 未将 ${action} 固定到带版本注释的提交 SHA`)
+}
+for (const required of ['pnpm install --frozen-lockfile', 'pnpm ci:check']) {
   if (!githubCi.includes(required)) failures.push(`GitHub CI 缺少：${required}`)
 }
 

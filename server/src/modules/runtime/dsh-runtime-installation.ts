@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process'
 import { constants } from 'node:fs'
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { isAbsolute, resolve } from 'node:path'
+import { dirname, isAbsolute, resolve } from 'node:path'
 
 import { AcpJsonRpcClient } from './acp-json-rpc-client.ts'
 import {
@@ -76,8 +76,13 @@ export async function resolveDshRuntimeInstallation(
   await access(deploymentConfigTemplate, constants.R_OK)
   const acpBaseConfig = resolve(home, metadata.acpConfig ?? 'examples/acp-agent/cordis.yml')
   await access(acpBaseConfig, constants.R_OK)
-  const deploymentConfig = await writeDeploymentOverlay(
+  const dataRoot = resolve(options.projectRoot, env['DSH_WORK_DATA_ROOT'] ?? '.runtime')
+  const dshSessionsRoot = resolve(
     options.projectRoot,
+    env['DSH_WORK_DSH_SESSIONS_ROOT'] ?? resolve(dataRoot, 'dsh-sessions'),
+  )
+  const deploymentConfig = await writeDeploymentOverlay(
+    dataRoot,
     deploymentConfigTemplate,
     acpBaseConfig,
   )
@@ -104,7 +109,10 @@ export async function resolveDshRuntimeInstallation(
       command,
       args,
       deploymentConfig,
-      env: { DSH_ACP_BASE_CONFIG: acpBaseConfig },
+      env: {
+        DSH_ACP_BASE_CONFIG: acpBaseConfig,
+        DSH_WORK_DSH_SESSIONS_ROOT: dshSessionsRoot,
+      },
     }),
   }
 }
@@ -121,7 +129,7 @@ function assertExpectedRuntimeLockEnvironment(env: NodeJS.ProcessEnv, lock: Runt
 }
 
 async function writeDeploymentOverlay(
-  projectRoot: string,
+  dataRoot: string,
   templatePath: string,
   acpBaseConfig: string,
 ): Promise<string> {
@@ -133,7 +141,7 @@ async function writeDeploymentOverlay(
   if (withBaseConfig === template) {
     throw new Error(`DSH deployment overlay template has no include path: ${templatePath}`)
   }
-  const toolPolicySource = resolve(projectRoot, 'server/config/dsh/dsh-work-tool-policy.js')
+  const toolPolicySource = resolve(dirname(templatePath), 'dsh-work-tool-policy.js')
   await access(toolPolicySource, constants.R_OK)
   const rendered = withBaseConfig.replace(
     '__DSH_WORK_TOOL_POLICY_MODULE__',
@@ -142,7 +150,7 @@ async function writeDeploymentOverlay(
   if (rendered === withBaseConfig) {
     throw new Error(`DSH deployment overlay template has no tool policy placeholder: ${templatePath}`)
   }
-  const directory = resolve(projectRoot, '.runtime/dsh-config')
+  const directory = resolve(dataRoot, 'dsh-config')
   const target = resolve(directory, 'acp-managed-credentials.cordis.yml')
   await mkdir(directory, { recursive: true })
   await writeFile(target, rendered, { mode: 0o600 })

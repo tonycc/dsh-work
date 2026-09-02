@@ -88,11 +88,12 @@ async function start() {
   let dshInstallation: DshRuntimeInstallation | null = null
   if (database) {
     const projectRoot = fileURLToPath(new URL('../..', import.meta.url))
+    const dataRoot = resolve(projectRoot, process.env.DSH_WORK_DATA_ROOT ?? '.runtime')
     dshInstallation = await resolveDshRuntimeInstallation({ projectRoot })
     await preflightDshRuntime(dshInstallation)
     const runtime = new DshAcpRuntimeAdapter({
       runtimeId: 'runtime-local-01',
-      runtimeRoot: resolve(projectRoot, '.runtime/dsh-attempts'),
+      runtimeRoot: resolve(dataRoot, 'dsh-attempts'),
       dshRepository: dshInstallation.home,
       runtimeVersion: dshInstallation.version,
       runtimeCommit: dshInstallation.commit,
@@ -102,7 +103,7 @@ async function start() {
       permissionDecision: async () => 'allow_once',
     })
     const conversations = new PostgresConversationRepository(database)
-    const content = new PostgresContentService(database, resolve(projectRoot, '.runtime/storage'))
+    const content = new PostgresContentService(database, resolve(dataRoot, 'storage'))
     const runs = new PostgresRunRepository(database)
     const authorization = new PostgresAuthorizationService(database)
     const operations = new PostgresOperationsService(

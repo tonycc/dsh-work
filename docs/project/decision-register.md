@@ -19,16 +19,17 @@
 | A-08 | Runtimes 位于安全与运维 | 已确认 | 项目 Owner | 健康状态与调度状态分离 |
 | A-09 | Mac mini 为 MVP 首期部署目标 | 已确认 | 项目 Owner | Kubernetes 不是一期依赖 |
 | A-10 | 不 Fork DSH；固定 Commit 并通过 ACP、权威 Session Log 和 Session Telemetry 集成 | 已确认 | 项目 Owner | dsh-work 维护 Adapter 和脱敏投影，不修改 DSH 核心 |
-| A-11 | DSH 作为受管 Runtime 制品独立交付；不把 DSH 源码并入 dsh-work | 已确认 | 项目 Owner | 本地可使用经校验的源码 checkout；integration、staging、pilot 使用固定版本制品 |
+| A-11 | DSH 作为受管 Runtime 制品独立交付；不把 DSH 源码并入 dsh-work | 已替代 | 项目 Owner | 由 A-15 替代；确认上游没有该模式，原内部制品契约尚无构建和发布流水线 |
 | A-12 | 每位用户自动拥有唯一默认个人工作空间；所有对话、文件和成果必须归属个人或团队空间 | 已确认 | 项目 Owner | 取消“未加入工作空间”；个人空间仅本人访问且不扩大企业权限 |
 | A-13 | 企业身份统一使用 AI Hub OIDC；dsh-work 采用 PKCE 和服务端加密 Session，高风险管理写操作使用 AI Hub 在线决策 | 已替代 | 项目 Owner | 由 A-14 替代；保留登录与服务端 Session，移除跨应用业务授权耦合 |
 | A-14 | AI Hub 只提供 OIDC 身份、一次性初始管理员和员工目录；dsh-work 持有全部角色、功能权限、数据范围与 Session 授权事实 | 已确认 | 项目 Owner | 类似第三方账号登录；禁止生产回退 Prototype；浏览器不持有 AI Hub Token；员工/管理端共用一个应用 |
+| A-15 | DSH 使用上游正式提供的 npm 或独立源码 checkout 运行；当前固定 `0.1.1-rc.2` 源码 Commit，内部离线制品需另行实现 | 已确认 | 项目 Owner | 不把 DSH 源码并入 dsh-work；不得把内部预留契约表述为上游受管制品模式 |
 
 ## 2. 启动外部决策
 
 | 编号 | 决策事项 | 当前结论/候选 | 状态 | 责任角色 | 截止时间 | 阻塞影响 |
 |---|---|---|---|---|---|---|
-| D-01 | DSH Runtime 版本和入口 | 本地开发通过 `DSH_RUNTIME_HOME` 指向经校验的源码 checkout；版本 `0.1.1-rc.2`；Commit `b150a551b8d465e31e418e1b2eaf5e79bbb7d28e`。integration、staging、pilot 使用包含元数据的受管制品和正式 ACP 入口；Headless CLI 仅作诊断 | 已确认 | 项目 Owner | 2026-08-30 | 服务端启动前校验安装、版本、Commit 和 ACP v1；DSH 不并入 dsh-work 源码 |
+| D-01 | DSH Runtime 版本和入口 | 当前通过 `DSH_RUNTIME_HOME` 指向经校验的独立源码 checkout；版本 `0.1.1-rc.2`；Commit `b150a551b8d465e31e418e1b2eaf5e79bbb7d28e`。上游只正式提供 npm 和源码运行方式；生产环境选择固定 npm 安装或自定义离线制品仍待实现和验证 | 工程入口已确认，生产交付待确定 | 项目 Owner | M5 部署前 | 服务端启动前校验版本、Commit 和 ACP v1；正式 integration、staging、pilot 交付仍被制品方案阻塞 |
 | D-02 | 模型 Provider 和预算 | M1/M2 默认使用 `deepseek-official / deepseek-v4-pro`；dsh-work 管理 Provider、模型和平台路由，但不在 Agent 中配置模型策略。运行参数仍继承 DSH 默认配置，正式企业数据出口由 D-09 控制 | 已确认 | 项目 Owner | 2026-08-30 | M2 已增加模型治理表、API、管理页和 Attempt 路由快照；M3 接入真实运行解析 |
 | D-03 | 企业身份 | 使用 AI Hub OIDC Authorization Code + PKCE；员工/管理两个 API Audience 共用一个应用环境凭据；平台登记人、业务负责人和环境初始管理员分离，只有环境初始管理员可一次性成为首位本地管理员；业务授权与员工目录同步由 dsh-work 管理 | 工程已确认，AI Hub 配置/联调待完成 | 项目 Owner | 2026-09-02 | 代码不再阻塞；真实凭据、初始管理员认领、目录同步和 OIDC_ONLY 认证仍阻塞试点 |
 | D-04 | 试点部门 | 原型使用供应链合成场景，正式试点待确定 | 待确定 | 项目 Owner | M6 数据准备前 | 阻塞正式 UAT，不阻塞 M0 |
@@ -55,7 +56,7 @@
 - 候选仓库当前存在未跟踪的 `scratch-plugin/`，锁定版本时必须明确是否属于正式运行闭包；
 - 产品命令可完成一次 Headless 任务，但结构化实时事件、取消和嵌入协议仍需 M1 POC 验证；
 - D-01 的安装源与版本选择已确认；真实模型、Tool、取消、超时和事件转换属于 M1 POC 验收，不再回退 D-01 状态。
-- 交付规范见 `docs/deployment/dsh-runtime-delivery.md`；相邻源码仓库只是 local 回退方式，不是正式部署依赖。
+- 交付规范见 `docs/deployment/dsh-runtime-delivery.md`；当前经验证的入口是独立源码 checkout。上游没有 `bin/dsh-acp + dsh-runtime.json` 受管制品模式，正式 npm 或离线制品交付完成前不得宣称 staging/pilot 已具备该能力。
 
 ## 5. 更新规则
 
