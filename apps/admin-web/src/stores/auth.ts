@@ -5,6 +5,7 @@ import { adminApi } from '../api/client'
 import type { AdminRole, AdminSession, AdminUserProfile } from '../types/domain'
 
 export const roleLabels: Record<AdminRole, string> = {
+  business_admin: '业务管理员',
   platform_admin: '平台管理员',
   auditor: '安全审计员',
 }
@@ -29,18 +30,20 @@ export const useAuthStore = defineStore('admin-auth', () => {
   const user = computed(() => sessionUser.value ?? loadingUser)
   const canReadAdmin = computed(() => hasPermission(
     permissions.value,
-    'dsh_work.admin.read',
     'admin:read',
+    'admin:write',
   ))
   const canReadAudit = computed(() => hasPermission(
     permissions.value,
-    'dsh_work.audit.read',
     'audit:read',
   ))
   const canManage = computed(() => hasPermission(
     permissions.value,
-    'dsh_work.admin.write',
     'admin:write',
+  ))
+  const canManageIdentity = computed(() => permissions.value.includes('admin:*'))
+  const identityAdministrationAvailable = computed(() => (
+    identityProvider.value === 'ai-hub-oidc'
   ))
   const canAccessAdmin = computed(() =>
     sessionUser.value !== null && (canReadAdmin.value || canReadAudit.value || canManage.value),
@@ -92,6 +95,8 @@ export const useAuthStore = defineStore('admin-auth', () => {
     canReadAdmin,
     canReadAudit,
     canManage,
+    canManageIdentity,
+    identityAdministrationAvailable,
     isAuditor,
     initialized,
     loading,

@@ -1,5 +1,5 @@
 /** Admin API DTOs. They are intentionally owned by the management application. */
-export type AdminRole = 'platform_admin' | 'auditor'
+export type AdminRole = 'business_admin' | 'platform_admin' | 'auditor'
 
 export interface AdminUserProfile {
   id: string
@@ -16,6 +16,66 @@ export interface AdminSession {
   identityProvider: 'prototype-sso' | 'ai-hub-oidc'
   apiAudience: 'admin'
   permissions: string[]
+}
+
+export interface IdentityRoleSummary {
+  id: string
+  code: string
+  name: string
+  description: string
+  status: 'active' | 'disabled'
+  permissions: string[]
+  dataScopes: string[]
+  userCount: number
+  system: boolean
+  updatedAt: string
+}
+
+export interface IdentityUserSummary {
+  id: string
+  externalUserId: string | null
+  name: string
+  email: string | null
+  department: string
+  status: 'active' | 'disabled'
+  identityProvider: 'local' | 'ai-hub'
+  directorySyncedAt: string | null
+  authorizationVersion: number
+  roles: Array<Pick<IdentityRoleSummary, 'id' | 'code' | 'name' | 'status'>>
+  dataScopes: string[]
+  activeSessionCount: number
+  lastSeenAt: string | null
+}
+
+export interface IdentityUserPage {
+  items: IdentityUserSummary[]
+  total: number
+  page: number
+  pageSize: number
+  summary: {
+    synchronized: number
+    active: number
+    authorized: number
+  }
+}
+
+export interface LocalPermissionDefinition {
+  code: string
+  name: string
+  category: string
+  description: string
+}
+
+export interface DirectorySyncState {
+  applicationId: string
+  environment: string
+  cursor: string | null
+  status: 'idle' | 'running' | 'failed'
+  lastStartedAt: string | null
+  lastSucceededAt: string | null
+  lastError: string | null
+  synchronizedUsers: number
+  updatedAt: string
 }
 
 export type RunStatus =

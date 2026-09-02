@@ -8,7 +8,7 @@
 | R-01 | DSH 预发布接口变化 | 高 | 高 | Headless、事件、取消或 Tool 协议变化 | 固定 Commit、Runtime Adapter、契约测试、升级沙箱和回滚版本 | 项目 Owner | 开放 |
 | R-02 | DSH ACP 不暴露 Tool、Token 和原始增量事件 | 高 | 高 | ACP 提供 assistant 增量和权限事件；Token/Tool 计数留在权威 Session Log | Runtime Adapter 已投影增量和权限事件，并从隔离 Session Log 读取权威 Token/Tool 计数，不需要 Fork DSH | 项目 Owner | 已关闭 |
 | R-03 | 模型凭据延期 | 中 | 高 | D-02 已确认，DSH 受管凭据真实调用已通过 | M1 POC 复用 DSH 受管凭据；生产密钥迁入 Model Gateway 的专用密钥存储 | 项目 Owner | 已关闭 |
-| R-04 | AI Hub SSO 凭据或测试授权延期 | 中 | 高 | 已有 OIDC 代码，但环境未创建凭据/试点用户未授权 | 按接入指南登记环境、凭据和 `dsh_work.*` 角色；保留 Prototype 仅用于非生产回归 | 项目 Owner | 已缓解，联调待完成 |
+| R-04 | AI Hub SSO 凭据或身份联调延期 | 中 | 高 | 已有 OIDC 代码，但环境、负责人或 Directory Scope 未配置 | 按接入指南登记唯一应用、负责人、回调和 Identity/Bootstrap/Directory Scope；保留 Prototype 仅用于非生产回归 | 项目 Owner | 已缓解，联调待完成 |
 | R-05 | ERP/MES 接口和 Owner 不明确 | 高 | 高 | Tool Schema、数据范围或口径无法评审 | 每个真实 Tool 接入时记录外部联系人；先只接一个只读 Tool | 项目 Owner | 开放 |
 | R-06 | Mock 与正式状态机偏差 | 中 | 高 | 页面刷新后状态丢失，取消只改变前端 | 员工主链路已切换 PostgreSQL Run/Attempt、真实 Runtime 和 SSE；取消、重试、刷新恢复有集成与浏览器证据 | 项目 Owner | 已关闭 |
 | R-07 | 权限和数据范围口径不清 | 高 | 高 | 测试用户预期结果不一致 | M0 固化访问矩阵；M2 服务端强制授权 | 项目 Owner | 开放 |
@@ -17,7 +17,7 @@
 | R-10 | Artifact 只有备份没有恢复能力 | 中 | 高 | 无恢复记录或恢复时间未知 | M5 强制恢复演练，未通过不得上线 | 项目 Owner | 开放 |
 | R-11 | GitHub 托管 CI 尚未产生首次运行 | 低 | 中 | 远程仓库未绑定或工作流首次运行失败 | 已提供 GitHub Actions；推送远程后验证并设置必需检查 | 项目 Owner | 已缓解 |
 | R-12 | 一期范围膨胀 | 高 | 中 | 自定义 Connector、微服务、PPT 等重新进入开发 | 进入后续 Backlog；范围变化必须走变更记录 | 项目 Owner | 开放 |
-| R-13 | 管理配置绕过服务端权限 | 低 | 高 | 修改前端角色或伪造 `actor` 尝试获得写权限 | API 统一从 HttpOnly Session 注入身份，忽略请求体操作人；本地角色校验 + AI Hub `dsh_work.admin.write` 在线决策 + 审计失败关闭 | 项目 Owner | 已缓解 |
+| R-13 | 管理配置绕过服务端权限 | 低 | 高 | 修改前端角色或伪造 `actor` 尝试获得写权限 | API 统一从 HttpOnly Session 注入身份，忽略请求体操作人；每次请求从 PostgreSQL 重算本地角色、权限和数据范围并写审计 | 项目 Owner | 已缓解 |
 | R-14 | SSE 断线导致重复或漏事件 | 中 | 高 | 页面状态与数据库终态不一致 | 稳定事件 ID、全 Run stream position、Last-Event-ID、幂等消费和终态回查均已实现并通过断点续传测试 | 项目 Owner | 已关闭 |
 | R-15 | 当前 DSH 默认模型链路运行回归 | 低 | 高 | 根因为 DSH 文件搜索 Tool 必填配置缺失，以及自定义 Tool Policy 路径和导出形式不符合实际加载约定 | 已补齐受管配置、生成绝对策略路径并统一默认插件导出；真实模型、Tool、Artifact 探针和两类浏览器文件分析均通过，固定 Commit 与回归测试继续保留 | 项目 Owner | 已关闭 |
 | R-16 | 失败反馈与真实服务端状态不一致 | 低 | 中 | 下载失败仍提示成功、错误只显示通用文案、纯前端审批按钮改变状态 | M4-09 已统一结构化错误契约，从 Attempt 投影错误码，下载先校验响应，并移除伪人工审批；单元与 PostgreSQL 测试进入 CI | 项目 Owner | 已关闭 |
@@ -26,6 +26,7 @@
 | R-19 | Runtime 取消原因和页面终态失真 | 低 | 高 | 无显式取消的 ACP `cancelled` 可能被误记为用户操作；旧 Attempt 事件可能覆盖重试状态 | Adapter 已区分用户与意外取消，Run DTO 暴露当前 Attempt，前端丢弃非当前 Attempt 事件；单元测试和真实浏览器无刷新重试通过 | 项目 Owner | 已关闭 |
 | R-20 | 工作空间文件引用未进入 Run 文件关联 | 低 | 高 | 引用动作此前只传提示文本，没有传 Workspace 文件 ID | 前端提交文件 ID，服务端重新授权并写入不可变 Manifest；浏览器 Run 与数据库 `run_input_files`、只读挂载证据均通过 | 项目 Owner | 已关闭 |
 | R-21 | 系统健康页产生错误上线信号 | 低 | 高 | 静态演示文案与真实持久化状态矛盾，DSH 健康未反映最近执行质量 | 健康接口已加入最近 24 小时 Attempt 质量，页面统一 PostgreSQL、Artifact Adapter 与 ACP 边界；浏览器显示 3 / 3 健康及最近 5 / 5 成功 | 项目 Owner | 已关闭 |
+| R-22 | 唯一应用管理员被停用导致管理端锁死 | 低 | 高 | 首位管理员尚未授权备用管理员即在 AI Hub 停用 | 禁止移除最后一个有效平台管理员；上线清单要求至少两名管理员；全员停用时走数据库变更与审计的受控恢复流程 | 项目 Owner | 已缓解，待 UAT |
 
 ## 每周风险复核
 

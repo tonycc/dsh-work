@@ -6,7 +6,7 @@ const authStore = useAuthStore()
 
 <template>
   <main class="auth-result-page">
-    <el-result icon="warning" title="无权访问员工工作台" sub-title="请在 AI Hub 中为当前账号授予 dsh_work.workbench.use 权限后重新登录。">
+    <el-result icon="warning" title="无权访问员工工作台" sub-title="请联系 dsh-work 应用管理员，在“员工与权限”中为当前账号分配可使用工作台的本地角色。">
       <template #extra>
         <el-button type="primary" @click="authStore.logout()">退出并重新选择账号</el-button>
       </template>

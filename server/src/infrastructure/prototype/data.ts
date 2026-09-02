@@ -35,6 +35,15 @@ export const prototypeUsers: Record<UserProfile['role'], UserProfile> = {
     role: 'department_manager',
     dataScopes: ['供应链中心', '工厂一', '工厂二'],
   },
+  business_admin: {
+    id: 'U00009',
+    name: '唐宁',
+    title: '业务管理员',
+    department: '数字化中心',
+    avatarText: '唐',
+    role: 'business_admin',
+    dataScopes: ['业务配置'],
+  },
   platform_admin: {
     id: 'U00008',
     name: '陈默',

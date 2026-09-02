@@ -24,7 +24,7 @@
 
 ## 身份与部署
 
-- [AI Hub SSO 接入说明](deployment/ai-hub-sso-integration.md)：应用环境、OIDC 回调、权限和联调步骤；
+- [AI Hub 身份接入说明](deployment/ai-hub-sso-integration.md)：应用环境、OIDC 回调、初始管理员、员工目录和本地授权联调步骤；
 - [M6 AI Hub SSO 检查清单](project/m6-ai-hub-sso-checklist.md)：代码完成项与平台侧待办；
 - [持续集成基线](project/ci-integration.md)：统一质量 Gate 与 CI 要求；
 - [本地开发环境 UAT 报告](project/local-development-uat-report.md)：最近一次本地联调证据。

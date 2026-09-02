@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "dsh-work 管理平台 API",
-    "version": "0.6.0-m6",
-    "description": "M6 管理面契约基线。请求使用 AI Hub OIDC 登录后由 dsh-work 签发的 HttpOnly 服务端 Session；普通读取要求 dsh_work.admin.read，审计读取要求 dsh_work.audit.read，写操作要求 dsh_work.admin.write 并默认执行 AI Hub 在线授权。操作人由服务端 Session 注入，请求体不接受 actor。"
+    "version": "0.7.1-identity-owned-authorization",
+    "description": "管理面请求使用 AI Hub OIDC 登录后由 dsh-work 签发的 HttpOnly 服务端 Session。AI Hub 只提供身份和员工资料；admin:read、admin:write、audit:read、角色与数据范围全部由 dsh-work 本地授权。身份同步、角色、员工授权和 Session 撤销仅允许本地平台管理员（admin:*）修改。操作人由服务端 Session 注入，请求体不接受 actor。"
   },
   "servers": [{ "url": "/api/admin/v1" }],
   "security": [{ "adminSession": [] }],
@@ -96,13 +96,24 @@
       "parameters": [{ "$ref": "#/components/parameters/RunId" }],
       "get": { "operationId": "getRunOperations", "summary": "按 Run 下钻运行、模型、工具和成果安全时间线", "responses": { "200": { "$ref": "#/components/responses/Ok" }, "404": { "$ref": "#/components/responses/Error" } } }
     },
+    "/identity/users": { "get": { "operationId": "listIdentityUsers", "summary": "分页查询从 AI Hub 同步的员工及其本地角色、数据范围和 Session 摘要", "parameters": [{ "name": "query", "in": "query", "schema": { "type": "string", "maxLength": 100 } }, { "name": "status", "in": "query", "schema": { "type": "string", "enum": ["active", "disabled"] } }, { "name": "page", "in": "query", "schema": { "type": "integer", "minimum": 1, "default": 1 } }, { "name": "page_size", "in": "query", "schema": { "type": "integer", "minimum": 10, "maximum": 100, "default": 20 } }], "responses": { "200": { "$ref": "#/components/responses/Ok" } } } },
+    "/identity/users/{userId}/roles": { "parameters": [{ "$ref": "#/components/parameters/UserId" }], "post": { "operationId": "grantIdentityUserRole", "summary": "由平台管理员为员工分配 dsh-work 本地角色", "responses": { "200": { "$ref": "#/components/responses/Ok" }, "403": { "$ref": "#/components/responses/Error" }, "422": { "$ref": "#/components/responses/Error" } } } },
+    "/identity/users/{userId}/roles/{roleId}": { "parameters": [{ "$ref": "#/components/parameters/UserId" }, { "$ref": "#/components/parameters/RoleId" }], "delete": { "operationId": "revokeIdentityUserRole", "summary": "由平台管理员移除员工的本地角色；禁止移除最后一个平台管理员", "responses": { "200": { "$ref": "#/components/responses/Ok" }, "403": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" } } } },
+    "/identity/users/{userId}/scopes": { "parameters": [{ "$ref": "#/components/parameters/UserId" }], "patch": { "operationId": "replaceIdentityUserScopes", "summary": "由平台管理员替换员工在 dsh-work 中的直接数据范围", "responses": { "200": { "$ref": "#/components/responses/Ok" }, "403": { "$ref": "#/components/responses/Error" } } } },
+    "/identity/users/{userId}/sessions/revoke": { "parameters": [{ "$ref": "#/components/parameters/UserId" }], "post": { "operationId": "revokeIdentityUserSessions", "summary": "由平台管理员撤销员工全部 dsh-work 登录 Session", "responses": { "200": { "$ref": "#/components/responses/Ok" }, "403": { "$ref": "#/components/responses/Error" } } } },
+    "/identity/roles": { "get": { "operationId": "listIdentityRoles", "summary": "查询 dsh-work 本地角色、权限和数据范围", "responses": { "200": { "$ref": "#/components/responses/Ok" } } }, "post": { "operationId": "createIdentityRole", "summary": "由平台管理员创建 dsh-work 本地角色", "responses": { "200": { "$ref": "#/components/responses/Ok" }, "403": { "$ref": "#/components/responses/Error" } } } },
+    "/identity/roles/{roleId}": { "parameters": [{ "$ref": "#/components/parameters/RoleId" }], "patch": { "operationId": "updateIdentityRole", "summary": "由平台管理员更新本地角色的状态、权限和数据范围", "responses": { "200": { "$ref": "#/components/responses/Ok" }, "403": { "$ref": "#/components/responses/Error" } } } },
+    "/identity/permissions": { "get": { "operationId": "listLocalPermissionCatalog", "summary": "查询 dsh-work 本地功能权限目录", "responses": { "200": { "$ref": "#/components/responses/Ok" } } } },
+    "/identity/directory-sync": { "get": { "operationId": "getIdentityDirectorySyncState", "summary": "查询 AI Hub 员工目录同步状态", "responses": { "200": { "$ref": "#/components/responses/Ok" } } }, "post": { "operationId": "synchronizeIdentityDirectory", "summary": "由平台管理员使用应用服务凭据增量或全量同步 AI Hub 员工资料，不修改本地授权", "responses": { "200": { "$ref": "#/components/responses/Ok" }, "403": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" } } } },
     "/health": { "get": { "operationId": "getPlatformHealth", "summary": "查询服务端、PostgreSQL 和 Runtime 当前状态", "responses": { "200": { "$ref": "#/components/responses/Ok" } } } }
   },
   "components": {
     "securitySchemes": { "adminSession": { "type": "apiKey", "in": "cookie", "name": "dsh_work_admin_session", "description": "AI Hub OIDC 回调后由 dsh-work 设置的不透明 HttpOnly Session Cookie；生产名称使用 __Host- 前缀。" } },
     "parameters": {
       "AgentId": { "name": "agentId", "in": "path", "required": true, "schema": { "type": "string" } },
-      "RunId": { "name": "runId", "in": "path", "required": true, "schema": { "type": "string" } }
+      "RunId": { "name": "runId", "in": "path", "required": true, "schema": { "type": "string" } },
+      "UserId": { "name": "userId", "in": "path", "required": true, "schema": { "type": "string" } },
+      "RoleId": { "name": "roleId", "in": "path", "required": true, "schema": { "type": "string" } }
     },
     "requestBodies": {
       "Agent": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AgentInput" } } } }
@@ -199,5 +210,5 @@
       }
     }
   },
-  "x-contract-status": "m6-implemented"
+  "x-contract-status": "identity-owned-authorization-implemented"
 }

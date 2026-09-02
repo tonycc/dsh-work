@@ -8,7 +8,12 @@ import type {
   AgentVersionRecord,
   AuditEvent,
   ConnectorDefinition,
+  DirectorySyncState,
   HealthComponent,
+  IdentityRoleSummary,
+  IdentityUserPage,
+  IdentityUserSummary,
+  LocalPermissionDefinition,
   ModelUsageRecord,
   ManagedWorkspaceDefinition,
   ModelProvider,
@@ -204,4 +209,60 @@ export const adminApi = {
     enabled: boolean
   }) => request<ModelRoute>('/model-routes', { method: 'POST', body: JSON.stringify(input) }),
   getPlatformStatus: () => request<PlatformStatus>('/platform-status'),
+  getIdentityUsers: (input: { query?: string; status?: string; page?: number; pageSize?: number } = {}) => {
+    const query = new URLSearchParams()
+    if (input.query) query.set('query', input.query)
+    if (input.status && input.status !== 'all') query.set('status', input.status)
+    query.set('page', String(input.page ?? 1))
+    query.set('page_size', String(input.pageSize ?? 20))
+    const suffix = query.size > 0 ? `?${query.toString()}` : ''
+    return request<IdentityUserPage>(`/identity/users${suffix}`)
+  },
+  getIdentityRoles: () => request<IdentityRoleSummary[]>('/identity/roles'),
+  getLocalPermissions: () => request<LocalPermissionDefinition[]>('/identity/permissions'),
+  createIdentityRole: (input: {
+    code: string
+    name: string
+    description: string
+    permissions: string[]
+    dataScopes: string[]
+  }) => request<IdentityRoleSummary>('/identity/roles', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  }),
+  updateIdentityRole: (roleId: string, input: {
+    name: string
+    description: string
+    status: IdentityRoleSummary['status']
+    permissions: string[]
+    dataScopes: string[]
+  }) => request<IdentityRoleSummary>(`/identity/roles/${encodeURIComponent(roleId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  }),
+  grantIdentityRole: (userId: string, input: { roleId: string; validUntil?: string | null }) =>
+    request<IdentityUserSummary>(`/identity/users/${encodeURIComponent(userId)}/roles`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  revokeIdentityRole: (userId: string, roleId: string) =>
+    request<IdentityUserSummary>(
+      `/identity/users/${encodeURIComponent(userId)}/roles/${encodeURIComponent(roleId)}`,
+      { method: 'DELETE' },
+    ),
+  replaceIdentityUserScopes: (userId: string, dataScopes: string[]) =>
+    request<IdentityUserSummary>(`/identity/users/${encodeURIComponent(userId)}/scopes`, {
+      method: 'PATCH',
+      body: JSON.stringify({ dataScopes }),
+    }),
+  revokeIdentityUserSessions: (userId: string) =>
+    request<{ userId: string; revokedSessions: number }>(
+      `/identity/users/${encodeURIComponent(userId)}/sessions/revoke`,
+      { method: 'POST' },
+    ),
+  getDirectorySyncState: () => request<DirectorySyncState>('/identity/directory-sync'),
+  synchronizeDirectory: (full = false) => request<DirectorySyncState>(
+    `/identity/directory-sync${full ? '?full=true' : ''}`,
+    { method: 'POST' },
+  ),
 }

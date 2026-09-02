@@ -32,7 +32,7 @@ MVP 明确不包含：
 |---|---|---|
 | dsh-work | 员工体验、Workspace、产品 Session、Run/Attempt、文件、成果、对象权限、运行编排、审计和运营 | 模型内部推理、企业身份主数据、企业系统业务规则 |
 | DSH | 单次 Attempt 内的 Agent Loop、Skill 执行、模型/Tool 调用编排、取消和运行事件 | 产品数据库、长期身份、对象权限、业务凭据和企业系统直连 |
-| AI Hub | OIDC 身份、应用 Scope、平台权限、在线高风险授权；后续承接跨应用治理 | dsh-work 的 Workspace、Session、Run、文件、成果和高频执行状态 |
+| AI Hub | OIDC 身份、环境初始管理员一次性 Bootstrap、基础员工资料与增量员工目录 | dsh-work 的角色、功能权限、数据范围、Session、业务对象和运行状态 |
 | 企业系统/模型/存储 | 权威业务数据、模型能力、文件与备份基础设施 | dsh-work 的交互、编排和审计语义 |
 
 关键边界：
@@ -41,7 +41,7 @@ MVP 明确不包含：
 - PostgreSQL 是产品运行事实来源，浏览器 Store、DSH Session Log 和缓存不能替代它；
 - 企业身份由服务端建立，浏览器传入的用户、角色或操作人字段不能作为授权事实；
 - DSH 只能通过受控适配器和平台能力调用模型、Tool 与成果存储；
-- AI Hub 不可用时不得绕过身份或高风险授权，已经开始的 Run 按持久化状态和既定故障语义收敛。
+- AI Hub 不可用时不得绕过登录、Token 刷新或员工目录同步；已有未过期 Session 继续使用 PostgreSQL 本地授权，已经开始的 Run 按持久化状态和既定故障语义收敛。
 
 ## 3. 架构原则
 
@@ -79,11 +79,12 @@ flowchart TB
   subgraph Access[接入与身份]
     WAPI[Workbench API / SSE]
     AAPI[Admin API]
-    Auth[AI Hub OIDC / 平台授权]
+    Auth[AI Hub OIDC / 员工目录]
   end
 
   subgraph App[dsh-work 模块化单体]
     Workspace[Workspace / Session / File / Artifact]
+    Authorization[本地身份映射 / 角色 / 权限 / 数据范围]
     Governance[Agent / Skill / Tool / Model 治理]
     Orchestration[Run / Attempt / Scheduler / Audit]
     Runtime[Runtime Adapter / Run Event]
@@ -105,11 +106,14 @@ flowchart TB
   Admin --> AAPI
   Auth --> WAPI
   Auth --> AAPI
+  WAPI --> Authorization
+  AAPI --> Authorization
   WAPI --> Workspace
   WAPI --> Orchestration
   AAPI --> Governance
   AAPI --> Orchestration
   Workspace --> PG
+  Authorization --> PG
   Governance --> PG
   Orchestration --> PG
   Orchestration --> Runtime
@@ -227,7 +231,8 @@ flowchart LR
 ## 9. 身份、安全与数据边界
 
 - 生产/联调身份使用 AI Hub OIDC，Token 加密保存在服务端 Session；Cookie 在 HTTPS 环境启用 Secure；
-- Workbench 与 Admin 分别校验 Audience，管理高风险写操作可调用 AI Hub 在线授权；
+- Workbench 与 Admin 分别校验 Audience；每次 API 请求从 PostgreSQL 解析当前本地角色、权限、数据范围和授权版本；
+- AI Hub 环境中明确指定的初始管理员只可一次性初始化首位本地平台管理员；应用负责人和平台登记人不因此获权，之后所有授权在 dsh-work 管理端维护；
 - API 不信任浏览器提交的 `actor`、用户 ID、角色或数据范围；
 - Workspace、Agent、Skill、Tool、Connector、文件和 Artifact 都在服务端执行对象级授权；
 - DSH 子进程使用环境白名单，应用数据库变量和敏感覆盖项不传入；
@@ -242,8 +247,8 @@ flowchart LR
 
 - M0～M4 工程 Gate 已关闭；
 - M5-01 自动化、M5-02 安全、M5-03 故障、M5-04 容量工程 Gate 已关闭；
-- AI Hub OIDC + PKCE、服务端 Session、双 Audience、在线管理授权和前端鉴权体验已经实现；
-- 平台管理员仍需完成 AI Hub 应用环境、凭据、权限、角色和测试账号配置；
+- AI Hub OIDC + PKCE、服务端 Session、双 Audience、一次性初始管理员、员工目录和 dsh-work 本地授权管理已经实现；
+- 平台管理员仍需完成 AI Hub 唯一应用环境、业务负责人、环境初始管理员、凭据、Identity/Bootstrap/Directory Scope 和真实账号配置；
 - 企业只读 Connector、真实知识源、生产文件存储/扫描、目标硬件、监控、备份恢复和 UAT 仍未关闭。
 
 因此，当前结论是“工程主链路成立，进入试点准备”，不是“生产上线完成”。最新 Gate 见 [MVP 路线图与交付状态](../project/mvp-roadmap.md)。

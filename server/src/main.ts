@@ -8,6 +8,7 @@ import { registerSkillRoutes } from './http/admin/skill-routes.ts'
 import { registerToolRoutes } from './http/admin/tool-routes.ts'
 import { registerModelGovernanceRoutes } from './http/admin/model-routes.ts'
 import { registerOperationsRoutes } from './http/admin/operations-routes.ts'
+import { registerIdentityAdministrationRoutes } from './http/admin/identity-routes.ts'
 import { Router, envelope } from './http/router.ts'
 import { registerWorkbenchRoutes } from './http/workbench/routes.ts'
 import { registerConversationRoutes } from './http/workbench/conversation-routes.ts'
@@ -41,6 +42,8 @@ import { PostgresKnowledgeService } from './modules/knowledge/postgres-knowledge
 import { PostgresAuthorizationService } from './modules/authorization/postgres-authorization-service.ts'
 import { loadIdentityConfiguration } from './modules/identity/config.ts'
 import { OidcAuthService } from './modules/identity/auth-service.ts'
+import { IdentityAdministrationService } from './modules/identity/administration-service.ts'
+import { IdentityDirectorySyncService } from './modules/identity/directory-sync-service.ts'
 import { prototypeApiAuthenticator } from './modules/identity/prototype-authenticator.ts'
 
 const port = Number(process.env.DSH_WORK_SERVER_PORT ?? 4190)
@@ -60,12 +63,23 @@ async function start() {
   const oidcAuthentication = identityConfiguration.mode === 'oidc' && database
     ? new OidcAuthService(identityConfiguration, database)
     : null
+  const directorySync = identityConfiguration.mode === 'oidc' && database
+    ? new IdentityDirectorySyncService(identityConfiguration, database)
+    : null
   const router = new Router({
     authenticateApi: oidcAuthentication
       ? (request, audience) => oidcAuthentication.authenticateApi(request, audience)
       : prototypeApiAuthenticator,
   })
   if (oidcAuthentication) registerOidcRoutes(router, oidcAuthentication)
+  if (database && directorySync) {
+    registerIdentityAdministrationRoutes(
+      router,
+      new IdentityAdministrationService(database),
+      directorySync,
+    )
+  }
+  const directorySyncTimer = directorySync?.startScheduler() ?? null
   const modelRepository = database
     ? new PostgresModelGovernanceRepository(database)
     : new MemoryModelGovernanceRepository()
@@ -164,6 +178,7 @@ async function start() {
   const shutdown = () => {
     server.close(() => {
       void (async () => {
+        if (directorySyncTimer) clearInterval(directorySyncTimer)
         if (orchestration) await orchestration.close()
         if (database) await database.end()
         process.exit(0)

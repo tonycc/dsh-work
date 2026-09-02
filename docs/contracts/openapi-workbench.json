@@ -3,7 +3,7 @@
   "info": {
     "title": "dsh-work 员工工作台 API",
     "version": "0.6.0-m6",
-    "description": "M6 契约基线。请求使用 AI Hub OIDC 登录后由 dsh-work 签发的 HttpOnly 服务端 Session；用户标识和数据范围不接受浏览器传入。每位用户具有唯一默认个人工作空间，所有 Session、文件与成果均归属个人或团队工作空间。"
+    "description": "请求使用 AI Hub OIDC 登录后由 dsh-work 签发的 HttpOnly 服务端 Session；AI Hub 只提供用户身份，工作台角色、权限和数据范围由 dsh-work 本地配置且不接受浏览器传入。每位用户具有唯一默认个人工作空间，所有 Session、文件与成果均归属个人或团队工作空间。"
   },
   "servers": [{ "url": "/api/workbench/v1" }],
   "security": [{ "enterpriseSession": [] }],

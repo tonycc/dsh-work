@@ -7,10 +7,13 @@ import {
 import { createServer } from 'node:http'
 import { test } from 'node:test'
 
+import type { DatabaseClient } from '../../infrastructure/postgres/database.ts'
 import { loadIdentityConfiguration } from './config.ts'
+import { OidcAuthService } from './auth-service.ts'
+import { IdentityDirectorySyncService } from './directory-sync-service.ts'
 import { OidcProtocolError, OidcProviderClient } from './oidc-client.ts'
 import { assertApiRouteAccess } from '../../http/router.ts'
-import { AI_HUB_PERMISSIONS, type RequestIdentity } from './types.ts'
+import { LOCAL_PERMISSIONS, type RequestIdentity } from './types.ts'
 import { SecretBox, equalOpaqueHash, hashOpaque, randomOpaque } from './secure-values.ts'
 
 test('OIDC configuration uses one AI Hub credential for both portals', () => {
@@ -19,21 +22,71 @@ test('OIDC configuration uses one AI Hub credential for both portals', () => {
   assert.equal(configuration.audiences.workbench.clientId, 'dsh-work__local__v1')
   assert.equal(configuration.audiences.admin.clientId, 'dsh-work__local__v1')
   assert.equal(configuration.audiences.workbench.tokenAudience, 'dsh-work__local__v1')
+  assert.equal(configuration.applicationId, 'dsh-work')
+  assert.equal(configuration.environment, 'local')
+  assert.equal(configuration.directorySyncIntervalSeconds, 900)
   assert.deepEqual(configuration.audiences.workbench.loginScopes, [
     'openid', 'profile', 'email', 'offline_access', 'ai_hub.identity', 'platform.me.read',
   ])
-  assert.ok(configuration.audiences.admin.loginScopes.includes('platform.authorization.decide'))
+  assert.ok(configuration.audiences.admin.loginScopes.includes('platform.application.bootstrap'))
 })
 
-test('OIDC configuration accepts per-portal credential overrides', () => {
+test('OIDC configuration rejects a separate admin application credential', () => {
   const environment = baseEnvironment()
   environment.AI_HUB_ADMIN_CLIENT_ID = 'dsh-work-admin__local__v1'
   environment.AI_HUB_ADMIN_CLIENT_SECRET = 'admin-client-secret-with-at-least-32-characters'
   environment.AI_HUB_ADMIN_OIDC_ISSUER = 'http://auth.localhost:8088/application/o/dsh-work-admin/'
-  const configuration = loadIdentityConfiguration(environment)
-  assert.equal(configuration.mode, 'oidc')
-  assert.equal(configuration.audiences.admin.clientId, 'dsh-work-admin__local__v1')
-  assert.equal(configuration.audiences.workbench.clientId, 'dsh-work__local__v1')
+  assert.throws(
+    () => loadIdentityConfiguration(environment),
+    /必须共用同一个 AI Hub 应用环境凭据/,
+  )
+})
+
+test('directory scheduler reconciles immediately before waiting for the interval', async () => {
+  const configuration = loadIdentityConfiguration(baseEnvironment())
+  if (configuration.mode !== 'oidc') assert.fail('expected OIDC configuration')
+  const directory = new IdentityDirectorySyncService(configuration, {} as DatabaseClient)
+  let synchronizationCalls = 0
+  directory.synchronize = (async () => {
+    synchronizationCalls += 1
+    return {} as Awaited<ReturnType<typeof directory.synchronize>>
+  }) as typeof directory.synchronize
+
+  const timer = directory.startScheduler()
+  await new Promise(resolve => setImmediate(resolve))
+  if (timer) clearInterval(timer)
+
+  assert.ok(timer)
+  assert.equal(synchronizationCalls, 1)
+
+  const oneShot = new IdentityDirectorySyncService(
+    { ...configuration, directorySyncIntervalSeconds: 0 },
+    {} as DatabaseClient,
+  )
+  let oneShotCalls = 0
+  oneShot.synchronize = (async () => {
+    oneShotCalls += 1
+    return {} as Awaited<ReturnType<typeof oneShot.synchronize>>
+  }) as typeof oneShot.synchronize
+  const disabledTimer = oneShot.startScheduler()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(disabledTimer, null)
+  assert.equal(oneShotCalls, 1)
+})
+
+test('OIDC errors redirect to frontend routes outside the backend auth proxy', () => {
+  const configuration = loadIdentityConfiguration(baseEnvironment())
+  if (configuration.mode !== 'oidc') assert.fail('expected OIDC configuration')
+  const authentication = new OidcAuthService(configuration, {} as DatabaseClient)
+
+  assert.equal(
+    authentication.errorRedirect('workbench', 'invalid_callback'),
+    'http://localhost:4174/login-error?code=invalid_callback',
+  )
+  assert.equal(
+    authentication.errorRedirect('admin', 'access_denied'),
+    'http://localhost:4180/login-error?code=access_denied',
+  )
 })
 
 test('production OIDC configuration rejects insecure URLs, cookies, and placeholder secrets', () => {
@@ -57,15 +110,21 @@ test('production OIDC configuration rejects insecure URLs, cookies, and placehol
   assert.throws(() => loadIdentityConfiguration(production), /占位值/)
 
   production.DSH_WORK_SESSION_SECRET = 'a-production-session-secret-with-strong-random-material'
-  production.DSH_WORK_ADMIN_ONLINE_AUTHORIZATION = 'false'
+  production.DSH_WORK_DIRECTORY_SYNC_INTERVAL_SECONDS = '0'
   assert.throws(
     () => loadIdentityConfiguration(production),
-    /必须启用管理写操作在线授权校验/,
+    /不能关闭 AI Hub 员工目录同步/,
+  )
+
+  production.DSH_WORK_DIRECTORY_SYNC_INTERVAL_SECONDS = '-1'
+  assert.throws(
+    () => loadIdentityConfiguration(production),
+    /必须是非负整数/,
   )
 })
 
 test('admin API read permissions are enforced per route', () => {
-  const auditIdentity = adminIdentity([AI_HUB_PERMISSIONS.auditRead])
+  const auditIdentity = adminIdentity([LOCAL_PERMISSIONS.auditRead])
   assert.doesNotThrow(() => assertApiRouteAccess(
     auditIdentity,
     '/api/admin/v1/audit-events',
@@ -76,7 +135,7 @@ test('admin API read permissions are enforced per route', () => {
     /管理读取权限/,
   )
 
-  const adminReadIdentity = adminIdentity([AI_HUB_PERMISSIONS.adminRead])
+  const adminReadIdentity = adminIdentity([LOCAL_PERMISSIONS.adminRead])
   assert.doesNotThrow(() => assertApiRouteAccess(
     adminReadIdentity,
     '/api/admin/v1/agents',
@@ -92,11 +151,11 @@ test('admin API read permissions are enforced per route', () => {
   )
 })
 
-test('AI Hub application permission codes satisfy its dotted identifier contract', () => {
-  const permissionPattern = /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/
-  for (const permission of Object.values(AI_HUB_PERMISSIONS)) {
-    assert.match(permission, permissionPattern)
-  }
+test('business permissions remain local and are not AI Hub application permissions', () => {
+  assert.deepEqual(Object.values(LOCAL_PERMISSIONS), [
+    'workbench:use', 'workbench:manage', 'admin:*', 'admin:read', 'admin:write', 'audit:read',
+  ])
+  assert.equal(Object.values(LOCAL_PERMISSIONS).some(permission => permission.startsWith('dsh_work.')), false)
 })
 
 test('opaque values are hashed and encrypted session values fail closed on tampering', () => {
@@ -109,7 +168,8 @@ test('opaque values are hashed and encrypted session values fail closed on tampe
   const sealed = box.seal('sensitive-refresh-token')
   assert.equal(box.open(sealed), 'sensitive-refresh-token')
   const segments = sealed.split('.')
-  segments[3] = `${segments[3]?.slice(0, -1)}A`
+  const ciphertext = segments[3] ?? ''
+  segments[3] = `${ciphertext.startsWith('A') ? 'B' : 'A'}${ciphertext.slice(1)}`
   assert.throws(() => box.open(segments.join('.')))
 })
 
@@ -119,7 +179,7 @@ test('OIDC client builds PKCE requests, verifies RS256 claims, and authenticates
   Object.assign(jwk, { kid: 'test-key', alg: 'RS256', use: 'sig' })
   let issuer = ''
   let tokenAuthorization = ''
-  let tokenBody = ''
+  const tokenBodies: string[] = []
   const server = createServer((request, response) => {
     if (request.url === '/application/o/dsh-work/.well-known/openid-configuration') {
       json(response, {
@@ -138,6 +198,7 @@ test('OIDC client builds PKCE requests, verifies RS256 claims, and authenticates
     if (request.url === '/application/o/dsh-work/token/' && request.method === 'POST') {
       tokenAuthorization = String(request.headers.authorization ?? '')
       request.setEncoding('utf8')
+      let tokenBody = ''
       request.on('data', chunk => { tokenBody += String(chunk) })
       request.on('end', () => json(response, {
         access_token: 'access-token',
@@ -146,6 +207,7 @@ test('OIDC client builds PKCE requests, verifies RS256 claims, and authenticates
         expires_in: 300,
         scope: 'openid ai_hub.identity platform.me.read',
       }))
+      request.on('end', () => { tokenBodies.push(tokenBody) })
       return
     }
     response.writeHead(404).end()
@@ -220,9 +282,14 @@ test('OIDC client builds PKCE requests, verifies RS256 claims, and authenticates
       tokenAuthorization,
       `Basic ${Buffer.from('dsh-work__local__v1:test-client-secret').toString('base64')}`,
     )
-    const submitted = new URLSearchParams(tokenBody)
+    const submitted = new URLSearchParams(tokenBodies[0])
     assert.equal(submitted.get('grant_type'), 'authorization_code')
     assert.equal(submitted.get('code_verifier'), authorization.codeVerifier)
+
+    await client.clientCredentials(['ai_hub.identity', 'platform.directory.read'])
+    const serviceRequest = new URLSearchParams(tokenBodies[1])
+    assert.equal(serviceRequest.get('grant_type'), 'client_credentials')
+    assert.equal(serviceRequest.get('scope'), 'ai_hub.identity platform.directory.read')
   } finally {
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
   }
@@ -249,7 +316,7 @@ function baseEnvironment(): NodeJS.ProcessEnv {
 function adminIdentity(permissions: string[]): RequestIdentity {
   return {
     audience: 'admin',
-    applicationId: 'dsh-work-admin',
+    applicationId: 'dsh-work',
     sessionHash: 'test-session',
     userId: 'user-test',
     subject: 'subject-test',

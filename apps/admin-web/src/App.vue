@@ -38,6 +38,7 @@ function logout() {
     :can-logout="authStore.identityProvider === 'ai-hub-oidc'"
     :can-read-admin="authStore.canReadAdmin"
     :can-read-audit="authStore.canReadAudit"
+    :identity-administration-available="authStore.identityAdministrationAvailable"
     @navigate="navigate"
     @open-workbench="openWorkbench"
     @logout="logout"

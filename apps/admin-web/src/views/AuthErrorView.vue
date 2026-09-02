@@ -10,7 +10,8 @@ const errorCode = computed(() => typeof route.query.code === 'string' ? route.qu
 const errorDescription = computed(() => ({
   access_denied: '你取消了授权，或 AI Hub 未允许该账号访问管理后台。',
   account_disabled: '该 AI Hub 账号已停用，请联系平台管理员。',
-  permission_denied: '当前账号缺少管理后台访问权限。',
+  permission_denied: '当前账号尚未在 dsh-work 中获得管理角色。',
+  initial_admin_not_authorized: '当前账号不是 AI Hub 中登记的应用初始管理员，也尚未在 dsh-work 中获得管理角色。',
   invalid_callback: '登录回调参数不完整，请重新发起登录。',
   invalid_state: '登录会话已过期或状态校验失败，请重新登录。',
   session_unavailable: '暂时无法校验登录会话，请稍后重试。',

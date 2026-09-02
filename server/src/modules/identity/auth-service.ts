@@ -6,19 +6,18 @@ import { OidcProtocolError, OidcProviderClient } from './oidc-client.ts'
 import { equalOpaqueHash, hashOpaque, randomOpaque, SecretBox } from './secure-values.ts'
 import {
   IdentitySessionRepository,
-  mappedRoleIds,
   type AuthenticationSessionRecord,
+  type LocalAuthorizationContext,
 } from './session-repository.ts'
 import type {
   ApiAudience,
+  CurrentPlatformUser,
   OidcAudienceConfiguration,
   OidcIdentityConfiguration,
-  PlatformDataScope,
-  PlatformPermissionSnapshot,
   RequestIdentity,
   VerifiedToken,
 } from './types.ts'
-import { AI_HUB_PERMISSIONS } from './types.ts'
+import { LOCAL_PERMISSIONS } from './types.ts'
 
 export class IdentityAccessError extends Error {
   readonly status: number
@@ -101,10 +100,12 @@ export class OidcAuthService {
         this.secretBox.open(transaction.codeVerifierEncrypted),
       )
       verified = await this.providers[input.audience].verify(tokenResponse.accessToken, {
-        requiredScopes: ['ai_hub.identity', 'platform.me.read'],
+        requiredScopes: requiredUserScopes(input.audience),
         requireAiHubUser: true,
       })
-      if (!tokenResponse.idToken) throw new OidcProtocolError('missing_id_token', 'OIDC 响应缺少 ID Token')
+      if (!tokenResponse.idToken) {
+        throw new OidcProtocolError('missing_id_token', 'OIDC 响应缺少 ID Token')
+      }
       const idToken = await this.providers[input.audience].verify(tokenResponse.idToken, {
         expectedNonce: transaction.nonce,
         expectedAudience: settings.clientId,
@@ -116,19 +117,42 @@ export class OidcAuthService {
       throw identityError(error)
     }
 
-    const { user, snapshot, dataScopes } = await this.loadPlatformIdentity(
+    const platformUser = await this.loadPlatformIdentity(
       tokenResponse.accessToken,
       settings,
       verified,
     )
-    const userId = await this.repository.synchronizeUser({
-      audience: input.audience,
-      applicationId: settings.applicationId,
-      user,
-      snapshot,
-      dataScopes,
-    })
-    assertAudienceAccess(input.audience, snapshot.permissions, false)
+    const synchronized = await this.repository.synchronizeIdentity(toExternalIdentity(platformUser))
+    let authorization: LocalAuthorizationContext
+    try {
+      if (!platformUser.business_user) {
+        throw new IdentityAccessError(
+          403,
+          'business_user_required',
+          'AI Hub 平台账号不能登录业务应用，请使用业务员工账号',
+        )
+      }
+      authorization = await this.repository.resolveAuthorization(synchronized.userId)
+      if (input.audience === 'admin' && !hasAdminAccess(authorization.permissions)) {
+        authorization = await this.claimInitialAdministrator({
+          accessToken: tokenResponse.accessToken,
+          settings,
+          platformUser,
+          localUserId: synchronized.userId,
+        })
+      }
+      assertAudienceAccess(input.audience, authorization.permissions, false)
+    } catch (error) {
+      const normalized = identityError(error)
+      await this.repository.appendAudit({
+        userId: synchronized.userId,
+        action: 'identity.login',
+        result: 'blocked',
+        audience: input.audience,
+        context: { errorCode: normalized.code },
+      }).catch(() => undefined)
+      throw normalized
+    }
 
     const sessionToken = randomOpaque()
     const now = Date.now()
@@ -140,23 +164,14 @@ export class OidcAuthService {
     await this.repository.createSession({
       sessionHash: hashOpaque(sessionToken),
       audience: input.audience,
-      userId,
+      userId: synchronized.userId,
       accessTokenEncrypted: this.secretBox.seal(tokenResponse.accessToken),
       refreshTokenEncrypted: tokenResponse.refreshToken
         ? this.secretBox.seal(tokenResponse.refreshToken)
         : null,
       tokenExpiresAt,
-      authorizationVersion: snapshot.authorization_version,
-      permissions: snapshot.permissions,
-      dataScopes,
-      permissionsExpiresAt: validFutureDate(snapshot.expires_at, 'AI Hub 权限快照'),
+      authorizationVersion: authorization.authorizationVersion,
       expiresAt,
-    })
-    await this.repository.appendAudit({
-      userId,
-      action: 'identity.login',
-      result: 'success',
-      audience: input.audience,
     })
     return {
       location: transaction.returnTo,
@@ -181,48 +196,28 @@ export class OidcAuthService {
     if (!session) throw new IdentityAccessError(401, 'session_expired', '登录会话不存在或已过期')
 
     validateRequestOrigin(request, settings.portalUrl)
-    session = await this.refreshSession(session, settings)
-    assertAudienceAccess(audience, session.permissions, isUnsafeMethod(request.method))
-
-    const accessToken = this.secretBox.open(session.accessTokenEncrypted)
-    if (
-      audience === 'admin'
-      && isUnsafeMethod(request.method)
-      && this.configuration.adminOnlineAuthorization
-    ) {
-      try {
-        const allowed = await this.platform.authorize(
-          accessToken,
-          settings.applicationId,
-          AI_HUB_PERMISSIONS.adminWrite,
-        )
-        if (!allowed) throw new IdentityAccessError(403, 'permission_denied', '当前用户没有管理写权限')
-      } catch (error) {
-        if (error instanceof IdentityAccessError) throw error
-        throw identityError(error)
-      }
+    session = await this.refreshSession(session)
+    const authorization = await this.repository.resolveAuthorization(session.userId)
+    assertAudienceAccess(audience, authorization.permissions, isUnsafeMethod(request.method))
+    if (session.authorizationVersion !== authorization.authorizationVersion) {
+      await this.repository.updateAuthorizationVersion(
+        session.sessionHash,
+        authorization.authorizationVersion,
+      )
+    } else {
+      await this.repository.touch(session.sessionHash)
     }
-
-    const roleIds = mappedRoleIds(audience, session.permissions)
-    const profile = await this.repository.profile({
-      userId: session.userId,
-      audience,
-      applicationId: settings.applicationId,
-      permissions: session.permissions,
-      sessionDataScopes: session.dataScopes,
-    })
-    await this.repository.touch(session.sessionHash)
     return {
       audience,
       applicationId: settings.applicationId,
       sessionHash: session.sessionHash,
       userId: session.userId,
       subject: session.subject,
-      profile,
-      roleIds,
-      permissions: [...session.permissions],
-      dataScopes: [...profile.dataScopes],
-      authorizationVersion: session.authorizationVersion,
+      profile: authorization.profile,
+      roleIds: [...authorization.roleIds],
+      permissions: [...authorization.permissions],
+      dataScopes: [...authorization.dataScopes],
+      authorizationVersion: authorization.authorizationVersion,
       identityProvider: 'ai-hub-oidc',
     }
   }
@@ -232,16 +227,7 @@ export class OidcAuthService {
     const cookieValue = parseCookies(request.headers.cookie)[settings.sessionCookieName]
     if (cookieValue) {
       const sessionHash = hashOpaque(cookieValue)
-      const session = await this.repository.findSession(sessionHash, audience)
-      await this.repository.revoke(sessionHash)
-      if (session) {
-        await this.repository.appendAudit({
-          userId: session.userId,
-          action: 'identity.logout',
-          result: 'success',
-          audience,
-        })
-      }
+      await this.repository.logoutSession(sessionHash, audience)
     }
     return {
       location: await this.providers[audience].logoutUrl(settings.portalUrl),
@@ -255,7 +241,7 @@ export class OidcAuthService {
   }
 
   errorRedirect(audience: ApiAudience, code: string) {
-    const url = new URL('/auth/error', `${this.configuration.audiences[audience].portalUrl}/`)
+    const url = new URL('/login-error', `${this.configuration.audiences[audience].portalUrl}/`)
     url.searchParams.set('code', safeErrorCode(code))
     return url.toString()
   }
@@ -267,99 +253,46 @@ export class OidcAuthService {
     )
   }
 
-  private async refreshSession(
-    original: AuthenticationSessionRecord,
-    settings: OidcAudienceConfiguration,
-  ) {
-    let session = original
-    let accessToken = this.secretBox.open(session.accessTokenEncrypted)
-    if (session.tokenExpiresAt.getTime() <= Date.now() + 30_000) {
-      try {
-        const refreshed = await this.repository.refreshTokensWithLock(
-          session.sessionHash,
-          session.audience,
-          async (latest) => {
-            if (latest.tokenExpiresAt.getTime() > Date.now() + 30_000) return null
-            if (!latest.refreshTokenEncrypted) {
-              throw new IdentityAccessError(401, 'session_expired', '登录凭据已经过期')
-            }
-            const tokenResponse = await this.providers[latest.audience].refresh(
-              this.secretBox.open(latest.refreshTokenEncrypted),
-            )
-            const verified = await this.providers[latest.audience].verify(tokenResponse.accessToken, {
-              requiredScopes: ['ai_hub.identity', 'platform.me.read'],
-              requireAiHubUser: true,
-            })
-            if (verified.subject !== latest.subject) {
-              throw new OidcProtocolError('invalid_subject', '刷新后的用户身份不一致')
-            }
-            return {
-              accessTokenEncrypted: this.secretBox.seal(tokenResponse.accessToken),
-              refreshTokenEncrypted: tokenResponse.refreshToken
-                ? this.secretBox.seal(tokenResponse.refreshToken)
-                : latest.refreshTokenEncrypted,
-              tokenExpiresAt: new Date(verified.expiresAt * 1000),
-              forceAuthorizationRefresh: verified.authorizationVersion !== latest.authorizationVersion,
-            }
-          },
-        )
-        if (!refreshed) {
-          throw new IdentityAccessError(401, 'session_expired', '登录会话不存在或已过期')
-        }
-        session = refreshed
-        accessToken = this.secretBox.open(session.accessTokenEncrypted)
-      } catch (error) {
-        if (shouldRevokeAfterRefreshFailure(error)) {
-          await this.repository.revoke(session.sessionHash)
-        }
-        throw identityError(error, error instanceof OidcProtocolError ? 401 : 503)
-      }
-    }
-
-    if (session.permissionsExpiresAt.getTime() <= Date.now()) {
-      let verified: VerifiedToken
-      try {
-        verified = await this.providers[session.audience].verify(accessToken, {
-          requiredScopes: ['ai_hub.identity', 'platform.me.read'],
-          requireAiHubUser: true,
-        })
-      } catch (error) {
-        await this.repository.revoke(session.sessionHash)
-        throw identityError(error, 401)
-      }
-      const { user, snapshot, dataScopes } = await this.loadPlatformIdentity(
-        accessToken,
-        settings,
-        verified,
+  private async refreshSession(original: AuthenticationSessionRecord) {
+    if (original.tokenExpiresAt.getTime() > Date.now() + 30_000) return original
+    try {
+      const refreshed = await this.repository.refreshTokensWithLock(
+        original.sessionHash,
+        original.audience,
+        async (latest) => {
+          if (latest.tokenExpiresAt.getTime() > Date.now() + 30_000) return null
+          if (!latest.refreshTokenEncrypted) {
+            throw new IdentityAccessError(401, 'session_expired', '登录凭据已经过期')
+          }
+          const tokenResponse = await this.providers[latest.audience].refresh(
+            this.secretBox.open(latest.refreshTokenEncrypted),
+          )
+          const verified = await this.providers[latest.audience].verify(tokenResponse.accessToken, {
+            requiredScopes: requiredUserScopes(latest.audience),
+            requireAiHubUser: true,
+          })
+          if (verified.subject !== latest.subject) {
+            throw new OidcProtocolError('invalid_subject', '刷新后的用户身份不一致')
+          }
+          return {
+            accessTokenEncrypted: this.secretBox.seal(tokenResponse.accessToken),
+            refreshTokenEncrypted: tokenResponse.refreshToken
+              ? this.secretBox.seal(tokenResponse.refreshToken)
+              : latest.refreshTokenEncrypted,
+            tokenExpiresAt: new Date(verified.expiresAt * 1000),
+          }
+        },
       )
-      const userId = await this.repository.synchronizeUser({
-        audience: session.audience,
-        applicationId: settings.applicationId,
-        user,
-        snapshot,
-        dataScopes,
-      })
-      if (userId !== session.userId) {
-        await this.repository.revoke(session.sessionHash)
-        throw new IdentityAccessError(401, 'identity_changed', '登录身份发生变化，请重新登录')
+      if (!refreshed) {
+        throw new IdentityAccessError(401, 'session_expired', '登录会话不存在或已过期')
       }
-      const permissionsExpiresAt = validFutureDate(snapshot.expires_at, 'AI Hub 权限快照')
-      await this.repository.updateAuthorization({
-        sessionHash: session.sessionHash,
-        authorizationVersion: snapshot.authorization_version,
-        permissions: snapshot.permissions,
-        dataScopes,
-        permissionsExpiresAt,
-      })
-      session = {
-        ...session,
-        authorizationVersion: snapshot.authorization_version,
-        permissions: snapshot.permissions,
-        dataScopes,
-        permissionsExpiresAt,
+      return refreshed
+    } catch (error) {
+      if (shouldRevokeAfterRefreshFailure(error)) {
+        await this.repository.revoke(original.sessionHash)
       }
+      throw identityError(error, error instanceof OidcProtocolError ? 401 : 503)
     }
-    return session
   }
 
   private async loadPlatformIdentity(
@@ -368,28 +301,64 @@ export class OidcAuthService {
     verified: VerifiedToken,
   ) {
     try {
-      const [user, snapshot] = await Promise.all([
-        this.platform.me(accessToken, settings.applicationId),
-        this.platform.permissions(accessToken, settings.applicationId),
-      ])
+      const user = await this.platform.me(accessToken, settings.applicationId)
       if (user.status.toUpperCase() !== 'ACTIVE') {
         throw new IdentityAccessError(403, 'account_disabled', 'AI Hub 用户已停用')
       }
-      if (user.subject !== verified.subject || snapshot.user_id !== user.user_id) {
+      if (user.subject !== verified.subject) {
         throw new IdentityAccessError(401, 'identity_mismatch', 'AI Hub 用户身份映射不一致')
       }
-      if (snapshot.application_id !== settings.applicationId) {
-        throw new IdentityAccessError(403, 'application_mismatch', 'AI Hub 权限快照不属于当前应用')
-      }
-      if (
-        verified.authorizationVersion !== user.authorization_version
-        || snapshot.authorization_version !== user.authorization_version
-      ) {
-        throw new IdentityAccessError(401, 'authorization_version_mismatch', 'AI Hub 授权版本已变化，请重新登录')
-      }
-      return { user, snapshot, dataScopes: normalizeDataScopes(snapshot.data_scopes) }
+      return user
     } catch (error) {
       if (error instanceof IdentityAccessError) throw error
+      throw identityError(error)
+    }
+  }
+
+  private async claimInitialAdministrator(input: {
+    accessToken: string
+    settings: OidcAudienceConfiguration
+    platformUser: CurrentPlatformUser
+    localUserId: string
+  }): Promise<LocalAuthorizationContext> {
+    try {
+      const claim = await this.platform.claimAdminBootstrap(
+        input.accessToken,
+        input.settings.applicationId,
+        this.configuration.environment,
+      )
+      if (
+        claim.application_id !== input.settings.applicationId
+        || claim.environment !== this.configuration.environment
+        || claim.claimed_user_id !== input.platformUser.user_id
+        || claim.initial_admin_user_id !== input.platformUser.user_id
+      ) {
+        throw new IdentityAccessError(502, 'invalid_admin_bootstrap', 'AI Hub 初始管理员响应不一致')
+      }
+      const consumedAt = new Date(claim.consumed_at)
+      if (!Number.isFinite(consumedAt.getTime())) {
+        throw new IdentityAccessError(502, 'invalid_admin_bootstrap', 'AI Hub 初始管理员时间无效')
+      }
+      await this.repository.consumeAdminBootstrap({
+        applicationId: claim.application_id,
+        environment: claim.environment,
+        externalUserId: claim.claimed_user_id,
+        userId: input.localUserId,
+        consumedAt,
+      })
+      return this.repository.resolveAuthorization(input.localUserId)
+    } catch (error) {
+      if (error instanceof IdentityAccessError) throw error
+      if (
+        error instanceof AiHubApiError
+        && [403, 404, 409].includes(error.status)
+      ) {
+        throw new IdentityAccessError(
+          403,
+          'initial_admin_not_authorized',
+          '当前账号不是应用初始管理员，且尚未获得本地管理角色',
+        )
+      }
       throw identityError(error)
     }
   }
@@ -407,52 +376,51 @@ function provider(configuration: OidcIdentityConfiguration, audience: ApiAudienc
   })
 }
 
+function requiredUserScopes(audience: ApiAudience) {
+  return [
+    'ai_hub.identity',
+    'platform.me.read',
+    ...(audience === 'admin' ? ['platform.application.bootstrap'] : []),
+  ]
+}
+
+function toExternalIdentity(user: CurrentPlatformUser) {
+  return {
+    externalUserId: user.user_id,
+    subject: user.subject,
+    displayName: user.display_name,
+    email: user.email,
+    organizationName: user.organization_name,
+    businessUser: user.business_user,
+    status: user.status,
+  }
+}
+
+function hasAdminAccess(permissions: string[]) {
+  const granted = new Set(permissions)
+  return granted.has(LOCAL_PERMISSIONS.adminAll)
+    || granted.has(LOCAL_PERMISSIONS.adminRead)
+    || granted.has(LOCAL_PERMISSIONS.adminWrite)
+    || granted.has(LOCAL_PERMISSIONS.auditRead)
+}
+
 function assertAudienceAccess(audience: ApiAudience, permissions: string[], unsafe: boolean) {
   const granted = new Set(permissions)
   if (audience === 'workbench') {
-    if (!granted.has(AI_HUB_PERMISSIONS.workbenchUse) && !granted.has(AI_HUB_PERMISSIONS.workbenchManage)) {
+    if (!granted.has(LOCAL_PERMISSIONS.workbenchUse) && !granted.has(LOCAL_PERMISSIONS.workbenchManage)) {
       throw new IdentityAccessError(403, 'permission_denied', '当前用户没有员工工作台访问权限')
     }
     return
   }
   if (unsafe) {
-    if (!granted.has(AI_HUB_PERMISSIONS.adminWrite)) {
+    if (!granted.has(LOCAL_PERMISSIONS.adminAll) && !granted.has(LOCAL_PERMISSIONS.adminWrite)) {
       throw new IdentityAccessError(403, 'permission_denied', '当前用户没有管理写权限')
     }
     return
   }
-  if (
-    !granted.has(AI_HUB_PERMISSIONS.adminWrite)
-    && !granted.has(AI_HUB_PERMISSIONS.adminRead)
-    && !granted.has(AI_HUB_PERMISSIONS.auditRead)
-  ) {
+  if (!hasAdminAccess(permissions)) {
     throw new IdentityAccessError(403, 'permission_denied', '当前用户没有管理后台访问权限')
   }
-}
-
-function normalizeDataScopes(scopes: PlatformDataScope[]) {
-  return [...new Set(scopes.map((scope) => {
-    const direct = scope.value.code ?? scope.value.scope ?? scope.value.value
-    if (typeof direct === 'string' && direct.trim()) {
-      return direct.includes(':') ? direct : `${scope.scope_type}:${direct}`
-    }
-    const entries = Object.entries(scope.value)
-    if (entries.length === 1 && typeof entries[0]?.[1] === 'string') {
-      return `${scope.scope_type}:${entries[0][1]}`
-    }
-    return `${scope.scope_type}:${stableJson(scope.value)}`
-  }))].sort()
-}
-
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
-  if (value && typeof value === 'object') {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`)
-      .join(',')}}`
-  }
-  return JSON.stringify(value)
 }
 
 function normalizeReturnTo(value: string | null, portalUrl: string) {
@@ -465,14 +433,6 @@ function normalizeReturnTo(value: string | null, portalUrl: string) {
   } catch {
     return portal.toString()
   }
-}
-
-function validFutureDate(value: string, label: string) {
-  const parsed = new Date(value)
-  if (!Number.isFinite(parsed.getTime()) || parsed.getTime() <= Date.now()) {
-    throw new IdentityAccessError(401, 'invalid_authorization_snapshot', `${label}已经过期或格式无效`)
-  }
-  return parsed
 }
 
 function validateRequestOrigin(request: IncomingMessage, portalUrl: string) {
@@ -546,16 +506,4 @@ function shouldRevokeAfterRefreshFailure(error: unknown) {
     'invalid_jwks',
     'unknown_signing_key',
   ].includes(error.code)
-}
-
-export function permissionSnapshotForTest(input: Partial<PlatformPermissionSnapshot> = {}): PlatformPermissionSnapshot {
-  return {
-    application_id: 'dsh-work',
-    user_id: 'user-test',
-    permissions: [AI_HUB_PERMISSIONS.workbenchUse],
-    data_scopes: [],
-    authorization_version: 1,
-    expires_at: new Date(Date.now() + 60_000).toISOString(),
-    ...input,
-  }
 }

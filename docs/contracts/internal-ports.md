@@ -14,7 +14,7 @@
 | `SecretStorePort` | 模型治理服务、Model Gateway | DSH Credentials Provider；未来为系统钥匙串或企业 Secret Manager | 写入、撤销和检查密钥引用对应的密钥 | 业务数据库、日志和 API 均不得出现密钥正文 |
 | `ToolGatewayPort` | Runtime Adapter | 企业 Tool/Connector Gateway | 调用一期平台预置工具和连接器 | 鉴权、审批、超时和业务错误分离 |
 | `ArtifactServicePort` | Runtime Adapter、员工 BFF | 文件与成果服务 | 创建成果版本、鉴权下载 | 成果不可覆盖，只能新增版本 |
-| `GovernancePort` | 员工 BFF、管理 BFF、编排服务 | 当前 dsh-work 控制面；未来可迁移 AI Hub | Agent、Skill、权限、数据范围快照 | 版本不存在或不可见时拒绝执行 |
+| `GovernancePort` | 员工 BFF、管理 BFF、编排服务 | dsh-work 控制面 | Agent、Skill、本地角色、权限和数据范围快照 | 版本不存在、角色停用或范围不足时拒绝执行 |
 
 ## 2. TypeScript 逻辑接口
 

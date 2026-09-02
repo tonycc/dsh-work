@@ -16,7 +16,7 @@
 | M3 端到端垂直闭环 | 已关闭 | 2026-08-30 | Session/Run、DSH、SSE、文件、成果、审计和管理运行视图 |
 | M4 MVP 功能完成 | 工程 Gate 已关闭 | 2026-08-30 | M4-01～M4-09 代码、契约和 PostgreSQL 验证完成；企业联调仍开放 |
 | M5 上线准备 | 部分关闭 | 2026-08-30 起 | M5-01～M5-04 已关闭；部署、Secret/网络、监控、备份恢复和发布仍待完成 |
-| M6 业务验收与试点启动 | 进行中 | 2026-09-01 起 | AI Hub SSO 代码完成；平台配置、UAT、试点数据、培训和 Go/No-Go 待完成 |
+| M6 业务验收与试点启动 | 进行中 | 2026-09-01 起 | AI Hub 身份接入与应用自主授权代码完成；平台配置、UAT、试点数据、培训和 Go/No-Go 待完成 |
 | M7 部门试点 | 未开始 | M6 通过后 2～4 周 | 真实价值、稳定性和安全指标 |
 
 里程碑的“工程 Gate 已关闭”只代表约定范围内的实现和自动化证据成立，不等于真实业务试点准入通过，也不等于生产安全、运维或业务验收已经签署。
@@ -59,9 +59,12 @@
 
 - AI Hub OIDC Authorization Code + PKCE；
 - `state`、`nonce`、JWT、Issuer、Audience、Scope 和 JWKS 校验；
-- 服务端加密 Session、用户/角色/数据范围同步和退出；
+- 服务端加密 Session、稳定外部身份映射和退出；
+- AI Hub 环境初始管理员一次性初始化首位本地管理员；
+- AI Hub 员工目录增量/全量同步，停用员工自动撤销 Session；
+- 角色、功能权限、用户/角色数据范围和会话撤销在 dsh-work 管理端配置；
 - Workbench/Admin 双 Audience 统一鉴权；
-- 管理高风险写操作在线授权；
+- 全部业务 API 使用 dsh-work 本地授权版本和 RBAC，移除 AI Hub 在线业务授权；
 - 移除浏览器可伪造的用户和操作人字段；
 - 两个前端的自动登录、无权限、鉴权失败与退出体验；
 - OIDC、PKCE、JWKS、密文和会话单元测试。
@@ -72,7 +75,7 @@
 
 | Gate | 当前状态 | 关闭条件 |
 |---|---|---|
-| D-03 / AI Hub 身份联调 | 代码完成，平台配置待执行 | 注册应用环境与两个回调；分配 Scope、权限、角色和测试账号；凭据进入 Secret Manager；完成登录、登出、收权和故障 UAT |
+| D-03 / AI Hub 身份联调 | 代码完成，平台配置待执行 | 注册唯一应用环境、负责人和两个回调；分配身份/Bootstrap/Directory Scope；凭据进入 Secret Manager；完成首登、同步、本地收权和故障 UAT |
 | D-05 企业只读 Connector | 未关闭 | 明确系统与接口 Owner、Schema、数据范围、超时、审计和错误口径，完成真实只读调用 |
 | D-06 真实知识源 | 未关闭 | 明确 API/目录、权限、版本、生效时间和引用口径，完成授权过滤 UAT |
 | D-07 / D-09 文件与数据安全 | 未关闭 | 确定正式存储、企业恶意文件扫描、保留/清理、数据分级和模型出口规则 |
@@ -85,8 +88,8 @@
 
 ## 4. 下一执行顺序
 
-1. 在 AI Hub 创建 dsh-work 应用环境，配置 Workbench/Admin 回调、OAuth Scope、平台权限、角色和测试账号；
-2. 将客户端 Secret 与 Session Secret 放入受管 Secret 存储，完成真实登录、权限收回和 AI Hub 故障联调；
+1. 在 AI Hub 创建唯一 dsh-work 应用环境，指定首位管理员并配置两个回调以及 Identity/Bootstrap/Directory Scope；
+2. 将客户端 Secret 与 Session Secret 放入受管 Secret 存储，完成负责人首登、员工同步、本地授权收回和 AI Hub 故障联调；
 3. 确定首个企业只读 Connector 和真实知识源，完成 Schema、数据范围、审计和业务口径评审；
 4. 锁定目标主机、HTTPS、网络、生产文件存储、恶意文件扫描、日志监控和告警；
 5. 在目标环境重跑真实 DSH 1/3/5 并发、20 MB 文件、长对话、备份恢复和故障演练；
@@ -102,7 +105,7 @@
 - 文件上传、解析、Run 绑定、成果版本和下载权限可追溯；
 - 管理员可以治理 Agent/Skill/Tool/Runtime，普通员工不能执行管理写操作；
 - 审计可沿 User → Workspace → Session → Run → Attempt → Model/Tool/Artifact 追踪且不暴露敏感正文；
-- AI Hub 登录、退出、Session 过期、权限收回、平台不可用和双 Audience 隔离通过 UAT；
+- AI Hub 登录、退出、Session 过期、员工停用、dsh-work 本地权限收回、平台不可用和双 Audience 隔离通过 UAT；
 - 备份可恢复，版本与数据库迁移可以按发布方案回滚应用。
 
 ## 6. 质量与复验入口

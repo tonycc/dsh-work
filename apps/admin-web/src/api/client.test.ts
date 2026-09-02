@@ -25,4 +25,42 @@ describe('admin API client', () => {
       traceId: 'trace-admin-001',
     })
   })
+
+  it('writes employee role assignments to the dsh-work identity API', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: { id: 'user-1', roles: [] },
+      meta: { api: 'admin', adapter: 'postgres', timestamp: new Date().toISOString() },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await adminApi.grantIdentityRole('user/1', { roleId: 'role-employee' })
+
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/admin/v1/identity/users/user%2F1/roles',
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'include',
+        body: JSON.stringify({ roleId: 'role-employee' }),
+      }),
+    )
+  })
+
+  it('uses server-side filters and pagination for the employee directory', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: {
+        items: [], total: 0, page: 2, pageSize: 20,
+        summary: { synchronized: 0, active: 0, authorized: 0 },
+      },
+      meta: { api: 'admin', adapter: 'postgres', timestamp: new Date().toISOString() },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await adminApi.getIdentityUsers({ query: '张 三', status: 'active', page: 2, pageSize: 20 })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/admin/v1/identity/users?query=%E5%BC%A0+%E4%B8%89&status=active&page=2&page_size=20',
+      expect.objectContaining({ credentials: 'include' }),
+    )
+  })
 })

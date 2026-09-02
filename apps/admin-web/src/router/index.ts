@@ -18,10 +18,11 @@ const router = createRouter({
     { path: '/admin/model-usage', redirect: '/model-usage' },
     { path: '/admin/model-governance', redirect: '/model-governance' },
     { path: '/admin/permissions', redirect: '/permissions' },
+    { path: '/admin/identity', redirect: '/identity' },
     { path: '/admin/audit', redirect: '/audit' },
     { path: '/admin/health', redirect: '/health' },
     {
-      path: '/auth/error',
+      path: '/login-error',
       name: 'auth-error',
       component: () => import('@/views/AuthErrorView.vue'),
       meta: { title: '登录失败', public: true },
@@ -81,6 +82,17 @@ const router = createRouter({
       meta: { title: '工作空间', requiresAdmin: true, requiredPermission: 'adminRead' },
     },
     {
+      path: '/identity',
+      name: 'identity',
+      component: () => import('@/views/IdentityAccessView.vue'),
+      meta: {
+        title: '员工与权限',
+        requiresAdmin: true,
+        requiredPermission: 'adminRead',
+        requiresAiHubIdentity: true,
+      },
+    },
+    {
       path: '/permissions',
       name: 'permissions',
       component: () => import('@/views/PermissionManagementView.vue'),
@@ -120,6 +132,9 @@ router.beforeEach(async (to) => {
     }
     if (status === 403) return { name: 'forbidden' }
     return { name: 'auth-error', query: { code: 'session_unavailable' } }
+  }
+  if (to.meta.requiresAiHubIdentity && !authStore.identityAdministrationAvailable) {
+    return { name: 'overview' }
   }
   if (to.meta.requiresAdmin && !authStore.canAccessAdmin) return { name: 'forbidden' }
   if (to.meta.requiredPermission === 'adminRead' && !authStore.canReadAdmin) {

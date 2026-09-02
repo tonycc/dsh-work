@@ -47,6 +47,20 @@ export function loadIdentityConfiguration(
   )
   const workbench = audienceConfiguration(environment, 'workbench', production)
   const admin = audienceConfiguration(environment, 'admin', production)
+  if (workbench.applicationId !== admin.applicationId) {
+    throw new Error('员工端与管理端必须使用同一个 AI Hub 应用，不能配置独立管理应用')
+  }
+  if (
+    workbench.clientId !== admin.clientId
+    || workbench.clientSecret !== admin.clientSecret
+    || workbench.issuer !== admin.issuer
+  ) {
+    throw new Error('员工端与管理端必须共用同一个 AI Hub 应用环境凭据')
+  }
+  const applicationEnvironment = environment.AI_HUB_ENVIRONMENT?.trim() || 'local'
+  if (!/^[a-z][a-z0-9_-]{0,63}$/.test(applicationEnvironment)) {
+    throw new Error('AI_HUB_ENVIRONMENT 必须是小写字母开头的环境标识')
+  }
   const jwksCacheTtlSeconds = positiveInteger(
     environment.DSH_WORK_OIDC_JWKS_CACHE_TTL_SECONDS,
     300,
@@ -60,18 +74,19 @@ export function loadIdentityConfiguration(
   if (jwksStaleTtlSeconds < jwksCacheTtlSeconds) {
     throw new Error('OIDC JWKS 陈旧窗口不能短于正常缓存时间')
   }
-  const adminOnlineAuthorization = booleanValue(
-    environment.DSH_WORK_ADMIN_ONLINE_AUTHORIZATION,
-    true,
-    'DSH_WORK_ADMIN_ONLINE_AUTHORIZATION',
+  const directorySyncIntervalSeconds = nonNegativeInteger(
+    environment.DSH_WORK_DIRECTORY_SYNC_INTERVAL_SECONDS,
+    15 * 60,
+    'DSH_WORK_DIRECTORY_SYNC_INTERVAL_SECONDS',
   )
-  if (production && !adminOnlineAuthorization) {
-    throw new Error('生产环境必须启用管理写操作在线授权校验')
+  if (production && directorySyncIntervalSeconds === 0) {
+    throw new Error('生产环境不能关闭 AI Hub 员工目录同步')
   }
-
   return {
     mode,
     platformUrl,
+    applicationId: workbench.applicationId,
+    environment: applicationEnvironment,
     sessionSecret,
     sessionTtlSeconds: positiveInteger(
       environment.DSH_WORK_SESSION_TTL_SECONDS,
@@ -84,7 +99,7 @@ export function loadIdentityConfiguration(
       'DSH_WORK_OIDC_TRANSACTION_TTL_SECONDS',
     ),
     cookieSecure,
-    adminOnlineAuthorization,
+    directorySyncIntervalSeconds,
     jwksCacheTtlSeconds,
     jwksStaleTtlSeconds,
     audiences: { workbench, admin },
@@ -131,7 +146,7 @@ function audienceConfiguration(
       production,
     ),
     loginScopes: audience === 'admin'
-      ? [...defaultScopes, 'platform.authorization.decide']
+      ? [...defaultScopes, 'platform.application.bootstrap']
       : [...defaultScopes],
   }
 }
@@ -179,6 +194,13 @@ function positiveInteger(value: string | undefined, fallback: number, name: stri
   if (value === undefined || value === '') return fallback
   const parsed = Number(value)
   if (!Number.isInteger(parsed) || parsed < 1) throw new Error(`${name} 必须是正整数`)
+  return parsed
+}
+
+function nonNegativeInteger(value: string | undefined, fallback: number, name: string) {
+  if (value === undefined || value === '') return fallback
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed < 0) throw new Error(`${name} 必须是非负整数`)
   return parsed
 }
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, type Component } from 'vue'
 import {
   ArrowRight,
   ChatDotRound,
@@ -14,6 +14,7 @@ import {
   SwitchButton,
   Tickets,
   Tools,
+  UserFilled,
 } from '@element-plus/icons-vue'
 
 import { AppLogo } from '@dsh-work/ui-core'
@@ -27,6 +28,7 @@ const props = defineProps<{
   canLogout: boolean
   canReadAdmin: boolean
   canReadAudit: boolean
+  identityAdministrationAvailable: boolean
 }>()
 
 const emit = defineEmits<{
@@ -37,7 +39,15 @@ const emit = defineEmits<{
 const mobileOpen = ref(false)
 const collapsedGroups = ref<Record<string, boolean>>({})
 
-const navigationGroups = [
+interface NavigationItem {
+  label: string
+  path: string
+  icon: Component
+  permission: 'admin' | 'audit'
+  requiresIdentityAdministration?: boolean
+}
+
+const navigationGroups: Array<{ label: string; items: NavigationItem[] }> = [
   {
     label: '概览',
     items: [{ label: '运营概览', path: '/overview', icon: DataAnalysis, permission: 'admin' }],
@@ -60,6 +70,13 @@ const navigationGroups = [
   {
     label: '组织与权限',
     items: [
+      {
+        label: '员工与权限',
+        path: '/identity',
+        icon: UserFilled,
+        permission: 'admin',
+        requiresIdentityAdministration: true,
+      },
       { label: '工作空间', path: '/workspaces', icon: FolderOpened, permission: 'admin' },
       { label: '工具权限', path: '/permissions', icon: Key, permission: 'admin' },
     ],
@@ -77,9 +94,12 @@ const navigationGroups = [
 const visibleNavigationGroups = computed(() => navigationGroups
   .map(group => ({
     ...group,
-    items: group.items.filter(item => item.permission === 'audit'
-      ? props.canReadAudit
-      : props.canReadAdmin),
+    items: group.items.filter(item => {
+      const permitted = item.permission === 'audit' ? props.canReadAudit : props.canReadAdmin
+      const available = !item.requiresIdentityAdministration
+        || props.identityAdministrationAvailable
+      return permitted && available
+    }),
   }))
   .filter(group => group.items.length > 0))
 

@@ -7,6 +7,7 @@ import type { UserProfile, UserRole, WorkbenchSession } from '../types/domain'
 export const roleLabels: Record<UserRole, string> = {
   employee: '普通员工',
   department_manager: '部门负责人',
+  business_admin: '业务管理员',
   platform_admin: '平台管理员',
   auditor: '安全审计员',
 }
@@ -29,7 +30,7 @@ export const useAuthStore = defineStore('workbench-auth', () => {
   const identityProvider = ref<WorkbenchSession['identityProvider'] | null>(null)
   const user = computed(() => sessionUser.value ?? loadingUser)
   const canAccessAdmin = computed(() =>
-    ['platform_admin', 'auditor'].includes(user.value.role),
+    ['business_admin', 'platform_admin', 'auditor'].includes(user.value.role),
   )
   let pendingLoad: Promise<void> | undefined
 

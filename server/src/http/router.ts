@@ -6,7 +6,6 @@ import type {
   ApiAuthenticator,
   RequestIdentity,
 } from '../modules/identity/types.ts'
-import { AI_HUB_PERMISSIONS } from '../modules/identity/types.ts'
 
 export interface ApiMeta {
   api: 'workbench' | 'admin' | 'system'
@@ -157,7 +156,7 @@ export function classifyHttpError(error: unknown, path: string): { status: numbe
     const suggestion = status === 401
       ? '请重新登录后继续；若仍失败，请确认 AI Hub 应用与回调配置。'
       : status === 403
-        ? '确认当前账号已获得对应应用权限；需要时联系管理员授权。'
+        ? '请联系业务应用管理员，在 dsh-work 中为当前账号配置角色与数据范围。'
         : '稍后重试；若问题持续，请检查 AI Hub 与身份服务健康状态。'
     return {
       status,
@@ -200,6 +199,7 @@ function inferRequestObject(path: string) {
   const mappings: Array<[string, string]> = [
     ['artifacts', '成果'], ['files', '文件'], ['connectors', '连接器'], ['runtimes', '运行时'],
     ['runs', '运行'], ['sessions', '对话'], ['workspaces', '工作空间'], ['agents', 'Agent'], ['skills', 'Skill'],
+    ['identity', '员工与权限'],
   ]
   for (const [segment, label] of mappings) {
     const index = segments.indexOf(segment)
@@ -240,12 +240,14 @@ export function assertApiRouteAccess(
 ) {
   if (identity.audience !== 'admin') return
   const permissions = new Set(identity.permissions)
-  const isPrototypeAdmin = permissions.has('admin:*')
+  const isPlatformAdmin = permissions.has('admin:*')
   if (path === '/api/admin/v1/session') return
   if (!['GET', 'HEAD', 'OPTIONS'].includes(method ?? 'GET')) {
-    if (!isPrototypeAdmin
-      && !permissions.has('admin:write')
-      && !permissions.has(AI_HUB_PERMISSIONS.adminWrite)) {
+    if (path.startsWith('/api/admin/v1/identity/') && !isPlatformAdmin) {
+      throw routePermissionDenied('只有平台管理员可以修改员工授权和身份同步配置')
+    }
+    if (!isPlatformAdmin
+      && !permissions.has('admin:write')) {
       throw routePermissionDenied('当前用户没有管理写权限')
     }
     return
@@ -254,12 +256,11 @@ export function assertApiRouteAccess(
     || path === '/api/admin/v1/operations/summary'
     || path.startsWith('/api/admin/v1/operations/runs/')
   const allowed = auditRoute
-    ? isPrototypeAdmin
+    ? isPlatformAdmin
       || permissions.has('audit:read')
-      || permissions.has(AI_HUB_PERMISSIONS.auditRead)
-    : isPrototypeAdmin
+    : isPlatformAdmin
       || permissions.has('admin:read')
-      || permissions.has(AI_HUB_PERMISSIONS.adminRead)
+      || permissions.has('admin:write')
   if (!allowed) {
     throw routePermissionDenied(
       auditRoute ? '当前用户没有审计读取权限' : '当前用户没有管理读取权限',
@@ -304,10 +305,10 @@ function apiAudience(path: string): ApiAudience | null {
 
 function isIdentityAccessError(
   error: unknown,
-): error is Error & { status: 401 | 403 | 503; code: string } {
+): error is Error & { status: 401 | 403 | 502 | 503; code: string } {
   if (!(error instanceof Error)) return false
   const candidate = error as Error & { status?: unknown; code?: unknown }
-  return [401, 403, 503].includes(Number(candidate.status))
+  return [401, 403, 502, 503].includes(Number(candidate.status))
     && typeof candidate.code === 'string'
     && /^[a-z0-9_]{1,80}$/i.test(candidate.code)
 }

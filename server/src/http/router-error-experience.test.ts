@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { classifyHttpError } from './router.ts'
+import type { RequestIdentity } from '../modules/identity/types.ts'
+import { assertApiRouteAccess, classifyHttpError } from './router.ts'
 
 test('timeout errors identify the affected run and give an operational next step', () => {
   const result = classifyHttpError(new Error('Runtime timeout after 30 seconds'), '/api/workbench/runs/run-001/retry')
@@ -53,4 +54,30 @@ test('malformed JSON is a validation error rather than an internal server failur
   assert.equal(result.error.code, 'invalid_request')
   assert.equal(result.error.object, 'Agent')
   assert.match(result.error.message, /有效 JSON/)
+})
+
+test('admin writers cannot escalate privileges through identity administration routes', () => {
+  const identity: RequestIdentity = {
+    audience: 'admin',
+    applicationId: 'dsh-work',
+    sessionHash: 'session-hash',
+    userId: 'user-writer',
+    subject: 'subject-writer',
+    profile: {
+      id: 'user-writer', name: '管理写用户', title: '', department: '', avatarText: '管',
+      role: 'employee', dataScopes: [],
+    },
+    roleIds: ['role-admin-writer'],
+    permissions: ['admin:read', 'admin:write'],
+    dataScopes: [],
+    authorizationVersion: 1,
+    identityProvider: 'ai-hub-oidc',
+  }
+
+  assert.doesNotThrow(() => assertApiRouteAccess(identity, '/api/admin/v1/identity/users', 'GET'))
+  assert.throws(
+    () => assertApiRouteAccess(identity, '/api/admin/v1/identity/users/user-1/roles', 'POST'),
+    /只有平台管理员/,
+  )
+  assert.doesNotThrow(() => assertApiRouteAccess(identity, '/api/admin/v1/agents', 'POST'))
 })

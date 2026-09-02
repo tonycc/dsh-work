@@ -101,6 +101,13 @@ export class OidcProviderClient {
     }))
   }
 
+  clientCredentials(scopes: string[]) {
+    return this.tokenRequest(new URLSearchParams({
+      grant_type: 'client_credentials',
+      scope: [...new Set(scopes)].join(' '),
+    }))
+  }
+
   async logoutUrl(postLogoutRedirectUri: string) {
     const metadata = await this.metadata()
     const endpoint = metadata.end_session_endpoint
@@ -174,9 +181,6 @@ export class OidcProviderClient {
       : null
     if (options.requireAiHubUser) {
       if (actorType !== 'user') throw new OidcProtocolError('invalid_actor_type', 'OIDC Token 不是用户身份')
-      if (authorizationVersion === null || authorizationVersion < 1) {
-        throw new OidcProtocolError('invalid_token', 'OIDC Token 缺少有效授权版本')
-      }
     }
 
     return {

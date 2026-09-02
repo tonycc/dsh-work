@@ -9,7 +9,7 @@ const router = createRouter({
   routes: [
     { path: '/', redirect: '/workbench' },
     {
-      path: '/auth/error',
+      path: '/login-error',
       name: 'auth-error',
       component: () => import('@/views/AuthErrorView.vue'),
       meta: { title: '登录失败', section: 'dsh-work', public: true },

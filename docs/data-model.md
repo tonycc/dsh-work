@@ -1,13 +1,13 @@
 # dsh-work MVP 数据模型（M0 基线）
 
-版本：V0.3
+版本：V0.4
 数据库：PostgreSQL
 状态：逻辑模型与 M2 物理 DDL 已冻结；迁移位于 `server/migrations`
 
 ## 1. 建模原则
 
 - 所有业务数据均带 `tenant_id`；任何查询必须先限定租户，再应用角色和数据范围。
-- 用户只来自 AI Hub OIDC，同一企业内通过稳定的 `external_subject` 关联；员工端与管理端使用独立的本地 Session 受众。
+- 企业用户通过 AI Hub OIDC 登录，以稳定的 `external_user_id` 建立本地映射；OIDC `subject` 可轮换且只作为协议身份属性。员工端与管理端使用独立的本地 Session 受众。
 - 每位用户自动拥有且只能拥有一个个人工作空间；所有 Session、文件和成果必须归属个人或团队工作空间，`workspace_id` 不可为空。
 - 对话是员工工作对象；管理端 Session 页面仅用于状态、用量、安全与审计治理，不建设可任意浏览全量消息的页面。
 - Agent、Skill 和 Runtime 配置使用不可变版本或变更快照；已运行任务可回溯到执行时配置。
@@ -50,16 +50,18 @@ erDiagram
 | 表 | 关键字段 | 约束与说明 |
 |---|---|---|
 | `tenants` | `id`, `name`, `status` | 企业租户根对象 |
-| `users` | `id`, `tenant_id`, `external_subject`, `display_name`, `department_id`, `status` | `unique(tenant_id, external_subject)`；不存 SSO 密码 |
-| `roles` | `id`, `tenant_id`, `code`, `name`, `permissions` | `code` 在租户内唯一；权限采用受控枚举 |
-| `user_roles` | `tenant_id`, `user_id`, `role_id`, `source_key`, `valid_until` | 联合主键包含授权来源；本地授权使用 `local`，AI Hub 授权按 Audience 与应用隔离 |
+| `users` | `id`, `tenant_id`, `identity_provider`, `external_user_id`, `external_subject`, `display_name`, `email`, `department_id`, `business_user`, `status`, `local_authorization_version` | `external_user_id` 是 AI Hub 稳定用户标识；`business_user=false` 的平台账号不进入员工授权目录且不能登录；不存 SSO 密码；本地授权变化递增版本 |
+| `roles` | `id`, `tenant_id`, `code`, `name`, `description`, `status`, `permissions` | `code` 在租户内唯一；权限采用 dsh-work 受控枚举 |
+| `user_roles` | `tenant_id`, `user_id`, `role_id`, `source_key`, `valid_until`, `granted_by`, `granted_at` | 授权来源只允许 `local`；员工目录同步不能修改本表 |
 | `data_scope_grants` | `id`, `tenant_id`, `subject_type`, `subject_id`, `scope_code`, `scope_value` | 主体可为用户、角色或 Workspace；MVP 以 `scope_value` 保存受控完整范围代码 |
 | `oidc_login_transactions` | `transaction_hash`, `audience`, `state_hash`, `code_verifier_encrypted`, `nonce`, `return_to`, `expires_at` | 一次性 OIDC 登录交易；使用后原子删除 |
-| `authentication_sessions` | `session_hash`, `tenant_id`, `audience`, `user_id`, `access_token_encrypted`, `refresh_token_encrypted`, `token_expires_at`, `authorization_version`, `permissions`, `data_scopes`, `expires_at`, `revoked_at` | 浏览器只保存不透明 Cookie；AI Hub Token 加密存储，不返回前端 |
+| `authentication_sessions` | `session_hash`, `tenant_id`, `audience`, `user_id`, `access_token_encrypted`, `refresh_token_encrypted`, `token_expires_at`, `authorization_version`, `expires_at`, `revoked_at` | 浏览器只保存不透明 Cookie；Token 加密存储；`authorization_version` 对应本地版本；旧快照列保持空数组仅用于迁移兼容 |
+| `application_admin_bootstrap_claims` | `application_id`, `environment`, `external_user_id`, `user_id`, `consumed_at` | 记录 AI Hub 环境初始管理员一次性认领本地平台管理员的结果；应用负责人变化不改认领记录或本地角色 |
+| `identity_directory_sync_state` | `application_id`, `environment`, `cursor`, `status`, `last_started_at`, `last_succeeded_at`, `last_error` | 保存 AI Hub 员工目录增量游标与运行状态；同步只改身份资料和账号状态 |
 
-服务端授权顺序固定为：启用租户/用户 → 当前 Session 所属 AI Hub 应用的未过期角色与入口权限 → 个人空间所有者或团队空间成员 → Session 锁定的 Agent 已发布版本/可见角色 → 当前应用数据范围覆盖 → 团队工作空间 Agent/Skill/Tool 精确版本授权 → Tool 状态、连接器健康和调用权限。个人空间只是用户内容边界，沿用用户与 Agent 的有效权限，不产生新的数据授权；任一环节失败都默认拒绝并写入 `audit_events`。
+服务端授权顺序固定为：启用租户/用户 → dsh-work 本地有效角色与入口权限 → 本地用户/角色数据范围 → 个人空间所有者或团队空间成员 → Session 锁定的 Agent 已发布版本/可见角色 → 团队工作空间 Agent/Skill/Tool 精确版本授权 → Tool 状态、连接器健康和调用权限。个人空间只是用户内容边界，沿用用户与 Agent 的有效权限，不产生新的数据授权；任一环节失败都默认拒绝并写入 `audit_events`。
 
-管理员与审计员仍使用 AI Hub 统一登录，但只有应用授权快照含 `dsh_work.admin.read` / `dsh_work.admin.write` / `dsh_work.audit.read` 时才能进入对应能力。
+管理员与审计员使用 AI Hub 统一登录，但是否进入管理能力仅取决于本地 `admin:read`、`admin:write`、`audit:read`。AI Hub 不存储 dsh-work 业务角色或数据范围。员工目录同步、角色与权限编辑、员工授权和 Session 撤销属于提权能力，只允许持有本地 `admin:*` 的平台管理员执行；普通 `admin:write` 不能借此自行提权。
 
 ### 3.2 个人与团队工作空间
 
@@ -176,4 +178,4 @@ queued ────────────────────────�
 
 M2 创建迁移脚本前，必须完成 D-03（SSO）、D-06（数据分级）、D-07（保留周期）和 D-08（超级管理员入口）的企业确认；未确认项使用配置占位，不得形成不可逆硬编码。
 
-M2 已按上述规则使用可替换引用和配置字段承接未决项：身份只保存 `external_subject`，文件只保存 `storage_key`，保留周期进入 `system_settings`，业务用户表不保存密码。M6 已用 AI Hub OIDC 和服务端加密 Session 关闭 D-03 的代码实现项；真实应用凭据、权限分配和生产参数仍按部署环境注入。
+M2 已按上述规则使用可替换引用和配置字段承接未决项；文件只保存 `storage_key`，保留周期进入 `system_settings`，业务用户表不保存密码。身份授权升级后，AI Hub 只负责 OIDC 身份和员工目录，dsh-work 以 `external_user_id` 映射用户并持有全部授权事实；真实应用凭据和生产参数仍按部署环境注入。

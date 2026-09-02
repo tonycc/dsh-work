@@ -5,12 +5,14 @@ import type { UserProfile } from '../../domain/types.ts'
 export type ApiAudience = 'workbench' | 'admin'
 export type IdentityProvider = 'prototype-sso' | 'ai-hub-oidc'
 
-export const AI_HUB_PERMISSIONS = {
-  workbenchUse: 'dsh_work.workbench.use',
-  workbenchManage: 'dsh_work.workbench.manage',
-  adminRead: 'dsh_work.admin.read',
-  adminWrite: 'dsh_work.admin.write',
-  auditRead: 'dsh_work.audit.read',
+/** Business permissions are defined and evaluated only by dsh-work. */
+export const LOCAL_PERMISSIONS = {
+  workbenchUse: 'workbench:use',
+  workbenchManage: 'workbench:manage',
+  adminAll: 'admin:*',
+  adminRead: 'admin:read',
+  adminWrite: 'admin:write',
+  auditRead: 'audit:read',
 } as const
 
 export interface RequestIdentity {
@@ -53,11 +55,13 @@ export interface PrototypeIdentityConfiguration {
 export interface OidcIdentityConfiguration {
   mode: 'oidc'
   platformUrl: string
+  applicationId: string
+  environment: string
   sessionSecret: string
   sessionTtlSeconds: number
   transactionTtlSeconds: number
   cookieSecure: boolean
-  adminOnlineAuthorization: boolean
+  directorySyncIntervalSeconds: number
   jwksCacheTtlSeconds: number
   jwksStaleTtlSeconds: number
   audiences: Record<ApiAudience, OidcAudienceConfiguration>
@@ -73,21 +77,37 @@ export interface CurrentPlatformUser {
   status: string
   organization_id: string
   organization_name: string
+  business_user: boolean
   authorization_version: number
 }
 
-export interface PlatformDataScope {
-  scope_type: string
-  value: Record<string, unknown>
-}
-
-export interface PlatformPermissionSnapshot {
+export interface AdminBootstrapClaim {
   application_id: string
+  environment: string
+  initial_admin_user_id: string
+  claimed_user_id: string
+  status: 'CONSUMED'
+  consumed_at: string
+}
+
+export interface DirectoryUser {
   user_id: string
-  permissions: string[]
-  data_scopes: PlatformDataScope[]
-  authorization_version: number
-  expires_at: string
+  subject: string
+  display_name: string
+  email: string | null
+  status: string
+  organization_id: string
+  organization_name: string
+  business_user: boolean
+  updated_at: string
+  tombstone: boolean
+}
+
+export interface DirectoryPage {
+  items: DirectoryUser[]
+  next_cursor: string | null
+  has_more: boolean
+  synchronized_at: string
 }
 
 export interface OAuthTokenResponse {

@@ -130,6 +130,7 @@ export class PostgresAuthorizationService {
            select 1 from user_roles ur
            join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id
             where ur.tenant_id = u.tenant_id and ur.user_id = u.id
+              and ur.source_key = 'local' and r.status = 'active'
               and (ur.valid_until is null or ur.valid_until > now())
               and (r.permissions ? 'admin:*' or r.permissions ? 'admin:write')
          )
@@ -151,9 +152,13 @@ export class PostgresAuthorizationService {
       const rows = await this.database<{ id: string; permissions: string[] }[]>`
         select r.id,
                coalesce(array_agg(distinct permission.value) filter (where permission.value is not null), '{}') as permissions
-          from roles r
+          from user_roles ur
+          join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id
           left join lateral jsonb_array_elements_text(coalesce(r.permissions, '[]')) permission(value) on true
-         where r.tenant_id = ${tenantId} and r.id in ${this.database(requestedRoleIds)}
+         where ur.tenant_id = ${tenantId} and ur.user_id = ${userId}
+           and ur.source_key = 'local'
+           and (ur.valid_until is null or ur.valid_until > now())
+           and r.status = 'active' and r.id in ${this.database(requestedRoleIds)}
          group by r.id
       `
       return {
@@ -169,7 +174,9 @@ export class PostgresAuthorizationService {
         from users u
         left join user_roles ur on ur.tenant_id = u.tenant_id and ur.user_id = u.id
           and (ur.valid_until is null or ur.valid_until > now())
+          and ur.source_key = 'local'
         left join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id
+          and r.status = 'active'
         left join lateral jsonb_array_elements_text(coalesce(r.permissions, '[]')) permission(value) on true
        where u.tenant_id = ${tenantId} and u.id = ${userId} and u.status = 'active'
          and exists (select 1 from tenants t where t.id = u.tenant_id and t.status = 'active')

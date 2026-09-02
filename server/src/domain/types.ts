@@ -1,5 +1,5 @@
 /** Prototype server domain model. Frontend applications own their API DTOs independently. */
-export type UserRole = 'employee' | 'department_manager' | 'platform_admin' | 'auditor'
+export type UserRole = 'employee' | 'department_manager' | 'business_admin' | 'platform_admin' | 'auditor'
 
 export interface UserProfile {
   id: string

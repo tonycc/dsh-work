@@ -87,7 +87,7 @@ describe('admin content store Skill version state', () => {
     api.getSession.mockResolvedValue({
       identityProvider: 'ai-hub-oidc',
       apiAudience: 'admin',
-      permissions: ['dsh_work.audit.read'],
+      permissions: ['audit:read'],
       user: {
         id: 'U00019', name: '安全审计员', title: '审计员', department: '信息安全部',
         avatarText: '审', role: 'auditor', dataScopes: [],
