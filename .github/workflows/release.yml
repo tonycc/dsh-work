@@ -40,6 +40,21 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Refuse Release or Tag reuse
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          tag="v${RELEASE_VERSION}"
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            echo "GitHub Release already exists: ${tag}" >&2
+            exit 1
+          fi
+          existing_tag="$(git ls-remote --tags --refs origin "refs/tags/${tag}")"
+          test -z "${existing_tag}" \
+            || { echo "Git tag already exists: ${tag}" >&2; exit 1; }
+
       - name: Require the commit CI gate to have passed
         env:
           GH_TOKEN: ${{ github.token }}
@@ -88,5 +103,11 @@ jobs:
             --target "${GITHUB_SHA}" \
             --title "dsh-work ${tag}" \
             --notes "Manually approved, attested Mac mini release for commit ${GITHUB_SHA}. The Mac mini public Release watcher deploys it automatically after publication."
+          release_target=$(gh release view "${tag}" --json targetCommitish --jq .targetCommitish)
+          test "${release_target}" = "${GITHUB_SHA}" \
+            || { echo "Draft Release target mismatch: ${release_target}" >&2; exit 1; }
           gh release upload "${tag}" "${archive}" "${checksum}"
           gh release edit "${tag}" --draft=false --latest
+          test "$(gh release view "${tag}" --json isImmutable --jq .isImmutable)" = true \
+            || { echo "Release immutability is not enabled for ${tag}" >&2; exit 1; }
+          gh release verify "${tag}"

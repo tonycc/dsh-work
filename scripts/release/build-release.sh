@@ -71,9 +71,10 @@ cp -R "${project_root}/apps/admin-web/dist" "${bundle}/apps/admin-web/dist"
 
 deployment_scripts=(
   backup.sh
-  generate-ip-certificate.sh
+  init-intranet-ca.sh
   install-launchd.sh
   install-release-watcher.sh
+  issue-intranet-ip-certificate.sh
   preflight.sh
   release.sh
   restore.sh

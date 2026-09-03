@@ -85,9 +85,32 @@ fi
 [[ -r "${DSH_WORK_TLS_CERT_FILE:?Set DSH_WORK_TLS_CERT_FILE}" ]] || fail "TLS certificate is unreadable"
 [[ -r "${DSH_WORK_TLS_KEY_FILE:?Set DSH_WORK_TLS_KEY_FILE}" ]] || fail "TLS private key is unreadable"
 [[ -r "${DSH_WORK_CA_CERT_FILE:?Set DSH_WORK_CA_CERT_FILE}" ]] || fail "internal CA certificate is unreadable"
+certificate_directory=$(cd "$(dirname "${DSH_WORK_TLS_CERT_FILE}")" && pwd -P)
+for forbidden_ca_key in "${certificate_directory}/root-ca.key" "${certificate_directory}/internal-ca.key"; do
+  [[ ! -e "${forbidden_ca_key}" ]] \
+    || fail "offline CA private keys must never be stored on the Mac mini: ${forbidden_ca_key}"
+done
 openssl x509 -in "${DSH_WORK_TLS_CERT_FILE}" -noout -checkend 86400 >/dev/null || fail "TLS certificate expires in less than 24 hours"
 openssl x509 -in "${DSH_WORK_TLS_CERT_FILE}" -noout -text | grep -F "IP Address:${DSH_WORK_PUBLIC_HOST:?Set DSH_WORK_PUBLIC_HOST}" >/dev/null \
   || fail "TLS certificate does not contain the configured private IP SAN"
+openssl verify -CAfile "${DSH_WORK_CA_CERT_FILE}" "${DSH_WORK_TLS_CERT_FILE}" >/dev/null \
+  || fail "TLS certificate is not signed by the configured offline CA"
+certificate_public_key=$(openssl x509 -in "${DSH_WORK_TLS_CERT_FILE}" -pubkey -noout \
+  | openssl pkey -pubin -outform DER 2>/dev/null \
+  | shasum -a 256 | awk '{print $1}')
+private_public_key=$(openssl pkey -in "${DSH_WORK_TLS_KEY_FILE}" -pubout -outform DER 2>/dev/null \
+  | shasum -a 256 | awk '{print $1}')
+[[ "${certificate_public_key}" == "${private_public_key}" ]] || fail "TLS certificate and private key do not match"
+
+off_host_root=${DSH_WORK_OFF_HOST_BACKUP_DIRECTORY:?Set DSH_WORK_OFF_HOST_BACKUP_DIRECTORY}
+[[ "${off_host_root}" == /* && "${off_host_root}" != / ]] \
+  || fail "off-host backup directory must be an absolute non-root path"
+[[ -d "${off_host_root}" && ! -L "${off_host_root}" && -w "${off_host_root}" ]] \
+  || fail "off-host backup directory must be a writable mounted directory: ${off_host_root}"
+local_device=$(df -P "${deploy_root}" | awk 'NR==2 {print $1}')
+off_host_device=$(df -P "${off_host_root}" | awk 'NR==2 {print $1}')
+[[ -n "${local_device}" && -n "${off_host_device}" && "${local_device}" != "${off_host_device}" ]] \
+  || fail "off-host backups must use a filesystem distinct from ${deploy_root}"
 
 runtime_home=${DSH_RUNTIME_HOME:?Set DSH_RUNTIME_HOME in runtime.env}
 runtime_is_worktree=$(git -C "${runtime_home}" rev-parse --is-inside-work-tree 2>/dev/null) \

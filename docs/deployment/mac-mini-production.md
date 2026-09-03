@@ -1,6 +1,6 @@
 # Mac mini 生产部署
 
-更新时间：2026-09-02
+更新时间：2026-09-03
 
 ## 1. 部署结论
 
@@ -62,16 +62,31 @@ Token 刷新和员工目录同步会失败关闭。AI Hub 的发布不得重建 
 6. 系统时间保持自动同步，关闭自动睡眠，并启用断电恢复后的自动启动；OIDC 对时间偏差敏感；
 7. 防火墙只向企业内网放行员工端和管理端端口；PostgreSQL 与 Node 端口只监听
    `127.0.0.1`；
-8. 内部 CA 证书包含 Mac mini IP 的 SAN，员工设备已信任该 CA。
+8. 内部 CA 证书包含 Mac mini IP 的 SAN，员工设备已信任该 CA；离线根 CA 私钥只保存在
+   运维工作站，绝不复制到 Mac mini；
+9. `/Volumes/dsh-work-backups` 是启用静态加密和访问控制的 NAS 或其他异机文件系统挂载点，
+   不能位于 Mac mini 系统盘。
 
-一期没有企业 CA 时，可以先生成试点 CA 和 IP 证书：
+一期没有企业 CA 时，在受控运维工作站建立一套供 AI Hub 与 dsh-work 共用的离线 CA：
 
 ```bash
-bash scripts/deploy/generate-ip-certificate.sh 192.168.1.50 /Users/dshdeploy/services/dsh-work
+bash scripts/deploy/init-intranet-ca.sh \
+  --ca-dir /absolute/private/company-intranet-ca
+bash scripts/deploy/issue-intranet-ip-certificate.sh \
+  --ca-dir /absolute/private/company-intranet-ca \
+  --ip 192.168.1.50 \
+  --output-dir /absolute/staging/macmini-192.168.1.50
 ```
 
-必须把生成的 `internal-ca.crt` 安装到所有访问设备的受信任根证书中。企业 CA 可用后，
-直接替换 `server.crt`、`server.key` 和 CA 文件，不需要改 Compose。
+只把 `server.crt`、`server.key` 和 `root-ca.crt` 安全复制到两个项目各自的 TLS 目录；
+`root-ca.key` 必须离线保存。预检会拒绝服务器证书目录中出现 CA 私钥。所有访问设备必须信任
+`root-ca.crt`。企业 CA 可用后，直接替换这三个服务器端文件，不需要改 Compose。
+
+若现有 Mac mini 曾使用已删除的 `generate-ip-certificate.sh`，不要直接沿用曾存放在服务器上的
+`internal-ca.key`。在发布本次部署改动前，先在运维工作站建立新的离线 CA、让客户端信任
+新 `root-ca.crt`、替换服务器证书并把 `runtime.env` 的 CA 路径改为 `root-ca.crt`；确认新
+证书生效后，从 Mac mini 移除旧 CA 私钥。同时先挂载异机备份目录并补上
+`DSH_WORK_OFF_HOST_BACKUP_DIRECTORY`，否则新版本会在停止服务和迁移之前安全拒绝部署。
 
 ## 4. 公开仓库发布保护
 
@@ -118,11 +133,19 @@ chmod 600 runtime.env
   Shell 的工具路径；
 - Mac mini 内网 IP、证书路径和对外端口；
 - PostgreSQL 密码与其 URL 编码后的 `DSH_WORK_DATABASE_URL`；
+- 已挂载的 `DSH_WORK_OFF_HOST_BACKUP_DIRECTORY`；该路径必须与部署根目录位于不同文件系统；
 - `DSH_WORK_SESSION_SECRET`；
 - AI Hub Platform URL、Issuer、Client ID、Client Secret、Audience；
 - AI Hub 中逐字登记的两个 HTTPS 回调地址；
 - 已安装 DSH 的绝对路径、锁定 Version 和 Commit。
 - `DSH_WORK_AUTO_DEPLOY_ENABLED=true`，轮询间隔保持至少 300 秒。
+
+与当前 AI Hub 纯 IP 部署配套时，平台使用 443，身份服务使用 8443：
+
+```dotenv
+AI_HUB_PLATFORM_URL=https://192.168.1.50
+AI_HUB_OIDC_ISSUER=https://192.168.1.50:8443/application/o/dsh-work/
+```
 
 `runtime.env` 是受信任的 shell-compatible dotenv 文件，会由部署脚本和 `launchd`
 加载。含空格或 shell 特殊字符的值必须使用单引号；不要在该文件中写命令。文件权限必须
@@ -161,7 +184,8 @@ bash scripts/deploy/install-release-watcher.sh /Users/dshdeploy/services/dsh-wor
    Lock，并与宿主机已安装的 DSH 做一次真实 ACP 启动握手；
 3. 已有版本时先停止旧后端，并使用旧版本 Compose 生成数据库与持久文件备份；首次部署
    则直接初始化 PostgreSQL；
-4. 备份成功后才应用候选版本的 PostgreSQL Compose 配置；
+4. 将备份打包复制到 NAS/异机挂载点，重新校验 SHA-256 并原子写入
+   `.verified.json` 回执；只有异机验证成功后才应用候选 PostgreSQL Compose；
 5. 执行向前数据库迁移；
 6. 原子切换 `current`，安装/重启 `launchd`，重建 Nginx 容器；
 7. 从内网 HTTPS 地址执行健康检查；失败时恢复旧应用版本与旧 PostgreSQL Compose 配置。
@@ -223,10 +247,33 @@ bash current/scripts/deploy/restore.sh \
 停止，避免空库或半恢复数据对外可见。修复磁盘、备份或数据库问题后，使用同一备份重新
 执行恢复命令；不要在恢复未完成时手工启动服务。
 
-备份完成后应复制到另一台设备、NAS 或企业备份系统；同一台 Mac mini 上的备份不能覆盖
-整机损坏、失窃或磁盘故障。
+每次手工备份和升级备份都会同时保留本机恢复目录，并在
+`DSH_WORK_OFF_HOST_BACKUP_DIRECTORY` 创建 `.tar.gz`、`.sha256` 和 `.verified.json`。
+异机挂载不可用、与部署目录位于同一文件系统或校验失败时，备份和发布都会在迁移前终止。
+该压缩包本身不做应用层加密，因此异机存储必须启用卷级静态加密、最小写权限和独立保留
+策略。需要从异机副本恢复时，先在受控临时目录验证 `.sha256` 并解压，再把其中的时间戳
+目录传给上述 `restore.sh`；不要跳过恢复演练。
 
-## 8. DSH 生命周期
+## 8. 与 AI Hub 的统一运维口径
+
+两个项目统一放在 `/Users/dshdeploy/services/<project>`，都使用 `runtime.env`、`releases/`、
+`current`、`previous`、`release-artifacts/`、`automation/state/` 和 `logs/`；普通 push 只跑
+CI，生产制品都由 GitHub Actions 人工批准后发布为不可变 Release，再由各自的 `launchd`
+watcher 发现并验证。它们仍各自持有数据库、Compose project、备份与版本，可以独立发布
+和回滚。
+
+| 运维动作 | dsh-work | AI Hub |
+| --- | --- | --- |
+| 查看监听器 | `launchctl print gui/$(id -u)/com.company.dsh-work.release-watcher` | `launchctl print gui/$(id -u)/com.company.ai-hub.release-watcher` |
+| 发布后的动作 | 自动校验、异机备份、迁移并提升 | 自动校验、下载、预拉镜像；凭新鲜异机备份回执显式提升 |
+| 暂停发现新版本 | `DSH_WORK_AUTO_DEPLOY_ENABLED=false` | `AI_HUB_AUTO_STAGE_ENABLED=false` |
+| 生产入口 | 4174 / 4180 | 443 / 8443 |
+| PostgreSQL | `127.0.0.1:5434` | `127.0.0.1:5433` |
+
+AI Hub 暂不自动提升，是因为其生产门禁要求平台与身份数据的独立加密异机备份回执；在
+Mac mini 备份作业能够可靠地产生并交接该回执之前，不应为了表面一致而绕过门禁。
+
+## 9. DSH 生命周期
 
 DSH 不随 dsh-work Release 自动升级。每次发布前置检查都会验证 DSH 的 Version、Git
 Commit、依赖、构建输出和 tracked file 清洁状态；不匹配就拒绝发布。DSH 升级应单独执行

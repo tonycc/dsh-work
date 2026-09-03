@@ -8,12 +8,14 @@ import { fileURLToPath } from 'node:url'
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const releasePath = join(projectRoot, 'scripts/deploy/release.sh')
 const restorePath = join(projectRoot, 'scripts/deploy/restore.sh')
+const backupPath = join(projectRoot, 'scripts/deploy/backup.sh')
 const buildPath = join(projectRoot, 'scripts/release/build-release.sh')
 const preflightPath = join(projectRoot, 'scripts/deploy/preflight.sh')
 
-const [release, restore, build, preflight] = await Promise.all([
+const [release, restore, backup, build, preflight] = await Promise.all([
   readFile(releasePath, 'utf8'),
   readFile(restorePath, 'utf8'),
+  readFile(backupPath, 'utf8'),
   readFile(buildPath, 'utf8'),
   readFile(preflightPath, 'utf8'),
 ])
@@ -43,6 +45,11 @@ assert.match(build, /deploy\/runtime\.env\.example/)
 
 assert.match(preflight, /git -C "\$\{runtime_home\}" rev-parse --is-inside-work-tree/)
 assert.doesNotMatch(preflight, /-d "\$\{runtime_home\}\/\.git"/)
+assert.match(preflight, /offline CA private keys must never be stored on the Mac mini/)
+assert.match(backup, /DSH_WORK_OFF_HOST_BACKUP_DIRECTORY/)
+assert.match(backup, /storage_class": "off-host"/)
+assert.match(backup, /shasum -a 256 -c/)
+assert.match(backup, /off-host backup filesystem changed while the backup was being written/)
 
 for (const [script, version] of [[buildPath, '0.1.0-rc.1'], [releasePath, '01.2.3']]) {
   const result = spawnSync('bash', [script, version], { encoding: 'utf8' })
@@ -53,9 +60,40 @@ for (const [script, version] of [[buildPath, '0.1.0-rc.1'], [releasePath, '01.2.
 const fixtureRoot = await mkdtemp(join(tmpdir(), 'dsh-work-deployment-safety.'))
 try {
   await verifyDestructiveRestoreFailsClosed(join(fixtureRoot, 'restore'))
+  await verifySameFilesystemBackupIsRejected(join(fixtureRoot, 'backup'))
   await verifySensitiveBuildInputIsRejected(join(fixtureRoot, 'build'), build)
 } finally {
   await rm(fixtureRoot, { recursive: true, force: true })
+}
+
+async function verifySameFilesystemBackupIsRejected(fixture) {
+  const binRoot = join(fixture, 'bin')
+  const currentRoot = join(fixture, 'current')
+  const offHostRoot = join(fixture, 'off-host')
+  const launchctlLog = join(fixture, 'launchctl.log')
+  await mkdir(join(currentRoot, 'deploy'), { recursive: true })
+  await mkdir(binRoot, { recursive: true })
+  await mkdir(offHostRoot, { recursive: true })
+  await writeFile(join(currentRoot, 'deploy/compose.yaml'), 'name: backup-test\nservices: {}\n')
+  await writeFile(join(fixture, 'runtime.env'), [
+    `PATH=${shellQuote(`${binRoot}:${process.env.PATH ?? '/usr/bin:/bin'}`)}`,
+    `DSH_WORK_OFF_HOST_BACKUP_DIRECTORY=${shellQuote(offHostRoot)}`,
+    `DSH_WORK_DATA_ROOT=${shellQuote(join(fixture, 'data'))}`,
+    '',
+  ].join('\n'), { mode: 0o600 })
+  await writeExecutable(join(binRoot, 'df'), `#!/usr/bin/env bash
+printf '%s\\n' 'Filesystem 1024-blocks Used Available Capacity Mounted on' '/dev/disk1 100 1 99 1% /'
+`)
+  await writeExecutable(join(binRoot, 'launchctl'), `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> ${shellQuote(launchctlLog)}
+exit 0
+`)
+
+  const result = spawnSync('bash', [backupPath, fixture, currentRoot], { encoding: 'utf8' })
+  assert.notEqual(result.status, 0, 'backup accepted storage on the deployment filesystem')
+  assert.match(result.stderr, /must use a filesystem distinct/)
+  const launchctlCalled = await readFile(launchctlLog, 'utf8').then(() => true, () => false)
+  assert.equal(launchctlCalled, false, 'backup entered maintenance before validating off-host storage')
 }
 
 console.log('deployment safety contract tests passed')
