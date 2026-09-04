@@ -42,6 +42,7 @@ assert.match(restore, /restore failed after database replacement began; services
 assert.doesNotMatch(build, /cp -R "\$\{project_root\}\/deploy\/\."/)
 assert.match(build, /refusing to build beside sensitive deployment material/)
 assert.match(build, /deploy\/runtime\.env\.example/)
+assert.match(build, /acp-managed-credentials\.legacy\.cordis\.yml/)
 
 assert.match(preflight, /git -C "\$\{runtime_home\}" rev-parse --is-inside-work-tree/)
 assert.doesNotMatch(preflight, /-d "\$\{runtime_home\}\/\.git"/)

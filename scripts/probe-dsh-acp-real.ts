@@ -7,7 +7,9 @@ import { AcpJsonRpcClient } from '../server/src/modules/runtime/acp-json-rpc-cli
 import { createManagedDshAcpProcessConfiguration } from '../server/src/modules/runtime/dsh-acp-process-configuration.ts'
 import { resolveDshRuntimeInstallation } from '../server/src/modules/runtime/dsh-runtime-installation.ts'
 
-const dshRepository = resolve(process.env['DSH_REPOSITORY'] ?? resolve(process.cwd(), '../deepseek-harness'))
+const dshRepository = resolve(
+  process.env['DSH_RUNTIME_HOME'] ?? process.env['DSH_REPOSITORY'] ?? resolve(process.cwd(), '../deepseek-harness'),
+)
 const projectRoot = resolve(import.meta.dirname, '..')
 const deploymentConfig = process.env['DSH_DEPLOYMENT_CONFIG']
 const dshPackage = JSON.parse(await readFile(join(dshRepository, 'package.json'), 'utf8')) as { version?: string }
@@ -35,14 +37,19 @@ let assistantText = ''
 const diagnostics: string[] = []
 const updateTypes: string[] = []
 let permissionRequestCount = 0
+const installation = await resolveDshRuntimeInstallation({
+  projectRoot,
+  env: { ...process.env, DSH_RUNTIME_HOME: dshRepository },
+})
 const processConfiguration = deploymentConfig === undefined
-  ? (await resolveDshRuntimeInstallation({
-      projectRoot,
-      env: { ...process.env, DSH_REPOSITORY: dshRepository },
-    })).process
+  ? installation.process
   : createManagedDshAcpProcessConfiguration({
-      dshRepository,
+      runtimeHome: dshRepository,
       projectRoot,
+      adapter: installation.adapter,
+      acpBaseConfig: installation.adapter === 'legacy-acp-demo'
+        ? join(dshRepository, 'examples/acp-agent/cordis.yml')
+        : undefined,
       deploymentConfig: resolve(deploymentConfig),
     })
 const client = AcpJsonRpcClient.launch(

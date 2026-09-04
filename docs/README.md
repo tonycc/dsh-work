@@ -26,6 +26,7 @@
 
 - [AI Hub 身份接入说明](deployment/ai-hub-sso-integration.md)：应用环境、OIDC 回调、初始管理员、员工目录和本地授权联调步骤；
 - [Mac mini 生产部署](deployment/mac-mini-production.md)：独立部署边界、公开仓库不可变 Release、自动监听部署、launchd、Docker Desktop、备份与回滚；
+- [Mac mini 部署流程（AI Hub 已部署）](deployment/mac-mini-deployment-runbook.md)：复用现有 AI Hub/DSH 的逐步首次安装、生产 OIDC 配置、验收和自动部署启用；
 - [M6 AI Hub SSO 检查清单](project/m6-ai-hub-sso-checklist.md)：代码完成项与平台侧待办；
 - [持续集成基线](project/ci-integration.md)：统一质量 Gate 与 CI 要求；
 - [本地开发环境 UAT 报告](project/local-development-uat-report.md)：最近一次本地联调证据。

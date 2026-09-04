@@ -1,5 +1,10 @@
 # dsh-work 接入 AI Hub 身份服务
 
+本文的命令与表单示例以本地 `local` 环境为主。若 AI Hub 已在 Mac mini 上以纯 IP HTTPS
+部署，生产地址、`production` 环境登记和首次安装顺序请使用
+[Mac mini 部署流程（AI Hub 已部署）](mac-mini-deployment-runbook.md)，不要照搬下文的
+localhost、HTTP 或开发端口。
+
 ## 1. 责任边界
 
 dsh-work 采用“统一身份、应用自主授权”模式：
@@ -23,7 +28,7 @@ dsh-work 采用“统一身份、应用自主授权”模式：
 | 字段 | 值 | 说明 |
 | --- | --- | --- |
 | 环境标识 | `local` | 对应 `AI_HUB_ENVIRONMENT` |
-| 版本 | `0.1.0` | 当前 dsh-work 版本 |
+| 版本 | `0.1.1` | 当前 dsh-work 版本 |
 | 门户入口 | `http://localhost:4174/workbench` | 从 AI Hub 打开应用时进入员工端 |
 | API 地址 | `http://host.docker.internal:4190/api` | AI Hub 在 Docker 内运行时使用；原生运行改为 `http://localhost:4190/api` |
 | 健康检查 | `http://host.docker.internal:4190/health` | AI Hub 在 Docker 内运行时使用；原生运行改为 `http://localhost:4190/health` |

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -97,18 +98,47 @@ describe('DSH ACP Runtime Adapter', () => {
 
     assert.equal(configuration.cwd, '/opt/dsh-runtime')
     assert.equal(configuration.env?.['DEEPSEEK_API_KEY'], undefined)
-    assert.equal(configuration.env?.['DSH_ACP_BASE_CONFIG'], '/opt/dsh-runtime/examples/acp-agent/cordis.yml')
-    assert.ok(configuration.args.includes('/opt/dsh-work/server/config/dsh/acp-managed-credentials.cordis.yml'))
+    assert.equal(configuration.env?.['DSH_ACP_BASE_CONFIG'], undefined)
+    assert.deepEqual(configuration.args, [
+      '--import',
+      'tsx/esm',
+      'apps/cli/src/bin.ts',
+      '--profile',
+      'acp',
+      '--patch',
+      '/opt/dsh-work/server/config/dsh/acp-managed-credentials.cordis.yml',
+    ])
+  })
+
+  it('uses the legacy ACP example only for the explicit compatibility adapter', () => {
+    const configuration = createManagedDshAcpProcessConfiguration({
+      runtimeHome: '/opt/dsh-runtime',
+      projectRoot: '/opt/dsh-work',
+      adapter: 'legacy-acp-demo',
+      acpBaseConfig: '/opt/dsh-runtime/examples/acp-agent/cordis.yml',
+    })
+
+    assert.deepEqual(configuration.args, [
+      '--import',
+      'tsx',
+      'packages/examples/acp-demo/src/bin.ts',
+      '--config',
+      '/opt/dsh-work/server/config/dsh/acp-managed-credentials.legacy.cordis.yml',
+    ])
+    assert.equal(
+      configuration.env?.['DSH_ACP_BASE_CONFIG'],
+      '/opt/dsh-runtime/examples/acp-agent/cordis.yml',
+    )
   })
 
   it('accepts a managed command without requiring a sibling source checkout', () => {
     const configuration = createManagedDshAcpProcessConfiguration({
       runtimeHome: '/opt/dsh-runtime',
       projectRoot: '/opt/dsh-work',
-      command: '/opt/dsh-runtime/bin/dsh-acp',
-      args: ['--config', '/opt/dsh-work/server/config/dsh/acp-managed-credentials.cordis.yml'],
+      command: '/opt/dsh-runtime/bin/dsh',
+      args: ['--profile', 'acp', '--patch', '/opt/dsh-work/server/config/dsh/acp-managed-credentials.cordis.yml'],
     })
-    assert.equal(configuration.command, '/opt/dsh-runtime/bin/dsh-acp')
+    assert.equal(configuration.command, '/opt/dsh-runtime/bin/dsh')
     assert.equal(configuration.cwd, '/opt/dsh-runtime')
   })
 
@@ -127,16 +157,118 @@ describe('DSH ACP Runtime Adapter', () => {
       },
     })
 
-    assert.equal(installation.version, '0.1.1-rc.2')
+    assert.equal(installation.version, '0.1.2-rc.1')
     assert.equal(installation.commit, fixture.commit)
     assert.equal(installation.launchMode, 'managed-distribution')
-    assert.deepEqual(installation.process.args.slice(0, 1), ['--version'])
+    assert.equal(installation.adapter, 'official-acp-profile')
+    assert.equal(installation.compatibilityMode, null)
+    assert.deepEqual(installation.process.args.slice(0, 4), ['--version', '--profile', 'acp', '--patch'])
+    assert.equal(installation.process.args[4], join(dataRoot, 'dsh-config/acp-managed-credentials.cordis.yml'))
     assert.equal(installation.process.env?.['DSH_WORK_DSH_SESSIONS_ROOT'], sessionsRoot)
-    await stat(join(dataRoot, 'dsh-config/acp-managed-credentials.cordis.yml'))
+    const generatedOverlay = join(dataRoot, 'dsh-config/acp-managed-credentials.cordis.yml')
+    await stat(generatedOverlay)
+    assert.doesNotMatch(await readFile(generatedOverlay, 'utf8'), /__DSH_WORK_TOOL_POLICY_MODULE__/)
+  })
+
+  it('resolves the official 0.1.2 ACP profile from a verified source checkout', async () => {
+    const fixture = await createSourceCheckoutFixture()
+    const dataRoot = join(fixture.projectRoot, 'persistent-data')
+    const installation = await resolveDshRuntimeInstallation({
+      projectRoot: fixture.projectRoot,
+      env: {
+        DSH_RUNTIME_HOME: fixture.runtimeHome,
+        DSH_WORK_DATA_ROOT: dataRoot,
+      },
+    })
+
+    assert.equal(installation.version, '0.1.2-rc.1')
+    assert.equal(installation.commit, fixture.commit)
+    assert.equal(installation.launchMode, 'source-checkout')
+    assert.equal(installation.adapter, 'official-acp-profile')
+    assert.equal(installation.compatibilityMode, null)
+    assert.deepEqual(installation.process.args.slice(0, 6), [
+      '--import',
+      'tsx/esm',
+      'apps/cli/src/bin.ts',
+      '--profile',
+      'acp',
+      '--patch',
+    ])
+    assert.equal(installation.process.args[6], join(dataRoot, 'dsh-config/acp-managed-credentials.cordis.yml'))
+    assert.equal(installation.process.env?.['DSH_ACP_BASE_CONFIG'], undefined)
+  })
+
+  it('resolves the exact legacy source checkout only through the development compatibility mode', async () => {
+    const fixture = await createLegacySourceCheckoutFixture()
+    const dataRoot = join(fixture.projectRoot, 'persistent-data')
+    const installation = await resolveDshRuntimeInstallation({
+      projectRoot: fixture.projectRoot,
+      env: {
+        NODE_ENV: 'development',
+        DSH_RUNTIME_HOME: fixture.runtimeHome,
+        DSH_RUNTIME_COMPATIBILITY: 'legacy-0.1.1-rc.2',
+        DSH_EXPECTED_VERSION: '0.1.1-rc.2',
+        DSH_EXPECTED_COMMIT: fixture.commit,
+        DSH_WORK_DATA_ROOT: dataRoot,
+      },
+    })
+
+    assert.equal(installation.version, '0.1.1-rc.2')
+    assert.equal(installation.commit, fixture.commit)
+    assert.equal(installation.adapter, 'legacy-acp-demo')
+    assert.equal(installation.compatibilityMode, 'legacy-0.1.1-rc.2')
+    assert.deepEqual(installation.process.args, [
+      '--import',
+      'tsx',
+      'packages/examples/acp-demo/src/bin.ts',
+      '--config',
+      join(dataRoot, 'dsh-config/acp-managed-credentials.legacy.cordis.yml'),
+    ])
+    assert.equal(
+      installation.process.env?.['DSH_ACP_BASE_CONFIG'],
+      join(fixture.runtimeHome, 'examples/acp-agent/cordis.yml'),
+    )
+    const generatedOverlay = await readFile(
+      join(dataRoot, 'dsh-config/acp-managed-credentials.legacy.cordis.yml'),
+      'utf8',
+    )
+    assert.doesNotMatch(generatedOverlay, /__DSH_(?:ACP_BASE_CONFIG|WORK_TOOL_POLICY_MODULE)__/)
+    assert.match(generatedOverlay, new RegExp(escapeRegExp(join(fixture.runtimeHome, 'examples/acp-agent/cordis.yml'))))
+  })
+
+  it('does not select the legacy Runtime implicitly', async () => {
+    const fixture = await createLegacySourceCheckoutFixture()
+    await assert.rejects(resolveDshRuntimeInstallation({
+      projectRoot: fixture.projectRoot,
+      env: { DSH_RUNTIME_HOME: fixture.runtimeHome },
+    }), /version mismatch/)
+  })
+
+  it('rejects the legacy compatibility mode in production', async () => {
+    const fixture = await createLegacySourceCheckoutFixture()
+    await assert.rejects(resolveDshRuntimeInstallation({
+      projectRoot: fixture.projectRoot,
+      env: {
+        NODE_ENV: 'production',
+        DSH_RUNTIME_HOME: fixture.runtimeHome,
+        DSH_RUNTIME_COMPATIBILITY: 'legacy-0.1.1-rc.2',
+      },
+    }), /development-only and forbidden in production/)
+  })
+
+  it('rejects an unknown compatibility mode', async () => {
+    const fixture = await createSourceCheckoutFixture()
+    await assert.rejects(resolveDshRuntimeInstallation({
+      projectRoot: fixture.projectRoot,
+      env: {
+        DSH_RUNTIME_HOME: fixture.runtimeHome,
+        DSH_RUNTIME_COMPATIBILITY: 'legacy-any-version',
+      },
+    }), /Unsupported DSH_RUNTIME_COMPATIBILITY mode/)
   })
 
   it('fails closed when the managed DSH version differs from the runtime lock', async () => {
-    const fixture = await createManagedDistributionFixture('0.1.1-rc.3')
+    const fixture = await createManagedDistributionFixture('0.1.2-rc.2')
     await assert.rejects(resolveDshRuntimeInstallation({
       projectRoot: fixture.projectRoot,
       env: {
@@ -147,25 +279,27 @@ describe('DSH ACP Runtime Adapter', () => {
   })
 
   it('does not allow environment expectations to bypass the runtime lock', async () => {
-    const fixture = await createManagedDistributionFixture('0.1.1-rc.3')
+    const fixture = await createManagedDistributionFixture('0.1.2-rc.2')
     await assert.rejects(resolveDshRuntimeInstallation({
       projectRoot: fixture.projectRoot,
       env: {
         DSH_RUNTIME_HOME: fixture.runtimeHome,
         DSH_RUNTIME_COMMAND: process.execPath,
-        DSH_EXPECTED_VERSION: '0.1.1-rc.3',
+        DSH_EXPECTED_VERSION: '0.1.2-rc.2',
         DSH_EXPECTED_COMMIT: fixture.commit,
       },
-    }), /DSH_EXPECTED_VERSION must match runtime lock/)
+    }), /DSH_EXPECTED_VERSION must match selected runtime/)
   })
 
-  it('negotiates ACP before the Runtime starts serving traffic', async () => {
+  it('negotiates ACP and creates a disposable Session before serving traffic', async () => {
     await preflightDshRuntime({
       home: process.cwd(),
       version: 'test',
       commit: '0'.repeat(40),
       protocolVersion: 1,
       launchMode: 'managed-distribution',
+      adapter: 'official-acp-profile',
+      compatibilityMode: null,
       process: {
         command: process.execPath,
         args: ['--experimental-strip-types', mockWorker],
@@ -352,28 +486,96 @@ function fileMount(mountPath: string, content: string) {
   }
 }
 
-async function createManagedDistributionFixture(version = '0.1.1-rc.2') {
+async function createManagedDistributionFixture(version = '0.1.2-rc.1') {
   const root = await mkdtemp(join(tmpdir(), 'dsh-work-runtime-installation-test-'))
   const projectRoot = join(root, 'dsh-work')
   const runtimeHome = join(root, 'runtime')
-  const configDirectory = join(projectRoot, 'server/config/dsh')
-  const commit = 'b150a551b8d465e31e418e1b2eaf5e79bbb7d28e'
-  await mkdir(configDirectory, { recursive: true })
+  const commit = '76fda729799fe9b3848dbe2c211d4b231032b81e'
   await mkdir(runtimeHome, { recursive: true })
-  await mkdir(join(runtimeHome, 'config'), { recursive: true })
+  await writeRuntimeProjectConfiguration(projectRoot, commit)
+  await writeFile(join(runtimeHome, 'dsh-runtime.json'), JSON.stringify({
+    name: 'deepseek-harness', version, commit, protocolVersion: 1,
+  }))
+  return { projectRoot, runtimeHome, commit }
+}
+
+async function createSourceCheckoutFixture() {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-work-source-runtime-test-'))
+  const projectRoot = join(root, 'dsh-work')
+  const runtimeHome = join(root, 'deepseek-harness')
+  await mkdir(join(runtimeHome, 'apps/cli/src'), { recursive: true })
+  await mkdir(join(runtimeHome, 'packages/bundle/acp-app'), { recursive: true })
+  await writeFile(join(runtimeHome, 'package.json'), JSON.stringify({ version: '0.1.2-rc.1' }))
+  await writeFile(join(runtimeHome, 'apps/cli/src/bin.ts'), '// source launcher fixture\n')
+  await writeFile(join(runtimeHome, 'packages/bundle/acp-app/cordis.patch.yml'), '[]\n')
+  execFileSync('git', ['init', '--quiet'], { cwd: runtimeHome })
+  execFileSync('git', ['add', '.'], { cwd: runtimeHome })
+  execFileSync('git', [
+    '-c', 'commit.gpgSign=false',
+    '-c', 'user.name=dsh-work-test',
+    '-c', 'user.email=dsh-work-test@example.invalid',
+    'commit', '--quiet', '-m', 'runtime fixture',
+  ], { cwd: runtimeHome })
+  const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: runtimeHome, encoding: 'utf8' }).trim()
+  await writeRuntimeProjectConfiguration(projectRoot, commit)
+  return { projectRoot, runtimeHome, commit }
+}
+
+async function createLegacySourceCheckoutFixture() {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-work-legacy-source-runtime-test-'))
+  const projectRoot = join(root, 'dsh-work')
+  const runtimeHome = join(root, 'deepseek-harness')
+  await mkdir(join(runtimeHome, 'packages/examples/acp-demo/src'), { recursive: true })
+  await mkdir(join(runtimeHome, 'examples/acp-agent'), { recursive: true })
+  await writeFile(join(runtimeHome, 'package.json'), JSON.stringify({ version: '0.1.1-rc.2' }))
+  await writeFile(join(runtimeHome, 'packages/examples/acp-demo/src/bin.ts'), '// legacy source launcher fixture\n')
+  await writeFile(join(runtimeHome, 'examples/acp-agent/cordis.yml'), '[]\n')
+  execFileSync('git', ['init', '--quiet'], { cwd: runtimeHome })
+  execFileSync('git', ['add', '.'], { cwd: runtimeHome })
+  execFileSync('git', [
+    '-c', 'commit.gpgSign=false',
+    '-c', 'user.name=dsh-work-test',
+    '-c', 'user.email=dsh-work-test@example.invalid',
+    'commit', '--quiet', '-m', 'legacy runtime fixture',
+  ], { cwd: runtimeHome })
+  const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: runtimeHome, encoding: 'utf8' }).trim()
+  await writeRuntimeProjectConfiguration(
+    projectRoot,
+    '76fda729799fe9b3848dbe2c211d4b231032b81e',
+    commit,
+  )
+  return { projectRoot, runtimeHome, commit }
+}
+
+async function writeRuntimeProjectConfiguration(
+  projectRoot: string,
+  commit: string,
+  legacyCommit = 'b150a551b8d465e31e418e1b2eaf5e79bbb7d28e',
+) {
+  const configDirectory = join(projectRoot, 'server/config/dsh')
+  await mkdir(configDirectory, { recursive: true })
   await writeFile(join(configDirectory, 'runtime-lock.json'), JSON.stringify({
-    version: '0.1.1-rc.2', commit, protocolVersion: 1,
+    version: '0.1.2-rc.1', commit, protocolVersion: 1, adapter: 'official-acp-profile',
+    compatibility: {
+      'legacy-0.1.1-rc.2': {
+        version: '0.1.1-rc.2', commit: legacyCommit, protocolVersion: 1,
+        adapter: 'legacy-acp-demo', scope: 'development',
+      },
+    },
   }))
   await writeFile(
     join(configDirectory, 'acp-managed-credentials.cordis.yml'),
-    '- id: base\n  name: cordis:include\n  config:\n    path: ../../runtime/config/cordis.yml\n    patches:\n      - insert:\n          - id: policy\n            name: __DSH_WORK_TOOL_POLICY_MODULE__\n',
+    '- insert:\n    - id: policy\n      name: __DSH_WORK_TOOL_POLICY_MODULE__\n',
+  )
+  await writeFile(
+    join(configDirectory, 'acp-managed-credentials.legacy.cordis.yml'),
+    '- id: base\n  name: cordis:include\n  config:\n    path: __DSH_ACP_BASE_CONFIG__\n    patches:\n      - insert:\n          - id: policy\n            name: __DSH_WORK_TOOL_POLICY_MODULE__\n',
   )
   await writeFile(join(configDirectory, 'dsh-work-tool-policy.js'), 'export function apply() {}\n')
-  await writeFile(join(runtimeHome, 'dsh-runtime.json'), JSON.stringify({
-    name: 'deepseek-harness', version, commit, protocolVersion: 1, acpConfig: 'config/cordis.yml',
-  }))
-  await writeFile(join(runtimeHome, 'config/cordis.yml'), '[]\n')
-  return { projectRoot, runtimeHome, commit }
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 function manifest(runId: string, attemptId: string, message = 'summarize inventory'): RuntimeManifest {

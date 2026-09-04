@@ -4,12 +4,18 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { AcpJsonRpcClient } from '../server/src/modules/runtime/acp-json-rpc-client.ts'
-import { createManagedDshAcpProcessConfiguration } from '../server/src/modules/runtime/dsh-acp-process-configuration.ts'
+import { resolveDshRuntimeInstallation } from '../server/src/modules/runtime/dsh-runtime-installation.ts'
 
 const execFileAsync = promisify(execFile)
-const dshRepository = resolve(process.env['DSH_REPOSITORY'] ?? resolve(process.cwd(), '../deepseek-harness'))
+const dshRepository = resolve(
+  process.env['DSH_RUNTIME_HOME'] ?? process.env['DSH_REPOSITORY'] ?? resolve(process.cwd(), '../deepseek-harness'),
+)
 const projectRoot = resolve(import.meta.dirname, '..')
 const dshPackage = JSON.parse(await readFile(join(dshRepository, 'package.json'), 'utf8')) as { version?: string }
+const processConfiguration = (await resolveDshRuntimeInstallation({
+  projectRoot,
+  env: { ...process.env, DSH_RUNTIME_HOME: dshRepository },
+})).process
 
 const results = []
 for (const concurrency of [1, 3, 5]) results.push(await runBatch(concurrency))
@@ -26,15 +32,15 @@ async function runBatch(concurrency: number): Promise<Record<string, number>> {
   const texts = Array.from({ length: concurrency }, () => '')
   const diagnostics: string[] = []
   const clients = Array.from({ length: concurrency }, (_value, index) => AcpJsonRpcClient.launch(
-    createManagedDshAcpProcessConfiguration({
-      dshRepository,
-      projectRoot,
+    {
+      ...processConfiguration,
       env: {
+        ...processConfiguration.env,
         DSH_PERMISSION_MODE: 'workspace-write',
         DSH_SNAPSHOT_SESSIONS_ROOT: join(batchRoot, `sessions-${index}`),
       },
       shutdownGraceMs: 5000,
-    }),
+    },
     {
       onSessionUpdate: ({ update }) => {
         const content = update['content']

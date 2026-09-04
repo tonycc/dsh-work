@@ -1,6 +1,6 @@
 # dsh-work MVP 路线图与交付状态
 
-**状态日期：** 2026-09-01<br>
+**状态日期：** 2026-09-04<br>
 **当前结论：** 工程主链路已完成，处于外部依赖联调与试点准备阶段；尚不具备生产发布条件<br>
 **执行模式：** 个人项目由项目 Owner 统一承担产品、研发、测试、安全与运维责任
 
@@ -25,7 +25,7 @@
 
 ### 2.1 Runtime 与平台基础
 
-- 固定 DSH `0.1.1-rc.2` / Commit，使用 ACP JSON-RPC stdio 作为程序化协议；
+- 生产固定 DSH `0.1.2-rc.1` / Commit `76fda729799fe9b3848dbe2c211d4b231032b81e`；本地开发显式兼容 `0.1.1-rc.2` / Commit `b150a551b8d465e31e418e1b2eaf5e79bbb7d28e`，两者通过各自 Adapter 使用 ACP JSON-RPC stdio；
 - 一个 Attempt 一个隔离 DSH Worker、目录和不可变 Manifest；
 - PostgreSQL 显式迁移、Run/Attempt 状态机、幂等创建、事件顺序和重启恢复；
 - 模型路由快照、凭据引用、Tool Allowlist、取消、超时和错误分类；

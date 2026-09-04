@@ -35,6 +35,8 @@ node_supported=$("${node_bin}" -p "const [major,minor]=process.versions.node.spl
 [[ "${node_supported}" == true ]] || fail "Node.js 22.19+ or 24+ is required"
 
 [[ "${NODE_ENV:-}" == production ]] || fail "NODE_ENV must be production"
+[[ -z "${DSH_RUNTIME_COMPATIBILITY:-}" ]] \
+  || fail "DSH_RUNTIME_COMPATIBILITY is development-only and must be unset in production"
 [[ "${DSH_WORK_AUTH_MODE:-}" == oidc ]] || fail "DSH_WORK_AUTH_MODE must be oidc"
 [[ "${DSH_WORK_COOKIE_SECURE:-}" == true ]] || fail "secure cookies are mandatory"
 [[ "${DSH_WORK_SERVER_HOST:-}" == 127.0.0.1 ]] || fail "the native server must bind only to 127.0.0.1"
@@ -129,9 +131,10 @@ actual_commit=$(git -C "${runtime_home}" rev-parse HEAD)
 [[ "${actual_commit}" == "${locked_commit}" ]] || fail "installed DSH commit does not match the release lock"
 actual_version=$("${node_bin}" -e "const p=require(process.argv[1]); process.stdout.write(p.version ?? '')" "${runtime_home}/package.json")
 [[ "${actual_version}" == "${locked_version}" ]] || fail "installed DSH version does not match the release lock"
-[[ -r "${runtime_home}/packages/examples/acp-demo/src/bin.ts" ]] || fail "DSH ACP source entry is missing"
+[[ -r "${runtime_home}/apps/cli/src/bin.ts" ]] || fail "DSH CLI source entry is missing"
+[[ -r "${runtime_home}/packages/bundle/acp-app/cordis.patch.yml" ]] || fail "DSH ACP profile bundle is missing"
 [[ -d "${runtime_home}/node_modules/tsx" ]] || fail "DSH dependencies are not installed"
-[[ -r "${runtime_home}/packages/examples/acp-demo/lib/bin.js" ]] || fail "DSH build output is missing; run its locked build"
+[[ -r "${runtime_home}/apps/cli/lib/bin.js" ]] || fail "DSH CLI build output is missing; run its locked build"
 if [[ -n "$(git -C "${runtime_home}" status --porcelain --untracked-files=no)" ]]; then
   fail "DSH tracked files are modified; production requires the locked clean checkout"
 fi
@@ -153,7 +156,7 @@ if ! (
   ' "${release_dir}" "${dsh_preflight_root}" "${dsh_preflight_root}/sessions"
 ); then
   rm -rf "${dsh_preflight_root}"
-  fail "installed DSH failed the ACP startup handshake"
+  fail "installed DSH failed ACP initialize/session creation; verify its Node version, locked build and DSH_HOME credentials"
 fi
 rm -rf "${dsh_preflight_root}"
 

@@ -2,21 +2,34 @@ import { execFile } from 'node:child_process'
 import { constants } from 'node:fs'
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, isAbsolute, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, resolve } from 'node:path'
 
 import { AcpJsonRpcClient } from './acp-json-rpc-client.ts'
 import {
   createManagedDshAcpProcessConfiguration,
+  type DshAcpAdapter,
 } from './dsh-acp-process-configuration.ts'
 import type { AcpProcessConfiguration } from './acp-json-rpc-client.ts'
 
-interface RuntimeLock {
+interface RuntimeIdentity {
   version: string
   commit: string
   protocolVersion: number
 }
 
-interface RuntimeMetadata extends RuntimeLock {
+interface RuntimeTarget extends RuntimeIdentity {
+  adapter: DshAcpAdapter
+}
+
+interface CompatibilityRuntimeTarget extends RuntimeTarget {
+  scope: 'development'
+}
+
+interface RuntimeLock extends RuntimeTarget {
+  compatibility?: Record<string, CompatibilityRuntimeTarget>
+}
+
+interface RuntimeMetadata extends RuntimeIdentity {
   name?: string
   acpConfig?: string
 }
@@ -27,6 +40,8 @@ export interface DshRuntimeInstallation {
   commit: string
   protocolVersion: number
   launchMode: 'source-checkout' | 'managed-distribution'
+  adapter: DshAcpAdapter
+  compatibilityMode: string | null
   process: AcpProcessConfiguration
 }
 
@@ -45,7 +60,8 @@ export async function resolveDshRuntimeInstallation(
     'server/config/dsh/runtime-lock.json',
   ))
   assertRuntimeLock(lock)
-  assertExpectedRuntimeLockEnvironment(env, lock)
+  const { target, compatibilityMode } = selectRuntimeTarget(lock, env)
+  assertExpectedRuntimeLockEnvironment(env, target)
 
   const home = resolve(env['DSH_RUNTIME_HOME'] ?? env['DSH_REPOSITORY'] ?? resolve(
     options.projectRoot,
@@ -57,25 +73,30 @@ export async function resolveDshRuntimeInstallation(
   await access(home, constants.R_OK)
   const metadata = launchMode === 'managed-distribution'
     ? await readJson<RuntimeMetadata>(resolve(home, 'dsh-runtime.json'))
-    : await readSourceMetadata(home, lock.protocolVersion)
+    : await readSourceMetadata(home, target.protocolVersion)
 
-  if (metadata.version !== lock.version) {
-    throw new Error(`DSH runtime version mismatch: expected ${lock.version}, received ${metadata.version}`)
+  if (metadata.version !== target.version) {
+    throw new Error(`DSH runtime version mismatch: expected ${target.version}, received ${metadata.version}`)
   }
-  if (metadata.commit !== lock.commit) {
-    throw new Error(`DSH runtime commit mismatch: expected ${lock.commit}, received ${metadata.commit}`)
+  if (metadata.commit !== target.commit) {
+    throw new Error(`DSH runtime commit mismatch: expected ${target.commit}, received ${metadata.commit}`)
   }
-  if (metadata.protocolVersion !== lock.protocolVersion) {
-    throw new Error(`DSH ACP protocol mismatch: expected ${lock.protocolVersion}, received ${metadata.protocolVersion}`)
+  if (metadata.protocolVersion !== target.protocolVersion) {
+    throw new Error(`DSH ACP protocol mismatch: expected ${target.protocolVersion}, received ${metadata.protocolVersion}`)
   }
 
+  const deploymentConfigFilename = target.adapter === 'legacy-acp-demo'
+    ? 'acp-managed-credentials.legacy.cordis.yml'
+    : 'acp-managed-credentials.cordis.yml'
   const deploymentConfigTemplate = resolve(
     options.projectRoot,
-    'server/config/dsh/acp-managed-credentials.cordis.yml',
+    `server/config/dsh/${deploymentConfigFilename}`,
   )
   await access(deploymentConfigTemplate, constants.R_OK)
-  const acpBaseConfig = resolve(home, metadata.acpConfig ?? 'examples/acp-agent/cordis.yml')
-  await access(acpBaseConfig, constants.R_OK)
+  const acpBaseConfig = target.adapter === 'legacy-acp-demo'
+    ? resolve(home, metadata.acpConfig ?? 'examples/acp-agent/cordis.yml')
+    : undefined
+  if (acpBaseConfig) await access(acpBaseConfig, constants.R_OK)
   const dataRoot = resolve(options.projectRoot, env['DSH_WORK_DATA_ROOT'] ?? '.runtime')
   const dshSessionsRoot = resolve(
     options.projectRoot,
@@ -92,9 +113,20 @@ export async function resolveDshRuntimeInstallation(
   if (configuredCommand) {
     command = isAbsolute(configuredCommand) ? configuredCommand : resolve(options.projectRoot, configuredCommand)
     await access(command, constants.X_OK)
-    args = [...parseStringArray(env['DSH_RUNTIME_ARGS_JSON']), '--config', deploymentConfig]
-  } else {
+    args = target.adapter === 'legacy-acp-demo'
+      ? [...parseStringArray(env['DSH_RUNTIME_ARGS_JSON']), '--config', deploymentConfig]
+      : [
+          ...parseStringArray(env['DSH_RUNTIME_ARGS_JSON']),
+          '--profile',
+          'acp',
+          '--patch',
+          deploymentConfig,
+        ]
+  } else if (target.adapter === 'legacy-acp-demo') {
     await access(resolve(home, 'packages/examples/acp-demo/src/bin.ts'), constants.R_OK)
+  } else {
+    await access(resolve(home, 'apps/cli/src/bin.ts'), constants.R_OK)
+    await access(resolve(home, 'packages/bundle/acp-app/cordis.patch.yml'), constants.R_OK)
   }
 
   return {
@@ -103,66 +135,86 @@ export async function resolveDshRuntimeInstallation(
     commit: metadata.commit,
     protocolVersion: metadata.protocolVersion,
     launchMode,
+    adapter: target.adapter,
+    compatibilityMode,
     process: createManagedDshAcpProcessConfiguration({
       runtimeHome: home,
       projectRoot: options.projectRoot,
       command,
       args,
       deploymentConfig,
+      adapter: target.adapter,
+      acpBaseConfig,
       env: {
-        DSH_ACP_BASE_CONFIG: acpBaseConfig,
         DSH_WORK_DSH_SESSIONS_ROOT: dshSessionsRoot,
       },
     }),
   }
 }
 
-function assertExpectedRuntimeLockEnvironment(env: NodeJS.ProcessEnv, lock: RuntimeLock) {
+function selectRuntimeTarget(
+  lock: RuntimeLock,
+  env: NodeJS.ProcessEnv,
+): { target: RuntimeTarget; compatibilityMode: string | null } {
+  const compatibilityMode = env['DSH_RUNTIME_COMPATIBILITY']
+  if (!compatibilityMode) return { target: lock, compatibilityMode: null }
+  if (env['NODE_ENV'] === 'production') {
+    throw new Error('DSH_RUNTIME_COMPATIBILITY is development-only and forbidden in production')
+  }
+  const target = lock.compatibility?.[compatibilityMode]
+  if (!target) {
+    throw new Error(`Unsupported DSH_RUNTIME_COMPATIBILITY mode: ${compatibilityMode}`)
+  }
+  return { target, compatibilityMode }
+}
+
+function assertExpectedRuntimeLockEnvironment(env: NodeJS.ProcessEnv, target: RuntimeTarget) {
   const expectedVersion = env['DSH_EXPECTED_VERSION']
-  if (expectedVersion !== undefined && expectedVersion !== lock.version) {
-    throw new Error(`DSH_EXPECTED_VERSION must match runtime lock ${lock.version}, received ${expectedVersion}`)
+  if (expectedVersion !== undefined && expectedVersion !== target.version) {
+    throw new Error(`DSH_EXPECTED_VERSION must match selected runtime ${target.version}, received ${expectedVersion}`)
   }
   const expectedCommit = env['DSH_EXPECTED_COMMIT']
-  if (expectedCommit !== undefined && expectedCommit !== lock.commit) {
-    throw new Error(`DSH_EXPECTED_COMMIT must match runtime lock ${lock.commit}, received ${expectedCommit}`)
+  if (expectedCommit !== undefined && expectedCommit !== target.commit) {
+    throw new Error(`DSH_EXPECTED_COMMIT must match selected runtime ${target.commit}, received ${expectedCommit}`)
   }
 }
 
 async function writeDeploymentOverlay(
   dataRoot: string,
   templatePath: string,
-  acpBaseConfig: string,
+  acpBaseConfig?: string,
 ): Promise<string> {
-  const template = await readFile(templatePath, 'utf8')
-  const withBaseConfig = template.replace(
-    /^([ \t]*path:).*$/m,
-    `$1 ${JSON.stringify(acpBaseConfig)}`,
-  )
-  if (withBaseConfig === template) {
-    throw new Error(`DSH deployment overlay template has no include path: ${templatePath}`)
+  let rendered = await readFile(templatePath, 'utf8')
+  if (acpBaseConfig) {
+    if (!rendered.includes('__DSH_ACP_BASE_CONFIG__')) {
+      throw new Error(`DSH legacy deployment overlay has no base config placeholder: ${templatePath}`)
+    }
+    rendered = rendered.replace('__DSH_ACP_BASE_CONFIG__', JSON.stringify(acpBaseConfig))
   }
   const toolPolicySource = resolve(dirname(templatePath), 'dsh-work-tool-policy.js')
   await access(toolPolicySource, constants.R_OK)
-  const rendered = withBaseConfig.replace(
+  const withToolPolicy = rendered.replace(
     '__DSH_WORK_TOOL_POLICY_MODULE__',
     JSON.stringify(toolPolicySource),
   )
-  if (rendered === withBaseConfig) {
+  if (withToolPolicy === rendered) {
     throw new Error(`DSH deployment overlay template has no tool policy placeholder: ${templatePath}`)
   }
   const directory = resolve(dataRoot, 'dsh-config')
-  const target = resolve(directory, 'acp-managed-credentials.cordis.yml')
+  const target = resolve(directory, basename(templatePath))
   await mkdir(directory, { recursive: true })
-  await writeFile(target, rendered, { mode: 0o600 })
+  await writeFile(target, withToolPolicy, { mode: 0o600 })
   return target
 }
 
-/** Start a short-lived ACP process and fail before serving traffic if negotiation is broken. */
+/** Start a short-lived ACP process and fail unless negotiation and Session creation both work. */
 export async function preflightDshRuntime(
   installation: DshRuntimeInstallation,
-  timeoutMs = 15_000,
+  timeoutMs = 30_000,
 ): Promise<void> {
   const preflightRoot = await mkdtemp(resolve(tmpdir(), 'dsh-work-dsh-preflight-'))
+  const workspace = resolve(preflightRoot, 'workspace')
+  await mkdir(workspace, { recursive: true })
   const diagnostics: string[] = []
   const client = AcpJsonRpcClient.launch({
     ...installation.process,
@@ -180,7 +232,10 @@ export async function preflightDshRuntime(
   try {
     try {
       await Promise.race([
-        client.initialize(),
+        (async () => {
+          await client.initialize()
+          await client.newSession(workspace)
+        })(),
         new Promise<never>((_resolve, reject) => {
           timeout = setTimeout(() => { reject(new Error(`DSH ACP preflight timed out after ${timeoutMs} ms`)) }, timeoutMs)
         }),
@@ -203,7 +258,6 @@ async function readSourceMetadata(home: string, protocolVersion: number): Promis
     version: packageJson.version,
     commit: await gitHead(home),
     protocolVersion,
-    acpConfig: 'examples/acp-agent/cordis.yml',
   }
 }
 
@@ -239,8 +293,17 @@ function parseStringArray(value: string | undefined): string[] {
 }
 
 function assertRuntimeLock(value: RuntimeLock): void {
-  if (!value.version || !/^[0-9a-f]{40}$/.test(value.commit) || value.protocolVersion !== 1) {
-    throw new Error('DSH runtime lock is invalid')
+  assertRuntimeTarget(value, 'primary')
+  for (const [mode, target] of Object.entries(value.compatibility ?? {})) {
+    assertRuntimeTarget(target, `compatibility.${mode}`)
+    if (target.scope !== 'development') throw new Error(`DSH runtime lock ${mode} must be development-only`)
+  }
+}
+
+function assertRuntimeTarget(value: RuntimeTarget, label: string): void {
+  if (!value.version || !/^[0-9a-f]{40}$/.test(value.commit) || value.protocolVersion !== 1
+    || !['official-acp-profile', 'legacy-acp-demo'].includes(value.adapter)) {
+    throw new Error(`DSH runtime lock is invalid: ${label}`)
   }
 }
 

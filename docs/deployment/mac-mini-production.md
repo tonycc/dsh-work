@@ -1,6 +1,6 @@
 # Mac mini 生产部署
 
-更新时间：2026-09-03
+更新时间：2026-09-04
 
 ## 1. 部署结论
 
@@ -15,7 +15,7 @@ GitHub push
   └─ 自动 CI（只验证，不部署）
 
 GitHub Actions / Manual release
-  └─ 人工触发，生成带构建来源证明的不可变 dsh-work-vX.Y.Z Release
+  └─ 人工触发，生成带构建来源证明的不可变 vX.Y.Z Release
 
 Mac mini / launchd Release watcher
   └─ 出站轮询，自动校验 → release.sh → 备份 → 迁移 → 切换 → 健康检查
@@ -57,7 +57,7 @@ Token 刷新和员工目录同步会失败关闭。AI Hub 的发布不得重建 
 3. GitHub CLI 已安装，并用仅限目标仓库的只读凭据登录；凭据只需要读取 Contents 和
    Attestations，不需要写权限；
 4. DSH 已在宿主机独立目录安装、安装依赖并构建，版本与
-   `server/config/dsh/runtime-lock.json` 完全一致；
+   `server/config/dsh/runtime-lock.json` 的生产主 Lock 完全一致；本地兼容模式在生产被拒绝；
 5. Mac mini 使用 DHCP Reservation 或静态内网 IP；
 6. 系统时间保持自动同步，关闭自动睡眠，并启用断电恢复后的自动启动；OIDC 对时间偏差敏感；
 7. 防火墙只向企业内网放行员工端和管理端端口；PostgreSQL 与 Node 端口只监听
@@ -74,8 +74,8 @@ bash scripts/deploy/init-intranet-ca.sh \
   --ca-dir /absolute/private/company-intranet-ca
 bash scripts/deploy/issue-intranet-ip-certificate.sh \
   --ca-dir /absolute/private/company-intranet-ca \
-  --ip 192.168.1.50 \
-  --output-dir /absolute/staging/macmini-192.168.1.50
+  --ip 192.168.33.20 \
+  --output-dir /absolute/staging/macmini-192.168.33.20
 ```
 
 只把 `server.crt`、`server.key` 和 `root-ca.crt` 安全复制到两个项目各自的 TLS 目录；
@@ -115,46 +115,36 @@ Git 忽略文件；构建目录中出现这些敏感路径时会直接失败。
 
 ## 5. 首次安装
 
-建议把控制仓库和稳定数据都放在 Docker Desktop 默认允许共享的 `/Users` 下：
+完整的逐段命令、配置清单和验收步骤见
+[Mac mini 部署流程（AI Hub 已部署）](mac-mini-deployment-runbook.md)。新安装统一采用：
 
-```bash
-mkdir -p /Users/dshdeploy/services
-cd /Users/dshdeploy/services
-git clone https://github.com/tonycc/dsh-work.git
-cd dsh-work
-cp deploy/runtime.env.example runtime.env
-chmod 600 runtime.env
-```
+1. 在独立临时目录下载指定 GitHub Release，验证不可变资产、SHA-256 和构建来源后解压；
+2. 在 Docker Desktop 默认允许共享的 `/Users` 下创建新的部署根目录，从发布包复制
+   `deploy/runtime.env.example`，设置权限 `600`，首次先关闭自动部署；
+3. 复用 AI Hub 的离线 CA，为 dsh-work 安装独立服务器证书副本；挂载独立异机备份目录；
+4. 在 AI Hub 登记 `dsh-work/production` 及两个 HTTPS 回调，填写实际签发的 Issuer、
+   Client ID、Audience、Secret 和已安装 DSH 的路径；
+5. 从已验证发布包执行 `preflight.sh` 和一次指定版本的 `release.sh`，建立 `current`；
+6. 完成健康、管理员登录、任务和备份验收后，再启用并安装当前版本的 Release watcher。
 
-编辑 `runtime.env`，至少替换以下内容：
+现有脚本支持直接从发布包完成首次安装，因此 Mac mini 不必克隆或编译 dsh-work。
+这不改变第 3 节对 DSH 独立源码 checkout 的要求。已有克隆式部署也不需要迁移目录或
+删除仓库；保留其 `runtime.env`、数据和发布状态，继续按升级流程维护。
 
-- `DSH_WORK_GITHUB_REPOSITORY` 和所有 `/Users/dshdeploy/...` 路径；
-- `PATH` 中保留 Homebrew、Docker Desktop 和 macOS 系统命令目录；`launchd` 不会继承交互式
-  Shell 的工具路径；
-- Mac mini 内网 IP、证书路径和对外端口；
-- PostgreSQL 密码与其 URL 编码后的 `DSH_WORK_DATABASE_URL`；
-- 已挂载的 `DSH_WORK_OFF_HOST_BACKUP_DIRECTORY`；该路径必须与部署根目录位于不同文件系统；
-- `DSH_WORK_SESSION_SECRET`；
-- AI Hub Platform URL、Issuer、Client ID、Client Secret、Audience；
-- AI Hub 中逐字登记的两个 HTTPS 回调地址；
-- 已安装 DSH 的绝对路径、锁定 Version 和 Commit。
-- `DSH_WORK_AUTO_DEPLOY_ENABLED=true`，轮询间隔保持至少 300 秒。
-
-与当前 AI Hub 纯 IP 部署配套时，平台使用 443，身份服务使用 8443：
-
-```dotenv
-AI_HUB_PLATFORM_URL=https://192.168.1.50
-AI_HUB_OIDC_ISSUER=https://192.168.1.50:8443/application/o/dsh-work/
-```
+与当前 AI Hub 纯 IP 部署配套时，平台使用 443，身份服务使用 8443。Issuer 和 Audience
+必须以 `production` 环境的实际凭据为准，不能直接使用模板中的 `/application/o/dsh-work/`
+和 `dsh-work` 占位值。
 
 `runtime.env` 是受信任的 shell-compatible dotenv 文件，会由部署脚本和 `launchd`
 加载。含空格或 shell 特殊字符的值必须使用单引号；不要在该文件中写命令。文件权限必须
 保持 `600`。
 
-证书、AI Hub 回调和 DSH 路径全部准备好后，安装一次 Release 监听器：
+首次指定版本部署及验收完成后，把 `DSH_WORK_AUTO_DEPLOY_ENABLED` 改为 `true`，确认
+GitHub 最新 Release 就是已批准版本，再安装一次 Release 监听器：
 
 ```bash
-bash scripts/deploy/install-release-watcher.sh /Users/dshdeploy/services/dsh-work
+bash /Users/deploy/services/dsh-work/current/scripts/deploy/install-release-watcher.sh \
+  /Users/deploy/services/dsh-work
 ```
 
 该命令会创建一个专用 `launchd` LaunchAgent 并立即检查最新 Release。此后不需要为每次
@@ -171,9 +161,9 @@ bash scripts/deploy/install-release-watcher.sh /Users/dshdeploy/services/dsh-wor
 1. 确认目标 Commit 的 `M6 quality gate` 成功；
 2. 在 GitHub Actions 打开 `Manual release`；
 3. 点击 `Run workflow`，选择 `main`，输入与 `server/package.json` 一致的版本，例如
-   `0.1.0`；
+   `0.1.1`；
 4. 工作流再次确认目标 Commit 的 CI 结论，构建前后端发布包，生成 SHA-256 和 Sigstore
-   来源证明，把资产上传到 Draft Release，最后发布为不可变的 `v0.1.0`；
+   来源证明，把资产上传到 Draft Release，最后发布为不可变的 `v0.1.1`；
 5. Mac mini 监听器在下一次轮询时自动发现、验证并部署，无需人工执行 `release.sh`。
 
 监听器调用的 `release.sh` 会：
@@ -204,8 +194,8 @@ bash scripts/deploy/install-release-watcher.sh /Users/dshdeploy/services/dsh-wor
 ```bash
 launchctl print gui/$(id -u)/com.company.dsh-work.server
 launchctl print gui/$(id -u)/com.company.dsh-work.release-watcher
-tail -f /Users/dshdeploy/services/dsh-work/logs/server.stderr.log
-tail -f /Users/dshdeploy/services/dsh-work/logs/release-watcher.stderr.log
+tail -f /Users/deploy/services/dsh-work/logs/server.stderr.log
+tail -f /Users/deploy/services/dsh-work/logs/release-watcher.stderr.log
 docker compose --env-file runtime.env -f current/deploy/compose.yaml ps
 docker compose --env-file runtime.env -f current/deploy/compose.yaml logs -f postgres web
 ```
@@ -213,13 +203,13 @@ docker compose --env-file runtime.env -f current/deploy/compose.yaml logs -f pos
 手工备份会短暂停止并恢复 `launchd` 后端，以保证数据库与持久文件处于一致的维护窗口：
 
 ```bash
-bash current/scripts/deploy/backup.sh /Users/dshdeploy/services/dsh-work
+bash current/scripts/deploy/backup.sh /Users/deploy/services/dsh-work
 ```
 
 回滚到已下载的旧版本：
 
 ```bash
-bash current/scripts/deploy/rollback.sh 0.1.0 /Users/dshdeploy/services/dsh-work
+bash current/scripts/deploy/rollback.sh 0.1.0 /Users/deploy/services/dsh-work
 ```
 
 回滚脚本会自动阻止监听器再次部署被回滚的版本。确认问题解决、确实需要重试同一 Tag 时，
@@ -238,8 +228,8 @@ launchctl kickstart -k gui/$(id -u)/com.company.dsh-work.release-watcher
 
 ```bash
 bash current/scripts/deploy/restore.sh \
-  /Users/dshdeploy/services/dsh-work \
-  /Users/dshdeploy/services/dsh-work/backups/20260902T120000Z \
+  /Users/deploy/services/dsh-work \
+  /Users/deploy/services/dsh-work/backups/20260902T120000Z \
   --confirm
 ```
 
@@ -256,7 +246,7 @@ bash current/scripts/deploy/restore.sh \
 
 ## 8. 与 AI Hub 的统一运维口径
 
-两个项目统一放在 `/Users/dshdeploy/services/<project>`，都使用 `runtime.env`、`releases/`、
+两个项目统一放在 `/Users/deploy/services/<project>`，都使用 `runtime.env`、`releases/`、
 `current`、`previous`、`release-artifacts/`、`automation/state/` 和 `logs/`；普通 push 只跑
 CI，生产制品都由 GitHub Actions 人工批准后发布为不可变 Release，再由各自的 `launchd`
 watcher 发现并验证。它们仍各自持有数据库、Compose project、备份与版本，可以独立发布
