@@ -58,7 +58,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-docker compose --env-file "${runtime_env}" -f "${compose_file}" exec -T postgres \
+endpoint_compose=$("${release_dir}/scripts/deploy/render-endpoint-compose.sh" "${deploy_root}" "${release_dir}")
+docker compose --env-file "${runtime_env}" -f "${compose_file}" -f "${endpoint_compose}" exec -T postgres \
   pg_dump --format=custom --no-owner --no-acl \
   --username "${DSH_WORK_POSTGRES_USER:?Set DSH_WORK_POSTGRES_USER}" \
   "${DSH_WORK_POSTGRES_DB:?Set DSH_WORK_POSTGRES_DB}" > "${partial}/database.dump"

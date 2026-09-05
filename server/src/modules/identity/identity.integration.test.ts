@@ -93,11 +93,15 @@ test('OIDC login transaction is short-lived and can only be consumed once', asyn
     codeVerifierEncrypted: 'encrypted-code-verifier',
     nonce: 'nonce-value',
     returnTo: 'http://localhost:4174/workbench',
+    portalOrigin: 'http://localhost:4174',
+    redirectUri: 'http://localhost:4190/auth/workbench/callback',
     expiresAt: new Date(Date.now() + 60_000),
   })
 
   const consumed = await repository.consumeLoginTransaction(transactionHash, 'workbench')
   assert.equal(consumed?.nonce, 'nonce-value')
+  assert.equal(consumed?.portalOrigin, 'http://localhost:4174')
+  assert.equal(consumed?.redirectUri, 'http://localhost:4190/auth/workbench/callback')
   assert.equal(await repository.consumeLoginTransaction(transactionHash, 'workbench'), null)
 })
 
@@ -531,8 +535,9 @@ function identityConfiguration(origin: string, issuer: string): OidcIdentityConf
     tokenAudience: 'dsh-work-test-client',
     clientId: 'dsh-work-test-client',
     clientSecret: 'directory-test-secret',
-    redirectUri: `${origin}/callback`,
-    portalUrl: origin,
+    allowedOrigins: [origin],
+    defaultOrigin: origin,
+    redirectUriByOrigin: { [origin]: `${origin}/callback` },
     loginScopes: ['openid'],
   }
   return {

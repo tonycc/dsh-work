@@ -72,15 +72,20 @@ cp -R "${project_root}/apps/admin-web/dist" "${bundle}/apps/admin-web/dist"
 
 deployment_scripts=(
   backup.sh
+  configure-macmini-endpoints.mjs
   init-intranet-ca.sh
   install-launchd.sh
   install-release-watcher.sh
+  issue-intranet-certificate.sh
   issue-intranet-ip-certificate.sh
   preflight.sh
+  render-endpoint-compose.mjs
+  render-endpoint-compose.sh
   release.sh
   restore.sh
   rollback.sh
   run-server.sh
+  set-macmini-endpoints.sh
   watch-release.sh
 )
 for deployment_script in "${deployment_scripts[@]}"; do

@@ -6,11 +6,14 @@ cd "${project_root}"
 
 deployment_scripts=(
   scripts/deploy/backup.sh
+  scripts/deploy/set-macmini-endpoints.sh
   scripts/deploy/init-intranet-ca.sh
   scripts/deploy/install-launchd.sh
   scripts/deploy/install-release-watcher.sh
+  scripts/deploy/issue-intranet-certificate.sh
   scripts/deploy/issue-intranet-ip-certificate.sh
   scripts/deploy/preflight.sh
+  scripts/deploy/render-endpoint-compose.sh
   scripts/deploy/release.sh
   scripts/deploy/restore.sh
   scripts/deploy/rollback.sh
@@ -33,18 +36,45 @@ bash scripts/deploy/init-intranet-ca.sh \
 bash scripts/deploy/issue-intranet-ip-certificate.sh \
   --ca-dir "${certificate_fixture}/ca" \
   --ip 192.168.50.20 \
+  --ip 192.168.50.21 \
+  --dns work.example.com \
   --output-dir "${certificate_fixture}/issued" >/dev/null 2>&1
 openssl verify \
   -CAfile "${certificate_fixture}/issued/root-ca.crt" \
   "${certificate_fixture}/issued/server.crt" >/dev/null
 [[ ! -e "${certificate_fixture}/issued/root-ca.key" ]]
+if openssl x509 -help 2>&1 | grep -q -- '-checkip'; then
+  openssl x509 -in "${certificate_fixture}/issued/server.crt" -noout -checkip 192.168.50.20 >/dev/null
+  openssl x509 -in "${certificate_fixture}/issued/server.crt" -noout -checkip 192.168.50.21 >/dev/null
+else
+  openssl x509 -in "${certificate_fixture}/issued/server.crt" -noout -text \
+    | grep -F 'IP Address:192.168.50.20' >/dev/null
+  openssl x509 -in "${certificate_fixture}/issued/server.crt" -noout -text \
+    | grep -F 'IP Address:192.168.50.21' >/dev/null
+fi
+if openssl x509 -help 2>&1 | grep -q -- '-checkhost'; then
+  openssl x509 -in "${certificate_fixture}/issued/server.crt" -noout -checkhost work.example.com >/dev/null
+else
+  openssl x509 -in "${certificate_fixture}/issued/server.crt" -noout -text \
+    | grep -F 'DNS:work.example.com' >/dev/null
+fi
 rm -rf "${certificate_fixture}"
 trap - EXIT
 
 node scripts/ci/release-watcher.test.mjs
 node scripts/ci/deployment-safety.test.mjs
 
-docker compose --env-file deploy/runtime.env.example -f deploy/compose.yaml config >/dev/null
+endpoint_fixture=$(mktemp -d "${TMPDIR:-/tmp}/dsh-work-endpoints-test.XXXXXX")
+NODE_ENV=production \
+DSH_WORK_BIND_ADDRESSES=192.168.33.20 \
+DSH_WORK_BIND_ADDRESS=192.168.33.20 \
+DSH_WORK_WORKBENCH_ORIGINS=https://192.168.33.20:4174 \
+DSH_WORK_ADMIN_ORIGINS=https://192.168.33.20:4180 \
+node scripts/deploy/render-endpoint-compose.mjs "${endpoint_fixture}" "${project_root}" >/dev/null
+docker compose --env-file deploy/runtime.env.example \
+  -f deploy/compose.yaml \
+  -f "${endpoint_fixture}/generated/compose.endpoints.yaml" config >/dev/null
+rm -rf "${endpoint_fixture}"
 python3 -c "import plistlib; plistlib.load(open('deploy/launchd/com.company.dsh-work.server.plist.template', 'rb'))"
 python3 -c "import plistlib; plistlib.load(open('deploy/launchd/com.company.dsh-work.release-watcher.plist.template', 'rb'))"
 

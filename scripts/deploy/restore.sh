@@ -18,9 +18,15 @@ set -a
 source "${runtime_env}"
 set +a
 
+endpoint_compose=$("${release_dir}/scripts/deploy/render-endpoint-compose.sh" "${deploy_root}" "${release_dir}")
+
+run_compose() {
+  docker compose --env-file "${runtime_env}" -f "${compose_file}" -f "${endpoint_compose}" "$@"
+}
+
 recover_service() {
   "${release_dir}/scripts/deploy/install-launchd.sh" "${deploy_root}" >/dev/null 2>&1 || true
-  docker compose --env-file "${runtime_env}" -f "${compose_file}" up -d --force-recreate web >/dev/null 2>&1 || true
+  run_compose up -d --force-recreate web >/dev/null 2>&1 || true
 }
 maintenance_started=false
 destructive_started=false
@@ -35,7 +41,7 @@ cleanup() {
     if launchctl print "${service_target}" >/dev/null 2>&1; then
       launchctl bootout "${service_target}" >/dev/null 2>&1 || true
     fi
-    docker compose --env-file "${runtime_env}" -f "${compose_file}" stop web >/dev/null 2>&1 || true
+    run_compose stop web >/dev/null 2>&1 || true
     echo "restore failed after database replacement began; services remain stopped so partial data is not exposed" >&2
   else
     recover_service
@@ -54,14 +60,14 @@ trap cleanup EXIT
 if launchctl print "${service_target}" >/dev/null 2>&1; then
   launchctl bootout "${service_target}"
 fi
-docker compose --env-file "${runtime_env}" -f "${compose_file}" stop web
+run_compose stop web
 
 destructive_started=true
-docker compose --env-file "${runtime_env}" -f "${compose_file}" exec -T postgres \
+run_compose exec -T postgres \
   dropdb --if-exists --force --username "${DSH_WORK_POSTGRES_USER}" "${DSH_WORK_POSTGRES_DB}"
-docker compose --env-file "${runtime_env}" -f "${compose_file}" exec -T postgres \
+run_compose exec -T postgres \
   createdb --username "${DSH_WORK_POSTGRES_USER}" "${DSH_WORK_POSTGRES_DB}"
-docker compose --env-file "${runtime_env}" -f "${compose_file}" exec -T postgres \
+run_compose exec -T postgres \
   pg_restore --exit-on-error --no-owner --no-acl \
   --username "${DSH_WORK_POSTGRES_USER}" --dbname "${DSH_WORK_POSTGRES_DB}" < "${backup_dir}/database.dump"
 
@@ -72,7 +78,7 @@ fi
 tar -xzf "${backup_dir}/data.tar.gz" -C "$(dirname "${DSH_WORK_DATA_ROOT}")"
 
 "${release_dir}/scripts/deploy/install-launchd.sh" "${deploy_root}"
-docker compose --env-file "${runtime_env}" -f "${compose_file}" up -d --wait --force-recreate web
+run_compose up -d --wait --force-recreate web
 restore_complete=true
 trap - EXIT
 echo "restore completed from ${backup_dir}; previous data was retained beside DSH_WORK_DATA_ROOT"

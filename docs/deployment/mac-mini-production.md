@@ -8,7 +8,7 @@
 项目或发布版本；`dsh-work` 只通过 AI Hub 的 HTTPS/OIDC/API 地址使用统一身份和员工
 目录。因此 AI Hub 可以先部署，`dsh-work` 后部署，也可以分别安排维护窗口。
 
-本方案针对一台 Apple Silicon Mac mini、Docker Desktop、一期内网 IP 访问：
+本方案针对一台 Apple Silicon Mac mini、Docker Desktop，以及并列支持的内网 IP/固定域名入口：
 
 ```text
 GitHub push
@@ -62,7 +62,7 @@ Token 刷新和员工目录同步会失败关闭。AI Hub 的发布不得重建 
 6. 系统时间保持自动同步，关闭自动睡眠，并启用断电恢复后的自动启动；OIDC 对时间偏差敏感；
 7. 防火墙只向企业内网放行员工端和管理端端口；PostgreSQL 与 Node 端口只监听
    `127.0.0.1`；
-8. 内部 CA 证书包含 Mac mini IP 的 SAN，员工设备已信任该 CA；离线根 CA 私钥只保存在
+8. 内部 CA 证书包含全部启用 IP/域名的 SAN，员工设备已信任该 CA；离线根 CA 私钥只保存在
    运维工作站，绝不复制到 Mac mini；
 9. `/Volumes/dsh-work-backups` 是启用静态加密和访问控制的 NAS 或其他异机文件系统挂载点，
    不能位于 Mac mini 系统盘。
@@ -75,8 +75,33 @@ bash scripts/deploy/init-intranet-ca.sh \
 bash scripts/deploy/issue-intranet-ip-certificate.sh \
   --ca-dir /absolute/private/company-intranet-ca \
   --ip 192.168.33.20 \
+  --ip 192.168.101.20 \
   --output-dir /absolute/staging/macmini-192.168.33.20
 ```
+
+需要同时启用多个 IP 或固定域名时，改用 `issue-intranet-certificate.sh`，重复传入 `--ip`
+和 `--dns`；每个项目使用独立服务器私钥。完整变更顺序见
+[多 IP 与固定域名实施方案](multi-ip-domain-implementation-plan.md)。
+
+地址变更使用同一组操作语义。先在离线工作站签发同时覆盖旧、新入口的证书并安装到既有
+证书路径，然后依次执行 `plan`、`check`、`apply`；`apply` 和 `rollback` 必须显式确认：
+
+```bash
+bash current/scripts/deploy/set-macmini-endpoints.sh plan \
+  --deploy-root /absolute/dsh-work \
+  --bind-address 192.168.33.20 \
+  --bind-address 192.168.101.20 \
+  --workbench-origin https://192.168.33.20:4174 \
+  --workbench-origin https://192.168.101.20:4174 \
+  --admin-origin https://192.168.33.20:4180 \
+  --admin-origin https://192.168.101.20:4180 \
+  --workbench-default-origin https://192.168.33.20:4174 \
+  --admin-default-origin https://192.168.33.20:4180
+```
+
+确认预览后把 `plan` 替换为 `check`，通过后再替换为 `apply` 并追加 `--confirm`。恢复上一份
+地址配置使用 `rollback --deploy-root /absolute/dsh-work --confirm`。命令只变更入口字段，保留
+数据库、Session、GitHub 和 DSH 凭据；同时复用发布锁，避免与 Release 部署并发。
 
 只把 `server.crt`、`server.key` 和 `root-ca.crt` 安全复制到两个项目各自的 TLS 目录；
 `root-ca.key` 必须离线保存。预检会拒绝服务器证书目录中出现 CA 私钥。所有访问设备必须信任
@@ -196,8 +221,10 @@ launchctl print gui/$(id -u)/com.company.dsh-work.server
 launchctl print gui/$(id -u)/com.company.dsh-work.release-watcher
 tail -f /Users/deploy/services/dsh-work/logs/server.stderr.log
 tail -f /Users/deploy/services/dsh-work/logs/release-watcher.stderr.log
-docker compose --env-file runtime.env -f current/deploy/compose.yaml ps
-docker compose --env-file runtime.env -f current/deploy/compose.yaml logs -f postgres web
+docker compose --env-file runtime.env -f current/deploy/compose.yaml \
+  -f generated/compose.endpoints.yaml ps
+docker compose --env-file runtime.env -f current/deploy/compose.yaml \
+  -f generated/compose.endpoints.yaml logs -f postgres web
 ```
 
 手工备份会短暂停止并恢复 `launchd` 后端，以保证数据库与持久文件处于一致的维护窗口：

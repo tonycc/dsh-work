@@ -54,7 +54,7 @@ erDiagram
 | `roles` | `id`, `tenant_id`, `code`, `name`, `description`, `status`, `permissions` | `code` 在租户内唯一；权限采用 dsh-work 受控枚举 |
 | `user_roles` | `tenant_id`, `user_id`, `role_id`, `source_key`, `valid_until`, `granted_by`, `granted_at` | 授权来源只允许 `local`；员工目录同步不能修改本表 |
 | `data_scope_grants` | `id`, `tenant_id`, `subject_type`, `subject_id`, `scope_code`, `scope_value` | 主体可为用户、角色或 Workspace；MVP 以 `scope_value` 保存受控完整范围代码 |
-| `oidc_login_transactions` | `transaction_hash`, `audience`, `state_hash`, `code_verifier_encrypted`, `nonce`, `return_to`, `expires_at` | 一次性 OIDC 登录交易；使用后原子删除 |
+| `oidc_login_transactions` | `transaction_hash`, `audience`, `state_hash`, `code_verifier_encrypted`, `nonce`, `return_to`, `portal_origin`, `redirect_uri`, `expires_at` | 一次性 OIDC 登录交易；锁定发起登录的入口和回调，使用后原子删除 |
 | `authentication_sessions` | `session_hash`, `tenant_id`, `audience`, `user_id`, `access_token_encrypted`, `refresh_token_encrypted`, `token_expires_at`, `authorization_version`, `expires_at`, `revoked_at` | 浏览器只保存不透明 Cookie；Token 加密存储；`authorization_version` 对应本地版本；旧快照列保持空数组仅用于迁移兼容 |
 | `application_admin_bootstrap_claims` | `application_id`, `environment`, `external_user_id`, `user_id`, `consumed_at` | 记录 AI Hub 环境初始管理员一次性认领本地平台管理员的结果；应用负责人变化不改认领记录或本地角色 |
 | `identity_directory_sync_state` | `application_id`, `environment`, `cursor`, `status`, `last_started_at`, `last_succeeded_at`, `last_error` | 保存 AI Hub 员工目录增量游标与运行状态；同步只改身份资料和账号状态 |

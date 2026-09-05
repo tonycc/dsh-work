@@ -4,12 +4,14 @@ import {
   sign as signPayload,
   type JsonWebKey,
 } from 'node:crypto'
-import { createServer } from 'node:http'
+import { createServer, type IncomingMessage } from 'node:http'
 import { test } from 'node:test'
 
 import type { DatabaseClient } from '../../infrastructure/postgres/database.ts'
 import { loadIdentityConfiguration } from './config.ts'
 import { OidcAuthService } from './auth-service.ts'
+import { AiHubClient } from './ai-hub-client.ts'
+import { IdentitySessionRepository, type LoginTransactionRecord } from './session-repository.ts'
 import { IdentityDirectorySyncService } from './directory-sync-service.ts'
 import { OidcProtocolError, OidcProviderClient } from './oidc-client.ts'
 import { assertApiRouteAccess } from '../../http/router.ts'
@@ -25,6 +27,12 @@ test('OIDC configuration uses one AI Hub credential for both portals', () => {
   assert.equal(configuration.applicationId, 'dsh-work')
   assert.equal(configuration.environment, 'local')
   assert.equal(configuration.directorySyncIntervalSeconds, 900)
+  assert.deepEqual(configuration.audiences.workbench.allowedOrigins, ['http://localhost:4174'])
+  assert.equal(configuration.audiences.workbench.defaultOrigin, 'http://localhost:4174')
+  assert.equal(
+    configuration.audiences.workbench.redirectUriByOrigin['http://localhost:4174'],
+    'http://localhost:4190/auth/workbench/callback',
+  )
   assert.deepEqual(configuration.audiences.workbench.loginScopes, [
     'openid', 'profile', 'email', 'offline_access', 'ai_hub.identity', 'platform.me.read',
   ])
@@ -40,6 +48,54 @@ test('OIDC configuration rejects a separate admin application credential', () =>
     () => loadIdentityConfiguration(environment),
     /必须共用同一个 AI Hub 应用环境凭据/,
   )
+})
+
+test('OIDC configuration supports multiple exact origins and derives matching callbacks', () => {
+  const environment = baseEnvironment()
+  delete environment.AI_HUB_WORKBENCH_PORTAL_URL
+  delete environment.AI_HUB_WORKBENCH_REDIRECT_URI
+  delete environment.AI_HUB_ADMIN_PORTAL_URL
+  delete environment.AI_HUB_ADMIN_REDIRECT_URI
+  Object.assign(environment, {
+    DSH_WORK_WORKBENCH_ORIGINS: 'http://192.168.33.20:4174,http://work.internal:4174',
+    DSH_WORK_ADMIN_ORIGINS: 'http://192.168.33.20:4180,http://work.internal:4180',
+    DSH_WORK_WORKBENCH_DEFAULT_ORIGIN: 'http://work.internal:4174',
+    DSH_WORK_ADMIN_DEFAULT_ORIGIN: 'http://work.internal:4180',
+  })
+
+  const configuration = loadIdentityConfiguration(environment)
+  assert.equal(configuration.mode, 'oidc')
+  assert.deepEqual(configuration.audiences.workbench.allowedOrigins, [
+    'http://192.168.33.20:4174',
+    'http://work.internal:4174',
+  ])
+  assert.equal(configuration.audiences.workbench.defaultOrigin, 'http://work.internal:4174')
+  assert.equal(
+    configuration.audiences.workbench.redirectUriByOrigin['http://192.168.33.20:4174'],
+    'http://192.168.33.20:4174/auth/workbench/callback',
+  )
+})
+
+test('OIDC configuration rejects duplicate, wrong-port, and conflicting origins', () => {
+  const duplicate = baseEnvironment()
+  duplicate.DSH_WORK_WORKBENCH_ORIGINS = 'http://localhost:4174,http://localhost:4174'
+  assert.throws(() => loadIdentityConfiguration(duplicate), /重复 Origin/)
+
+  const wrongPort = baseEnvironment()
+  delete wrongPort.AI_HUB_WORKBENCH_PORTAL_URL
+  delete wrongPort.AI_HUB_WORKBENCH_REDIRECT_URI
+  wrongPort.DSH_WORK_WORKBENCH_ORIGINS = 'http://localhost:9999'
+  assert.throws(() => loadIdentityConfiguration(wrongPort), /必须使用端口 4174/)
+
+  const conflictingLegacy = baseEnvironment()
+  conflictingLegacy.DSH_WORK_WORKBENCH_ORIGINS = 'http://work.internal:4174'
+  assert.throws(() => loadIdentityConfiguration(conflictingLegacy), /含义不一致/)
+
+  const publicIp = baseEnvironment()
+  delete publicIp.AI_HUB_WORKBENCH_PORTAL_URL
+  delete publicIp.AI_HUB_WORKBENCH_REDIRECT_URI
+  publicIp.DSH_WORK_WORKBENCH_ORIGINS = 'http://203.0.113.10:4174'
+  assert.throws(() => loadIdentityConfiguration(publicIp), /RFC1918/)
 })
 
 test('directory scheduler reconciles immediately before waiting for the interval', async () => {
@@ -80,13 +136,117 @@ test('OIDC errors redirect to frontend routes outside the backend auth proxy', (
   const authentication = new OidcAuthService(configuration, {} as DatabaseClient)
 
   assert.equal(
-    authentication.errorRedirect('workbench', 'invalid_callback'),
+    authentication.errorRedirect(requestFor('localhost:4174'), 'workbench', 'invalid_callback'),
     'http://localhost:4174/login-error?code=invalid_callback',
   )
   assert.equal(
-    authentication.errorRedirect('admin', 'access_denied'),
+    authentication.errorRedirect(requestFor('localhost:4180'), 'admin', 'access_denied'),
     'http://localhost:4180/login-error?code=access_denied',
   )
+})
+
+test('OIDC redirects trust only a forwarded Origin from the exact allowlist', () => {
+  const environment = baseEnvironment()
+  delete environment.AI_HUB_WORKBENCH_PORTAL_URL
+  delete environment.AI_HUB_WORKBENCH_REDIRECT_URI
+  environment.DSH_WORK_WORKBENCH_ORIGINS = 'http://192.168.33.20:4174,http://work.internal:4174'
+  const configuration = loadIdentityConfiguration(environment)
+  if (configuration.mode !== 'oidc') assert.fail('expected OIDC configuration')
+  const authentication = new OidcAuthService(configuration, {} as DatabaseClient)
+
+  const forwarded = requestFor('127.0.0.1:4190', {
+    'x-forwarded-proto': 'http',
+    'x-forwarded-host': 'work.internal:4174',
+  })
+  assert.equal(
+    authentication.errorRedirect(forwarded, 'workbench', 'invalid_callback'),
+    'http://work.internal:4174/login-error?code=invalid_callback',
+  )
+  assert.throws(
+    () => authentication.errorRedirect(requestFor('unknown.internal:4174'), 'workbench', 'invalid_callback'),
+    /不在允许列表/,
+  )
+})
+
+test('local SSO completes both portal logins through the legacy backend callback', async (context) => {
+  const configuration = loadIdentityConfiguration(baseEnvironment())
+  if (configuration.mode !== 'oidc') assert.fail('expected OIDC configuration')
+  const authentication = new OidcAuthService(configuration, {} as DatabaseClient)
+  let pending: LoginTransactionRecord | null = null
+  context.mock.method(IdentitySessionRepository.prototype, 'createLoginTransaction', async (
+    input: Parameters<IdentitySessionRepository['createLoginTransaction']>[0],
+  ) => {
+    pending = input
+  })
+  context.mock.method(IdentitySessionRepository.prototype, 'consumeLoginTransaction', async () => pending)
+  context.mock.method(OidcProviderClient.prototype, 'createAuthorizationRequest', async (redirectUri: string) => ({
+    url: `https://issuer.example/authorize?redirect_uri=${encodeURIComponent(redirectUri)}`,
+    state: 'login-state', nonce: 'login-nonce', codeVerifier: 'login-verifier',
+  }))
+  const exchange = context.mock.method(OidcProviderClient.prototype, 'exchangeCode', async () => ({
+    accessToken: 'access-token', idToken: 'id-token', refreshToken: null, expiresIn: 3600, scope: 'openid',
+  }))
+  context.mock.method(OidcProviderClient.prototype, 'verify', async () => ({
+    subject: 'employee', issuer: configuration.audiences.workbench.issuer,
+    audiences: ['dsh-work__local__v1'], expiresAt: Date.now() / 1000 + 3600,
+    issuedAt: Date.now() / 1000, scopes: ['openid'], actorType: 'user',
+    authorizationVersion: 1, displayName: 'Employee', email: null, claims: {},
+  }))
+  context.mock.method(AiHubClient.prototype, 'me', async () => ({
+    user_id: 'employee', subject: 'employee', display_name: 'Employee', email: null,
+    status: 'ACTIVE', organization_id: 'org', organization_name: 'Company',
+    business_user: true, authorization_version: 1,
+  }))
+  context.mock.method(IdentitySessionRepository.prototype, 'synchronizeIdentity', async () => ({
+    userId: 'employee', authorizationVersion: 1,
+  }))
+  context.mock.method(IdentitySessionRepository.prototype, 'resolveAuthorization', async () => ({
+    profile: adminIdentity([]).profile, roleIds: [], roleCodes: [], dataScopes: [],
+    permissions: [LOCAL_PERMISSIONS.workbenchUse, LOCAL_PERMISSIONS.adminAll], authorizationVersion: 1,
+  }))
+  const createSession = context.mock.method(IdentitySessionRepository.prototype, 'createSession', async () => {})
+
+  for (const [audience, port] of [['workbench', 4174], ['admin', 4180]] as const) {
+    const origin = `http://localhost:${port}`
+    const callback = `http://localhost:4190/auth/${audience}/callback`
+    const login = await authentication.beginLogin(requestFor(`localhost:${port}`), audience, '/home')
+    assert.equal(new URL(login.location).searchParams.get('redirect_uri'), callback)
+    const result = await authentication.completeLogin({
+      request: requestFor('localhost:4190'), audience, code: 'code',
+      state: 'login-state', transactionToken: 'transaction-cookie',
+    })
+    assert.equal(result.location, `${origin}/home`)
+    assert.match(result.sessionCookie, /_session=/)
+    assert.deepEqual(exchange.mock.calls.at(-1)?.arguments, ['code', callback, 'login-verifier'])
+    assert.equal(authentication.errorRedirect(requestFor('localhost:4190'), audience, 'denied'),
+      `${origin}/login-error?code=denied`)
+  }
+  assert.equal(createSession.mock.callCount(), 2)
+  await assert.rejects(authentication.beginLogin(requestFor('localhost:4190'), 'workbench', null),
+    /不在允许列表/)
+  assert.throws(() => authentication.errorRedirect(requestFor('localhost:4191'), 'workbench', 'denied'),
+    /不在允许列表/)
+})
+
+test('multi-origin callbacks cannot switch away from the transaction origin', async (context) => {
+  const environment = baseEnvironment()
+  delete environment.AI_HUB_WORKBENCH_PORTAL_URL
+  delete environment.AI_HUB_WORKBENCH_REDIRECT_URI
+  environment.DSH_WORK_WORKBENCH_ORIGINS = 'http://192.168.33.20:4174,http://192.168.101.20:4174'
+  const configuration = loadIdentityConfiguration(environment)
+  if (configuration.mode !== 'oidc') assert.fail('expected OIDC configuration')
+  const authentication = new OidcAuthService(configuration, {} as DatabaseClient)
+  context.mock.method(IdentitySessionRepository.prototype, 'consumeLoginTransaction', async () => ({
+    stateHash: hashOpaque('state'), codeVerifierEncrypted: '', nonce: '', returnTo: '/',
+    portalOrigin: 'http://192.168.33.20:4174',
+    redirectUri: 'http://192.168.33.20:4174/auth/workbench/callback',
+  }))
+  await assert.rejects(authentication.completeLogin({
+    request: requestFor('192.168.101.20:4174'), audience: 'workbench',
+    code: 'code', state: 'state', transactionToken: 'cookie',
+  }), /回调入口与登录入口不一致/)
+  assert.throws(() => authentication.errorRedirect(requestFor('localhost:4190'), 'workbench', 'denied'),
+    /不在允许列表/)
 })
 
 test('production OIDC configuration rejects insecure URLs, cookies, and placeholder secrets', () => {
@@ -311,6 +471,16 @@ function baseEnvironment(): NodeJS.ProcessEnv {
     AI_HUB_ADMIN_REDIRECT_URI: 'http://localhost:4190/auth/admin/callback',
     AI_HUB_ADMIN_PORTAL_URL: 'http://localhost:4180',
   }
+}
+
+function requestFor(
+  host: string,
+  headers: Record<string, string> = {},
+): IncomingMessage {
+  return {
+    headers: { host, ...headers },
+    socket: {},
+  } as IncomingMessage
 }
 
 function adminIdentity(permissions: string[]): RequestIdentity {

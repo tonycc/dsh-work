@@ -6,8 +6,8 @@ import type { Router } from './router.ts'
 
 export function registerOidcRoutes(router: Router, authentication: OidcAuthService) {
   for (const audience of ['workbench', 'admin'] as const) {
-    router.get(`/auth/${audience}/login`, async (_request, context, response) => {
-      const result = await authentication.beginLogin(audience, context.url.searchParams.get('return_to'))
+    router.get(`/auth/${audience}/login`, async (request, context, response) => {
+      const result = await authentication.beginLogin(request, audience, context.url.searchParams.get('return_to'))
       redirect(response, result.location, [result.cookie])
     })
 
@@ -16,7 +16,7 @@ export function registerOidcRoutes(router: Router, authentication: OidcAuthServi
       if (providerError) {
         redirect(
           response,
-          authentication.errorRedirect(audience, providerError),
+          authentication.errorRedirect(request, audience, providerError),
           [authentication.clearTransactionCookie(audience)],
         )
         return
@@ -27,19 +27,25 @@ export function registerOidcRoutes(router: Router, authentication: OidcAuthServi
       if (!code || !state || !transactionToken) {
         redirect(
           response,
-          authentication.errorRedirect(audience, 'invalid_callback'),
+          authentication.errorRedirect(request, audience, 'invalid_callback'),
           [authentication.clearTransactionCookie(audience)],
         )
         return
       }
       try {
-        const result = await authentication.completeLogin({ audience, code, state, transactionToken })
+        const result = await authentication.completeLogin({
+          request,
+          audience,
+          code,
+          state,
+          transactionToken,
+        })
         redirect(response, result.location, [result.sessionCookie, result.clearTransactionCookie])
       } catch (error) {
         const codeValue = error instanceof IdentityAccessError ? error.code : 'authentication_failed'
         redirect(
           response,
-          authentication.errorRedirect(audience, codeValue),
+          authentication.errorRedirect(request, audience, codeValue),
           [authentication.clearTransactionCookie(audience)],
         )
       }

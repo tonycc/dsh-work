@@ -3,7 +3,15 @@ set -euo pipefail
 
 deploy_root=${1:?Usage: preflight.sh DEPLOY_ROOT RELEASE_DIR}
 release_dir=${2:?Usage: preflight.sh DEPLOY_ROOT RELEASE_DIR}
-runtime_env="${deploy_root}/runtime.env"
+runtime_env=${3:-"${deploy_root}/runtime.env"}
+candidate_endpoint_compose=${4:-"${deploy_root}/generated/.compose.endpoints.preflight-$$.yaml"}
+external_endpoint_candidate=false
+[[ $# -lt 4 ]] || external_endpoint_candidate=true
+
+cleanup() {
+  [[ "${external_endpoint_candidate}" == true ]] || rm -f "${candidate_endpoint_compose}"
+}
+trap cleanup EXIT
 
 fail() {
   echo "preflight failed: $*" >&2
@@ -19,7 +27,7 @@ set -a
 source "${runtime_env}"
 set +a
 
-for command_name in docker git curl gh shasum launchctl openssl plutil; do
+for command_name in docker git curl gh shasum launchctl openssl plutil ifconfig; do
   command -v "${command_name}" >/dev/null || fail "required command is unavailable: ${command_name}"
 done
 gh auth status >/dev/null 2>&1 || fail "GitHub CLI is not authenticated"
@@ -51,7 +59,11 @@ for required_path in \
   "${release_dir}/server/config/dsh/runtime-lock.json" \
   "${release_dir}/apps/workbench-web/dist/index.html" \
   "${release_dir}/apps/admin-web/dist/index.html" \
-  "${release_dir}/deploy/compose.yaml"; do
+  "${release_dir}/deploy/compose.yaml" \
+  "${release_dir}/scripts/deploy/configure-macmini-endpoints.mjs" \
+  "${release_dir}/scripts/deploy/render-endpoint-compose.sh" \
+  "${release_dir}/scripts/deploy/render-endpoint-compose.mjs" \
+  "${release_dir}/scripts/deploy/set-macmini-endpoints.sh"; do
   [[ -e "${required_path}" ]] || fail "release payload is incomplete: ${required_path}"
 done
 
@@ -62,6 +74,10 @@ if ! (
 ); then
   fail "AI Hub OIDC production configuration is invalid"
 fi
+
+endpoint_compose=$("${release_dir}/scripts/deploy/render-endpoint-compose.sh" \
+  "${deploy_root}" "${release_dir}" "${candidate_endpoint_compose}" "${runtime_env}")
+[[ -r "${endpoint_compose}" ]] || fail "generated endpoint Compose override is unreadable"
 
 if ! "${node_bin}" -e '
   const url = new URL(process.env.DSH_WORK_DATABASE_URL ?? "")
@@ -93,8 +109,47 @@ for forbidden_ca_key in "${certificate_directory}/root-ca.key" "${certificate_di
     || fail "offline CA private keys must never be stored on the Mac mini: ${forbidden_ca_key}"
 done
 openssl x509 -in "${DSH_WORK_TLS_CERT_FILE}" -noout -checkend 86400 >/dev/null || fail "TLS certificate expires in less than 24 hours"
-openssl x509 -in "${DSH_WORK_TLS_CERT_FILE}" -noout -text | grep -F "IP Address:${DSH_WORK_PUBLIC_HOST:?Set DSH_WORK_PUBLIC_HOST}" >/dev/null \
-  || fail "TLS certificate does not contain the configured private IP SAN"
+bind_address_values=${DSH_WORK_BIND_ADDRESSES:-${DSH_WORK_BIND_ADDRESS:?Set DSH_WORK_BIND_ADDRESSES}}
+old_ifs=${IFS}
+IFS=',' read -r -a bind_addresses <<<"${bind_address_values}"
+IFS=${old_ifs}
+for bind_address in "${bind_addresses[@]}"; do
+  bind_address=${bind_address//[[:space:]]/}
+  if ! ifconfig | awk -v expected="${bind_address}" \
+    '$1 == "inet" && $2 == expected { found = 1 } END { exit(found ? 0 : 1) }'; then
+    fail "configured private IP is not assigned to a Mac mini interface: ${bind_address}"
+  fi
+  if openssl x509 -help 2>&1 | grep -q -- '-checkip'; then
+    openssl x509 -in "${DSH_WORK_TLS_CERT_FILE}" -noout -checkip "${bind_address}" >/dev/null \
+      || fail "TLS certificate does not contain IP SAN ${bind_address}"
+  else
+    openssl x509 -in "${DSH_WORK_TLS_CERT_FILE}" -noout -text \
+      | grep -F "IP Address:${bind_address}" >/dev/null \
+      || fail "TLS certificate does not contain IP SAN ${bind_address}"
+  fi
+done
+
+origin_values=${DSH_WORK_WORKBENCH_ORIGINS:-${AI_HUB_WORKBENCH_PORTAL_URL:?Set workbench Origins}}
+origin_values+=",${DSH_WORK_ADMIN_ORIGINS:-${AI_HUB_ADMIN_PORTAL_URL:?Set admin Origins}}"
+IFS=',' read -r -a configured_origins <<<"${origin_values}"
+IFS=${old_ifs}
+checked_dns_names=' '
+for configured_origin in "${configured_origins[@]}"; do
+  origin_host=$("${node_bin}" -e 'process.stdout.write(new URL(process.argv[1].trim()).hostname)' \
+    "${configured_origin}")
+  [[ "${origin_host}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && continue
+  [[ "${checked_dns_names}" != *" ${origin_host} "* ]] \
+    || continue
+  checked_dns_names+="${origin_host} "
+  if openssl x509 -help 2>&1 | grep -q -- '-checkhost'; then
+    openssl x509 -in "${DSH_WORK_TLS_CERT_FILE}" -noout -checkhost "${origin_host}" >/dev/null \
+      || fail "TLS certificate does not contain DNS SAN ${origin_host}"
+  else
+    openssl x509 -in "${DSH_WORK_TLS_CERT_FILE}" -noout -text \
+      | grep -F "DNS:${origin_host}" >/dev/null \
+      || fail "TLS certificate does not contain DNS SAN ${origin_host}"
+  fi
+done
 openssl verify -CAfile "${DSH_WORK_CA_CERT_FILE}" "${DSH_WORK_TLS_CERT_FILE}" >/dev/null \
   || fail "TLS certificate is not signed by the configured offline CA"
 certificate_public_key=$(openssl x509 -in "${DSH_WORK_TLS_CERT_FILE}" -pubkey -noout \
@@ -168,4 +223,8 @@ fi
 available_kib=$(df -Pk "${deploy_root}" | awk 'NR==2 {print $4}')
 (( available_kib >= 5 * 1024 * 1024 )) || fail "at least 5 GiB free disk space is required"
 
+if [[ "${external_endpoint_candidate}" != true ]]; then
+  mv "${candidate_endpoint_compose}" "${deploy_root}/generated/compose.endpoints.yaml"
+fi
+trap - EXIT
 echo "preflight passed for ${release_dir}"

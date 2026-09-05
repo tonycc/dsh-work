@@ -88,6 +88,11 @@ DSH_WORK_COOKIE_SECURE=false
 DSH_WORK_DIRECTORY_SYNC_INTERVAL_SECONDS=900
 ```
 
+本地 Vite 代理保留浏览器的 Host（`changeOrigin: false`），登录与 API 校验使用
+`localhost:4174/4180`。上面的旧单入口配置仍支持直接回调 `localhost:4190`：
+仅回调处理会把已配置的回调 Origin 映射回对应门户，不会将后端端口加入登录/API
+白名单。启用多 Origin 后，每个回调必须与发起登录时的入口一致。
+
 `DSH_WORK_SESSION_SECRET` 直接填写命令输出的一整行，不要包含尖括号。生产环境必须使用独立随机值、HTTPS、`DSH_WORK_COOKIE_SECURE=true`，目录同步间隔必须为正数，建议从 `900` 秒开始。服务会在启动后立即对账一次；`0` 只允许用于隔离的非生产诊断，此时需要管理员手工同步。
 
 服务端会拒绝员工端与管理端配置不同的应用或凭据，因此不再支持 `dsh-work-admin` 独立应用模式。

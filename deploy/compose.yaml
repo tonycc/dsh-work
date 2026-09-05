@@ -23,9 +23,6 @@ services:
     image: ${DSH_WORK_NGINX_IMAGE:-nginx:1.30.4-alpine@sha256:97d490c12ba55b4946b01546d1c3ed324e8d41ab1c9fcb2a616aa470620e5b46}
     environment:
       DSH_WORK_SERVER_PORT: ${DSH_WORK_SERVER_PORT:-4190}
-    ports:
-      - "${DSH_WORK_BIND_ADDRESS:-0.0.0.0}:${DSH_WORK_WORKBENCH_PORT:-4174}:8443"
-      - "${DSH_WORK_BIND_ADDRESS:-0.0.0.0}:${DSH_WORK_ADMIN_PORT:-4180}:8444"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -54,7 +51,7 @@ services:
         target: /etc/dsh-work/tls/server.key
         read_only: true
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--no-check-certificate", "--spider", "https://127.0.0.1:8443/health/live"]
+      test: ["CMD-SHELL", "wget --quiet --no-check-certificate --header=\"Host: $${DSH_WORK_HEALTHCHECK_HOST}\" --spider https://127.0.0.1:8443/health/live"]
       interval: 5s
       timeout: 3s
       retries: 20

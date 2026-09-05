@@ -11,6 +11,8 @@ export interface LoginTransactionRecord {
   codeVerifierEncrypted: string
   nonce: string
   returnTo: string
+  portalOrigin: string | null
+  redirectUri: string | null
 }
 
 export interface AuthenticationSessionRecord {
@@ -73,6 +75,8 @@ export class IdentitySessionRepository {
     codeVerifierEncrypted: string
     nonce: string
     returnTo: string
+    portalOrigin: string
+    redirectUri: string
     expiresAt: Date
   }) {
     await this.database.begin(async (transaction) => {
@@ -80,10 +84,11 @@ export class IdentitySessionRepository {
       await transaction`
         insert into oidc_login_transactions (
           transaction_hash, audience, state_hash, code_verifier_encrypted,
-          nonce, return_to, expires_at
+          nonce, return_to, portal_origin, redirect_uri, expires_at
         ) values (
           ${input.transactionHash}, ${input.audience}, ${input.stateHash},
-          ${input.codeVerifierEncrypted}, ${input.nonce}, ${input.returnTo}, ${input.expiresAt}
+          ${input.codeVerifierEncrypted}, ${input.nonce}, ${input.returnTo},
+          ${input.portalOrigin}, ${input.redirectUri}, ${input.expiresAt}
         )
       `
     })
@@ -99,7 +104,8 @@ export class IdentitySessionRepository {
          where transaction_hash = ${transactionHash} and audience = ${audience}
            and expires_at > now()
         returning state_hash as "stateHash", code_verifier_encrypted as "codeVerifierEncrypted",
-                  nonce, return_to as "returnTo"
+                  nonce, return_to as "returnTo", portal_origin as "portalOrigin",
+                  redirect_uri as "redirectUri"
       `
       return record ?? null
     })

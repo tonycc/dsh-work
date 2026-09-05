@@ -49,10 +49,16 @@ export class OidcAuthService {
     }
   }
 
-  async beginLogin(audience: ApiAudience, requestedReturnTo: string | null) {
+  async beginLogin(
+    request: IncomingMessage,
+    audience: ApiAudience,
+    requestedReturnTo: string | null,
+  ) {
     const settings = this.configuration.audiences[audience]
+    const portalOrigin = resolveRequestOrigin(request, settings)
+    const redirectUri = redirectUriForOrigin(settings, portalOrigin)
     const authorization = await this.providers[audience].createAuthorizationRequest(
-      settings.redirectUri,
+      redirectUri,
       settings.loginScopes,
     )
     const transactionToken = randomOpaque()
@@ -62,7 +68,9 @@ export class OidcAuthService {
       stateHash: hashOpaque(authorization.state),
       codeVerifierEncrypted: this.secretBox.seal(authorization.codeVerifier),
       nonce: authorization.nonce,
-      returnTo: normalizeReturnTo(requestedReturnTo, settings.portalUrl),
+      returnTo: normalizeReturnTo(requestedReturnTo, portalOrigin),
+      portalOrigin,
+      redirectUri,
       expiresAt: new Date(Date.now() + this.configuration.transactionTtlSeconds * 1000),
     })
     return {
@@ -77,6 +85,7 @@ export class OidcAuthService {
   }
 
   async completeLogin(input: {
+    request: IncomingMessage
     audience: ApiAudience
     code: string
     state: string
@@ -90,13 +99,22 @@ export class OidcAuthService {
     if (!transaction || !equalOpaqueHash(input.state, transaction.stateHash)) {
       throw new IdentityAccessError(401, 'invalid_state', 'OIDC 登录状态无效或已过期')
     }
+    const requestOrigin = resolveCallbackOrigin(input.request, settings)
+    const portalOrigin = transaction.portalOrigin ?? requestOrigin
+    if (requestOrigin !== portalOrigin) {
+      throw new IdentityAccessError(403, 'invalid_callback_origin', 'OIDC 回调入口与登录入口不一致')
+    }
+    const redirectUri = transaction.redirectUri ?? redirectUriForOrigin(settings, portalOrigin)
+    if (redirectUri !== redirectUriForOrigin(settings, portalOrigin)) {
+      throw new IdentityAccessError(401, 'invalid_redirect_uri', 'OIDC 登录回调地址不在允许列表中')
+    }
 
     let tokenResponse
     let verified: VerifiedToken
     try {
       tokenResponse = await this.providers[input.audience].exchangeCode(
         input.code,
-        settings.redirectUri,
+        redirectUri,
         this.secretBox.open(transaction.codeVerifierEncrypted),
       )
       verified = await this.providers[input.audience].verify(tokenResponse.accessToken, {
@@ -195,7 +213,7 @@ export class OidcAuthService {
     let session = await this.repository.findSession(hashOpaque(cookieValue), audience)
     if (!session) throw new IdentityAccessError(401, 'session_expired', '登录会话不存在或已过期')
 
-    validateRequestOrigin(request, settings.portalUrl)
+    validateRequestOrigin(request, settings)
     session = await this.refreshSession(session)
     const authorization = await this.repository.resolveAuthorization(session.userId)
     assertAudienceAccess(audience, authorization.permissions, isUnsafeMethod(request.method))
@@ -224,13 +242,14 @@ export class OidcAuthService {
 
   async logout(request: IncomingMessage, audience: ApiAudience) {
     const settings = this.configuration.audiences[audience]
+    const portalOrigin = resolveRequestOrigin(request, settings)
     const cookieValue = parseCookies(request.headers.cookie)[settings.sessionCookieName]
     if (cookieValue) {
       const sessionHash = hashOpaque(cookieValue)
       await this.repository.logoutSession(sessionHash, audience)
     }
     return {
-      location: await this.providers[audience].logoutUrl(settings.portalUrl),
+      location: await this.providers[audience].logoutUrl(portalOrigin),
       clearSessionCookie: clearCookie(settings.sessionCookieName, this.configuration.cookieSecure),
     }
   }
@@ -240,8 +259,9 @@ export class OidcAuthService {
     return parseCookies(request.headers.cookie)[name] ?? null
   }
 
-  errorRedirect(audience: ApiAudience, code: string) {
-    const url = new URL('/login-error', `${this.configuration.audiences[audience].portalUrl}/`)
+  errorRedirect(request: IncomingMessage, audience: ApiAudience, code: string) {
+    const origin = resolveCallbackOrigin(request, this.configuration.audiences[audience])
+    const url = new URL('/login-error', `${origin}/`)
     url.searchParams.set('code', safeErrorCode(code))
     return url.toString()
   }
@@ -423,8 +443,8 @@ function assertAudienceAccess(audience: ApiAudience, permissions: string[], unsa
   }
 }
 
-function normalizeReturnTo(value: string | null, portalUrl: string) {
-  const portal = new URL(`${portalUrl.replace(/\/$/, '')}/`)
+function normalizeReturnTo(value: string | null, portalOrigin: string) {
+  const portal = new URL(`${portalOrigin.replace(/\/$/, '')}/`)
   if (!value) return portal.toString()
   try {
     const candidate = new URL(value, portal)
@@ -435,11 +455,91 @@ function normalizeReturnTo(value: string | null, portalUrl: string) {
   }
 }
 
-function validateRequestOrigin(request: IncomingMessage, portalUrl: string) {
+function validateRequestOrigin(
+  request: IncomingMessage,
+  settings: OidcAudienceConfiguration,
+) {
   if (!isUnsafeMethod(request.method)) return
   const origin = request.headers.origin
-  if (!origin || origin !== new URL(portalUrl).origin) {
+  const requestOrigin = resolveRequestOrigin(request, settings)
+  if (!origin || normalizeHeaderOrigin(origin) !== requestOrigin) {
     throw new IdentityAccessError(403, 'csrf_check_failed', '请求来源校验失败')
+  }
+}
+
+function redirectUriForOrigin(settings: OidcAudienceConfiguration, origin: string) {
+  const redirectUri = settings.redirectUriByOrigin[origin]
+  if (!redirectUri) {
+    throw new IdentityAccessError(421, 'unknown_request_origin', '请求入口不在允许列表中')
+  }
+  return redirectUri
+}
+
+function resolveRequestOrigin(
+  request: IncomingMessage,
+  settings: OidcAudienceConfiguration,
+) {
+  const origin = requestOrigin(request)
+  if (!settings.allowedOrigins.includes(origin)) {
+    throw new IdentityAccessError(421, 'unknown_request_origin', '请求入口不在允许列表中')
+  }
+  return origin
+}
+
+function resolveCallbackOrigin(request: IncomingMessage, settings: OidcAudienceConfiguration) {
+  const origin = requestOrigin(request)
+  // Legacy single-portal configurations may send callbacks directly to the
+  // backend port. Only the explicitly configured callback origin is an alias;
+  // it never becomes an allowed login/API/logout origin.
+  if (settings.allowedOrigins.length === 1) {
+    const portalOrigin = settings.allowedOrigins[0]!
+    if (new URL(redirectUriForOrigin(settings, portalOrigin)).origin === origin) {
+      return portalOrigin
+    }
+  }
+  return resolveRequestOrigin(request, settings)
+}
+
+function requestOrigin(request: IncomingMessage) {
+  const forwardedProtocol = singleForwardedHeader(request.headers['x-forwarded-proto'])
+  const forwardedHost = singleForwardedHeader(request.headers['x-forwarded-host'])
+  const protocol = forwardedProtocol
+    ?? ((request.socket as IncomingMessage['socket'] & { encrypted?: boolean }).encrypted ? 'https' : 'http')
+  const host = forwardedHost ?? singleForwardedHeader(request.headers.host)
+  if (!host || !['http', 'https'].includes(protocol)) {
+    throw new IdentityAccessError(421, 'invalid_request_origin', '请求入口地址无效')
+  }
+  let origin: string
+  try {
+    origin = new URL(`${protocol}://${host}`).origin
+  } catch {
+    throw new IdentityAccessError(421, 'invalid_request_origin', '请求入口地址无效')
+  }
+  return origin
+}
+
+function singleForwardedHeader(value: string | string[] | undefined) {
+  if (Array.isArray(value)) {
+    if (value.length !== 1) throw new IdentityAccessError(421, 'invalid_request_origin', '请求入口地址无效')
+    return singleForwardedHeader(value[0])
+  }
+  const normalized = value?.trim()
+  if (!normalized) return undefined
+  if (normalized.includes(',') || /[\r\n]/.test(normalized)) {
+    throw new IdentityAccessError(421, 'invalid_request_origin', '请求入口地址无效')
+  }
+  return normalized
+}
+
+function normalizeHeaderOrigin(value: string) {
+  try {
+    const parsed = new URL(value)
+    if (parsed.pathname !== '/' || parsed.search || parsed.hash || parsed.username || parsed.password) {
+      return null
+    }
+    return parsed.origin
+  } catch {
+    return null
   }
 }
 

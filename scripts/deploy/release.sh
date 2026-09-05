@@ -173,22 +173,29 @@ fi
 
 "${release_dir}/scripts/deploy/preflight.sh" "${deploy_root}" "${release_dir}"
 compose_file="${release_dir}/deploy/compose.yaml"
+endpoint_compose="${deploy_root}/generated/compose.endpoints.yaml"
 state_root="${deploy_root}/automation/state"
 mkdir -p "${state_root}"
+
+run_compose() {
+  local base_file=$1
+  shift
+  docker compose --env-file "${runtime_env}" -f "${base_file}" -f "${endpoint_compose}" "$@"
+}
 
 restart_old_release() {
   if [[ -z "${old_release}" || ! -d "${old_release}" ]]; then
     if launchctl print "${service_target}" >/dev/null 2>&1; then
       launchctl bootout "${service_target}"
     fi
-    docker compose --env-file "${runtime_env}" -f "${compose_file}" stop web >/dev/null 2>&1 || true
+    run_compose "${compose_file}" stop web >/dev/null 2>&1 || true
     echo "no previous release is available; the failed first deployment was stopped" >&2
     return
   fi
   ln -sfn "${old_release}" "${deploy_root}/current"
-  docker compose --env-file "${runtime_env}" -f "${old_release}/deploy/compose.yaml" up -d --wait postgres
+  run_compose "${old_release}/deploy/compose.yaml" up -d --wait postgres
   "${old_release}/scripts/deploy/install-launchd.sh" "${deploy_root}"
-  docker compose --env-file "${runtime_env}" -f "${old_release}/deploy/compose.yaml" up -d --wait --force-recreate web
+  run_compose "${old_release}/deploy/compose.yaml" up -d --wait --force-recreate web
   echo "application files rolled back to ${old_release}; database migrations were not downgraded" >&2
 }
 
@@ -207,13 +214,13 @@ if [[ -n "${old_release}" && -d "${old_release}" ]]; then
     exit 1
   fi
   mark_attempted
-  if ! docker compose --env-file "${runtime_env}" -f "${compose_file}" up -d --wait postgres; then
+  if ! run_compose "${compose_file}" up -d --wait postgres; then
     echo "candidate PostgreSQL configuration failed after the backup" >&2
     restart_old_release
     exit 1
   fi
 else
-  docker compose --env-file "${runtime_env}" -f "${compose_file}" up -d --wait postgres
+  run_compose "${compose_file}" up -d --wait postgres
   mark_attempted
 fi
 
@@ -236,12 +243,14 @@ if ! "${release_dir}/scripts/deploy/install-launchd.sh" "${deploy_root}"; then
   restart_old_release
   exit 1
 fi
-if ! docker compose --env-file "${runtime_env}" -f "${compose_file}" up -d --wait --force-recreate web; then
+if ! run_compose "${compose_file}" up -d --wait --force-recreate web; then
   restart_old_release
   exit 1
 fi
 
-health_url="https://${DSH_WORK_PUBLIC_HOST:?Set DSH_WORK_PUBLIC_HOST}:${DSH_WORK_WORKBENCH_PORT:-4174}/health"
+workbench_origin=${DSH_WORK_WORKBENCH_DEFAULT_ORIGIN:-${AI_HUB_WORKBENCH_PORTAL_URL:?Set the workbench default Origin}}
+admin_origin=${DSH_WORK_ADMIN_DEFAULT_ORIGIN:-${AI_HUB_ADMIN_PORTAL_URL:?Set the admin default Origin}}
+health_url="${workbench_origin%/}/health"
 healthy=false
 for _attempt in {1..30}; do
   if curl --fail --silent --show-error --cacert "${DSH_WORK_CA_CERT_FILE}" "${health_url}" >/dev/null; then
@@ -260,5 +269,5 @@ printf '%s\n' "${tag}" > "${deploy_root}/active-release.new"
 mv "${deploy_root}/active-release.new" "${deploy_root}/active-release"
 rm -f "${state_root}/attempted-release"
 echo "release activated: ${tag}"
-echo "workbench: https://${DSH_WORK_PUBLIC_HOST}:${DSH_WORK_WORKBENCH_PORT:-4174}/workbench"
-echo "admin: https://${DSH_WORK_PUBLIC_HOST}:${DSH_WORK_ADMIN_PORT:-4180}/overview"
+echo "workbench: ${workbench_origin%/}/workbench"
+echo "admin: ${admin_origin%/}/overview"

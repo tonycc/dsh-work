@@ -11,13 +11,17 @@ const restorePath = join(projectRoot, 'scripts/deploy/restore.sh')
 const backupPath = join(projectRoot, 'scripts/deploy/backup.sh')
 const buildPath = join(projectRoot, 'scripts/release/build-release.sh')
 const preflightPath = join(projectRoot, 'scripts/deploy/preflight.sh')
+const endpointRendererPath = join(projectRoot, 'scripts/deploy/render-endpoint-compose.mjs')
+const endpointConfiguratorPath = join(projectRoot, 'scripts/deploy/configure-macmini-endpoints.mjs')
+const endpointWrapperPath = join(projectRoot, 'scripts/deploy/render-endpoint-compose.sh')
 
-const [release, restore, backup, build, preflight] = await Promise.all([
+const [release, restore, backup, build, preflight, endpointWrapper] = await Promise.all([
   readFile(releasePath, 'utf8'),
   readFile(restorePath, 'utf8'),
   readFile(backupPath, 'utf8'),
   readFile(buildPath, 'utf8'),
   readFile(preflightPath, 'utf8'),
+  readFile(endpointWrapperPath, 'utf8'),
 ])
 
 const upgradeStart = release.indexOf('if [[ -n "${old_release}" && -d "${old_release}" ]]; then\n  if launchctl')
@@ -26,7 +30,7 @@ assert.notEqual(upgradeStart, -1, 'release upgrade block is missing')
 assert.notEqual(upgradeEnd, -1, 'release upgrade block is incomplete')
 const upgradeBlock = release.slice(upgradeStart, upgradeEnd)
 assertOrder(upgradeBlock, '/scripts/deploy/backup.sh', 'mark_attempted')
-assertOrder(upgradeBlock, 'mark_attempted', '-f "${compose_file}" up -d --wait postgres')
+assertOrder(upgradeBlock, 'mark_attempted', 'run_compose "${compose_file}" up -d --wait postgres')
 
 assertOrder(release, 'tar -xzf "${archive}"', 'if [[ -d "${release_dir}" ]]')
 assert.match(release, /mv "\$\{release_dir\}" "\$\{stale_release\}"/)
@@ -35,7 +39,7 @@ assert.doesNotMatch(release, /if \[\[ ! -d "\$\{release_dir\}" \]\]; then\s+tar 
 const restoreOperationStart = restore.lastIndexOf('maintenance_started=true\ntrap cleanup EXIT')
 assert.notEqual(restoreOperationStart, -1, 'restore maintenance block is missing')
 const restoreOperation = restore.slice(restoreOperationStart)
-assertOrder(restoreOperation, 'maintenance_started=true\ntrap cleanup EXIT', 'docker compose --env-file "${runtime_env}" -f "${compose_file}" stop web')
+assertOrder(restoreOperation, 'maintenance_started=true\ntrap cleanup EXIT', 'run_compose stop web')
 assertOrder(restoreOperation, 'destructive_started=true', 'dropdb --if-exists --force')
 assert.match(restore, /restore failed after database replacement began; services remain stopped/)
 
@@ -47,6 +51,8 @@ assert.match(build, /acp-managed-credentials\.legacy\.cordis\.yml/)
 assert.match(preflight, /git -C "\$\{runtime_home\}" rev-parse --is-inside-work-tree/)
 assert.doesNotMatch(preflight, /-d "\$\{runtime_home\}\/\.git"/)
 assert.match(preflight, /offline CA private keys must never be stored on the Mac mini/)
+assert.match(preflight, /"\$\{candidate_endpoint_compose\}" "\$\{runtime_env\}"/)
+assert.match(endpointWrapper, /runtime_env=\$\{4:-"\$\{deploy_root\}\/runtime\.env"\}/)
 assert.match(backup, /DSH_WORK_OFF_HOST_BACKUP_DIRECTORY/)
 assert.match(backup, /storage_class": "off-host"/)
 assert.match(backup, /shasum -a 256 -c/)
@@ -63,6 +69,15 @@ try {
   await verifyDestructiveRestoreFailsClosed(join(fixtureRoot, 'restore'))
   await verifySameFilesystemBackupIsRejected(join(fixtureRoot, 'backup'))
   await verifySensitiveBuildInputIsRejected(join(fixtureRoot, 'build'), build)
+  await verifyEndpointRenderer(join(fixtureRoot, 'endpoints'))
+  await verifyEndpointConfigurator(join(fixtureRoot, 'endpoint-config'))
+  await verifyEndpointRestartFailure(join(fixtureRoot, 'endpoint-restart'))
+  await verifyNativeCertificateIssuance(join(fixtureRoot, 'certificates'))
+  for (const app of ['admin-web', 'workbench-web']) {
+    const vite = await readFile(join(projectRoot, 'apps', app, 'vite.config.ts'), 'utf8')
+    assert.doesNotMatch(vite, /changeOrigin: true/, 'development proxy must preserve the portal Host')
+    assert.equal(vite.match(/changeOrigin: false/g)?.length, 2)
+  }
 } finally {
   await rm(fixtureRoot, { recursive: true, force: true })
 }
@@ -118,6 +133,7 @@ async function verifyDestructiveRestoreFailsClosed(fixture) {
   await mkdir(binRoot, { recursive: true })
   await mkdir(backupRoot, { recursive: true })
   await writeFile(join(currentRoot, 'deploy/compose.yaml'), 'name: restore-test\nservices: {}\n')
+  await writeFile(join(fixture, 'compose.endpoints.yaml'), 'services: {}\n')
   await writeFile(join(backupRoot, 'SHA256SUMS'), 'fixture\n')
   await writeFile(join(backupRoot, 'database.dump'), 'fixture\n')
   await writeFile(join(fixture, 'runtime.env'), [
@@ -142,6 +158,9 @@ exit 0
   await writeExecutable(join(binRoot, 'shasum'), '#!/usr/bin/env bash\nexit 0\n')
   await writeExecutable(join(currentRoot, 'scripts/deploy/install-launchd.sh'), `#!/usr/bin/env bash
 printf 'started\\n' >> ${shellQuote(installLog)}
+`)
+  await writeExecutable(join(currentRoot, 'scripts/deploy/render-endpoint-compose.sh'), `#!/usr/bin/env bash
+printf '%s\\n' ${shellQuote(join(fixture, 'compose.endpoints.yaml'))}
 `)
 
   const result = spawnSync('bash', [restorePath, fixture, backupRoot, '--confirm'], { encoding: 'utf8' })
@@ -173,9 +192,164 @@ async function verifySensitiveBuildInputIsRejected(fixture, buildSource) {
   assert.equal(bundleExists, false, 'failed sensitive build left a release payload behind')
 }
 
+async function verifyEndpointRenderer(fixture) {
+  const validEnvironment = {
+    ...process.env,
+    NODE_ENV: 'production',
+    DSH_WORK_BIND_ADDRESSES: '192.168.33.20,192.168.34.20',
+    DSH_WORK_BIND_ADDRESS: '192.168.33.20',
+    DSH_WORK_WORKBENCH_PORT: '4174',
+    DSH_WORK_ADMIN_PORT: '4180',
+    DSH_WORK_WORKBENCH_ORIGINS: [
+      'https://192.168.33.20:4174',
+      'https://192.168.34.20:4174',
+      'https://work.example.com:4174',
+    ].join(','),
+    DSH_WORK_ADMIN_ORIGINS: [
+      'https://192.168.33.20:4180',
+      'https://192.168.34.20:4180',
+      'https://work.example.com:4180',
+    ].join(','),
+  }
+  const valid = spawnSync(
+    process.execPath,
+    [endpointRendererPath, fixture, projectRoot],
+    { encoding: 'utf8', env: validEnvironment },
+  )
+  assert.equal(valid.status, 0, valid.stderr)
+  const generated = await readFile(join(fixture, 'generated/compose.endpoints.yaml'), 'utf8')
+  for (const mapping of [
+    '192.168.33.20:4174:8443',
+    '192.168.33.20:4180:8444',
+    '192.168.34.20:4174:8443',
+    '192.168.34.20:4180:8444',
+  ]) {
+    assert.ok(generated.includes(mapping), `endpoint override is missing ${mapping}`)
+  }
+  assert.match(generated, /DSH_WORK_WORKBENCH_SERVER_NAMES: .*work\.example\.com/)
+
+  const publicAddress = spawnSync(
+    process.execPath,
+    [endpointRendererPath, join(fixture, 'invalid'), projectRoot],
+    {
+      encoding: 'utf8',
+      env: {
+        ...validEnvironment,
+        DSH_WORK_BIND_ADDRESSES: '203.0.113.10',
+        DSH_WORK_BIND_ADDRESS: '203.0.113.10',
+      },
+    },
+  )
+  assert.notEqual(publicAddress.status, 0, 'endpoint renderer accepted a public bind address')
+  assert.match(publicAddress.stderr, /RFC1918/)
+}
+
+async function verifyEndpointConfigurator(fixture) {
+  await mkdir(fixture, { recursive: true })
+  const runtimeEnv = join(fixture, 'runtime.env')
+  const candidateEnv = join(fixture, 'candidate.env')
+  await writeFile(runtimeEnv, [
+    'DSH_WORK_BIND_ADDRESS=192.168.33.20',
+    'DSH_WORK_WORKBENCH_PORT=4174',
+    'DSH_WORK_ADMIN_PORT=4180',
+    'DSH_WORK_POSTGRES_PASSWORD=preserve-this-secret',
+    '',
+  ].join('\n'), { mode: 0o600 })
+  const result = spawnSync(process.execPath, [
+    endpointConfiguratorPath,
+    '--env-file', runtimeEnv,
+    '--output', candidateEnv,
+    '--bind-address', '192.168.33.20',
+    '--bind-address', '192.168.34.20',
+    '--workbench-origin', 'https://192.168.33.20:4174',
+    '--workbench-origin', 'https://192.168.34.20:4174',
+    '--workbench-origin', 'https://work.example.com:4174',
+    '--admin-origin', 'https://192.168.33.20:4180',
+    '--admin-origin', 'https://192.168.34.20:4180',
+    '--admin-origin', 'https://work.example.com:4180',
+    '--workbench-default-origin', 'https://work.example.com:4174',
+    '--admin-default-origin', 'https://work.example.com:4180',
+  ], { encoding: 'utf8' })
+  assert.equal(result.status, 0, result.stderr)
+  const candidate = await readFile(candidateEnv, 'utf8')
+  assert.match(candidate, /DSH_WORK_BIND_ADDRESSES=192\.168\.33\.20,192\.168\.34\.20/)
+  assert.match(candidate, /AI_HUB_WORKBENCH_REDIRECT_URI=https:\/\/work\.example\.com:4174\/auth\/workbench\/callback/)
+  assert.match(candidate, /DSH_WORK_POSTGRES_PASSWORD=preserve-this-secret/)
+}
+
 async function writeExecutable(path, content) {
   await writeFile(path, content)
   await chmod(path, 0o755)
+}
+
+async function verifyNativeCertificateIssuance(fixture) {
+  const env = { ...process.env, PATH: '/usr/bin:/bin:/usr/sbin:/sbin' }
+  const ca = spawnSync('/bin/bash', [join(projectRoot, 'scripts/deploy/init-intranet-ca.sh'),
+    '--ca-dir', join(fixture, 'ca')], { encoding: 'utf8', env })
+  assert.equal(ca.status, 0, ca.stderr)
+  for (const [script, args, name] of [
+    ['issue-intranet-ip-certificate.sh', ['--ip', '192.168.33.20'], 'single'],
+    ['issue-intranet-certificate.sh', ['--ip', '192.168.33.20', '--ip', '192.168.101.20',
+      '--dns', 'work.example.com'], 'multi'],
+  ]) {
+    const output = join(fixture, name)
+    const issued = spawnSync('/bin/bash', [join(projectRoot, 'scripts/deploy', script),
+      '--ca-dir', join(fixture, 'ca'), '--output-dir', output, ...args], { encoding: 'utf8', env })
+    assert.equal(issued.status, 0, issued.stderr)
+    const verified = spawnSync('/usr/bin/openssl', ['verify', '-CAfile', join(output, 'root-ca.crt'),
+      join(output, 'server.crt')], { encoding: 'utf8', env })
+    assert.equal(verified.status, 0, verified.stderr)
+    const cert = spawnSync('/usr/bin/openssl', ['x509', '-in', join(output, 'server.crt'), '-noout', '-text'],
+      { encoding: 'utf8', env })
+    assert.equal(cert.status, 0, cert.stderr)
+    assert.match(cert.stdout, /IP Address:192\.168\.33\.20/)
+    if (name === 'multi') {
+      assert.match(cert.stdout, /IP Address:192\.168\.101\.20/)
+      assert.match(cert.stdout, /DNS:work\.example\.com/)
+    }
+  }
+}
+
+async function verifyEndpointRestartFailure(fixture) {
+  const scripts = join(fixture, 'current/scripts/deploy')
+  const bin = join(fixture, 'bin')
+  await mkdir(scripts, { recursive: true })
+  await mkdir(bin)
+  await mkdir(join(fixture, 'generated'))
+  const originalEnv = `DSH_WORK_NODE_BIN=${process.execPath}\n`
+  await writeFile(join(fixture, 'runtime.env'), originalEnv)
+  const originalCompose = 'services: {}\n'
+  await writeFile(join(fixture, 'generated/compose.endpoints.yaml'), originalCompose)
+  await writeFile(join(scripts, 'configure-macmini-endpoints.mjs'), `
+import { readFileSync, writeFileSync } from 'node:fs';
+writeFileSync(process.argv[5], readFileSync(process.argv[3], 'utf8') + '# candidate\\n');
+`)
+  await writeExecutable(join(scripts, 'render-endpoint-compose.sh'), `#!/bin/bash
+printf 'candidate compose\\n' > "$3"
+`)
+  await writeExecutable(join(scripts, 'preflight.sh'), '#!/bin/bash\nexit 0\n')
+  await writeExecutable(join(scripts, 'install-launchd.sh'), `#!/bin/bash
+printf 'install\\n' >> ${shellQuote(join(fixture, 'install.log'))}
+if [[ ! -e ${shellQuote(join(fixture, 'failed-once'))} ]]; then
+  touch ${shellQuote(join(fixture, 'failed-once'))}
+  exit 42
+fi
+`)
+  await writeExecutable(join(bin, 'docker'), `#!/bin/bash
+printf 'docker\\n' >> ${shellQuote(join(fixture, 'docker.log'))}
+`)
+  await writeExecutable(join(bin, 'curl'), '#!/bin/bash\nexit 0\n')
+  const result = spawnSync('/bin/bash', [join(projectRoot, 'scripts/deploy/set-macmini-endpoints.sh'),
+    'apply', '--deploy-root', fixture, '--bind-address', '192.168.101.20', '--confirm'], {
+    encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+  })
+  assert.notEqual(result.status, 0, 'failed launchd restart was reported as applied')
+  assert.match(result.stderr, /endpoint apply failed; previous configuration restored/)
+  assert.equal(await readFile(join(fixture, 'runtime.env'), 'utf8'), originalEnv)
+  assert.equal(await readFile(join(fixture, 'generated/compose.endpoints.yaml'), 'utf8'), originalCompose)
+  assert.equal(await readFile(join(fixture, 'install.log'), 'utf8'), 'install\ninstall\n')
+  assert.equal(await readFile(join(fixture, 'docker.log'), 'utf8'), 'docker\n',
+    'Compose should only run for the successful rollback restart')
 }
 
 function shellQuote(value) {

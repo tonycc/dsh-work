@@ -340,7 +340,8 @@ openssl x509 -in "${DWP_ROOT}/certs/server.crt" -noout -checkend 2592000
 | `DSH_WORK_RELEASE_POLL_INTERVAL_SECONDS` | `300` |
 | `NODE_ENV` | `production` |
 | `DSH_WORK_SERVER_HOST`、`DSH_WORK_SERVER_PORT` | `127.0.0.1`、`4190` |
-| `DSH_WORK_PUBLIC_HOST`、`DSH_WORK_BIND_ADDRESS` | 两者都填 Mac mini 的实际 LAN IP；不要沿用 `0.0.0.0` |
+| `DSH_WORK_PUBLIC_HOST`、`DSH_WORK_BIND_ADDRESS` | 兼容字段；两者都填首个 Mac mini LAN IP，不使用 `0.0.0.0` |
+| `DSH_WORK_BIND_ADDRESSES` | 初次部署填同一个 LAN IP；后续多 IP 用无空格逗号分隔，第一项与兼容字段一致 |
 | `DSH_WORK_WORKBENCH_PORT`、`DSH_WORK_ADMIN_PORT` | `4174`、`4180` |
 | `DSH_WORK_POSTGRES_PORT` | `5434` |
 | `DSH_WORK_POSTGRES_DB`、`DSH_WORK_POSTGRES_USER` | 两者均为 `dsh_work`，与 AI Hub 独立 |
@@ -366,6 +367,8 @@ openssl x509 -in "${DWP_ROOT}/certs/server.crt" -noout -checkend 2592000
 | `AI_HUB_WORKBENCH_REDIRECT_URI` | `https://<Mac mini IP>:4174/auth/workbench/callback` |
 | `AI_HUB_ADMIN_PORTAL_URL` | `https://<Mac mini IP>:4180` |
 | `AI_HUB_ADMIN_REDIRECT_URI` | `https://<Mac mini IP>:4180/auth/admin/callback` |
+| `DSH_WORK_WORKBENCH_ORIGINS`、`DSH_WORK_ADMIN_ORIGINS` | 初次分别填 `https://<Mac mini IP>:4174`、`https://<Mac mini IP>:4180`；后续可追加已批准 IP/域名 Origin |
+| `DSH_WORK_WORKBENCH_DEFAULT_ORIGIN`、`DSH_WORK_ADMIN_DEFAULT_ORIGIN` | 初次与上述单入口相同；启用固定域名后可改为相应域名 Origin |
 
 密码可在受控本地终端用 `openssl rand -hex 32` 分别生成，或由密码管理器生成；不要让
 Agent 把生成值输出到对话。非十六进制数据库密码需正确 URL 编码后再放入连接串。
@@ -428,7 +431,8 @@ bash "${DWP_BUNDLE}/scripts/deploy/release.sh" "${DWP_VERSION}" "${DWP_ROOT}"
 [[ -L "${DWP_ROOT}/current" ]]
 launchctl print "gui/$(id -u)/com.company.dsh-work.server"
 docker compose --env-file "${DWP_ROOT}/runtime.env" \
-  -f "${DWP_ROOT}/current/deploy/compose.yaml" ps
+  -f "${DWP_ROOT}/current/deploy/compose.yaml" \
+  -f "${DWP_ROOT}/generated/compose.endpoints.yaml" ps
 curl --fail --silent --show-error --max-time 30 http://127.0.0.1:4190/health
 for DWP_PORT in 4174 4180; do
   curl --fail --silent --show-error --max-time 30 \
@@ -443,6 +447,8 @@ curl --fail --silent --show-error --max-time 30 \
 确认 `postgres`、`web` 健康，且 AI Hub 仍健康。Nginx 通过 `host.docker.internal:4190`
 访问宿主机后端：若回环健康而 HTTPS 返回 502，检查 Docker Desktop 到宿主机的连接和
 Nginx 日志；不要为排障把 4190 暴露到全网，也不要忽略 HTTPS 检查。
+端口发布由预检生成的 `generated/compose.endpoints.yaml` 管理；不要省略该文件直接运行
+Compose，否则无法验证实际入口集合。
 
 从另一台已信任根 CA 的局域网电脑确认 4174/4180 可访问，4190/5434 不可访问。
 
@@ -512,7 +518,8 @@ tail -n 80 "${DWP_ROOT}/logs/release-watcher.stdout.log"
 tail -n 80 "${DWP_ROOT}/logs/release-watcher.stderr.log"
 tail -n 80 "${DWP_ROOT}/logs/server.stderr.log"
 docker compose --env-file "${DWP_ROOT}/runtime.env" \
-  -f "${DWP_ROOT}/current/deploy/compose.yaml" logs --tail 80 postgres web
+  -f "${DWP_ROOT}/current/deploy/compose.yaml" \
+  -f "${DWP_ROOT}/generated/compose.endpoints.yaml" logs --tail 80 postgres web
 ```
 
 不要运行会回显完整配置的 `source ...; env`、`set -x` 或 `docker compose config` 后把输出

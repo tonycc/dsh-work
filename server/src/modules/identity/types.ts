@@ -41,8 +41,9 @@ export interface OidcAudienceConfiguration {
   tokenAudience: string
   clientId: string
   clientSecret: string
-  redirectUri: string
-  portalUrl: string
+  allowedOrigins: string[]
+  defaultOrigin: string
+  redirectUriByOrigin: Readonly<Record<string, string>>
   sessionCookieName: string
   transactionCookieName: string
   loginScopes: string[]
