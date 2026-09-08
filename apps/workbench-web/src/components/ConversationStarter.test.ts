@@ -8,9 +8,9 @@ import { useTaskStore } from '@/stores/tasks'
 import type { WorkspaceFile } from '@/types/domain'
 import ConversationStarter from './ConversationStarter.vue'
 
-const router = vi.hoisted(() => ({ push: vi.fn() }))
+const router = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }))
 
-vi.mock('vue-router', () => ({ useRouter: () => router }))
+vi.mock('vue-router', () => ({ useRouter: () => router, useRoute: () => ({ query: {} }) }))
 
 describe('ConversationStarter', () => {
   it('does not submit a previously referenced workspace file after switching tasks', async () => {

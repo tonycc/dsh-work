@@ -1,4 +1,4 @@
-import type { Artifact, TaskRun, WorkbenchAgent, WorkbenchSession, Workspace, WorkspaceFile } from '../types/domain'
+import type { Artifact, TaskRun, WorkbenchAgent, WorkbenchSession, WorkbenchSkill, Workspace, WorkspaceFile } from '../types/domain'
 
 interface ApiEnvelope<T> {
   data: T
@@ -86,8 +86,9 @@ export const workbenchApi = {
   getSession: () => request<WorkbenchSession>('/session'),
   getTasks: () => request<TaskRun[]>('/tasks'),
   getAgents: () => request<WorkbenchAgent[]>('/agents'),
+  getSkills: () => request<WorkbenchSkill[]>('/skills'),
   getRun: (runId: string) => request<TaskRun>(`/runs/${encodeURIComponent(runId)}`),
-  createSession: (input: { title: string; workspaceId?: string; agentId?: string }) =>
+  createSession: (input: { title: string; workspaceId?: string; agentId?: string; skillId?: string }) =>
     request<{ id: string; workspaceId: string; agentVersionId: string; title: string; createdAt: string }>('/sessions', {
       method: 'POST',
       body: JSON.stringify(input),

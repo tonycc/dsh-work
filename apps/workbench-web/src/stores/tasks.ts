@@ -56,12 +56,14 @@ export const useTaskStore = defineStore('tasks', () => {
     _workspaceName?: string,
     agentId?: string,
     referencedFileIds: string[] = [],
+    skillId?: string,
   ) {
     void _workspaceName
     const session = await workbenchApi.createSession({
       title: prompt,
       ...(workspaceId ? { workspaceId } : {}),
       ...(agentId ? { agentId } : {}),
+      ...(skillId ? { skillId } : {}),
     })
     const uploadedFileIds = await uploadSessionFiles(session.id, attachments)
     const fileIds = [...new Set([...referencedFileIds, ...uploadedFileIds])]

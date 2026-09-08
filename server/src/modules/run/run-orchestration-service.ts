@@ -63,6 +63,7 @@ export class RunOrchestrationService {
     title: string
     workspaceId?: string
     agentVersionId?: string
+    selectedSkillVersionId?: string
     authorizationContext?: SessionAuthorizationContext
   }) {
     assertPrompt(input.title)
@@ -86,6 +87,7 @@ export class RunOrchestrationService {
       title: input.title,
       workspaceId,
       agentVersionId: input.agentVersionId,
+      selectedSkillVersionId: input.selectedSkillVersionId,
     })
   }
 
@@ -99,10 +101,14 @@ export class RunOrchestrationService {
   }) {
     assertPrompt(input.prompt)
     const session = await this.conversations.requireSession(input.sessionId, input.userId)
+    const additionalSkillReferences = session.selectedSkillReference
+      ? [session.selectedSkillReference]
+      : []
     const authorization = await this.authorization?.authorizeRuntime({
       userId: input.userId,
       workspaceId: session.workspaceId,
       agentVersionId: session.agentVersionId,
+      additionalSkillReferences,
       ...input.authorizationContext,
     })
     const preparedFiles = this.content
@@ -134,6 +140,7 @@ export class RunOrchestrationService {
       fileIds: input.fileIds ?? [],
       preparedFiles,
       authorization,
+      additionalSkillReferences,
     })
     await this.operations?.appendAudit(input.userId, 'run.create', run.id, 'success', `trace-${run.id}`, '员工创建真实 Run')
     return this.runs.getRun(tenantId, run.id)
@@ -156,10 +163,14 @@ export class RunOrchestrationService {
     const run = await this.requireOwnedRun(runId, userId)
     if (!['failed', 'cancelled'].includes(run.status)) throw new Error('只有失败或已取消的 Run 可以重试')
     const session = await this.conversations.requireSession(run.sessionId, userId)
+    const additionalSkillReferences = session.selectedSkillReference
+      ? [session.selectedSkillReference]
+      : []
     const authorization = await this.authorization?.authorizeRuntime({
       userId,
       workspaceId: session.workspaceId,
       agentVersionId: session.agentVersionId,
+      additionalSkillReferences,
       ...authorizationContext,
     })
     const prompt = await this.conversations.getRunPrompt(run.id)
@@ -171,6 +182,7 @@ export class RunOrchestrationService {
       userId,
       fileIds,
       authorization,
+      additionalSkillReferences,
     })
     await this.operations?.appendAudit(userId, 'run.retry', runId, 'success', `trace-${runId}`, '员工创建新的不可变 Attempt')
     return this.runs.getRun(tenantId, run.id)
@@ -214,11 +226,12 @@ export class RunOrchestrationService {
     fileIds: string[]
     preparedFiles?: PreparedRuntimeFile[]
     authorization?: RuntimeAuthorizationDecision
+    additionalSkillReferences?: string[]
   }) {
     const route = await this.models.resolveRoute('default')
     const runtimePolicy = await this.operations?.getRuntimePolicy(runtimeId)
     const agent = this.agents
-      ? await this.agents.getRuntimeSnapshot(input.agentVersionId)
+      ? await this.agents.getRuntimeSnapshot(input.agentVersionId, input.additionalSkillReferences)
       : {
           versionId: input.agentVersionId,
           systemPrompt: '你是 dsh-work 企业员工助手。请给出准确、简洁、可执行的中文回答。',
@@ -236,6 +249,7 @@ export class RunOrchestrationService {
       userId: input.userId,
       workspaceId: input.workspaceId,
       agentVersionId: input.agentVersionId,
+      additionalSkillReferences: input.additionalSkillReferences,
     })
     const effectiveDataScopes = authorization?.dataScopes ?? agent.dataScopes
     const knowledgeContext = this.knowledge

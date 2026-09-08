@@ -1,63 +1,30 @@
-# dsh-work 文档导航
+# 文档导航
 
-`docs/` 是项目方案、架构、契约、实施证据和运维说明的唯一存放目录。仓库根目录只保留项目入口 `README.md`，避免方案在多个位置形成互相冲突的副本。
+只维护当前开发、系统边界和部署操作所需的文档。历史里程碑、一次性审核和测试结果不作为现状说明；已提交内容通过 Git 历史追溯。
 
-## 核心文档
+| 阅读目的 | 文档 |
+| --- | --- |
+| 了解产品与仓库 | [项目入口](../README.md) |
+| 开发约束与统一 Agent 执行要求 | [项目工作规范](../AGENTS.md) |
+| 启动开发、选择测试、准备验收 | [开发与测试](testing/development.md) |
+| 理解业务、权限和系统边界 | [架构总览](architecture/overview.md) |
+| 理解数据关系与迁移约束 | [数据模型](data-model.md) |
+| 修改内部接口与事件 | [内部端口与契约](contracts/internal-ports.md) |
+| 配置登录、员工目录和首位管理员 | [AI Hub 身份接入](deployment/ai-hub-sso-integration.md) |
+| 安装、验证与升级执行内核 | [DSH Runtime](deployment/dsh-runtime-delivery.md) |
+| 发布、首次安装、升级、备份、恢复及地址变更 | [Mac mini 部署手册](deployment/mac-mini-deployment-runbook.md) |
 
-| 文档 | 作用 | 事实范围 |
-|---|---|---|
-| [产品与系统架构总览](architecture/overview.md) | 产品范围、系统边界、逻辑/部署架构、安全与演进原则 | 当前架构基线 |
-| [MVP 路线图与交付状态](project/mvp-roadmap.md) | 里程碑结论、开放 Gate 和下一步 | 当前实施状态 |
-| [数据模型](data-model.md) | 领域关系、表和关键约束 | 逻辑数据基线 |
-| [决策台账](project/decision-register.md) | 已确认决策、外部依赖和变更规则 | 决策事实 |
-| [风险台账](project/risk-register.md) | 风险、触发信号、Owner 与缓解措施 | 风险事实 |
+机器可读契约继续保留在 `contracts/`：
 
-## 契约与运行
+- [员工端 OpenAPI](contracts/openapi-workbench.json)
+- [管理端 OpenAPI](contracts/openapi-admin.json)
+- [Runtime Manifest Schema](contracts/runtime-manifest.schema.json)
+- [Run Event Schema](contracts/run-event.schema.json)
+- [合成测试数据](testing/fixtures/mvp-fixtures.json)
 
-- `contracts/openapi-workbench.json`：员工端 OpenAPI；
-- `contracts/openapi-admin.json`：管理端 OpenAPI；
-- [内部端口契约](contracts/internal-ports.md)：Repository、Runtime、Gateway 等内部边界；
-- `contracts/runtime-manifest.schema.json`：不可变 Runtime Manifest Schema；
-- `contracts/run-event.schema.json`：标准 Run Event Schema；
-- [M1 Runtime POC](poc/m1-runtime-poc.md)：DSH ACP、版本、事件与探针结论；
-- [Runtime 交付基线](deployment/dsh-runtime-delivery.md)：运行时安装、启动、升级与回滚。
+维护规则：
 
-## 身份与部署
-
-- [AI Hub 身份接入说明](deployment/ai-hub-sso-integration.md)：应用环境、OIDC 回调、初始管理员、员工目录和本地授权联调步骤；
-- [Mac mini 生产部署](deployment/mac-mini-production.md)：独立部署边界、公开仓库不可变 Release、自动监听部署、launchd、Docker Desktop、备份与回滚；
-- [Mac mini 部署流程（AI Hub 已部署）](deployment/mac-mini-deployment-runbook.md)：复用现有 AI Hub/DSH 的逐步首次安装、生产 OIDC 配置、验收和自动部署启用；
-- [Mac mini 多 IP 与固定域名实施方案](deployment/multi-ip-domain-implementation-plan.md)：IP 与域名并列入口、跨项目配置契约、证书、OIDC、部署脚本、上线和回滚计划；
-- [M6 AI Hub SSO 检查清单](project/m6-ai-hub-sso-checklist.md)：代码完成项与平台侧待办；
-- [持续集成基线](project/ci-integration.md)：统一质量 Gate 与 CI 要求；
-- [本地开发环境 UAT 报告](project/local-development-uat-report.md)：最近一次本地联调证据。
-
-## 基线、测试与验收
-
-- [M0 原型基线](baselines/m0-prototype-baseline.md)：已确认的信息架构和交互边界；
-- [MVP 测试数据](testing/mvp-test-data.md) 与 `testing/fixtures/mvp-fixtures.json`：合成测试数据；
-- `project/m0-exit-checklist.md` ～ `project/m4-exit-checklist.md`：M0～M4 Gate 记录；
-- `project/m4-*-checklist.md`：M4 九项能力的工程证据；
-- `project/m5-*-checklist.md` 与 `project/m5-capacity-test-report.md`：测试、安全、故障与容量证据。
-
-这些检查表记录“当时验证了什么”，不替代当前实施状态。阅读项目现状时先看 [MVP 路线图与交付状态](project/mvp-roadmap.md)，需要追溯结论时再进入对应检查表。
-
-## 文档优先级
-
-同一主题出现差异时，按以下规则处理：
-
-1. API 行为以 `contracts/` 下的可执行契约和服务端契约测试为准；
-2. 物理数据结构以 `server/migrations/` 为准，`data-model.md` 负责解释逻辑关系；
-3. 当前实现状态以 `project/mvp-roadmap.md` 和最新 Gate 检查表为准；
-4. 产品范围与长期边界以 `architecture/overview.md` 为准；
-5. 新决策先写入 `project/decision-register.md`，再同步受影响的架构、契约和检查表。
-
-## 维护规则
-
-- 不在仓库根目录新增方案、架构、评审或实施计划副本；
-- 不在架构文档内复制完整 OpenAPI、DDL 或测试记录，只链接其权威来源；
-- 已关闭里程碑保留检查表作为证据，不继续在历史长文中追加流水账；
-- 任何“已完成”结论必须指向代码、契约、测试或可复现命令；
-- 过时方案从工作树删除，历史版本通过 Git 记录追溯。
-
-本次整理已将原根目录的产品设计、简化架构、MVP 实施长文和前端评审说明归并到上述单一事实来源，不再保留重复副本。
+1. API 字段以可执行契约与测试为准，物理数据结构以 [SQL 迁移](../server/migrations/) 为准，内部类型以源码为准；文档解释边界，不复制完整实现。
+2. 同一主题只维护一个入口；新决策直接更新对应文档，不另建重复方案、路线图或已完成清单。
+3. 文档写可复现命令和验收条件；测试、CI、发布、远端部署和真实业务验收分别记录，不能互相替代。
+4. 接口、配置、命令改变时同步更新文档和校验；过期说明从工作树删除，已提交历史由 Git 保存。

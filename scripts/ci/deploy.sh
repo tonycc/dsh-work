@@ -88,6 +88,10 @@ grep -F 'gh release verify "${tag}"' .github/workflows/release.yml >/dev/null
 grep -F -- '--json isImmutable' .github/workflows/release.yml >/dev/null
 grep -F 'release.immutable !== true' scripts/deploy/watch-release.sh >/dev/null
 grep -F 'release.author?.login !== "github-actions[bot]"' scripts/deploy/watch-release.sh >/dev/null
+grep -F 'release_version_script="${automation_root}/release-version.sh"' scripts/deploy/watch-release.sh >/dev/null
+grep -F 'release-version.sh.new' scripts/deploy/install-release-watcher.sh >/dev/null
+grep -F 'bash "${DWP_BUNDLE}/scripts/deploy/release.sh" "${DWP_VERSION}" "${DWP_ROOT}"' docs/deployment/mac-mini-deployment-runbook.md >/dev/null
+grep -F 'bash "${DWP_BUNDLE}/scripts/deploy/install-release-watcher.sh" "${DWP_ROOT}"' docs/deployment/mac-mini-deployment-runbook.md >/dev/null
 grep -F 'PATH=/opt/homebrew/bin:/usr/local/bin:/Applications/Docker.app/Contents/Resources/bin:/usr/bin:/bin:/usr/sbin:/sbin' deploy/runtime.env.example >/dev/null
 grep -F -- '--deny-self-hosted-runners' scripts/deploy/release.sh >/dev/null
 grep -F '/releases/latest' scripts/deploy/watch-release.sh >/dev/null

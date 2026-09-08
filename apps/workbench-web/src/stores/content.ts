@@ -2,12 +2,13 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 
 import { workbenchApi } from '../api/client'
-import type { Artifact, WorkbenchAgent, Workspace } from '../types/domain'
+import type { Artifact, WorkbenchAgent, WorkbenchSkill, Workspace } from '../types/domain'
 
 export const useContentStore = defineStore('workbench-content', () => {
   const workspaces = ref<Workspace[]>([])
   const artifacts = ref<Artifact[]>([])
   const agents = ref<WorkbenchAgent[]>([])
+  const skills = ref<WorkbenchSkill[]>([])
   const loading = ref(false)
   const initialized = ref(false)
   const personalWorkspace = computed(() => workspaces.value.find(workspace => workspace.type === 'personal'))
@@ -32,6 +33,11 @@ export const useContentStore = defineStore('workbench-content', () => {
     } finally {
       loading.value = false
     }
+  }
+
+  async function refreshSkills() {
+    skills.value = await workbenchApi.getSkills()
+    return skills.value
   }
 
   async function createTeamWorkspace(input: {
@@ -62,6 +68,7 @@ export const useContentStore = defineStore('workbench-content', () => {
     personalWorkspace,
     artifacts,
     agents,
+    skills,
     loading,
     initialized,
     load,
@@ -69,5 +76,6 @@ export const useContentStore = defineStore('workbench-content', () => {
     createTeamWorkspace,
     uploadWorkspaceFile,
     refreshArtifacts,
+    refreshSkills,
   }
 })

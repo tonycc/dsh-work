@@ -3,7 +3,20 @@ set -euo pipefail
 
 deploy_root=${1:?Usage: watch-release.sh DEPLOY_ROOT}
 runtime_env="${deploy_root}/runtime.env"
+automation_root="${deploy_root}/automation"
 umask 077
+
+release_version_script="${automation_root}/release-version.sh"
+if [[ ! -r "${release_version_script}" ]]; then
+  release_version_script="${deploy_root}/current/scripts/deploy/release-version.sh"
+fi
+if [[ ! -r "${release_version_script}" ]]; then
+  release_version_script="${deploy_root}/scripts/deploy/release-version.sh"
+fi
+[[ -r "${release_version_script}" ]] \
+  || { echo "release watcher: release version helper is unavailable" >&2; exit 1; }
+# shellcheck disable=SC1090
+source "${release_version_script}"
 
 [[ -r "${runtime_env}" ]] || { echo "release watcher: missing ${runtime_env}" >&2; exit 1; }
 set -a
@@ -19,7 +32,6 @@ repository=${DSH_WORK_GITHUB_REPOSITORY:?Set DSH_WORK_GITHUB_REPOSITORY in runti
 node_bin=${DSH_WORK_NODE_BIN:?Set DSH_WORK_NODE_BIN in runtime.env}
 [[ -x "${node_bin}" ]] || { echo "release watcher: Node.js is not executable: ${node_bin}" >&2; exit 1; }
 
-automation_root="${deploy_root}/automation"
 state_root="${automation_root}/state"
 mkdir -p "${state_root}" "${deploy_root}/logs"
 
@@ -81,8 +93,10 @@ release_record=$("${node_bin}" -e '
   if (release.draft || release.prerelease) throw new Error("latest release is not a stable published release")
   if (release.immutable !== true) throw new Error("latest release is not immutable")
   if (release.author?.login !== "github-actions[bot]") throw new Error("latest release was not published by GitHub Actions")
-  if (!/^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/.test(tag ?? "")) {
-    throw new Error("latest release tag is not a stable semantic version")
+  const isDateRelease = /^v[0-9]{4}\.(?:0[1-9]|1[0-2])\.(?:0[1-9]|[12][0-9]|3[01])-[0-9]{2}$/.test(tag ?? "")
+  const isLegacyRelease = /^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/.test(tag ?? "")
+  if (!isDateRelease && !isLegacyRelease) {
+    throw new Error("latest release tag is not a supported stable version")
   }
   if (!/^[0-9a-f]{40}$/.test(commit ?? "")) throw new Error("release target is not an immutable commit SHA")
   const expected = new Set([`dsh-work-${tag}.tar.gz`, `dsh-work-${tag}.tar.gz.sha256`])
@@ -112,19 +126,29 @@ if [[ -r "${attempted_file}" && "$(<"${attempted_file}")" == "${candidate_tag}" 
 fi
 
 if [[ -n "${active_tag}" ]]; then
-  if [[ ! "${active_tag}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+  if [[ "${active_tag}" != v* ]] || ! is_supported_release_version "${active_tag#v}"; then
     echo "release watcher: active-release contains an invalid tag: ${active_tag}" >&2
     exit 1
   fi
   is_newer=$("${node_bin}" -e '
-    const parse = value => value.slice(1).split(".").map(Number)
+    const parse = value => {
+      const dateMatch = /^v(\d{4})\.(\d{2})\.(\d{2})-(\d{2})$/.exec(value)
+      if (dateMatch) return { kind: "date", parts: dateMatch.slice(1).map(Number) }
+      const legacyMatch = /^v(\d+)\.(\d+)\.(\d+)$/.exec(value)
+      if (legacyMatch) return { kind: "legacy", parts: legacyMatch.slice(1).map(Number) }
+      throw new Error(`unsupported release tag: ${value}`)
+    }
     const candidate = parse(process.argv[1])
     const active = parse(process.argv[2])
     let comparison = 0
-    for (let index = 0; index < 3; index += 1) {
-      if (candidate[index] === active[index]) continue
-      comparison = candidate[index] > active[index] ? 1 : -1
-      break
+    if (candidate.kind !== active.kind) {
+      comparison = candidate.kind === "date" ? 1 : -1
+    } else {
+      for (let index = 0; index < candidate.parts.length; index += 1) {
+        if (candidate.parts[index] === active.parts[index]) continue
+        comparison = candidate.parts[index] > active.parts[index] ? 1 : -1
+        break
+      }
     }
     process.stdout.write(String(comparison === 1))
   ' "${candidate_tag}" "${active_tag}")
@@ -163,5 +187,12 @@ if [[ -r "${new_watcher}" ]] && ! cmp -s "${new_watcher}" "${installed_watcher}"
   cp "${new_watcher}" "${installed_watcher}.new"
   chmod 700 "${installed_watcher}.new"
   mv "${installed_watcher}.new" "${installed_watcher}"
+fi
+new_release_version="${deploy_root}/current/scripts/deploy/release-version.sh"
+installed_release_version="${automation_root}/release-version.sh"
+if [[ -r "${new_release_version}" ]] && ! cmp -s "${new_release_version}" "${installed_release_version}"; then
+  cp "${new_release_version}" "${installed_release_version}.new"
+  chmod 700 "${installed_release_version}.new"
+  mv "${installed_release_version}.new" "${installed_release_version}"
 fi
 echo "release watcher: ${candidate_tag} deployed successfully"

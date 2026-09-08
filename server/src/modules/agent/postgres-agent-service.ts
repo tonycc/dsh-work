@@ -450,7 +450,7 @@ export class PostgresAgentService {
     return row.activeVersionId
   }
 
-  async getRuntimeSnapshot(versionId: string): Promise<RuntimeAgentSnapshot> {
+  async getRuntimeSnapshot(versionId: string, additionalSkillReferences: string[] = []): Promise<RuntimeAgentSnapshot> {
     const [row] = await this.database<Omit<RuntimeAgentSnapshot, 'skillInstructions' | 'runtimeTools' | 'approvalMode'>[]>`
       select id as "versionId", system_prompt as "systemPrompt", skill_refs as skills,
              tool_refs as tools, visible_role_ids as "roleIds", data_scopes as "dataScopes",
@@ -458,21 +458,23 @@ export class PostgresAgentService {
         from agent_versions where tenant_id = ${tenantId} and id = ${versionId}
     `
     if (!row) throw new Error(`Agent Version 不存在：${versionId}`)
-    await this.assertCapabilityReferences(row.skills, row.tools, row.roleIds, row.dataScopes)
+    const skills = mergeSkillReferences(row.skills, additionalSkillReferences)
+    await this.assertCapabilityReferences(skills, row.tools, row.roleIds, row.dataScopes)
     const skillInstructions = this.skillService
-      ? await this.skillService.resolveRuntimeSkills(row.skills)
+      ? await this.skillService.resolveRuntimeSkills(skills)
       : []
+    const tools = unique(row.tools)
     const runtimeToolNames = this.toolService
-      ? await this.toolService.resolveRuntimeToolNames(row.tools)
-      : unique(row.tools).map(reference => parseReference(reference).id)
-    const runtimeTools = unique(row.tools).map((reference, index) => {
+      ? await this.toolService.resolveRuntimeToolNames(tools)
+      : tools.map(reference => parseReference(reference).id)
+    const runtimeTools = tools.map((reference, index) => {
       const { version } = parseReference(reference)
       return `${runtimeToolNames[index]}@${version}`
     })
     const approvalMode = this.toolService
-      ? await this.toolService.resolveRuntimeApprovalMode(row.tools)
+      ? await this.toolService.resolveRuntimeApprovalMode(tools)
       : 'risk_based'
-    return { ...row, skillInstructions, runtimeTools, approvalMode }
+    return { ...row, skills, tools, skillInstructions, runtimeTools, approvalMode }
   }
 
   private async publishDraft(current: AgentRow, actor: { id: string; displayName: string; department: string }) {
@@ -732,6 +734,16 @@ function nextVersion(current: string) {
 
 function unique(values: string[]) {
   return [...new Set(values.map(value => value.trim()).filter(Boolean))]
+}
+
+function mergeSkillReferences(base: string[], additional: string[]) {
+  const references = new Map<string, string>()
+  for (const reference of [...base, ...additional]) {
+    const normalized = reference.trim()
+    const { id } = parseReference(normalized)
+    references.set(id, normalized)
+  }
+  return [...references.values()]
 }
 
 function parseReference(reference: string) {

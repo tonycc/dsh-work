@@ -80,6 +80,21 @@ export interface RuntimeSkillConfiguration {
   tools: string[]
 }
 
+export interface WorkbenchSkillDefinition {
+  id: string
+  name: string
+  version: string
+  category: string
+  description: string
+  owner: string
+  testPrompt: string
+  updatedAt: string
+}
+
+interface WorkbenchSkillRow extends Omit<WorkbenchSkillDefinition, 'updatedAt'> {
+  updatedAt: Date
+}
+
 export class PostgresSkillService {
   private readonly database: DatabaseClient
   private readonly operations?: PostgresOperationsService
@@ -97,6 +112,32 @@ export class PostgresSkillService {
 
   async getSkills(): Promise<SkillDefinition[]> {
     return (await this.readSkillRows()).map(toSkillDefinition)
+  }
+
+  async listWorkbenchSkills(): Promise<WorkbenchSkillDefinition[]> {
+    const rows = await this.database<WorkbenchSkillRow[]>`
+      select s.id, sv.name, sv.version, sv.category, sv.description,
+             owner.display_name as owner, sv.test_prompt as "testPrompt",
+             s.updated_at as "updatedAt"
+        from skills s
+        join skill_versions sv on sv.tenant_id = s.tenant_id and sv.id = s.active_version_id
+        join users owner on owner.tenant_id = s.tenant_id and owner.id = s.owner_user_id
+       where s.tenant_id = ${tenantId} and s.status = 'published' and sv.status = 'published'
+       order by s.updated_at desc, sv.name asc
+    `
+    return rows.map(row => ({ ...row, updatedAt: formatDateTime(row.updatedAt) }))
+  }
+
+  async resolveWorkbenchSkillVersion(skillId: string) {
+    const [row] = await this.database<{ id: string; skillId: string; version: string }[]>`
+      select sv.id, sv.skill_id as "skillId", sv.version
+        from skills s
+        join skill_versions sv on sv.tenant_id = s.tenant_id and sv.id = s.active_version_id
+       where s.tenant_id = ${tenantId} and s.id = ${skillId}
+         and s.status = 'published' and sv.status = 'published'
+    `
+    if (!row) throw new Error('Skill 不存在、未发布或已停用')
+    return { id: row.id, reference: `${row.skillId}@${row.version}` }
   }
 
   async getSkillVersions(): Promise<SkillVersionRecord[]> {

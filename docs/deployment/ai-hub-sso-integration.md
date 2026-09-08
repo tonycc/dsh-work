@@ -28,7 +28,7 @@ dsh-work 采用“统一身份、应用自主授权”模式：
 | 字段 | 值 | 说明 |
 | --- | --- | --- |
 | 环境标识 | `local` | 对应 `AI_HUB_ENVIRONMENT` |
-| 版本 | `0.1.1` | 当前 dsh-work 版本 |
+| 版本 | 实际部署版本 | 与 `server/package.json` 的 `releaseVersion` 或已验证 Release 一致 |
 | 门户入口 | `http://localhost:4174/workbench` | 从 AI Hub 打开应用时进入员工端 |
 | API 地址 | `http://host.docker.internal:4190/api` | AI Hub 在 Docker 内运行时使用；原生运行改为 `http://localhost:4190/api` |
 | 健康检查 | `http://host.docker.internal:4190/health` | AI Hub 在 Docker 内运行时使用；原生运行改为 `http://localhost:4190/health` |
@@ -140,7 +140,7 @@ Bootstrap 只在本地认领记录首次原子写入时授予 `role-platform-adm
 7. 移除角色，确认下一个请求立即 403，而不是等待 AI Hub Token 过期；
 8. 修改用户和角色数据范围，确认运行授权使用本地合并结果；
 9. 在 AI Hub 停用测试员工并同步，确认 Session 被撤销；
-10. 停止 AI Hub Platform API：已有未过期 dsh-work Session 应继续按本地权限工作；需要刷新 OIDC Token、重新登录或同步目录时应失败关闭；
+10. 停止 AI Hub Platform API：已有 dsh-work Session 不直接依赖 Platform API；另停用 OIDC Token Endpoint，确认 Token 进入到期前 30 秒刷新窗口后请求被阻断。不要把 Session 默认 8 小时期限当作离线窗口；
 11. 验证不能移除最后一位平台管理员，并检查所有变更均写入 `audit_events`。
 
 ## 8. 外部待办

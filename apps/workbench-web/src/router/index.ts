@@ -27,6 +27,12 @@ const router = createRouter({
       meta: { title: '工作台', section: '员工工作台' },
     },
     {
+      path: '/skills',
+      name: 'skills',
+      component: () => import('@/views/SkillPlazaView.vue'),
+      meta: { title: 'Skill 广场', section: '员工工作台' },
+    },
+    {
       path: '/conversations/:id',
       name: 'conversation',
       component: () => import('@/views/ConversationView.vue'),

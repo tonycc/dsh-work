@@ -81,6 +81,11 @@ export interface TaskRun {
   sources: TaskSource[]
   artifacts: Artifact[]
   attachments: string[]
+  skill?: {
+    id: string
+    name: string
+    version: string
+  }
   summary?: string
   approval?: {
     object: string

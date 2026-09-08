@@ -4,6 +4,7 @@ import type { RunRepository } from '../../modules/run/run-repository.ts'
 import type { PostgresAgentService } from '../../modules/agent/postgres-agent-service.ts'
 import type { PostgresAuthorizationService } from '../../modules/authorization/postgres-authorization-service.ts'
 import type { PostgresOperationsService } from '../../modules/admin/application/postgres-operations-service.ts'
+import type { PostgresSkillService } from '../../modules/skill/postgres-skill-service.ts'
 import {
   envelope,
   httpResult,
@@ -24,6 +25,7 @@ export function registerConversationRoutes(
   agents: PostgresAgentService,
   authorization?: PostgresAuthorizationService,
   operations?: PostgresOperationsService,
+  skills?: PostgresSkillService,
 ) {
   router.get(`${basePath}/tasks`, async (_request, context) => {
     const identity = requireRequestIdentity(context, 'workbench')
@@ -36,22 +38,37 @@ export function registerConversationRoutes(
     const identity = requireRequestIdentity(context, 'workbench')
     const userId = identity.userId
     const authorizationContext = sessionAuthorizationContext(identity)
-    const body = await readJsonBody<{ title: string; workspaceId?: string; agentId?: string }>(request)
+    const body = await readJsonBody<{ title: string; workspaceId?: string; agentId?: string; skillId?: string }>(request)
     const access = await authorization?.authorizeWorkbench({ userId, ...authorizationContext })
     const agentVersionId = await agents.resolveWorkbenchAgentVersion(
       body.agentId,
       userId,
       access?.roleIds ?? identity.roleIds,
     )
+    const selectedSkillVersion = body.skillId && skills
+      ? await skills.resolveWorkbenchSkillVersion(body.skillId)
+      : undefined
     const session = await orchestration.createSession({
       userId,
       title: body.title,
       workspaceId: body.workspaceId,
       agentVersionId,
+      selectedSkillVersionId: selectedSkillVersion?.id,
       authorizationContext,
     })
     return httpResult(201, envelope('workbench', session, 'postgres'))
   })
+
+  if (skills) {
+    router.get(`${basePath}/skills`, async (_request, context) => {
+      const identity = requireRequestIdentity(context, 'workbench')
+      await authorization?.authorizeWorkbench({
+        userId: identity.userId,
+        ...sessionAuthorizationContext(identity),
+      })
+      return envelope('workbench', await skills.listWorkbenchSkills(), 'postgres')
+    })
+  }
 
   router.delete(`${basePath}/sessions/:sessionId`, async (_request, context) => {
     const identity = requireRequestIdentity(context, 'workbench')

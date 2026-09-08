@@ -22,6 +22,13 @@
         "responses": { "200": { "$ref": "#/components/responses/Ok" } }
       }
     },
+    "/skills": {
+      "get": {
+        "operationId": "listAvailableSkills",
+        "summary": "查询当前员工可查看的已发布 Skill 广场目录",
+        "responses": { "200": { "$ref": "#/components/responses/Ok" }, "401": { "$ref": "#/components/responses/Error" } }
+      }
+    },
     "/workspaces": {
       "get": {
         "operationId": "listMyWorkspaces",
@@ -62,6 +69,7 @@
                 "properties": {
                   "workspaceId": { "type": "string", "description": "个人或团队工作空间 ID；省略时由服务端选择默认个人空间。" },
                   "agentId": { "type": ["string", "null"] },
+                  "skillId": { "type": ["string", "null"], "description": "员工从 Skill 广场选择的 Skill；服务端锁定其当前已发布版本。" },
                   "title": { "type": ["string", "null"], "maxLength": 120 }
                 }
               }

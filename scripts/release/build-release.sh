@@ -2,10 +2,11 @@
 set -euo pipefail
 
 version=${1:?Usage: build-release.sh VERSION [OUTPUT_DIRECTORY]}
-[[ "${version}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] \
-  || { echo "invalid stable release version: ${version}" >&2; exit 1; }
+version=${version#v}
 
 project_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+source "${project_root}/scripts/deploy/release-version.sh"
+require_release_version "${version}"
 output_directory=${2:-"${project_root}/dist/releases"}
 tag="v${version}"
 bundle_name="dsh-work-${tag}"
@@ -25,9 +26,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-package_version=$(node -e "const p=require(process.argv[1]); process.stdout.write(p.version ?? '')" "${project_root}/server/package.json")
-[[ "${package_version}" == "${version}" ]] \
-  || { echo "release version ${version} does not match server/package.json ${package_version}" >&2; exit 1; }
+release_metadata_version=$(node -e "const p=require(process.argv[1]); process.stdout.write(p.releaseVersion ?? '')" "${project_root}/server/package.json")
+[[ "${release_metadata_version}" == "${version}" ]] \
+  || { echo "release version ${version} does not match server/package.json releaseVersion ${release_metadata_version}" >&2; exit 1; }
 
 mkdir -p "${output_directory}"
 if [[ -e "${bundle}" || -e "${archive}" ]]; then
@@ -79,6 +80,7 @@ deployment_scripts=(
   issue-intranet-certificate.sh
   issue-intranet-ip-certificate.sh
   preflight.sh
+  release-version.sh
   render-endpoint-compose.mjs
   render-endpoint-compose.sh
   release.sh

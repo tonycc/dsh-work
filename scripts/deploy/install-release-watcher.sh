@@ -8,6 +8,7 @@ script_directory=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source_root=$(cd "${script_directory}/../.." && pwd)
 template="${source_root}/deploy/launchd/${label}.plist.template"
 source_watcher="${source_root}/scripts/deploy/watch-release.sh"
+source_release_version="${source_root}/scripts/deploy/release-version.sh"
 agents_directory="${HOME}/Library/LaunchAgents"
 plist="${agents_directory}/${label}.plist"
 
@@ -36,6 +37,7 @@ if (( (8#${runtime_mode} & 8#077) != 0 )); then
 fi
 [[ -f "${template}" ]] || { echo "release watcher launchd template is missing: ${template}" >&2; exit 1; }
 [[ -r "${source_watcher}" ]] || { echo "release watcher script is missing: ${source_watcher}" >&2; exit 1; }
+[[ -r "${source_release_version}" ]] || { echo "release version helper is missing: ${source_release_version}" >&2; exit 1; }
 if [[ "${deploy_root}" == *['&<>|\\']* ]]; then
   echo "deployment root contains unsupported plist or template characters: ${deploy_root}" >&2
   exit 1
@@ -52,6 +54,9 @@ mkdir -p "${agents_directory}" "${automation_root}/state" "${deploy_root}/logs"
 cp "${source_watcher}" "${automation_root}/watch-release.sh.new"
 chmod 700 "${automation_root}/watch-release.sh.new"
 mv "${automation_root}/watch-release.sh.new" "${automation_root}/watch-release.sh"
+cp "${source_release_version}" "${automation_root}/release-version.sh.new"
+chmod 700 "${automation_root}/release-version.sh.new"
+mv "${automation_root}/release-version.sh.new" "${automation_root}/release-version.sh"
 
 sed \
   -e "s|__DEPLOY_ROOT__|${deploy_root}|g" \

@@ -22,6 +22,7 @@ interface AgentAuthorizationRow {
 interface CapabilityVersion {
   reference: string
   versionId: string
+  toolReferences?: string[]
 }
 
 export interface RuntimeAuthorizationDecision {
@@ -74,6 +75,7 @@ export class PostgresAuthorizationService {
     agentVersionId: string
     roleIds?: string[]
     dataScopes?: string[]
+    additionalSkillReferences?: string[]
   }): Promise<RuntimeAuthorizationDecision> {
     const workspaceId = normalizeWorkspaceId(input.workspaceId)
     try {
@@ -89,7 +91,15 @@ export class PostgresAuthorizationService {
       }
       requireScopes(context.dataScopes, agent.dataScopes, 'Agent')
 
-      const skillVersions = await this.resolveSkillVersions(agent.skillReferences)
+      const skillVersions = await this.resolveSkillVersions(
+        mergeSkillReferences(agent.skillReferences, input.additionalSkillReferences ?? []),
+      )
+      const authorizedToolReferences = new Set(unique(agent.toolReferences))
+      const missingSkillTools = unique(skillVersions.flatMap(skill => skill.toolReferences ?? []))
+        .filter(reference => !authorizedToolReferences.has(reference))
+      if (missingSkillTools.length) {
+        throw new Error(`Agent 必须显式授权所选 Skill 依赖的工具：${missingSkillTools.join('、')}`)
+      }
       const toolVersions = await this.resolveAndAuthorizeTools(
         agent.toolReferences,
         context.roleIds,
@@ -246,14 +256,14 @@ export class PostgresAuthorizationService {
     const resolved: CapabilityVersion[] = []
     for (const reference of unique(references)) {
       const { id, version } = parseReference(reference, 'Skill')
-      const [row] = await this.database<{ versionId: string }[]>`
-        select sv.id as "versionId" from skills s
+      const [row] = await this.database<{ versionId: string; toolReferences: string[] }[]>`
+        select sv.id as "versionId", sv.tool_refs as "toolReferences" from skills s
         join skill_versions sv on sv.tenant_id = s.tenant_id and sv.skill_id = s.id
          where s.tenant_id = ${tenantId} and s.id = ${id} and sv.version = ${version}
            and s.status = 'published' and sv.status = 'published'
       `
       if (!row) throw new Error(`Skill 不存在、未发布或已停用：${reference}`)
-      resolved.push({ reference, versionId: row.versionId })
+      resolved.push({ reference, versionId: row.versionId, toolReferences: row.toolReferences })
     }
     return resolved
   }
@@ -356,6 +366,16 @@ function intersects(left: string[], right: string[]) {
 
 function unique(values: string[]) {
   return [...new Set(values.map(value => value.trim()).filter(Boolean))]
+}
+
+function mergeSkillReferences(base: string[], additional: string[]) {
+  const references = new Map<string, string>()
+  for (const reference of [...base, ...additional]) {
+    const normalized = reference.trim()
+    const { id } = parseReference(normalized, 'Skill')
+    references.set(id, normalized)
+  }
+  return [...references.values()]
 }
 
 function capabilityLabel(type: 'agent' | 'skill' | 'tool') {

@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Collection,
+  Grid,
   Delete as DeleteIcon,
   Download,
   Files,
@@ -35,6 +36,7 @@ const deletingSessionId = ref<string>()
 
 const navigation = [
   { label: '工作台', path: '/workbench', icon: HomeFilled },
+  { label: 'Skill 广场', path: '/skills', icon: Grid },
   { label: '工作空间', path: '/workspaces', icon: Collection },
   { label: '成果库', path: '/artifacts', icon: Files },
 ]

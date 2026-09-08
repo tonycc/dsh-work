@@ -28,6 +28,11 @@ interface AgentEnvelope {
   meta: { api: string; adapter: string }
 }
 
+interface SkillEnvelope {
+  data: Array<{ id: string; status?: string; instructions?: string; toolIds?: string[]; testPrompt: string }>
+  meta: { api: string; adapter: string }
+}
+
 interface WorkspaceEnvelope {
   data: Array<{ id: string; type: 'personal' | 'team'; name: string }>
 }
@@ -126,6 +131,17 @@ test('prototype workbench Agent DTO exposes only published employee-safe fields'
   assert.ok(result.body.data.every(agent => agent.status === undefined))
   assert.ok(result.body.data.every(agent => agent.systemPrompt === undefined))
   assert.ok(result.body.data.every(agent => agent.owner === undefined))
+})
+
+test('prototype workbench Skill plaza exposes only published employee-safe fields', async () => {
+  const result = await getJson<SkillEnvelope>('/api/workbench/v1/skills')
+  assert.equal(result.response.status, 200)
+  assert.equal(result.body.meta.adapter, 'prototype-memory')
+  assert.ok(result.body.data.length >= 1)
+  assert.ok(result.body.data.every(skill => skill.status === undefined))
+  assert.ok(result.body.data.every(skill => skill.instructions === undefined))
+  assert.ok(result.body.data.every(skill => skill.toolIds === undefined))
+  assert.ok(result.body.data.every(skill => skill.testPrompt.length >= 4))
 })
 
 test('prototype workbench exposes exactly one default personal workspace', async () => {

@@ -58,7 +58,7 @@ assert.match(backup, /storage_class": "off-host"/)
 assert.match(backup, /shasum -a 256 -c/)
 assert.match(backup, /off-host backup filesystem changed while the backup was being written/)
 
-for (const [script, version] of [[buildPath, '0.1.0-rc.1'], [releasePath, '01.2.3']]) {
+for (const [script, version] of [[buildPath, '0.1.0'], [releasePath, '2026.9.7-01']]) {
   const result = spawnSync('bash', [script, version], { encoding: 'utf8' })
   assert.notEqual(result.status, 0, `${script} accepted non-stable version ${version}`)
   assert.match(result.stderr, /invalid stable release version/)
@@ -177,17 +177,23 @@ async function verifySensitiveBuildInputIsRejected(fixture, buildSource) {
   const fixtureBuild = join(fixture, 'scripts/release/build-release.sh')
   const outputRoot = join(fixture, 'output')
   await mkdir(dirname(fixtureBuild), { recursive: true })
+  await mkdir(join(fixture, 'scripts/deploy'), { recursive: true })
   await mkdir(join(fixture, 'server'), { recursive: true })
   await mkdir(join(fixture, 'deploy'), { recursive: true })
   await writeFile(fixtureBuild, buildSource)
   await chmod(fixtureBuild, 0o755)
-  await writeFile(join(fixture, 'server/package.json'), '{"version":"0.1.0"}\n')
+  await writeFile(join(fixture, 'server/package.json'), '{"version":"0.1.1","releaseVersion":"2026.09.07-01"}\n')
+  await writeFile(
+    join(fixture, 'scripts/deploy/release-version.sh'),
+    await readFile(join(projectRoot, 'scripts/deploy/release-version.sh')),
+    { mode: 0o755 },
+  )
   await writeFile(join(fixture, 'deploy/runtime.env'), 'AI_HUB_CLIENT_SECRET=must-not-ship\n', { mode: 0o600 })
 
-  const result = spawnSync('bash', [fixtureBuild, '0.1.0', outputRoot], { encoding: 'utf8' })
+  const result = spawnSync('bash', [fixtureBuild, '2026.09.07-01', outputRoot], { encoding: 'utf8' })
   assert.notEqual(result.status, 0, 'release build accepted deploy/runtime.env')
   assert.match(result.stderr, /refusing to build beside sensitive deployment material/)
-  const bundleExists = await readFile(join(outputRoot, 'dsh-work-v0.1.0/release.json'), 'utf8')
+  const bundleExists = await readFile(join(outputRoot, 'dsh-work-v2026.09.07-01/release.json'), 'utf8')
     .then(() => true, () => false)
   assert.equal(bundleExists, false, 'failed sensitive build left a release payload behind')
 }

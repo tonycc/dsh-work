@@ -133,7 +133,7 @@ async function start() {
     if (restartRecovery.failed > 0 || restartRecovery.resumedQueued > 0) {
       console.warn('service restart recovery completed', restartRecovery)
     }
-    registerConversationRoutes(router, conversations, orchestration, runs, agents, authorization, operations)
+    registerConversationRoutes(router, conversations, orchestration, runs, agents, authorization, operations, skills)
     registerContentRoutes(router, content, authorization)
     registerOperationsRoutes(router, operations)
     registerAgentRoutes(router, agents)

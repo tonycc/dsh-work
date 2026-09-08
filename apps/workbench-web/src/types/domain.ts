@@ -81,6 +81,7 @@ export interface TaskRun {
   sources: TaskSource[]
   artifacts: Artifact[]
   attachments: string[]
+  skill?: Pick<WorkbenchSkill, 'id' | 'name' | 'version'>
   summary?: string
   approval?: {
     object: string
@@ -136,4 +137,15 @@ export interface WorkbenchAgent {
   welcomeMessage: string
   version: string
   examplePrompts: string[]
+}
+
+export interface WorkbenchSkill {
+  id: string
+  name: string
+  version: string
+  category: string
+  description: string
+  owner: string
+  testPrompt: string
+  updatedAt: string
 }

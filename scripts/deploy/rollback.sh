@@ -4,6 +4,7 @@ set -euo pipefail
 version=${1:?Usage: rollback.sh VERSION [DEPLOY_ROOT]}
 deploy_root=${2:-${DSH_WORK_DEPLOY_ROOT:-}}
 script_directory=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+source "${script_directory}/release-version.sh"
 
 if [[ -z "${deploy_root}" ]]; then
   deploy_root=$(cd "${script_directory}/../.." && pwd)
@@ -11,7 +12,7 @@ fi
 
 if [[ -r "${deploy_root}/active-release" ]]; then
   active_tag=$(<"${deploy_root}/active-release")
-  if [[ "${active_tag}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+  if [[ "${active_tag}" == v* ]] && is_supported_release_version "${active_tag#v}"; then
     state_root="${deploy_root}/automation/state"
     mkdir -p "${state_root}"
     printf '%s\n' "${active_tag}" > "${state_root}/blocked-release.new"

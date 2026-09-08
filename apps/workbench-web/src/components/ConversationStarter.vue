@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import {
   Document,
   DocumentChecked,
@@ -11,7 +11,7 @@ import {
 import { TaskComposer } from '@dsh-work/workbench-components'
 import { useContentStore } from '@/stores/content'
 import { useTaskStore } from '@/stores/tasks'
-import type { WorkspaceFile } from '@/types/domain'
+import type { WorkbenchSkill, WorkspaceFile } from '@/types/domain'
 import { notifyActionFailure } from '@/utils/feedback'
 
 const props = withDefaults(
@@ -32,6 +32,7 @@ const props = withDefaults(
 )
 
 const router = useRouter()
+const route = useRoute()
 const taskStore = useTaskStore()
 const contentStore = useContentStore()
 const rootRef = ref<HTMLElement>()
@@ -41,6 +42,7 @@ const selectedTask = ref('')
 const presetPrompt = ref('')
 const composerKey = ref(0)
 const referencedWorkspaceFileIds = ref<string[]>([])
+const selectedSkillId = ref('')
 
 const personalWorkspace = computed(() =>
   contentStore.workspaces.find(workspace => workspace.type === 'personal'),
@@ -59,6 +61,9 @@ const composerWorkspaceName = computed(() =>
 )
 const composerReady = computed(() =>
   props.workspaceLocked || contentStore.initialized || workspaceLoadFinished.value,
+)
+const selectedSkill = computed<WorkbenchSkill | undefined>(() =>
+  contentStore.skills.find(skill => skill.id === selectedSkillId.value),
 )
 
 const commonTasks = [
@@ -106,14 +111,24 @@ function useWorkspaceFile(file: WorkspaceFile) {
 
 async function submitTask(payload: { prompt: string; files: File[]; workspaceId: string }) {
   try {
-    const task = await taskStore.createTask(
-      payload.prompt,
-      payload.files,
-      payload.workspaceId,
-      props.workspaceLocked ? props.workspaceName : composerWorkspaceName.value,
-      undefined,
-      referencedWorkspaceFileIds.value,
-    )
+    const task = selectedSkillId.value
+      ? await taskStore.createTask(
+          payload.prompt,
+          payload.files,
+          payload.workspaceId,
+          props.workspaceLocked ? props.workspaceName : composerWorkspaceName.value,
+          undefined,
+          referencedWorkspaceFileIds.value,
+          selectedSkillId.value,
+        )
+      : await taskStore.createTask(
+          payload.prompt,
+          payload.files,
+          payload.workspaceId,
+          props.workspaceLocked ? props.workspaceName : composerWorkspaceName.value,
+          undefined,
+          referencedWorkspaceFileIds.value,
+        )
     referencedWorkspaceFileIds.value = []
     await router.push(`/conversations/${task.id}`)
   } catch (error) {
@@ -121,19 +136,40 @@ async function submitTask(payload: { prompt: string; files: File[]; workspaceId:
   }
 }
 
-onMounted(async () => {
-  if (props.workspaceLocked) {
-    workspaceLoadFinished.value = true
-    return
+function syncSkillFromRoute() {
+  const skillId = typeof route.query.skill === 'string' ? route.query.skill : ''
+  selectedSkillId.value = contentStore.skills.some(skill => skill.id === skillId) ? skillId : ''
+  const skill = selectedSkill.value
+  if (skill) {
+    selectedTask.value = ''
+    presetPrompt.value = skill.testPrompt
+    composerKey.value += 1
+    focusComposer()
   }
+}
+
+function clearSelectedSkill() {
+  selectedSkillId.value = ''
+  const query = { ...route.query }
+  delete query.skill
+  void router.replace({ query })
+}
+
+onMounted(async () => {
   try {
-    await contentStore.load()
+    await Promise.all([
+      props.workspaceLocked ? Promise.resolve() : contentStore.load(),
+      props.workspaceLocked && !route.query.skill ? Promise.resolve() : contentStore.refreshSkills(),
+    ])
+    syncSkillFromRoute()
   } catch (error) {
-    notifyActionFailure('加载工作空间', '新对话的空间列表', error, '仍可继续发送，服务端会自动归入“我的空间”。')
+    notifyActionFailure('加载员工能力', 'Skill 广场', error, '仍可继续发送普通对话；稍后刷新页面重试 Skill。')
   } finally {
     workspaceLoadFinished.value = true
   }
 })
+
+watch(() => route.query.skill, syncSkillFromRoute)
 
 defineExpose({ useWorkspaceFile })
 </script>
@@ -164,6 +200,13 @@ defineExpose({ useWorkspaceFile })
             <span>{{ item.label }}</span>
           </button>
         </nav>
+
+        <div v-if="selectedSkill" class="selected-skill" aria-live="polite">
+          <span class="selected-skill__label">已选择 Skill</span>
+          <strong>{{ selectedSkill.name }}</strong>
+          <span class="selected-skill__version">v{{ selectedSkill.version }}</span>
+          <button type="button" aria-label="移除已选择 Skill" @click="clearSelectedSkill">×</button>
+        </div>
 
         <TaskComposer
           v-if="composerReady"
@@ -290,6 +333,25 @@ defineExpose({ useWorkspaceFile })
   color: #999d99;
   font-size: var(--dsh-font-size-micro);
 }
+
+.selected-skill {
+  display: flex;
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  gap: 8px;
+  margin: 16px auto 0;
+  padding: 7px 10px;
+  border: 1px solid #c9e6d9;
+  border-radius: 999px;
+  color: #23644f;
+  background: #f0faf5;
+  font-size: var(--dsh-font-size-caption);
+}
+
+.selected-skill__label,
+.selected-skill__version { color: #5f8b7b; }
+.selected-skill button { padding: 0 2px; border: 0; color: #5f8b7b; background: transparent; cursor: pointer; font-size: var(--dsh-font-size-header); line-height: 1; }
 
 .workbench-trust span {
   display: inline-flex;

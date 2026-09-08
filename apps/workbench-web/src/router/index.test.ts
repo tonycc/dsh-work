@@ -9,4 +9,11 @@ describe('workbench authentication routes', () => {
     expect(route.name).toBe('auth-error')
     expect(route.meta.public).toBe(true)
   })
+
+  it('routes employees to the Skill plaza without a duplicate page title', () => {
+    const route = router.resolve('/skills')
+
+    expect(route.name).toBe('skills')
+    expect(route.meta.section).toBe('员工工作台')
+  })
 })

@@ -4,10 +4,10 @@ set -euo pipefail
 version=${1:?Usage: release.sh VERSION [DEPLOY_ROOT]}
 version=${version#v}
 umask 077
-[[ "${version}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] \
-  || { echo "invalid stable release version: ${version}" >&2; exit 1; }
 
 script_directory=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+source "${script_directory}/release-version.sh"
+require_supported_release_version "${version}"
 control_root=$(cd "${script_directory}/../.." && pwd)
 deploy_root=${2:-${DSH_WORK_DEPLOY_ROOT:-${control_root}}}
 runtime_env="${deploy_root}/runtime.env"

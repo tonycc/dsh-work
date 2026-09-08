@@ -4,7 +4,7 @@ name: Manual release
   workflow_dispatch:
     inputs:
       version:
-        description: Stable version from server/package.json, without the v prefix
+        description: Date-based releaseVersion from server/package.json, without the v prefix (YYYY.MM.DD-NN)
         required: true
         type: string
 
@@ -29,16 +29,16 @@ jobs:
           SELECTED_REF: ${{ github.ref }}
         run: test "${SELECTED_REF}" = "refs/heads/main"
 
-      - name: Require a stable release version
-        env:
-          RELEASE_VERSION: ${{ inputs.version }}
-        run: |
-          [[ "${RELEASE_VERSION}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
-
       - name: Check out the selected commit
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+
+      - name: Require a stable release version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          bash scripts/deploy/release-version.sh "${RELEASE_VERSION}"
 
       - name: Refuse Release or Tag reuse
         env:

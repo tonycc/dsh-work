@@ -1,12 +1,11 @@
-# dsh-work Mac mini 部署流程（AI Hub 已部署）
+# Mac mini 部署手册
 
-更新时间：2026-09-04
+更新时间：2026-09-08
 
 本流程用于在**已经部署 AI Hub、已经安装 DSH 的同一台 Apple Silicon Mac mini** 上，
 首次部署 dsh-work。参考 AI Hub 的
 [Mac mini 镜像部署文档](https://github.com/tonycc/ai-hub/blob/main/docs/macmini-image-deployment.md)，
-但所有 dsh-work 命令均以本仓库现有部署脚本为准。架构和恢复约束见
-[Mac mini 生产部署](mac-mini-production.md)。
+所有 dsh-work 命令以本仓库现有部署脚本为准；本文统一维护首次安装、升级、恢复和地址变更。
 
 目标顺序：确认现有环境 → 登记 AI Hub 应用 → 验证并下载 Release → 配置与预检 →
 部署指定版本 → 登录和备份验收 → 启用后续自动部署。
@@ -45,7 +44,7 @@ dsh-work 不是 AI Hub 的另一个容器，也不是纯镜像部署。其前后
 | 参数 | 示例 | 确认方式 |
 | --- | --- | --- |
 | 仓库 | `tonycc/dsh-work` | dsh-work 的公开 GitHub 仓库 |
-| Release Tag | `v0.1.1` | 管理员批准的、已发布的不可变 Release，不是 AI Hub 的 CalVer |
+| Release Tag | `v2026.09.07-01` | 管理员批准的、已发布的不可变 Release，格式为 `vYYYY.MM.DD-NN` |
 | Mac mini IP | `192.168.33.20` | 沿用 AI Hub 正在使用的 RFC1918 私有保留地址 |
 | dsh-work 根目录 | `/Users/deploy/services/dsh-work` | 首次安装的新目录；不能是 AI Hub 或 DSH 目录 |
 | AI Hub 根目录 | `/Users/deploy/services/ai-hub` | 现有部署的真实目录，只读引用其证书 |
@@ -75,7 +74,7 @@ umask 077
 export PATH=/opt/homebrew/bin:/usr/local/bin:/Applications/Docker.app/Contents/Resources/bin:/usr/bin:/bin:/usr/sbin:/sbin
 
 DWP_REPOSITORY='tonycc/dsh-work'
-DWP_TAG='v0.1.1'
+DWP_TAG='v2026.09.07-01'
 DWP_VERSION="${DWP_TAG#v}"
 DWP_IP='192.168.33.20'
 DWP_ROOT='/Users/deploy/services/dsh-work'
@@ -87,7 +86,7 @@ DWP_NODE='/opt/homebrew/bin/node'
 DWP_OFFHOST='/Volumes/dsh-work-backups'
 
 [[ "${DWP_REPOSITORY}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
-[[ "${DWP_TAG}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+[[ "${DWP_TAG}" =~ ^v[0-9]{4}\.(0[1-9]|1[0-2])\.(0[1-9]|[12][0-9]|3[01])-[0-9]{2}$ ]]
 [[ "${DWP_ROOT}" == "/Users/$(id -un)/"* ]]
 [[ "${DWP_ROOT}" != "${DWP_AIH_ROOT}" && "${DWP_ROOT}" != "${DWP_RUNTIME_HOME}" ]]
 [[ "${DWP_ROOT}" != *[[:space:]]* ]]
@@ -104,10 +103,10 @@ DWP_OFFHOST='/Volumes/dsh-work-backups'
 1. 确认部署改动已合并到 dsh-work 的 `main`，目标 Commit 的 **M6 quality gate** 成功。
 2. 在仓库 `Settings → General → Releases` 启用 **Enable release immutability**。
    旧 Release 不会因此自动变为不可变 Release；不能用旧可变包充当新发布包。
-3. 确认 `server/package.json` 中的版本与准备发布的稳定语义版本一致。
+3. 确认 `server/package.json` 中的 `releaseVersion` 与准备发布的日期版本一致。
 4. 在 Actions 中人工运行 **Manual release**，选择 `main`，输入不带 `v` 的版本，
-   例如本次发布的 `0.1.1`。若 Tag/Release 已存在，递增版本并通过 CI 后再发布，不能覆盖旧 Tag。
-5. 等待工作流成功。目标 `v0.1.1` 应包含 `dsh-work-v0.1.1.tar.gz` 和对应 `.sha256`，
+   例如本次发布的 `2026.09.07-01`。同一天的后续发布递增 `NN`；若 Tag/Release 已存在，递增构建号并通过 CI 后再发布，不能覆盖旧 Tag。
+5. 等待工作流成功。目标 `v2026.09.07-01` 应包含 `dsh-work-v2026.09.07-01.tar.gz` 和对应 `.sha256`，
    并具有 GitHub 构建来源证明。
 
 普通 push 只运行 CI，不部署。服务器凭据只负责读取和验证 Release，不需要 GitHub 写权限，
@@ -234,7 +233,7 @@ Commit 为 `76fda729799fe9b3848dbe2c211d4b231032b81e`；第 8 节会用目标发
 | AI Hub 环境字段 | 应填写的值 |
 | --- | --- |
 | 环境标识 | `production` |
-| 版本 | 目标 dsh-work 版本，如 `0.1.1` |
+| 版本 | 目标 dsh-work Release 版本，如 `2026.09.07-01` |
 | 门户入口 | `https://192.168.33.20:4174/workbench` |
 | API 地址 | `https://192.168.33.20:4174/api` |
 | 健康检查 | `https://192.168.33.20:4174/health` |
@@ -488,11 +487,22 @@ DWP_LATEST_TAG="$(gh release view --repo "${DWP_REPOSITORY}" --json tagName --jq
 [[ "${DWP_LATEST_TAG}" == "${DWP_TAG}" ]]
 ```
 
-在本地编辑器中仅将 `runtime.env` 的 `DSH_WORK_AUTO_DEPLOY_ENABLED` 改为 `true`，
-保留全部密钥和其他值，然后安装当前已验证版本的监听器：
+如果服务器的 `current` 仍指向旧版 `v0.1.x`，不能只从旧 `current` 重装 watcher：旧版
+`release.sh` 也不能完成日期版本升级。先按第 6～8 节下载并验证目标 Release，保持
+`DSH_WORK_AUTO_DEPLOY_ENABLED=false`，用已验证的新 bundle 完成一次人工升级：
 
 ```bash
-bash "${DWP_ROOT}/current/scripts/deploy/install-release-watcher.sh" "${DWP_ROOT}"
+bash "${DWP_BUNDLE}/scripts/deploy/release.sh" "${DWP_VERSION}" "${DWP_ROOT}"
+```
+
+确认 `active-release` 和 `current` 已指向目标版本后，再在本地编辑器中仅将
+`runtime.env` 的 `DSH_WORK_AUTO_DEPLOY_ENABLED` 改为 `true`，保留全部密钥和其他值，
+并始终从已验证的 bundle 安装新版 watcher，不要调用旧 `current` 中的安装脚本：
+
+```bash
+bash "${DWP_BUNDLE}/scripts/deploy/install-release-watcher.sh" "${DWP_ROOT}"
+test -x "${DWP_ROOT}/automation/watch-release.sh"
+test -x "${DWP_ROOT}/automation/release-version.sh"
 launchctl print "gui/$(id -u)/com.company.dsh-work.release-watcher"
 ```
 
@@ -539,13 +549,13 @@ docker compose --env-file "${DWP_ROOT}/runtime.env" \
 Schema 和宿主机 DSH Lock。在维护窗口选择**不同于当前活动版本**的已知良好版本：
 
 ```bash
-DWP_ROLLBACK_VERSION='0.1.0' # 示例：必须换成已批准的旧版本
+DWP_ROLLBACK_VERSION='2026.09.06-01' # 示例：必须换成已批准的旧版本
 bash "${DWP_ROOT}/current/scripts/deploy/rollback.sh" "${DWP_ROLLBACK_VERSION}" "${DWP_ROOT}"
 ```
 
 回滚仍会验证 GitHub Release 并执行备份，因此需要 GitHub 可达和 NAS 就绪；不是离线
 切软链接。它只回滚应用，不降级数据库，不能用来修复破坏性迁移。备份恢复属于破坏性操作，
-需另行批准，按[生产部署的恢复流程](mac-mini-production.md#7-运行维护)执行。
+需在确认的维护窗口按本文第 12 节执行。
 
 最后安排共享服务器的维护窗口，验证 Mac mini 重启并登录、Docker Desktop 重启后两个
 应用都恢复；不要在 AI Hub 业务期间擅自重启整机或 Docker Desktop。制定定时备份、保留、
@@ -555,3 +565,97 @@ bash "${DWP_ROOT}/current/scripts/deploy/rollback.sh" "${DWP_ROLLBACK_VERSION}" 
 部署交接只记录账号、目录、Release Tag/Commit、DSH Lock、健康/登录/任务/备份与重启
 验收结论，不记录密码、Token 或私钥。绝不执行 `docker compose down -v`、删除数据卷，
 或覆盖已有 `runtime.env` 来处理部署失败。
+
+## 12. 升级与备份恢复
+
+监听器调用的 `release.sh` 会：
+
+1. 验证不可变 Release、Release 资产、Sigstore 构建来源和 SHA-256，并从已验证归档重新
+   建立非活动 Release 目录；
+2. 校验 macOS/ARM64、Docker Desktop、Node、证书、AI Hub 生产配置、发布包的 DSH
+   Lock，并与宿主机已安装的 DSH 做一次真实 ACP 启动握手；
+3. 已有版本时先停止旧后端，并使用旧版本 Compose 生成数据库与持久文件备份；首次部署
+   则直接初始化 PostgreSQL；
+4. 将备份打包复制到 NAS/异机挂载点，重新校验 SHA-256 并原子写入
+   `.verified.json` 回执；只有异机验证成功后才应用候选 PostgreSQL Compose；
+5. 执行向前数据库迁移；
+6. 原子切换 `current`，安装/重启 `launchd`，重建 Nginx 容器；
+7. 从内网 HTTPS 地址执行健康检查；失败时恢复旧应用版本与旧 PostgreSQL Compose 配置。
+
+数据库迁移不会自动降级。因此每次迁移必须保持至少一个版本的向后兼容，确认新版本稳定
+后再进行破坏性清理。
+
+自动部署接受新的稳定版本 `vYYYY.MM.DD-NN`；为兼容已发布版本，也保留对旧
+`vMAJOR.MINOR.PATCH` Tag 的读取和回滚支持。自动部署只允许升级，不会自动降级。
+部署失败的 Tag 会写入 `automation/state/blocked-release`，不会反复重试和制造重复停机；
+发布修复版本是首选处理方式。
+
+恢复备份是破坏性操作，脚本要求显式确认，并把原数据目录改名保留：
+
+```bash
+bash current/scripts/deploy/restore.sh \
+  /Users/deploy/services/dsh-work \
+  /Users/deploy/services/dsh-work/backups/20260902T120000Z \
+  --confirm
+```
+
+如果数据库删除开始后 `pg_restore`、文件解压或服务重建失败，脚本会保持后端和 Nginx
+停止，避免空库或半恢复数据对外可见。修复磁盘、备份或数据库问题后，使用同一备份重新
+执行恢复命令；不要在恢复未完成时手工启动服务。
+
+每次手工备份和升级备份都会同时保留本机恢复目录，并在
+`DSH_WORK_OFF_HOST_BACKUP_DIRECTORY` 创建 `.tar.gz`、`.sha256` 和 `.verified.json`。
+异机挂载不可用、与部署目录位于同一文件系统或校验失败时，备份和发布都会在迁移前终止。
+该压缩包本身不做应用层加密，因此异机存储必须启用卷级静态加密、最小写权限和独立保留
+策略。需要从异机副本恢复时，先在受控临时目录验证 `.sha256` 并解压，再把其中的时间戳
+目录传给上述 `restore.sh`；不要跳过恢复演练。
+
+
+## 13. 多 IP、固定域名与证书
+
+入口配置由 dsh-work 自己管理，不改写 AI Hub 的配置、数据库或网络。两者独立升级、回滚；同机维护仍需协调共同的 Docker Desktop 和宿主机故障域。
+
+1. 在网卡/DNS 上准备实际可达的地址，绑定 IP 必须是本机已分配的 RFC1918 IPv4。生产 Origin 使用完整 HTTPS 协议、主机和端口，不带路径、查询或 Fragment。
+2. 在离线运维工作站使用企业 CA 签发覆盖旧、新全部 IP/域名的证书。没有现成 CA 时才使用 `init-intranet-ca.sh` 建立一套。每个项目优先使用独立服务器私钥，CA 私钥不放到 Mac mini。
+3. 将服务器证书、私钥、根证书安装到 `runtime.env` 既有路径。私钥权限 `0600`；客户端信任根 CA。切换期间保留旧入口的证书覆盖和可达性。
+4. 在 AI Hub 的同一个应用环境登记所有入口的完整回调，每行一个。每个入口不新建应用或凭据；Issuer 保持平台实际签发的固定地址，不随用户访问 Origin 改写。
+5. 依次执行 `plan`、`check`、`apply --confirm`。多值配置使用逗号分隔，不手改生成的 Compose。
+
+离线工作站签发示例（将示例域名和目录替换为实际值）：
+
+```bash
+bash scripts/deploy/issue-intranet-certificate.sh \
+  --ca-dir /absolute/offline/company-ca \
+  --ip 192.168.33.20 --ip 192.168.101.20 \
+  --dns work.example.com \
+  --output-dir /absolute/staging/dsh-work
+```
+
+Mac mini 地址预览示例：
+
+```bash
+bash current/scripts/deploy/set-macmini-endpoints.sh plan \
+  --deploy-root /Users/deploy/services/dsh-work \
+  --bind-address 192.168.33.20 --bind-address 192.168.101.20 \
+  --workbench-origin https://192.168.33.20:4174 \
+  --workbench-origin https://192.168.101.20:4174 \
+  --admin-origin https://192.168.33.20:4180 \
+  --admin-origin https://192.168.101.20:4180 \
+  --workbench-default-origin https://192.168.33.20:4174 \
+  --admin-default-origin https://192.168.33.20:4180
+```
+
+从部署根目录执行；确认预览后保留全部参数，把 `plan` 替换为 `check`；通过后再替换为 `apply` 并追加 `--confirm`。域名入口使用相同的 Origin 参数，默认入口必须属于允许列表。保持员工端 4174、管理端 4180 的当前端口约束。
+
+命令只修改入口字段，保留其他凭据，并复用发布锁。逐个入口验证 HTTPS、登录回调、刷新、退出和写请求；未知 Host/Origin 及跨入口回调应拒绝。`/health` 成功不能替代登录验证。确保后端与 AI Hub 容器均能解析固定认证域名。
+
+恢复上一份地址配置：
+
+```bash
+bash current/scripts/deploy/set-macmini-endpoints.sh rollback \
+  --deploy-root /Users/deploy/services/dsh-work --confirm
+```
+
+地址回滚不恢复 DNS、AI Hub 回调或证书文件，需分别核对。域名不变仅改变其 DNS IP 通常无需重签；新增直接访问的 IP/域名必须已在 SAN 中。所有副本续期后分别生效。
+
+旧自签 CA 若曾将私钥放在服务器，应换成离线 CA 签发方案并在客户端完成信任切换；不要沿用服务器持有根私钥的模式。异机备份目录仍为所有发布的前置条件。

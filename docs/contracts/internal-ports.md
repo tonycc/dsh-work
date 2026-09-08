@@ -1,101 +1,33 @@
-# dsh-work 内部端口契约
+# 内部端口与契约
 
-版本：V0.2
-状态：M1 ACP、真实模型、Tool、Token、Artifact、取消和并发 POC 已校验；正式 Repository、SSE 和 Telemetry 投影在后续阶段实现
-原则：两个前端只调用各自 BFF；控制面通过端口访问 Runtime、模型、工具、成果和治理能力。
+两个前端只调用各自 API；服务端通过明确的接口协作。下表链接实际类型和实现，避免维护与源码不一致的伪接口副本。
 
-## 1. 端口总览
+| 边界 | 权威来源 | 约束 |
+| --- | --- | --- |
+| Runtime 启动、取消、事件、健康与关闭 | [AgentRuntimePort](../../server/src/modules/runtime/runtime-types.ts) | 一个 Attempt 一个隔离 Worker；DSH 版本由 Runtime Lock 决定 |
+| Run、Attempt、事件与重启恢复 | [RunRepository](../../server/src/modules/run/run-repository.ts) | 租户隔离、幂等、终态不可回退；事件先落库后发送 |
+| 模型 Provider、路由与凭据引用 | [ModelGovernanceRepository](../../server/src/modules/model/model-governance-repository.ts) | Attempt 固定路由快照；Agent 不单独配置模型策略 |
+| 凭据存储 | [SecretStorePort](../../server/src/modules/model/secret-store-port.ts) | 当前 DSH 适配器不读取或覆盖实际密钥，引用存在不等于凭据已验证 |
+| 身份与本地授权上下文 | [RequestIdentity](../../server/src/modules/identity/types.ts) | 用户、角色、数据范围和操作人只从服务端产生 |
+| 对象与执行授权 | [PostgresAuthorizationService](../../server/src/modules/authorization/postgres-authorization-service.ts) | Workspace、Agent/Skill/Tool Version 与数据范围逐层校验，默认拒绝 |
 
-| 端口 | 调用方 | 实现方 | 一期职责 | 失败语义 |
-|---|---|---|---|---|
-| `AgentRuntimePort` | Run 编排服务 | DSH Runtime Adapter | 启动、取消、查询一次 Run Attempt | 明确区分拒绝、超时、取消、Runtime 故障 |
-| `RunEventStorePort` | Runtime Adapter、Run 编排服务 | PostgreSQL 事件存储 | 顺序追加、断点读取安全事件 | 同一 `event_id` 幂等；序号冲突拒绝 |
-| `ModelGatewayPort` | Runtime Adapter | 企业模型网关 | 路由、限流、Token 与费用计量 | 不向上游暴露模型密钥 |
-| `SecretStorePort` | 模型治理服务、Model Gateway | DSH Credentials Provider；未来为系统钥匙串或企业 Secret Manager | 写入、撤销和检查密钥引用对应的密钥 | 业务数据库、日志和 API 均不得出现密钥正文 |
-| `ToolGatewayPort` | Runtime Adapter | 企业 Tool/Connector Gateway | 调用一期平台预置工具和连接器 | 鉴权、审批、超时和业务错误分离 |
-| `ArtifactServicePort` | Runtime Adapter、员工 BFF | 文件与成果服务 | 创建成果版本、鉴权下载 | 成果不可覆盖，只能新增版本 |
-| `GovernancePort` | 员工 BFF、管理 BFF、编排服务 | dsh-work 控制面 | Agent、Skill、本地角色、权限和数据范围快照 | 版本不存在、角色停用或范围不足时拒绝执行 |
+## API 与运行契约
 
-## 2. TypeScript 逻辑接口
+- [Workbench OpenAPI](openapi-workbench.json)：`/api/workbench/v1`。
+- [Admin OpenAPI](openapi-admin.json)：`/api/admin/v1`。
+- [Runtime Manifest](runtime-manifest.schema.json)：不可变输入、能力、文件、知识与权限快照。
+- [Run Event](run-event.schema.json)：标准可展示事件，不包含隐藏推理和凭据。
 
-以下接口用于冻结语义，不要求 M1 按文件原样复制。
+接口修改必须同步消费者、Schema 和相应测试。公开 API、内部 TypeScript 类型和 DSH ACP 是不同边界，不应直接复用上游内部对象代替产品契约。
 
-```ts
-type StartRunResult = {
-  runId: string
-  attemptId: string
-  acceptedAt: string
-}
+员工与管理端 Agent 均通过同一 Run/Attempt、AgentRuntimePort 和 DSH 适配链路执行，不能通过新增 API、Gateway 或业务服务另建直接调用模型的 Agent Loop。职责与评审要求见 [架构总览：Agent 执行引擎统一](../architecture/overview.md)。
 
-interface AgentRuntimePort {
-  execute(manifest: RuntimeManifest): Promise<RuntimeExecutionHandle>
-  subscribe(runId: string, listener: RuntimeEventListener): () => void
-  cancel(runId: string, requestedBy: string): Promise<{ accepted: boolean }>
-  status(runId: string): RuntimeExecutionSnapshot | undefined
-  health(): Promise<RuntimeHealth>
-  close(): Promise<void>
-}
+## 运行与恢复规则
 
-interface RunEventStorePort {
-  append(event: RunEvent): Promise<void>
-  read(runId: string, afterSequence?: number): AsyncIterable<RunEvent>
-}
+- 使用稳定事件 ID，按持久化的全 Run 顺序支持 `Last-Event-ID` 续传；不能仅按单 Attempt 序号恢复整个 Run。
+- Token、Tool 和计量信息来自受控 Session 日志/Telemetry 投影，不从回答文本猜测，不直接导出未经脱敏的运行轨迹。
+- 取消和重启须收敛到确定终态；重试新增 Attempt，旧事件不得覆盖当前 Attempt。
+- 文件路径使用受控存储键；输入只读、成果显式收集，下载重新鉴权。
+- 业务角色与数据范围留在本地；AI Hub 专用协议仅进入身份模块，外部身份变化不覆盖本地授权历史。
 
-interface ModelGatewayPort {
-  resolveRoute(context: ModelRouteContext): Promise<ModelRoute>
-  recordUsage(usage: TokenUsage): Promise<void>
-}
-
-interface SecretStorePort {
-  put(reference: string, secret: string): Promise<void>
-  remove(reference: string): Promise<void>
-  exists(reference: string): Promise<boolean>
-}
-
-interface ToolGatewayPort {
-  describe(toolId: string, version: string): Promise<ToolDescriptor>
-  invoke(request: ToolInvocation, signal?: AbortSignal): Promise<ToolResult>
-}
-
-interface ArtifactServicePort {
-  createVersion(input: ArtifactVersionInput): Promise<ArtifactVersion>
-  authorizeDownload(userId: string, versionId: string): Promise<DownloadGrant>
-}
-
-interface GovernancePort {
-  getAgentVersion(agentVersionId: string): Promise<AgentVersionSnapshot>
-  resolveCapabilities(input: CapabilityContext): Promise<CapabilitySnapshot>
-  authorizeDataScopes(input: DataScopeRequest): Promise<DataScopeDecision>
-}
-```
-
-## 3. 共同约束
-
-- `run_id` 表示用户可感知的一次运行；重试创建新的 `attempt_id`，不得覆盖原 Attempt。
-- `RuntimeManifest` 在执行开始后不可变，Agent 后续修改不影响已启动 Run。
-- 开始 Run 必须带 `idempotencyKey`；相同员工、Session 和键只能产生一个 Run。
-- 调用链全程携带 `trace_id`，审计记录主体、动作、对象、结果和请求来源。
-- 超时由 Manifest 传入并受平台上限约束；取消先通过 ACP `session/cancel` 传播，宽限期后回收 Attempt 子进程。
-- 端口不得传递企业 SSO Cookie、模型密钥或连接器凭据；只传短期授权引用。
-- Provider、模型和路由由 dsh-work 治理；Agent 不保存模型策略。路由在创建 Attempt 前解析，并作为不含密钥正文的不可变快照持久化。
-- 当前 `dsh-managed` SecretStore 适配器只登记并检查引用，不读取、复制或覆盖 DSH 的现有密钥；切换密钥后端不改变模型治理业务表。
-- DSH ACP 子进程只继承显式 OS/DSH 基线环境；数据库连接、应用 Secret、Token 和连接器凭据不得通过父进程环境透传，敏感覆盖请求必须失败关闭。
-- 管理审计、授权记录、Runtime 诊断和 Tool 参数摘要在持久化前统一递归脱敏，读取时再次执行防御性脱敏；Token 数量等非凭据指标可以保留。
-- Worker 崩溃、模型失败、Tool 超时、网络中断和服务停止必须保留独立错误码；不得全部折叠为通用失败或员工取消。
-- 服务启动时，旧进程遗留的运行中 Attempt 以 `SERVICE_RESTARTED` 失败关闭；只有尚未开始的排队 Attempt 可以使用原不可变 Manifest 恢复调度。
-- SSE 重连只依赖 PostgreSQL 全 Run `stream_position` 和 `Last-Event-ID`，不得依赖进程内事件缓存。
-- 对员工展示的事件必须符合 `run-event.schema.json`，隐藏推理不得持久化或返回前端。
-
-## 4. M1 验证结果
-
-| 问题 | 当前结论 |
-|---|---|
-| 稳定程序化接口 | 采用 DSH ACP JSON-RPC stdio；Headless CLI 最终文本不作为产品协议 |
-| 结构化事件 | ACP 支持提交后的 assistant 消息、取消和权限；Tool、Token 与原始增量需要 observer/telemetry 投影 |
-| 取消与超时 | Mock 超时和真实模型 ACP 取消均通过；真实取消约 255ms 收敛为 `cancelled` |
-| 进程与目录隔离 | 每 Attempt 独立进程和目录的并发测试通过 |
-| Manifest | canonical JSON、SHA-256 和 Attempt 快照已实现 |
-| 崩溃恢复 | Adapter 可形成失败终态；PostgreSQL 事件恢复在 M2-M3 实现 |
-| Skill、Tool、文件 | 版本引用进入 Manifest；真实挂载和调用仍待 M1 后续验证 |
-
-员工 BFF 不得直接依赖 DSH CLI、ACP 或 DSH Session；所有调用继续经过 `AgentRuntimePort`。
+具体运行环境见 [Runtime 指南](../deployment/dsh-runtime-delivery.md)，验证命令见 [开发与测试](../testing/development.md)。

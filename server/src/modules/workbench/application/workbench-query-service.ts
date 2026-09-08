@@ -40,4 +40,20 @@ export class WorkbenchQueryService {
         examplePrompts: [...agent.examplePrompts],
       }))
   }
+
+  async getSkills() {
+    const skills = await this.repository.read('skills')
+    return skills
+      .filter(skill => skill.status === 'published')
+      .map(skill => ({
+        id: skill.id,
+        name: skill.name,
+        version: skill.version,
+        category: skill.category,
+        description: skill.description,
+        owner: skill.owner,
+        testPrompt: skill.testPrompt,
+        updatedAt: skill.updatedAt,
+      }))
+  }
 }

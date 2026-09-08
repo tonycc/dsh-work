@@ -11,6 +11,8 @@ interface SessionRow {
   id: string
   workspaceId: string
   agentVersionId: string
+  selectedSkillVersionId: string | null
+  selectedSkillReference?: string | null
   title: string
   createdAt: Date
 }
@@ -28,6 +30,9 @@ interface TaskRow {
   agentVersion: string
   owner: string
   errorCode: string | null
+  selectedSkillId: string | null
+  selectedSkillName: string | null
+  selectedSkillVersion: string | null
 }
 
 interface MessageRow {
@@ -87,31 +92,43 @@ export class PostgresConversationRepository {
     title: string
     workspaceId?: string
     agentVersionId?: string
+    selectedSkillVersionId?: string
   }) {
     const id = `session-${randomUUID()}`
     const agentVersionId = input.agentVersionId ?? 'agent-version-dsh-work-assistant-1'
     const workspaceId = await this.resolveWorkspaceId(input.workspaceId, input.userId)
     const [row] = await this.database<SessionRow[]>`
       insert into sessions (
-        id, tenant_id, workspace_id, created_by, agent_version_id, title, status
+        id, tenant_id, workspace_id, created_by, agent_version_id, selected_skill_version_id, title, status
       ) values (
-        ${id}, ${tenantId}, ${workspaceId}, ${input.userId}, ${agentVersionId},
+        ${id}, ${tenantId}, ${workspaceId}, ${input.userId}, ${agentVersionId}, ${input.selectedSkillVersionId ?? null},
         ${truncateTitle(input.title)}, 'active'
       )
       returning id, workspace_id as "workspaceId", agent_version_id as "agentVersionId",
+                selected_skill_version_id as "selectedSkillVersionId",
                 title, created_at as "createdAt"
     `
     if (!row) throw new Error('Session 创建失败')
-    return { ...row, createdAt: row.createdAt.toISOString() }
+    return {
+      id: row.id,
+      workspaceId: row.workspaceId,
+      agentVersionId: row.agentVersionId,
+      title: row.title,
+      createdAt: row.createdAt.toISOString(),
+    }
   }
 
   async requireSession(sessionId: string, userId: string) {
     const [row] = await this.database<SessionRow[]>`
-      select id, workspace_id as "workspaceId", agent_version_id as "agentVersionId",
-             title, created_at as "createdAt"
-        from sessions
-       where tenant_id = ${tenantId} and id = ${sessionId} and created_by = ${userId}
-         and status = 'active'
+      select s.id, s.workspace_id as "workspaceId", s.agent_version_id as "agentVersionId",
+             s.selected_skill_version_id as "selectedSkillVersionId",
+             selected_skill.skill_id || '@' || selected_skill.version as "selectedSkillReference",
+             s.title, s.created_at as "createdAt"
+        from sessions s
+        left join skill_versions selected_skill
+          on selected_skill.tenant_id = s.tenant_id and selected_skill.id = s.selected_skill_version_id
+       where s.tenant_id = ${tenantId} and s.id = ${sessionId} and s.created_by = ${userId}
+         and s.status = 'active'
     `
     if (!row) throw new Error(`Session 不存在或不可访问：${sessionId}`)
     return { ...row, createdAt: row.createdAt.toISOString() }
@@ -179,13 +196,16 @@ export class PostgresConversationRepository {
              r.current_attempt_id as "currentAttemptId", r.created_at as "createdAt",
              r.updated_at as "updatedAt", s.title, s.workspace_id as "workspaceId",
              w.name as "workspaceName", av.version as "agentVersion", u.display_name as owner,
-             ra.error_code as "errorCode"
+             ra.error_code as "errorCode", selected_skill.skill_id as "selectedSkillId",
+             selected_skill.name as "selectedSkillName", selected_skill.version as "selectedSkillVersion"
         from runs r
         join sessions s on s.tenant_id = r.tenant_id and s.id = r.session_id
         join users u on u.tenant_id = r.tenant_id and u.id = r.requested_by
         join agent_versions av on av.tenant_id = s.tenant_id and av.id = s.agent_version_id
         left join run_attempts ra on ra.tenant_id = r.tenant_id and ra.id = r.current_attempt_id
         left join workspaces w on w.tenant_id = s.tenant_id and w.id = s.workspace_id
+        left join skill_versions selected_skill
+          on selected_skill.tenant_id = s.tenant_id and selected_skill.id = s.selected_skill_version_id
        where r.tenant_id = ${tenantId} and r.requested_by = ${userId}
          and s.status = 'active'
        order by r.created_at desc
@@ -200,13 +220,16 @@ export class PostgresConversationRepository {
              r.current_attempt_id as "currentAttemptId", r.created_at as "createdAt",
              r.updated_at as "updatedAt", s.title, s.workspace_id as "workspaceId",
              w.name as "workspaceName", av.version as "agentVersion", u.display_name as owner,
-             ra.error_code as "errorCode"
+             ra.error_code as "errorCode", selected_skill.skill_id as "selectedSkillId",
+             selected_skill.name as "selectedSkillName", selected_skill.version as "selectedSkillVersion"
         from runs r
         join sessions s on s.tenant_id = r.tenant_id and s.id = r.session_id
         join users u on u.tenant_id = r.tenant_id and u.id = r.requested_by
         join agent_versions av on av.tenant_id = s.tenant_id and av.id = s.agent_version_id
         left join run_attempts ra on ra.tenant_id = r.tenant_id and ra.id = r.current_attempt_id
         left join workspaces w on w.tenant_id = s.tenant_id and w.id = s.workspace_id
+        left join skill_versions selected_skill
+          on selected_skill.tenant_id = s.tenant_id and selected_skill.id = s.selected_skill_version_id
        where r.tenant_id = ${tenantId} and r.id = ${runId} and r.requested_by = ${userId}
          and s.status = 'active'
     `
@@ -300,6 +323,9 @@ export class PostgresConversationRepository {
         summary: '由 DSH Runtime 本轮回答发布，保留来源 Run 与不可覆盖版本。',
       })),
       attachments: attachments.map(attachment => attachment.name),
+      skill: row.selectedSkillId && row.selectedSkillName && row.selectedSkillVersion
+        ? { id: row.selectedSkillId, name: row.selectedSkillName, version: row.selectedSkillVersion }
+        : undefined,
       summary: row.status === 'succeeded' ? '本轮对话已由 DSH Runtime 执行完成。' : undefined,
       error: row.status === 'failed' ? toRunError(row.id, row.errorCode) : undefined,
     }

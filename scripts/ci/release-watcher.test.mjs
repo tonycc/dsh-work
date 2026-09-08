@@ -11,9 +11,16 @@ const fixtureRoot = await mkdtemp(join(tmpdir(), 'dsh-work-watcher-test.'))
 
 try {
   const binRoot = join(fixtureRoot, 'bin')
-  const deployScripts = join(fixtureRoot, 'scripts/deploy')
+  const deployScripts = join(fixtureRoot, 'current/scripts/deploy')
+  const automationRoot = join(fixtureRoot, 'automation')
   await mkdir(binRoot, { recursive: true })
   await mkdir(deployScripts, { recursive: true })
+  await mkdir(automationRoot, { recursive: true })
+  await writeFile(
+    join(automationRoot, 'release-version.sh'),
+    await readFile(join(projectRoot, 'scripts/deploy/release-version.sh')),
+    { mode: 0o755 },
+  )
 
   await writeFile(join(fixtureRoot, 'runtime.env'), [
     'DSH_WORK_AUTO_DEPLOY_ENABLED=true',
@@ -46,7 +53,7 @@ set -euo pipefail
 version=\${1:?}
 deploy_root=\${2:?}
 printf '%s\\n' "\${version}" >> "\${deploy_root}/deploy-invocations"
-if [[ "\${version}" == 0.1.1 ]]; then
+if [[ "\${version}" == 2026.09.07-01 ]]; then
   printf 'v%s\\n' "\${version}" > "\${deploy_root}/automation/state/attempted-release"
   exit 42
 fi
@@ -58,24 +65,25 @@ printf 'v%s\\n' "\${version}" > "\${deploy_root}/active-release"
   await mkdir(staleLock, { recursive: true })
   await writeFile(join(staleLock, 'pid'), '99999999\n')
 
-  await writeRelease('v0.1.0')
+  await writeFile(join(fixtureRoot, 'active-release'), 'v0.1.1\n')
+  await writeRelease('v2026.09.06-01')
   runWatcher(0)
   runWatcher(0)
-  assert.equal(await readTrimmed('active-release'), 'v0.1.0')
-  assert.deepEqual((await readTrimmed('deploy-invocations')).split('\n'), ['0.1.0'])
+  assert.equal(await readTrimmed('active-release'), 'v2026.09.06-01')
+  assert.deepEqual((await readTrimmed('deploy-invocations')).split('\n'), ['2026.09.06-01'])
 
-  await writeRelease('v0.1.1')
+  await writeRelease('v2026.09.07-01')
   runWatcher(1)
-  assert.equal(await readTrimmed('automation/state/blocked-release'), 'v0.1.1')
+  assert.equal(await readTrimmed('automation/state/blocked-release'), 'v2026.09.07-01')
   runWatcher(0)
-  assert.deepEqual((await readTrimmed('deploy-invocations')).split('\n'), ['0.1.0', '0.1.1'])
+  assert.deepEqual((await readTrimmed('deploy-invocations')).split('\n'), ['2026.09.06-01', '2026.09.07-01'])
 
   await unlink(join(fixtureRoot, 'automation/state/blocked-release'))
-  await writeRelease('v0.0.9')
+  await writeRelease('v2026.09.05-99')
   runWatcher(0)
-  assert.equal(await readTrimmed('automation/state/blocked-release'), 'v0.0.9')
-  assert.equal(await readTrimmed('active-release'), 'v0.1.0')
-  assert.deepEqual((await readTrimmed('deploy-invocations')).split('\n'), ['0.1.0', '0.1.1'])
+  assert.equal(await readTrimmed('automation/state/blocked-release'), 'v2026.09.05-99')
+  assert.equal(await readTrimmed('active-release'), 'v2026.09.06-01')
+  assert.deepEqual((await readTrimmed('deploy-invocations')).split('\n'), ['2026.09.06-01', '2026.09.07-01'])
 } finally {
   await rm(fixtureRoot, { recursive: true, force: true })
 }

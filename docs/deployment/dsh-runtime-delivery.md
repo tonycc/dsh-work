@@ -1,6 +1,6 @@
 # DSH Runtime 交付基线
 
-更新时间：2026-09-04
+更新时间：2026-09-08
 
 ## 1. 固定版本与兼容结论
 
@@ -53,7 +53,7 @@ DSH_RUNTIME_HOME=/Users/deploy/services/deepseek-harness
 DSH_HOME=/Users/deploy/.dsh
 ```
 
-服务器已报告目标 Version 和 Commit，但部署前仍要在实际 checkout 中独立核验：
+部署前在实际 checkout 中独立核验 Version 和 Commit：
 
 ```bash
 ssh deploy@192.168.33.20
@@ -156,26 +156,26 @@ dsh-work 的环境文件、数据库、日志或 Release。
 也不证明真实模型、Tool、取消、并发或产物链路已通过。
 
 本地服务启动也会对选中的旧版 Adapter 执行同样的 `initialize + session/new` 检查，但不会
-放宽生产部署脚本。当前代码已分别对两个精确 checkout 完成无模型 Session 探针。
+放宽生产部署脚本。每次切换版本后都应重新运行该检查。
 
 ## 5. 升级验收与回滚
 
-从 `0.1.1-rc.2` 切换到本版本后，旧版 M1 POC 证据只能作为历史记录，不能替代新版本验收。
+切换 Runtime 版本后，旧版测试结果不能替代新版本验收。
 至少执行：
 
 ```bash
 pnpm test:m1
 pnpm typecheck
 
-DSH_RUNTIME_HOME=/Users/deploy/services/deepseek-harness pnpm probe:m1
-DSH_RUNTIME_HOME=/Users/deploy/services/deepseek-harness pnpm probe:m1:real
-DSH_RUNTIME_HOME=/Users/deploy/services/deepseek-harness pnpm probe:m1:tool
-DSH_RUNTIME_HOME=/Users/deploy/services/deepseek-harness pnpm probe:m1:artifact
-DSH_RUNTIME_HOME=/Users/deploy/services/deepseek-harness pnpm probe:m1:cancel
-DSH_RUNTIME_HOME=/Users/deploy/services/deepseek-harness pnpm probe:m1:concurrency
+DSH_RUNTIME_HOME=/Users/deploy/services/deepseek-harness pnpm probe:handshake
+DSH_RUNTIME_HOME=/Users/deploy/services/deepseek-harness pnpm probe:model
+DSH_RUNTIME_HOME=/Users/deploy/services/deepseek-harness pnpm probe:tool
+DSH_RUNTIME_HOME=/Users/deploy/services/deepseek-harness pnpm probe:artifact
+DSH_RUNTIME_HOME=/Users/deploy/services/deepseek-harness pnpm probe:cancel
+DSH_RUNTIME_HOME=/Users/deploy/services/deepseek-harness pnpm probe:concurrency
 ```
 
-真实探针会调用模型，应在受控测试数据和预算下执行。通过后还要按
+以上命令统一调用 `scripts/runtime/probe.ts`；`pnpm probe --help` 可查看入口。`handshake` 只做握手、建会话与取消，不调用模型；其余模式会调用模型，应在受控测试数据和预算下执行。每次探针退出时关闭 Worker 并清理临时工作区与 Session Log，JSON 输出保留验证摘要。通过后还要按
 [Mac mini 部署流程](mac-mini-deployment-runbook.md)完成登录、实际任务、备份与重启验收。
 
 应用 Release 的回滚不会自动降级 DSH。生产环境不能把本地兼容模式当成回滚开关；若要恢复

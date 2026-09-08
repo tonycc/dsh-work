@@ -1,0 +1,33 @@
+// These forbidden dependencies and production safeguards supplement behavior tests.
+// Method names, SQL formatting and UI copy are intentionally left to their test suites.
+export function checkSecurity(check) {
+  check.excludes('server/src/modules/identity/ai-hub-client.ts', ['/me/permissions', '/authorization/decisions'])
+  check.excludes('server/src/modules/identity/types.ts', ['dsh_work.'])
+  check.excludes('server/src/modules/identity/auth-service.ts', ['claim.owner_user_id'])
+  check.excludes('server/src/modules/run/run-orchestration-service.ts', ["role_ids: ['role-employee']", 'publishAssistantResult'])
+  const initialMigration = check.read('server/migrations/0001_m2_platform.sql').toLowerCase()
+  for (const secret of ['api_key text', 'secret_value', 'credential_value']) {
+    check.assert(!initialMigration.includes(secret), `初始化迁移不得包含明文凭据列 ${secret}`)
+  }
+  check.includes('server/src/modules/identity/config.ts', [
+    "production && mode !== 'oidc'", '`__Host-${name}`', 'DSH_WORK_COOKIE_SECURE',
+    'DSH_WORK_DIRECTORY_SYNC_INTERVAL_SECONDS',
+  ])
+  check.includes('server/src/modules/identity/auth-service.ts', [
+    'equalOpaqueHash', 'validateRequestOrigin', 'refreshTokensWithLock', 'resolveAuthorization',
+  ])
+  check.includes('server/src/modules/runtime/acp-json-rpc-client.ts', [
+    'buildAcpChildEnvironment', 'isSensitiveEnvironmentKey', 'redactSensitiveText',
+  ])
+  check.assert(!/spawn\([\s\S]{0,400}env:\s*process\.env/.test(check.read('server/src/modules/runtime/acp-json-rpc-client.ts')),
+    'ACP 子进程不得直接继承 process.env')
+  check.includes('server/config/dsh/dsh-work-tool-policy.js', ['ctx.tools.guard', 'DSH_ALLOWED_TOOLS_JSON'])
+  check.includes('server/src/modules/runtime/dsh-acp-runtime-adapter.ts', ['DSH_ALLOWED_TOOLS_JSON'])
+  check.includes('server/src/security/safe-observability.ts', ['sanitizeSafeMetadata', 'redactSensitiveText'])
+  check.includes('server/migrations/0016_identity_owned_authorization.sql', [
+    'local_authorization_version', 'application_admin_bootstrap_claims', 'identity_directory_sync_state',
+    "delete from user_roles where source_key like 'ai-hub:%'", 'user_roles_local_source_check',
+  ])
+  check.includes('server/migrations/0017_business_user_directory.sql', ['business_user boolean not null default false'])
+  check.includes('server/migrations/0018_fail_closed_directory_reconciliation.sql', ['business_user = false', 'cursor = null'])
+}

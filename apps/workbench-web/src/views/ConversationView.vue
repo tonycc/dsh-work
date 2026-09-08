@@ -169,6 +169,9 @@ watch(
             <el-icon><ArrowLeft /></el-icon>
           </button>
           <h1>{{ task.title }}</h1>
+          <span v-if="task.skill" class="conversation-skill">
+            <span>Skill</span>{{ task.skill.name }} · v{{ task.skill.version }}
+          </span>
         </div>
         <div class="conversation-header__actions">
           <StatusTag :status="task.status" dot />
@@ -446,6 +449,24 @@ watch(
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.conversation-skill {
+  display: inline-flex;
+  max-width: 260px;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  padding: 4px 8px;
+  border: 1px solid #c9e6d9;
+  border-radius: 999px;
+  color: #23644f;
+  background: #f0faf5;
+  font-size: var(--dsh-font-size-micro);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-skill span { color: #6d9586; }
 
 .conversation-header__back {
   display: grid;

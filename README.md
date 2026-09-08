@@ -78,16 +78,34 @@ packages/                  # Design Token 与共享无状态组件
 server/                    # Node.js / TypeScript 模块化单体
 ├── migrations/            # PostgreSQL 显式迁移
 └── src/modules/           # 领域、应用与适配器模块
-docs/                      # 架构、契约、部署、测试和项目记录
-scripts/                   # 架构检查、里程碑验证与 DSH 探针
+docs/                      # 架构、契约、开发测试和部署
+scripts/                   # 功能分组校验、Runtime 探针、CI 与发布部署
 e2e/                       # Playwright 浏览器冒烟
 ```
+
+## 本地启动
+
+在项目根目录执行以下命令，可分别启动后端、员工端和管理端：
+
+```bash
+pnpm dev:server
+pnpm dev:workbench
+pnpm dev:admin
+```
+
+默认访问地址：
+
+- 后端：`http://localhost:4190/health`
+- 员工端：`http://localhost:4174/workbench`
+- 管理端：`http://localhost:4180/overview`
 
 ## 文档
 
 - [文档导航与维护规则](docs/README.md)
 - [产品与系统架构总览](docs/architecture/overview.md)
+- [开发与测试](docs/testing/development.md)
+- [Mac mini 部署手册](docs/deployment/mac-mini-deployment-runbook.md)
 - [数据模型](docs/data-model.md)
 - [内部端口契约](docs/contracts/internal-ports.md)
 
-项目状态、实施路线、部署、测试和验收记录统一收录在 `docs/`，不在 README 中重复维护。
+开发启动和验证命令见开发与测试；接口、配置及部署操作统一在 `docs/` 维护。

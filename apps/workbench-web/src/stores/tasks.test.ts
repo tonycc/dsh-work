@@ -102,6 +102,24 @@ describe('task store', () => {
     }))
   })
 
+  it('binds the selected Skill to the new Session while keeping the DSH run API unchanged', async () => {
+    const { useTaskStore } = await import('./tasks')
+    api.createSession.mockResolvedValue({ id: 'session-skill-001' })
+    api.startRun.mockResolvedValue({ ...baseTask, sessionId: 'session-skill-001' })
+    const store = useTaskStore()
+
+    await store.createTask('分析本月订单交付风险', [], undefined, undefined, undefined, [], 'order-analysis')
+
+    expect(api.createSession).toHaveBeenCalledWith({
+      title: '分析本月订单交付风险',
+      skillId: 'order-analysis',
+    })
+    expect(api.startRun).toHaveBeenCalledWith('session-skill-001', expect.objectContaining({
+      prompt: '分析本月订单交付风险',
+      fileIds: [],
+    }))
+  })
+
   it('lets the server choose the personal workspace when the caller omits a workspace', async () => {
     const { useTaskStore } = await import('./tasks')
     api.createSession.mockResolvedValue({ id: 'session-personal-001', workspaceId: 'ws-personal-U00001' })
