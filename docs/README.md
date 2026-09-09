@@ -9,6 +9,7 @@
 | 启动开发、选择测试、准备验收 | [开发与测试](testing/development.md) |
 | 理解业务、权限和系统边界 | [架构总览](architecture/overview.md) |
 | 理解数据关系与迁移约束 | [数据模型](data-model.md) |
+| 规划团队工作空间功能、权限、页面入口与分批实施 | [团队工作空间产品方案与实施计划](product/team-workspace-plan.md) |
 | 修改内部接口与事件 | [内部端口与契约](contracts/internal-ports.md) |
 | 配置登录、员工目录和首位管理员 | [AI Hub 身份接入](deployment/ai-hub-sso-integration.md) |
 | 安装、验证与升级执行内核 | [DSH Runtime](deployment/dsh-runtime-delivery.md) |
