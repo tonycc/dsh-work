@@ -152,3 +152,9 @@ Bootstrap 只在本地认领记录首次原子写入时授予 `role-platform-adm
 - 将生产 Session Secret 写入 Secret Manager；
 - 配置 HTTPS、Cookie、服务可达性与定时目录同步；
 - 完成真实账号、停用、故障和恢复 UAT，保存 AI Hub 接入认证与 dsh-work 审计证据。
+
+## 账号切换与门户会话
+
+平台账号被 `business_user_required` 拒绝时，错误页的“切换账号”访问对应 Audience 的 `/auth/workbench/switch-account` 或 `/auth/admin/switch-account`。服务端撤销当前应用 Session，并新建带 `prompt=login`、PKCE、state 和 nonce 的授权事务，锁定原入口及回调。不能把普通 OIDC `end-session` 当作账号切换：未登记退出回跳时 Authentik 会忽略该回跳，已登记回跳时又要求有效 ID Token hint，均不能保证返回当前业务应用。
+
+AI Hub 门户与 dsh-work 的应用 Session 独立。切换 dsh-work 身份不会自动撤销 AI Hub 门户已有的管理员 Session；验收应确认业务人员最终回到原员工端或管理端，且该应用会话的身份为所选员工，而不是根据另一个门户显示的账号判断。

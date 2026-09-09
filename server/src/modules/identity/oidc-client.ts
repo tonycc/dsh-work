@@ -65,7 +65,7 @@ export class OidcProviderClient {
     this.staleTtlMilliseconds = input.staleTtlSeconds * 1000
   }
 
-  async createAuthorizationRequest(redirectUri: string, scopes: string[]) {
+  async createAuthorizationRequest(redirectUri: string, scopes: string[], forceLogin = false) {
     const metadata = await this.metadata()
     const state = randomBytes(32).toString('base64url')
     const nonce = randomBytes(32).toString('base64url')
@@ -82,6 +82,7 @@ export class OidcProviderClient {
       code_challenge: codeChallenge,
       code_challenge_method: 'S256',
     }).toString()
+    if (forceLogin) url.searchParams.set('prompt', 'login')
     return { url: url.toString(), state, nonce, codeVerifier }
   }
 

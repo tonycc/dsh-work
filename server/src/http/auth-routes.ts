@@ -11,6 +11,11 @@ export function registerOidcRoutes(router: Router, authentication: OidcAuthServi
       redirect(response, result.location, [result.cookie])
     })
 
+    router.get(`/auth/${audience}/switch-account`, async (request, context, response) => {
+      const result = await authentication.switchAccount(request, audience, context.url.searchParams.get('return_to'))
+      redirect(response, result.location, [result.cookie, result.clearSessionCookie])
+    })
+
     router.get(`/auth/${audience}/callback`, async (request, context, response) => {
       const providerError = context.url.searchParams.get('error')
       if (providerError) {

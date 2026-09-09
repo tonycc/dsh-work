@@ -81,6 +81,10 @@ export const useAuthStore = defineStore('admin-auth', () => {
     window.location.assign(`/auth/admin/login?return_to=${encodeURIComponent(returnTo)}`)
   }
 
+  function switchAccount(returnTo = '/overview') {
+    window.location.assign(`/auth/admin/switch-account?return_to=${encodeURIComponent(returnTo)}`)
+  }
+
   function logout() {
     sessionUser.value = null
     identityProvider.value = null
@@ -106,6 +110,7 @@ export const useAuthStore = defineStore('admin-auth', () => {
     load,
     login,
     logout,
+    switchAccount,
   }
 })
 

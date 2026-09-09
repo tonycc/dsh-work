@@ -24,6 +24,7 @@ const props = withDefaults(
     workspaceLocked?: boolean
     compact?: boolean
     submitting?: boolean
+    selectedSkillName?: string
   }>(),
   {
     initialPrompt: '',
@@ -33,11 +34,13 @@ const props = withDefaults(
     workspaceLocked: false,
     compact: false,
     submitting: false,
+    selectedSkillName: '',
   },
 )
 
 const emit = defineEmits<{
   submit: [payload: { prompt: string; files: File[]; workspaceId: string }]
+  'clear-skill': []
 }>()
 
 const prompt = ref(props.initialPrompt)
@@ -163,6 +166,13 @@ function onKeydown(event: KeyboardEvent) {
             <el-icon><Close /></el-icon>
           </button>
         </span>
+      </div>
+
+      <div v-if="selectedSkillName" class="composer__skill-reference" aria-label="已选择 Skill">
+        <span>@{{ selectedSkillName }}</span>
+        <button type="button" aria-label="移除已选择 Skill" @click="emit('clear-skill')">
+          <el-icon><Close /></el-icon>
+        </button>
       </div>
 
       <textarea
@@ -372,6 +382,54 @@ function onKeydown(event: KeyboardEvent) {
 
 .composer--compact .composer__files + .composer__input {
   padding-top: 7px;
+}
+
+.composer__skill-reference {
+  display: inline-flex;
+  align-items: center;
+  max-width: calc(100% - 26px);
+  gap: 5px;
+  margin: 12px 13px 0;
+  padding: 5px 6px 5px 11px;
+  border: 1px solid #c9e6d9;
+  border-radius: 999px;
+  color: #23644f;
+  background: #f0faf5;
+  font-size: var(--dsh-font-size-caption);
+  line-height: 1.35;
+}
+
+.composer__skill-reference > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer__skill-reference button {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  color: #5f8b7b;
+  background: transparent;
+  cursor: pointer;
+}
+
+.composer__skill-reference button:hover {
+  color: #23644f;
+  background: #d9efe5;
+}
+
+.composer__skill-reference + .composer__input {
+  padding-top: 8px;
+}
+
+.composer--compact .composer__skill-reference {
+  margin: 10px 11px 0;
 }
 
 .file-chip {

@@ -201,13 +201,6 @@ defineExpose({ useWorkspaceFile })
           </button>
         </nav>
 
-        <div v-if="selectedSkill" class="selected-skill" aria-live="polite">
-          <span class="selected-skill__label">已选择 Skill</span>
-          <strong>{{ selectedSkill.name }}</strong>
-          <span class="selected-skill__version">v{{ selectedSkill.version }}</span>
-          <button type="button" aria-label="移除已选择 Skill" @click="clearSelectedSkill">×</button>
-        </div>
-
         <TaskComposer
           v-if="composerReady"
           :key="composerKey"
@@ -217,7 +210,9 @@ defineExpose({ useWorkspaceFile })
           :initial-workspace-name="composerWorkspaceName"
           :workspaces="contentStore.workspaces"
           :workspace-locked="workspaceLocked"
+          :selected-skill-name="selectedSkill?.name"
           @submit="submitTask"
+          @clear-skill="clearSelectedSkill"
         />
         <el-skeleton v-else class="workbench-composer" :rows="3" animated />
 
@@ -333,25 +328,6 @@ defineExpose({ useWorkspaceFile })
   color: #999d99;
   font-size: var(--dsh-font-size-micro);
 }
-
-.selected-skill {
-  display: flex;
-  align-items: center;
-  width: fit-content;
-  max-width: 100%;
-  gap: 8px;
-  margin: 16px auto 0;
-  padding: 7px 10px;
-  border: 1px solid #c9e6d9;
-  border-radius: 999px;
-  color: #23644f;
-  background: #f0faf5;
-  font-size: var(--dsh-font-size-caption);
-}
-
-.selected-skill__label,
-.selected-skill__version { color: #5f8b7b; }
-.selected-skill button { padding: 0 2px; border: 0; color: #5f8b7b; background: transparent; cursor: pointer; font-size: var(--dsh-font-size-header); line-height: 1; }
 
 .workbench-trust span {
   display: inline-flex;

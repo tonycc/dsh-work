@@ -62,6 +62,10 @@ export const useAuthStore = defineStore('workbench-auth', () => {
     window.location.assign(`/auth/workbench/login?return_to=${encodeURIComponent(returnTo)}`)
   }
 
+  function switchAccount(returnTo = '/workbench') {
+    window.location.assign(`/auth/workbench/switch-account?return_to=${encodeURIComponent(returnTo)}`)
+  }
+
   function logout() {
     sessionUser.value = null
     identityProvider.value = null
@@ -79,6 +83,7 @@ export const useAuthStore = defineStore('workbench-auth', () => {
     load,
     login,
     logout,
+    switchAccount,
   }
 })
 

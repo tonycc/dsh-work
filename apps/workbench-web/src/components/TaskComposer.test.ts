@@ -84,6 +84,16 @@ describe('TaskComposer', () => {
     expect(compact.text()).toContain('按企业权限执行')
   })
 
+  it('shows the selected Skill as an @ reference without its version and can remove it', async () => {
+    const wrapper = mountComposer({ selectedSkillName: '文档处理' })
+
+    expect(wrapper.get('[aria-label="已选择 Skill"]').text()).toContain('@文档处理')
+    expect(wrapper.text()).not.toContain('v1.0.0')
+
+    await wrapper.get('[aria-label="移除已选择 Skill"]').trigger('click')
+    expect(wrapper.emitted('clear-skill')).toEqual([[]])
+  })
+
   it('defaults to the personal workspace and never offers an unassigned conversation', () => {
     const wrapper = mountComposer({
       initialWorkspaceId: 'ws-personal-U00001',

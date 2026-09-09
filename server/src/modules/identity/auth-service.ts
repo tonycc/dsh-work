@@ -53,6 +53,7 @@ export class OidcAuthService {
     request: IncomingMessage,
     audience: ApiAudience,
     requestedReturnTo: string | null,
+    forceLogin = false,
   ) {
     const settings = this.configuration.audiences[audience]
     const portalOrigin = resolveRequestOrigin(request, settings)
@@ -60,6 +61,7 @@ export class OidcAuthService {
     const authorization = await this.providers[audience].createAuthorizationRequest(
       redirectUri,
       settings.loginScopes,
+      forceLogin,
     )
     const transactionToken = randomOpaque()
     await this.repository.createLoginTransaction({
@@ -81,6 +83,18 @@ export class OidcAuthService {
         this.configuration.transactionTtlSeconds,
         this.configuration.cookieSecure,
       ),
+    }
+  }
+
+  async switchAccount(request: IncomingMessage, audience: ApiAudience, returnTo: string | null) {
+    const settings = this.configuration.audiences[audience]
+    resolveRequestOrigin(request, settings)
+    const cookieValue = parseCookies(request.headers.cookie)[settings.sessionCookieName]
+    if (cookieValue) await this.repository.logoutSession(hashOpaque(cookieValue), audience)
+    const login = await this.beginLogin(request, audience, returnTo, true)
+    return {
+      ...login,
+      clearSessionCookie: clearCookie(settings.sessionCookieName, this.configuration.cookieSecure),
     }
   }
 

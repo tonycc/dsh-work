@@ -168,7 +168,7 @@ test('OIDC redirects trust only a forwarded Origin from the exact allowlist', ()
   )
 })
 
-test('local SSO completes both portal logins through the legacy backend callback', async (context) => {
+test('local SSO rejects platform accounts then accepts employees through each legacy callback', async (context) => {
   const configuration = loadIdentityConfiguration(baseEnvironment())
   if (configuration.mode !== 'oidc') assert.fail('expected OIDC configuration')
   const authentication = new OidcAuthService(configuration, {} as DatabaseClient)
@@ -179,7 +179,7 @@ test('local SSO completes both portal logins through the legacy backend callback
     pending = input
   })
   context.mock.method(IdentitySessionRepository.prototype, 'consumeLoginTransaction', async () => pending)
-  context.mock.method(OidcProviderClient.prototype, 'createAuthorizationRequest', async (redirectUri: string) => ({
+  const authorizationRequest = context.mock.method(OidcProviderClient.prototype, 'createAuthorizationRequest', async (redirectUri: string) => ({
     url: `https://issuer.example/authorize?redirect_uri=${encodeURIComponent(redirectUri)}`,
     state: 'login-state', nonce: 'login-nonce', codeVerifier: 'login-verifier',
   }))
@@ -192,10 +192,12 @@ test('local SSO completes both portal logins through the legacy backend callback
     issuedAt: Date.now() / 1000, scopes: ['openid'], actorType: 'user',
     authorizationVersion: 1, displayName: 'Employee', email: null, claims: {},
   }))
+  let businessUser = false
+  context.mock.method(IdentitySessionRepository.prototype, 'appendAudit', async () => {})
   context.mock.method(AiHubClient.prototype, 'me', async () => ({
     user_id: 'employee', subject: 'employee', display_name: 'Employee', email: null,
     status: 'ACTIVE', organization_id: 'org', organization_name: 'Company',
-    business_user: true, authorization_version: 1,
+    business_user: businessUser, authorization_version: 1,
   }))
   context.mock.method(IdentitySessionRepository.prototype, 'synchronizeIdentity', async () => ({
     userId: 'employee', authorizationVersion: 1,
@@ -211,6 +213,17 @@ test('local SSO completes both portal logins through the legacy backend callback
     const callback = `http://localhost:4190/auth/${audience}/callback`
     const login = await authentication.beginLogin(requestFor(`localhost:${port}`), audience, '/home')
     assert.equal(new URL(login.location).searchParams.get('redirect_uri'), callback)
+    businessUser = false
+    const sessionCount = createSession.mock.callCount()
+    await assert.rejects(authentication.completeLogin({
+      request: requestFor('localhost:4190'), audience, code: 'code',
+      state: 'login-state', transactionToken: 'transaction-cookie',
+    }), { code: 'business_user_required', status: 403 })
+    assert.equal(createSession.mock.callCount(), sessionCount)
+    businessUser = true
+    const switched = await authentication.switchAccount(requestFor(`localhost:${port}`), audience, '/home')
+    assert.match(switched.clearSessionCookie, /Max-Age=0/)
+    assert.equal(authorizationRequest.mock.calls.at(-1)?.arguments[2], true)
     const result = await authentication.completeLogin({
       request: requestFor('localhost:4190'), audience, code: 'code',
       state: 'login-state', transactionToken: 'transaction-cookie',
@@ -226,6 +239,25 @@ test('local SSO completes both portal logins through the legacy backend callback
     /不在允许列表/)
   assert.throws(() => authentication.errorRedirect(requestFor('localhost:4191'), 'workbench', 'denied'),
     /不在允许列表/)
+})
+
+test('account switching without a local session logs out of OIDC and returns to the same portal', async (context) => {
+  const configuration = loadIdentityConfiguration(baseEnvironment())
+  if (configuration.mode !== 'oidc') assert.fail('expected OIDC configuration')
+  const authentication = new OidcAuthService(configuration, {} as DatabaseClient)
+  const logout = context.mock.method(OidcProviderClient.prototype, 'logoutUrl', async (origin: string) =>
+    `https://identity.example/end-session/?post_logout_redirect_uri=${encodeURIComponent(origin)}`)
+  const localLogout = context.mock.method(IdentitySessionRepository.prototype, 'logoutSession', async () => {})
+  for (const [audience, port] of [['workbench', 4174], ['admin', 4180]] as const) {
+    const origin = `http://localhost:${port}`
+    const result = await authentication.logout(requestFor(`localhost:${port}`), audience)
+    assert.equal(new URL(result.location).searchParams.get('post_logout_redirect_uri'), origin)
+    assert.match(result.clearSessionCookie, /Max-Age=0/)
+    assert.equal(authentication.errorRedirect(requestFor('localhost:4190'), audience, 'business_user_required'),
+      `${origin}/login-error?code=business_user_required`)
+  }
+  assert.equal(logout.mock.callCount(), 2)
+  assert.equal(localLogout.mock.callCount(), 0)
 })
 
 test('multi-origin callbacks cannot switch away from the transaction origin', async (context) => {
@@ -400,6 +432,14 @@ test('OIDC client builds PKCE requests, verifies RS256 claims, and authenticates
     assert.equal(authorizationUrl.searchParams.get('state'), authorization.state)
     assert.equal(authorizationUrl.searchParams.get('nonce'), authorization.nonce)
     assert.ok((authorizationUrl.searchParams.get('code_challenge') ?? '').length >= 43)
+
+    assert.equal(authorizationUrl.searchParams.has('prompt'), false)
+    const switching = new URL((await client.createAuthorizationRequest(
+      'http://localhost:4190/auth/workbench/callback', ['openid'], true,
+    )).url)
+    assert.equal(switching.searchParams.get('prompt'), 'login')
+    assert.equal(switching.searchParams.get('redirect_uri'), 'http://localhost:4190/auth/workbench/callback')
+    assert.notEqual(switching.searchParams.get('state'), authorization.state)
 
     const now = Math.floor(Date.now() / 1000)
     const token = signedJwt(privateKey, {
