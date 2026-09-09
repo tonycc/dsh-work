@@ -89,6 +89,49 @@ describe('task store', () => {
     expect(FakeEventSource.instances[0]?.url).toBe('/events/run-001')
   })
 
+  it('shows five distinct conversations after loading repeated Runs from the server', async () => {
+    const { useTaskStore } = await import('./tasks')
+    const latest = { ...baseTask, id: 'run-latest', status: 'succeeded' as const }
+    const older = Array.from({ length: 6 }, (_, index) => ({
+      ...latest, id: `run-older-${index}`,
+    }))
+    const others = Array.from({ length: 5 }, (_, index) => ({
+      ...latest, id: `run-other-${index}`, sessionId: `session-other-${index}`,
+    }))
+    api.getTasks.mockResolvedValue([latest, ...older, ...others])
+    const store = useTaskStore()
+    await store.load()
+
+    expect(store.recentTasks.map(task => task.id)).toEqual([
+      'run-latest', 'run-other-0', 'run-other-1', 'run-other-2', 'run-other-3',
+    ])
+    expect(store.getTask('run-older-0')).toBeDefined()
+  })
+
+  it('updates and moves the existing conversation on consecutive messages without adding sidebar entries', async () => {
+    const { useTaskStore } = await import('./tasks')
+    const initial = { ...baseTask, status: 'succeeded' as const }
+    const other = { ...initial, id: 'run-other', sessionId: 'session-other' }
+    api.getTasks.mockResolvedValue([other, initial])
+    const store = useTaskStore()
+    await store.load()
+
+    for (const id of ['run-followup-1', 'run-followup-2']) {
+      api.startRun.mockResolvedValue({ ...baseTask, id, status: 'queued', updatedAt: '刚刚' })
+      await store.sendMessage(store.recentTasks.find(task => task.sessionId === baseTask.sessionId)!.id, '继续分析', [])
+      expect(store.recentTasks.map(task => task.id)).toEqual([id, other.id])
+      expect(store.recentTasks[0]).toMatchObject({ status: 'queued', updatedAt: '刚刚' })
+    }
+    expect(api.createSession).not.toHaveBeenCalled()
+    expect(api.startRun).toHaveBeenLastCalledWith(baseTask.sessionId, expect.objectContaining({ prompt: '继续分析' }))
+
+    // A late refresh for an earlier Run must not replace the latest conversation entry.
+    api.getRun.mockResolvedValue({ ...initial, updatedAt: '刚刚' })
+    await store.refreshRun(initial.id)
+    expect(store.recentTasks.map(task => task.id)).toEqual(['run-followup-2', other.id])
+    expect(store.getTask(initial.id)).toBeDefined()
+  })
+
   it('binds an authorized workspace file id to the immutable Run input', async () => {
     const { useTaskStore } = await import('./tasks')
     api.createSession.mockResolvedValue({ id: 'session-001' })

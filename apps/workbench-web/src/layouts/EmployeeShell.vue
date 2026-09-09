@@ -184,7 +184,7 @@ onMounted(() => {
         <div class="employee-sidebar__recent-title">最近对话</div>
         <div
           v-for="task in taskStore.recentTasks"
-          :key="task.id"
+          :key="task.sessionId"
           class="recent-conversation"
         >
           <button

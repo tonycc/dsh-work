@@ -31,7 +31,16 @@ export const useTaskStore = defineStore('tasks', () => {
   const activeTasks = computed(() =>
     tasks.value.filter((task) => ['queued', 'running', 'awaiting_approval'].includes(task.status)),
   )
-  const recentTasks = computed(() => tasks.value.slice(0, 5))
+  const recentTasks = computed(() => {
+    // Runs arrive newest first. Project one latest Run per product Session
+    // before limiting the sidebar, while retaining Run history in the store.
+    const sessions = new Set<string>()
+    return tasks.value.filter((task) => {
+      if (sessions.has(task.sessionId)) return false
+      sessions.add(task.sessionId)
+      return true
+    }).slice(0, 5)
+  })
 
   async function load() {
     if (initialized.value) return
