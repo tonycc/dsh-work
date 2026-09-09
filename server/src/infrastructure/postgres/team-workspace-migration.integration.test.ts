@@ -307,7 +307,7 @@ test('revocation events dedupe on (workspace_id, user_id, kind, payload_hash)', 
       insert into workspace_revocation_events (id, tenant_id, workspace_id, user_id, kind, payload, payload_hash)
       values (${`wre-${suffix}-2`}, 'tenant-dsh-work', 'ws-supply', 'U00001', 'member_removed', '{"role":"member"}'::jsonb, ${payloadHash})
     `,
-    /workspace_revocation_events_workspace_id_user_id_kind_paylo(_hash)?_key/,
+    /workspace_revocation_events_dedupe/,
   )
 
   // Same tuple with a different payload hash is a distinct event.
@@ -315,4 +315,57 @@ test('revocation events dedupe on (workspace_id, user_id, kind, payload_hash)', 
     insert into workspace_revocation_events (id, tenant_id, workspace_id, user_id, kind, payload, payload_hash)
     values (${`wre-${suffix}-3`}, 'tenant-dsh-work', 'ws-supply', 'U00001', 'member_removed', '{"role":"owner"}'::jsonb, ${`md5-${suffix}-other`})
   `
+})
+
+test('moving a sole owner to another team workspace is rejected at commit', async () => {
+  const secondTeamWorkspaceId = `ws-1a-team-b-${suffix}`
+  await database`
+    insert into workspaces (id, tenant_id, name, description, workspace_type, created_by, status)
+    values (${secondTeamWorkspaceId}, 'tenant-dsh-work', '1A 团队空间 B', '', 'team', 'U00001', 'active')
+  `
+
+  // Cross-workspace move of the sole owner must leave the old team workspace with an owner.
+  await assert.rejects(
+    database`
+      update workspace_members
+         set workspace_id = ${secondTeamWorkspaceId}
+       where tenant_id = 'tenant-dsh-work'
+         and workspace_id = ${teamWorkspaceId}
+         and user_id = 'U00001'
+    `,
+    /exactly one owner/,
+  )
+
+  const [owners] = await database<{ count: number }[]>`
+    select count(*)::integer as count
+      from workspace_members
+     where tenant_id = 'tenant-dsh-work'
+       and workspace_id = ${teamWorkspaceId}
+       and member_role = 'owner'
+  `
+  assert.equal(owners?.count, 1)
+})
+
+test('moving a team membership into a personal workspace hits the 0013 guard', async () => {
+  // The 0013 personal guard fires first (before-trigger) and rejects the move;
+  // the team side keeps its owner.
+  await assert.rejects(
+    database`
+      update workspace_members
+         set workspace_id = ${personalWorkspaceId}
+       where tenant_id = 'tenant-dsh-work'
+         and workspace_id = ${teamWorkspaceId}
+         and user_id = 'U00001'
+    `,
+    /personal workspace can only contain its owner/,
+  )
+
+  const [owners] = await database<{ count: number }[]>`
+    select count(*)::integer as count
+      from workspace_members
+     where tenant_id = 'tenant-dsh-work'
+       and workspace_id = ${teamWorkspaceId}
+       and member_role = 'owner'
+  `
+  assert.equal(owners?.count, 1)
 })

@@ -31,6 +31,7 @@
     "test:sso:integration": "node --experimental-strip-types --test src/modules/identity/identity.integration.test.ts",
     "test:m5:faults:integration": "node --experimental-strip-types --test src/infrastructure/postgres/m5-runtime-faults.integration.test.ts",
     "test:m5:capacity:integration": "node --experimental-strip-types --test src/infrastructure/postgres/m5-capacity.integration.test.ts",
+    "test:m5:workspace:integration": "node --experimental-strip-types --test src/infrastructure/postgres/team-workspace-migration.integration.test.ts",
     "test:runtime": "node --experimental-strip-types --test src/modules/runtime/runtime-adapter.test.ts config/dsh/dsh-work-tool-policy.test.js",
     "start": "node dist/main.js"
   },

@@ -38,6 +38,12 @@ create table workspace_agent_members (
 comment on table workspace_agent_members is
   'Associates a team workspace with a platform Agent. The same agent cannot be joined twice; re-adding after removal reuses the row (app-level behavior).';
 
+comment on column workspace_agent_members.status is
+  'Stored states are available/disabled/removed. 「不可用」(unavailable) is a derived display state computed from platform authorization, version validity and runtime health — never stored.';
+
+comment on column workspace_agent_members.added_by is
+  'User id of the employee who added the agent membership (no FK, consistent with workspace_grant_sources.created_by).';
+
 create index if not exists workspace_agent_members_by_workspace_active
   on workspace_agent_members (tenant_id, workspace_id)
   where status <> 'removed';
@@ -69,6 +75,14 @@ create index if not exists workspace_grant_sources_active_set
 create index if not exists workspace_grant_sources_by_workspace
   on workspace_grant_sources (tenant_id, workspace_id);
 
+create unique index if not exists workspace_grant_sources_agent_member_once
+  on workspace_grant_sources (tenant_id, workspace_id, capability_type, capability_version_id, source_ref_id)
+  where source_type = 'agent_member';
+
+create index if not exists workspace_grant_sources_by_ref
+  on workspace_grant_sources (tenant_id, source_ref_id)
+  where status = 'active';
+
 -- ---------------------------------------------------------------------------
 -- 5. workspace_revocation_events: durable, replayable revocation work items
 -- ---------------------------------------------------------------------------
@@ -84,7 +98,7 @@ create table workspace_revocation_events (
   attempts integer not null default 0,
   created_at timestamptz not null default now(),
   processed_at timestamptz,
-  unique (workspace_id, user_id, kind, payload_hash)
+  constraint workspace_revocation_events_dedupe unique (workspace_id, user_id, kind, payload_hash)
 );
 
 comment on table workspace_revocation_events is
@@ -92,6 +106,10 @@ comment on table workspace_revocation_events is
 
 comment on column workspace_revocation_events.payload_hash is
   'Caller computes md5 of payload::text; the migration only defines the column. The unique key makes delivery idempotent.';
+
+create index if not exists workspace_revocation_events_pending
+  on workspace_revocation_events (tenant_id)
+  where status = 'pending';
 
 -- ---------------------------------------------------------------------------
 -- 6. Team single-owner constraint (constraint trigger, deferred to commit)
@@ -118,23 +136,46 @@ begin
    where id = target_workspace_id;
 
   -- Personal spaces stay governed by personal_workspace_membership_guard (0013).
-  if target_workspace_type = 'personal' then
-    if tg_op = 'DELETE' then
-      return old;
+  if target_workspace_type <> 'personal' then
+    select count(*)::integer
+      into owner_count
+      from workspace_members
+     where tenant_id = target_tenant_id
+       and workspace_id = target_workspace_id
+       and member_role = 'owner';
+
+    if owner_count <> 1 then
+      raise exception 'team workspace % must have exactly one owner (found %)',
+        target_workspace_id, owner_count;
     end if;
-    return new;
   end if;
 
-  select count(*)::integer
-    into owner_count
-    from workspace_members
-   where tenant_id = target_tenant_id
-     and workspace_id = target_workspace_id
-     and member_role = 'owner';
+  -- A cross-workspace or cross-tenant move must leave the old team workspace valid
+  -- as well: validate the old (tenant_id, workspace_id) against the same invariant.
+  if tg_op = 'UPDATE'
+     and (old.workspace_id is distinct from new.workspace_id
+          or old.tenant_id is distinct from new.tenant_id) then
+    target_tenant_id := old.tenant_id;
+    target_workspace_id := old.workspace_id;
 
-  if owner_count <> 1 then
-    raise exception 'team workspace % must have exactly one owner (found %)',
-      target_workspace_id, owner_count;
+    select workspace_type
+      into target_workspace_type
+      from workspaces
+     where id = target_workspace_id;
+
+    if target_workspace_type <> 'personal' then
+      select count(*)::integer
+        into owner_count
+        from workspace_members
+       where tenant_id = target_tenant_id
+         and workspace_id = target_workspace_id
+         and member_role = 'owner';
+
+      if owner_count <> 1 then
+        raise exception 'team workspace % must have exactly one owner (found %)',
+          target_workspace_id, owner_count;
+      end if;
+    end if;
   end if;
 
   if tg_op = 'DELETE' then
