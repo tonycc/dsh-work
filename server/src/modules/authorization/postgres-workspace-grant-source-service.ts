@@ -29,6 +29,12 @@ export interface CapabilityGrantSourceGroup {
   sources: GrantSourceRecord[]
 }
 
+export interface UnresolvedLegacyGrantSource {
+  sourceId: string
+  capabilityType: WorkspaceCapabilityType
+  capabilityVersionId: string
+}
+
 /**
  * Maintains the provenance of `workspace_capability_grants` (the effective set)
  * through `workspace_grant_sources`. Lives in the authorization module because
@@ -125,8 +131,7 @@ export class PostgresWorkspaceGrantSourceService {
   async listGrantSources(
     database: DatabaseClient | DatabaseTransaction,
     workspaceId: string,
-  ): Promise<CapabilityGrantSourceGroup[]> {
-    const rows = await database<{
+  ): Promise<CapabilityGrantSourceGroup[]> {    const rows = await database<{
       id: string
       capabilityType: WorkspaceCapabilityType
       capabilityVersionId: string
@@ -165,6 +170,51 @@ export class PostgresWorkspaceGrantSourceService {
       })
     }
     return [...groups.values()]
+  }
+
+  /**
+   * Lists the active `legacy_unresolved` sources of a workspace. These are the
+   * pre-1A grants the migration could not attribute to an Agent or an explicit
+   * human decision (plan 6.3: 来源不明的存量授权不能猜测归属).
+   */
+  async listActiveLegacySources(
+    database: DatabaseClient | DatabaseTransaction,
+    workspaceId: string,
+  ): Promise<UnresolvedLegacyGrantSource[]> {
+    const rows = await database<{
+      sourceId: string
+      capabilityType: WorkspaceCapabilityType
+      capabilityVersionId: string
+    }[]>`
+      select id as "sourceId", capability_type as "capabilityType",
+             capability_version_id as "capabilityVersionId"
+        from workspace_grant_sources
+       where tenant_id = ${tenantId} and workspace_id = ${workspaceId}
+         and source_type = 'legacy_unresolved' and status = 'active'
+       order by capability_type, capability_version_id, id
+    `
+    return rows.map(row => ({ ...row }))
+  }
+
+  /**
+   * 方案 6.3 门禁：对账完成前，凡涉及歧义来源的破坏性授权调整（Agent 移出/停用）
+   * 必须被拒绝。移出/停用只能撤销 `agent_member` 来源，无法判断某个 legacy 授权是否
+   * 属于被移出的 Agent；若放行，legacy 来源会让该 Agent 的能力仍留在有效集合里，
+   * 操作者会以为已收权而实际没有。必须在持有 workspace 行锁的事务内调用，避免与
+   * 并发对账/授权变更交错。
+   */
+  async assertNoUnresolvedLegacySources(
+    tx: DatabaseTransaction,
+    workspaceId: string,
+    operationLabel: string,
+  ): Promise<void> {
+    const unresolved = await this.listActiveLegacySources(tx, workspaceId)
+    if (unresolved.length === 0) return
+    throw new Error(
+      `该空间存在 ${unresolved.length} 条待对账的历史授权来源（legacy_unresolved），`
+      + `完成对账前不能${operationLabel}。请先在管理端运营「授权来源对账清单」完成对账，`
+      + '再执行移除或停用操作。',
+    )
   }
 }
 

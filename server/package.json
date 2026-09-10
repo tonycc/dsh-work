@@ -38,7 +38,9 @@
     "start": "node dist/main.js",
     "test:m5:agent-members:integration": "node --experimental-strip-types --test src/http/workspace-agent-member-api.integration.test.ts",
     "test:m5:revocation:integration": "node --experimental-strip-types --test src/infrastructure/postgres/m5-revocation-pipeline.integration.test.ts",
-    "test:m5:revocation": "node --experimental-strip-types --test src/modules/run/run-revocation-sweep.test.ts"
+    "test:m5:revocation": "node --experimental-strip-types --test src/modules/run/run-revocation-sweep.test.ts",
+    "test:m5:reconciliation:integration": "node --experimental-strip-types --test src/http/team-workspace-reconciliation-api.integration.test.ts",
+    "test:m5:workspace:upgrade:integration": "node --experimental-strip-types --test src/infrastructure/postgres/team-workspace-upgrade.integration.test.ts"
   },
   "devDependencies": {
     "@types/node": "^24.7.2",

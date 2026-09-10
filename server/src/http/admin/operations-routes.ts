@@ -1,9 +1,14 @@
 import type { PostgresOperationsService } from '../../modules/admin/application/postgres-operations-service.ts'
+import type { PostgresGrantReconciliationService } from '../../modules/admin/application/postgres-grant-reconciliation-service.ts'
 import { envelope, readJsonBody, requireRequestIdentity, type Router } from '../router.ts'
 
 const basePath = '/api/admin/v1'
 
-export function registerOperationsRoutes(router: Router, service: PostgresOperationsService) {
+export function registerOperationsRoutes(
+  router: Router,
+  service: PostgresOperationsService,
+  reconciliation?: PostgresGrantReconciliationService,
+) {
   router.get(`${basePath}/tasks`, async () => envelope('admin', await service.getTaskSummaries(), 'postgres'))
   router.get(`${basePath}/runtimes`, async () => envelope('admin', await service.getRuntimes(), 'postgres'))
   router.get(`${basePath}/runtimes/configuration`, async () =>
@@ -27,4 +32,16 @@ export function registerOperationsRoutes(router: Router, service: PostgresOperat
   router.get(`${basePath}/usage`, async () => envelope('admin', await service.getUsage(), 'postgres'))
   router.get(`${basePath}/model-usage`, async () => envelope('admin', await service.getModelUsage(), 'postgres'))
   router.get(`${basePath}/platform-status`, () => envelope('admin', service.getPlatformStatus(), 'postgres'))
+  // 1A-T7 授权来源对账清单（convergence §2 / plan 6.3）。仅在 postgres 适配器下注册。
+  if (reconciliation) {
+    router.get(`${basePath}/grant-sources/unresolved`, async () =>
+      envelope('admin', await reconciliation.listUnresolvedSources(), 'postgres'))
+    router.post(`${basePath}/grant-sources/reconcile`, async (request, context) => {
+      const input = await readJsonBody<{ sourceIds: string[] }>(request)
+      return envelope('admin', await reconciliation.reconcile({
+        sourceIds: input.sourceIds,
+        actor: requireRequestIdentity(context, 'admin').userId,
+      }), 'postgres')
+    })
+  }
 }

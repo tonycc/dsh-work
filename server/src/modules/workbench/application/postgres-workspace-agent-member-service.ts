@@ -238,6 +238,8 @@ export class PostgresWorkspaceAgentMemberService {
 
     await this.database.begin(async transaction => {
       await lockWorkspaceRow(transaction, workspaceId)
+      // 方案 6.3 门禁：对账完成前，涉及 legacy 歧义来源的破坏性调整必须被拒绝。
+      await this.grantSources.assertNoUnresolvedLegacySources(transaction, workspaceId, '移除 Agent 成员')
       const [locked] = await transaction<MemberStateRow[]>`
         select id, agent_id as "agentId", agent_version_id as "agentVersionId", status
           from workspace_agent_members
@@ -304,6 +306,8 @@ export class PostgresWorkspaceAgentMemberService {
 
     await this.database.begin(async transaction => {
       await lockWorkspaceRow(transaction, workspaceId)
+      // 同移除：停用也会撤销该成员的 agent_member 来源，必须先排除歧义 legacy 来源。
+      await this.grantSources.assertNoUnresolvedLegacySources(transaction, workspaceId, '停用 Agent 成员')
       const [locked] = await transaction<MemberStateRow[]>`
         select id, agent_id as "agentId", agent_version_id as "agentVersionId", status
           from workspace_agent_members

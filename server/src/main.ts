@@ -23,6 +23,7 @@ import { runMigrations } from './infrastructure/postgres/migration-runner.ts'
 import { PrototypeRepository } from './infrastructure/prototype/prototype-repository.ts'
 import { AdminQueryService } from './modules/admin/application/admin-query-service.ts'
 import { PostgresOperationsService } from './modules/admin/application/postgres-operations-service.ts'
+import { PostgresGrantReconciliationService } from './modules/admin/application/postgres-grant-reconciliation-service.ts'
 import { MemoryModelGovernanceRepository } from './modules/model/memory-model-governance-repository.ts'
 import { ModelGovernanceService } from './modules/model/model-governance-service.ts'
 import { PostgresModelGovernanceRepository } from './modules/model/postgres-model-governance-repository.ts'
@@ -148,7 +149,7 @@ async function start() {
     registerContentRoutes(router, content, authorization)
     registerWorkspaceMemberRoutes(router, workspaceMembers, authorization)
     registerWorkspaceAgentMemberRoutes(router, workspaceAgentMembers, authorization)
-    registerOperationsRoutes(router, operations)
+    registerOperationsRoutes(router, operations, new PostgresGrantReconciliationService(database, operations))
     registerAgentRoutes(router, agents)
     registerSkillRoutes(router, skills)
     registerToolRoutes(router, tools)
