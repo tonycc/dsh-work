@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Cpu, Plus, Search } from '@element-plus/icons-vue'
 
@@ -96,13 +96,20 @@ function editableRoles(member: WorkspaceMember): TeamMemberRole[] {
   return []
 }
 
+/**
+ * 当前操作人身份暂不可从服务端契约判定（见 T6 报告缺口）：无法确认「自己」
+ * 是哪一行，因此管理员行一律按不可管理处理，绝不会误改或误移除自己。
+ */
 function isSelf(member: WorkspaceMember) {
+  void member
   return false
 }
 
+/** 权限矩阵：负责人可移除全员；管理员只能移除「成员／只读成员」。 */
 function canRemove(member: WorkspaceMember) {
-  void member
-  return canManageEmployees.value
+  if (member.role === 'owner' && ownerCount.value <= 1) return false
+  if (isOwner.value) return true
+  return props.currentUserRole === 'admin' && ['member', 'viewer'].includes(member.role)
 }
 
 function roleSelectValue(member: WorkspaceMember) {
@@ -139,7 +146,6 @@ watch(() => props.agentMembers, (value) => {
 watch(() => props.open, (open) => {
   if (!open) return
   if (props.loadAgentMembers) void loadAgentMembers()
-  void ensureEmployeeCandidates()
 }, { immediate: true })
 
 watch(() => props.members, () => {
@@ -173,6 +179,7 @@ async function ensureEmployeeCandidates(reset = true) {
 
 let employeeSearchTimer: ReturnType<typeof setTimeout> | undefined
 function onEmployeeSearchInput(value: string) {
+  if (value === employeeSearch.value.query) return
   employeeSearch.value.query = value
   if (employeeSearchTimer) clearTimeout(employeeSearchTimer)
   employeeSearchTimer = setTimeout(() => void ensureEmployeeCandidates(), 300)
@@ -240,6 +247,7 @@ function openAgentSearch() {
 
 let agentSearchTimer: ReturnType<typeof setTimeout> | undefined
 function onAgentSearchInput(value: string) {
+  if (value === candidate.value.query) return
   candidate.value.query = value
   if (agentSearchTimer) clearTimeout(agentSearchTimer)
   agentSearchTimer = setTimeout(() => void searchAgentCandidates(value), 300)
@@ -329,6 +337,11 @@ function agentStatusTone(member: WorkspaceAgentMember) {
 function close() {
   emit('update:open', false)
 }
+
+onBeforeUnmount(() => {
+  if (employeeSearchTimer) clearTimeout(employeeSearchTimer)
+  if (agentSearchTimer) clearTimeout(agentSearchTimer)
+})
 
 defineExpose({ ensureEmployeeCandidates })
 </script>
@@ -595,15 +608,21 @@ defineExpose({ ensureEmployeeCandidates })
           </div>
         </div>
       </section>
-    </div>
 
-    <template #footer>
-      <el-button data-testid="member-dialog-close" @click="close">关闭</el-button>
-    </template>
+      <footer class="member-dialog__footer">
+        <el-button data-testid="member-dialog-close" @click="close">关闭</el-button>
+      </footer>
+    </div>
   </el-dialog>
 </template>
 
 <style scoped>
+.member-dialog__footer {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+
 .member-dialog__body {
   display: flex;
   flex-direction: column;

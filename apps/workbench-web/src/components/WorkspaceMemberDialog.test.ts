@@ -205,10 +205,14 @@ describe('WorkspaceMemberDialog', () => {
     expect(selects[1].props('disabled')).toBe(true)
     // 自己所在行。
     expect(selects[2].props('disabled')).toBe(true)
-    // 成员/只读成员行只提供两个可选项。
-    expect(selects[3].findAllComponents(ElOption).map(option => option.props('value'))).toEqual(['member', 'viewer'])
-    expect(selects[4].findAllComponents(ElOption).map(option => option.props('value'))).toEqual(['member', 'viewer'])
-    expect(panelOf(wrapper).findAll('[data-testid="member-remove"]')).toHaveLength(0)
+    // 成员/只读成员行：只有「成员/只读成员」可选项，负责人与管理员被禁用。
+    expect(selects[3].props('disabled')).toBe(false)
+    expect(selects[4].props('disabled')).toBe(false)
+    expect(selects[3].findAllComponents(ElOption)
+      .filter(option => option.props('disabled') === false)
+      .map(option => option.props('value'))).toEqual(['member', 'viewer'])
+    // 只能移除「成员/只读成员」：负责人（行 0/1）与自己（行 2）都没有移除入口。
+    expect(panelOf(wrapper).findAll('[data-testid="member-remove"]')).toHaveLength(2)
   })
 
   it('renders a bare read-only employee list for plain members', async () => {
@@ -228,9 +232,8 @@ describe('WorkspaceMemberDialog', () => {
     await flushPromises()
     const panel = panelOf(wrapper)
 
-    const select = panel.findComponent(ElSelect)
-    expect(select.props('disabled')).toBe(true)
-    expect(select.props('modelValue')).toBe('owner')
+    // 最后负责人不渲染角色下拉，也不渲染移除；显示「负责人（唯一）」。
+    expect(panel.findAllComponents(ElSelect)).toHaveLength(0)
     expect(panel.find('[data-testid="member-role-unique"]').text()).toContain('负责人（唯一）')
     expect(panel.find('[data-testid="member-remove"]').exists()).toBe(false)
   })
@@ -262,7 +265,14 @@ describe('WorkspaceMemberDialog', () => {
   })
 
   it('renders only server-allowed Agent actions and starts a conversation from the row', async () => {
-    const wrapper = mountDialog({ currentUserRole: 'member' })
+    // 服务端按操作人角色裁剪 allowedActions：成员只拿到 start_conversation。
+    const wrapper = mountDialog({
+      currentUserRole: 'member',
+      agentMembers: [
+        { ...agents[0]!, allowedActions: ['start_conversation'] },
+        { ...agents[1]!, allowedActions: ['enable'] },
+      ],
+    })
     await flushPromises()
     const rows = panelOf(wrapper).findAll('[data-testid="agent-member-row"]')
 
@@ -311,7 +321,7 @@ describe('WorkspaceMemberDialog', () => {
     const status = panelOf(wrapper).find('[data-testid="agent-status-tooltip"]')
     expect(status.exists()).toBe(true)
     expect(status.attributes('aria-label')).toBe('Agent 状态：已停用')
-    const tooltip = wrapper.findAllComponents(ElTooltip)[0]
+    const tooltip = wrapper.findAllComponents(ElTooltip).at(-1)
     expect(tooltip?.props('content')).toContain('平台已撤权')
   })
 
