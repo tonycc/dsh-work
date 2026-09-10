@@ -41,6 +41,10 @@ export interface SessionAuthorizationContext {
 
 export type TeamMemberRole = 'owner' | 'admin' | 'member' | 'viewer'
 
+/** Stream-access cache stays well under these bounds; both are safety caps. */
+const STREAM_ACCESS_CACHE_SWEEP_THRESHOLD = 512
+const STREAM_ACCESS_CACHE_MAX_ENTRIES = 4_096
+
 export class PostgresAuthorizationService {
   private readonly database: DatabaseClient
   private readonly streamAccessTtlMs: number
@@ -197,7 +201,28 @@ export class PostgresAuthorizationService {
     const cached = this.teamReadAccessCache.get(key)
     if (cached && cached.revision === row.revision && Date.now() - cached.checkedAt < ttlMs) return
     await this.authorizeWorkbench({ userId, workspaceId })
-    this.teamReadAccessCache.set(key, { revision: row.revision, checkedAt: Date.now() })
+    this.setStreamAccessCache(key, { revision: row.revision, checkedAt: Date.now() }, ttlMs)
+  }
+
+  /**
+   * Bounds the in-process stream-access cache. Entries expire by TTL but were
+   * never evicted, so a long-lived process accumulated one entry per
+   * (tenant, workspace, viewer) pair forever. Sweep expired entries once the
+   * map grows past a threshold and hard-cap the size as a backstop; the cache
+   * is only a latency optimization, so dropping entries is always safe.
+   */
+  private setStreamAccessCache(key: string, entry: { revision: number; checkedAt: number }, ttlMs: number) {
+    if (this.teamReadAccessCache.size >= STREAM_ACCESS_CACHE_SWEEP_THRESHOLD) {
+      const now = Date.now()
+      for (const [existingKey, existing] of this.teamReadAccessCache) {
+        if (now - existing.checkedAt >= ttlMs) this.teamReadAccessCache.delete(existingKey)
+      }
+      if (this.teamReadAccessCache.size >= STREAM_ACCESS_CACHE_MAX_ENTRIES) {
+        const oldest = this.teamReadAccessCache.keys().next()
+        if (!oldest.done) this.teamReadAccessCache.delete(oldest.value)
+      }
+    }
+    this.teamReadAccessCache.set(key, entry)
   }
 
   /**
