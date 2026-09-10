@@ -102,6 +102,22 @@ test('requireTeamRole is a no-op for personal workspaces', async () => {
   await authorization.requireTeamRole(personalWorkspaceId, 'U00008', ['owner'])
 })
 
+test('requireTeamRole rejects archived team workspaces with the membership wording', async () => {
+  const workspaceId = `ws-t2-archived-${suffix}`
+  const ownerId = `user-t2-archived-owner-${suffix}`
+  await createUser(ownerId, 'T2 归档空间负责人')
+  await createTeamWorkspace(workspaceId, [{ userId: ownerId, role: 'owner' }])
+  await database`
+    update workspaces set status = 'archived', archived_at = now()
+     where tenant_id = ${tenantId} and id = ${workspaceId}
+  `
+  // Even the owner is rejected: the status predicate excludes archived rows.
+  await assert.rejects(
+    authorization.requireTeamRole(workspaceId, ownerId, ['owner']),
+    /不是成员/,
+  )
+})
+
 // ---------------------------------------------------------------------------
 // 2. resolveWorkspaceOwner
 // ---------------------------------------------------------------------------
@@ -227,6 +243,131 @@ test('revokeGrantSourcesByRef keeps grants with remaining active sources and del
   assert.equal(await revisionOf(workspaceId), 3)
 })
 
+test('re-adding an agent_member source after revocation reactivates the same row instead of silently skipping it', async () => {
+  const workspaceId = `ws-t2-reactivate-${suffix}`
+  const memberRefA = `wam-t2-reactivate-${suffix}`
+  await createTeamWorkspace(workspaceId, [{ userId: 'U00001', role: 'owner' }])
+
+  await database.begin(async transaction => {
+    await grantSources.addGrantSources(transaction, [
+      { capabilityType: 'agent', capabilityVersionId: 'agent-version-dsh-work-assistant-1', sourceType: 'agent_member', sourceRefId: memberRefA, createdBy: 'U00001' },
+    ], workspaceId)
+  })
+  assert.equal(await countSources(workspaceId), 1)
+  assert.deepEqual(await listGrants(workspaceId), [
+    { capabilityType: 'agent', capabilityVersionId: 'agent-version-dsh-work-assistant-1' },
+  ])
+
+  // Revoke: the source row is marked revoked and the grant is deleted.
+  await database.begin(async transaction => {
+    await grantSources.revokeGrantSourcesByRef(transaction, workspaceId, memberRefA)
+  })
+  assert.equal(await countActiveSources(workspaceId), 0)
+  assert.deepEqual(await listGrants(workspaceId), [])
+
+  // Re-add the same sourceRefId + tuple (disable→enable / remove→re-add flows
+  // reuse the reference). The revoked provenance row must be reactivated, not
+  // silently skipped by the partial unique index — otherwise the recreated
+  // grant would have zero active sources and die on the next revoke sweep.
+  await database.begin(async transaction => {
+    await grantSources.addGrantSources(transaction, [
+      { capabilityType: 'agent', capabilityVersionId: 'agent-version-dsh-work-assistant-1', sourceType: 'agent_member', sourceRefId: memberRefA, createdBy: 'U00001' },
+    ], workspaceId)
+  })
+
+  // Exactly one source row exists (no duplicate) and it is active again.
+  const rows = await database<{ status: string; revokedAt: Date | null }[]>`
+    select status, revoked_at as "revokedAt" from workspace_grant_sources
+     where tenant_id = ${tenantId} and workspace_id = ${workspaceId}
+       and source_ref_id = ${memberRefA}
+  `
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0]?.status, 'active')
+  assert.equal(rows[0]?.revokedAt, null)
+  assert.equal(await countActiveSources(workspaceId), 1)
+  assert.deepEqual(await listGrants(workspaceId), [
+    { capabilityType: 'agent', capabilityVersionId: 'agent-version-dsh-work-assistant-1' },
+  ])
+
+  // Revoke again: the grant must be deleted this time too.
+  await database.begin(async transaction => {
+    await grantSources.revokeGrantSourcesByRef(transaction, workspaceId, memberRefA)
+  })
+  assert.deepEqual(await listGrants(workspaceId), [])
+  assert.equal(await countActiveSources(workspaceId), 0)
+})
+
+test('addGrantSources rejects agent_member sources without a sourceRefId', async () => {
+  const workspaceId = `ws-t2-no-ref-${suffix}`
+  await createTeamWorkspace(workspaceId, [{ userId: 'U00001', role: 'owner' }])
+  await assert.rejects(
+    database.begin(async transaction => {
+      await grantSources.addGrantSources(transaction, [
+        { capabilityType: 'agent', capabilityVersionId: 'agent-version-dsh-work-assistant-1', sourceType: 'agent_member', createdBy: 'U00001' },
+      ], workspaceId)
+    }),
+    /sourceRefId/,
+  )
+})
+
+test('concurrent revokes of different sources serialize per workspace and never orphan a grant', async () => {
+  const workspaceId = `ws-t2-concurrent-${suffix}`
+  const memberRefA = `wam-t2-conc-a-${suffix}`
+  const memberRefB = `wam-t2-conc-b-${suffix}`
+  await createTeamWorkspace(workspaceId, [{ userId: 'U00001', role: 'owner' }])
+  await database.begin(async transaction => {
+    await grantSources.addGrantSources(transaction, [
+      { capabilityType: 'agent', capabilityVersionId: 'agent-version-dsh-work-assistant-1', sourceType: 'agent_member', sourceRefId: memberRefA, createdBy: 'U00001' },
+      { capabilityType: 'agent', capabilityVersionId: 'agent-version-dsh-work-assistant-1', sourceType: 'agent_member', sourceRefId: memberRefB, createdBy: 'U00001' },
+    ], workspaceId)
+  })
+
+  // Two independent sessions revoke the two sources of the same tuple
+  // concurrently. A barrier ensures both transactions are open before either
+  // revoke runs, so the update-then-sweep sequences interleave exactly like
+  // the reported write-skew race.
+  const secondSession = createDatabase({ url: databaseUrl, maxConnections: 2 })
+  try {
+    const arrived = new Set<string>()
+    let release: () => void = () => undefined
+    const barrier = new Promise<void>(resolve => { release = resolve })
+    const enter = async (session: string) => {
+      arrived.add(session)
+      if (arrived.size === 2) release()
+      await Promise.race([
+        barrier,
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(() => reject(new Error(`并发会话 ${session} 等待对方启动超时`)), 10_000)
+        }),
+      ])
+    }
+    await Promise.all([
+      database.begin(async transaction => {
+        await enter('sessionA')
+        await grantSources.revokeGrantSourcesByRef(transaction, workspaceId, memberRefA)
+      }),
+      secondSession.begin(async transaction => {
+        await enter('sessionB')
+        await grantSources.revokeGrantSourcesByRef(transaction, workspaceId, memberRefB)
+      }),
+    ])
+  } finally {
+    await secondSession.end()
+  }
+
+  // The workspace-row lock serializes the two transactions, so the second
+  // revoke's sweep sees the first's committed revoke: no orphan grant with
+  // zero active sources may survive.
+  assert.deepEqual(await listGrants(workspaceId), [])
+  assert.equal(await countActiveSources(workspaceId), 0)
+  const [revoked] = await database<{ count: number }[]>`
+    select count(*)::integer as count from workspace_grant_sources
+     where tenant_id = ${tenantId} and workspace_id = ${workspaceId}
+       and status = 'revoked'
+  `
+  assert.equal(revoked?.count, 2)
+})
+
 test('listGrantSources groups active sources by capability and includes legacy sources', async () => {
   // The seeded ws-supply grants were backfilled with legacy_unresolved sources by migration 0022.
   await database.begin(async transaction => {
@@ -349,29 +490,35 @@ async function createTeamWorkspace(workspaceId: string, members: Array<{ userId:
 }
 
 async function insertOwnersBypassingTrigger(workspaceId: string, ownerIds: string[]) {
-  await database.begin(async transaction => {
-    await transaction.unsafe('alter table workspace_members disable trigger team_workspace_single_owner')
-    for (const ownerId of ownerIds) {
-      await transaction`
-        insert into workspace_members (tenant_id, workspace_id, user_id, member_role, added_by)
-        values (${tenantId}, ${workspaceId}, ${ownerId}, 'owner', 'U00001')
-      `
-    }
-  })
-  await database.unsafe('alter table workspace_members enable trigger team_workspace_single_owner')
+  await database.unsafe('alter table workspace_members disable trigger team_workspace_single_owner')
+  try {
+    await database.begin(async transaction => {
+      for (const ownerId of ownerIds) {
+        await transaction`
+          insert into workspace_members (tenant_id, workspace_id, user_id, member_role, added_by)
+          values (${tenantId}, ${workspaceId}, ${ownerId}, 'owner', 'U00001')
+        `
+      }
+    })
+  } finally {
+    await database.unsafe('alter table workspace_members enable trigger team_workspace_single_owner')
+  }
 }
 
 async function removeWorkspaceBypassingTrigger(workspaceId: string) {
-  await database.begin(async transaction => {
-    await transaction.unsafe('alter table workspace_members disable trigger team_workspace_single_owner')
-    await transaction`
-      delete from workspace_members where tenant_id = ${tenantId} and workspace_id = ${workspaceId}
-    `
-    await transaction`
-      delete from workspaces where tenant_id = ${tenantId} and id = ${workspaceId}
-    `
-  })
-  await database.unsafe('alter table workspace_members enable trigger team_workspace_single_owner')
+  await database.unsafe('alter table workspace_members disable trigger team_workspace_single_owner')
+  try {
+    await database.begin(async transaction => {
+      await transaction`
+        delete from workspace_members where tenant_id = ${tenantId} and workspace_id = ${workspaceId}
+      `
+      await transaction`
+        delete from workspaces where tenant_id = ${tenantId} and id = ${workspaceId}
+      `
+    })
+  } finally {
+    await database.unsafe('alter table workspace_members enable trigger team_workspace_single_owner')
+  }
 }
 
 async function listGrants(workspaceId: string) {

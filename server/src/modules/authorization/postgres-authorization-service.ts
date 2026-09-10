@@ -151,6 +151,14 @@ export class PostgresAuthorizationService {
     return row
   }
 
+  /**
+   * Building block, not a complete identity check: verifies only that the
+   * given user holds one of `allowedRoles` in the given team workspace.
+   * Callers must compose it with `authorizeWorkbench` (or an equivalent
+   * identity check) to satisfy the 员工有效身份 requirement — this method
+   * does not verify the user exists or is an active employee. Personal
+   * workspaces are intentionally a no-op (team role checks do not apply).
+   */
   async requireTeamRole(
     workspaceId: string,
     userId: string,

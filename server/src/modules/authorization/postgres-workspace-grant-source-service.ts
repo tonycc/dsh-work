@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
-import type { DatabaseTransaction } from '../../infrastructure/postgres/database.ts'
+import type { DatabaseClient, DatabaseTransaction } from '../../infrastructure/postgres/database.ts'
 
 const tenantId = 'tenant-dsh-work'
 
@@ -43,18 +43,46 @@ export class PostgresWorkspaceGrantSourceService {
     sources: GrantSourceInput[],
     workspaceId: string,
   ) {
+    // Serialize all grant source mutations per workspace: concurrent
+    // add/revoke sweeps must not interleave into a grant with zero active
+    // sources (write skew under READ COMMITTED). Same pattern the plan
+    // prescribes for owner transfers.
+    await lockWorkspaceForGrantSync(tx, workspaceId)
     for (const source of sources) {
-      await tx`
-        insert into workspace_grant_sources (
-          id, tenant_id, workspace_id, capability_type, capability_version_id,
-          source_type, source_ref_id, status, created_by
-        ) values (
-          ${`wgs-${randomUUID()}`}, ${tenantId}, ${workspaceId},
-          ${source.capabilityType}, ${source.capabilityVersionId},
-          ${source.sourceType}, ${source.sourceRefId ?? null}, 'active', ${source.createdBy}
-        )
-        on conflict do nothing
-      `
+      if (source.sourceType === 'agent_member') {
+        if (!source.sourceRefId) {
+          throw new Error('Agent 成员授权来源必须指定 sourceRefId（关联的 Agent 成员）')
+        }
+        // The partial unique index workspace_grant_sources_agent_member_once
+        // covers revoked rows too: re-adding after a revoke must reactivate
+        // the existing provenance row instead of being silently skipped
+        // (which would leave the recreated grant without any active source).
+        await tx`
+          insert into workspace_grant_sources (
+            id, tenant_id, workspace_id, capability_type, capability_version_id,
+            source_type, source_ref_id, status, created_by
+          ) values (
+            ${`wgs-${randomUUID()}`}, ${tenantId}, ${workspaceId},
+            ${source.capabilityType}, ${source.capabilityVersionId},
+            ${source.sourceType}, ${source.sourceRefId}, 'active', ${source.createdBy}
+          )
+          on conflict (tenant_id, workspace_id, capability_type, capability_version_id, source_ref_id)
+            where source_type = 'agent_member'
+          do update set status = 'active', revoked_at = null
+        `
+      } else {
+        await tx`
+          insert into workspace_grant_sources (
+            id, tenant_id, workspace_id, capability_type, capability_version_id,
+            source_type, source_ref_id, status, created_by
+          ) values (
+            ${`wgs-${randomUUID()}`}, ${tenantId}, ${workspaceId},
+            ${source.capabilityType}, ${source.capabilityVersionId},
+            ${source.sourceType}, ${source.sourceRefId ?? null}, 'active', ${source.createdBy}
+          )
+          on conflict do nothing
+        `
+      }
       await tx`
         insert into workspace_capability_grants (
           tenant_id, workspace_id, capability_type, capability_version_id
@@ -72,6 +100,7 @@ export class PostgresWorkspaceGrantSourceService {
     workspaceId: string,
     sourceRefId: string,
   ) {
+    await lockWorkspaceForGrantSync(tx, workspaceId)
     await tx`
       update workspace_grant_sources
          set status = 'revoked', revoked_at = now()
@@ -94,10 +123,10 @@ export class PostgresWorkspaceGrantSourceService {
   }
 
   async listGrantSources(
-    tx: DatabaseTransaction,
+    database: DatabaseClient | DatabaseTransaction,
     workspaceId: string,
   ): Promise<CapabilityGrantSourceGroup[]> {
-    const rows = await tx<{
+    const rows = await database<{
       id: string
       capabilityType: WorkspaceCapabilityType
       capabilityVersionId: string
@@ -137,6 +166,21 @@ export class PostgresWorkspaceGrantSourceService {
     }
     return [...groups.values()]
   }
+}
+
+/**
+ * Serializes grant source mutations per workspace by locking the workspace
+ * row. Both `addGrantSources` and `revokeGrantSourcesByRef` must take this
+ * lock as their first statement so the update-then-sweep-delete sequence
+ * cannot interleave across concurrent transactions (write skew under
+ * READ COMMITTED would otherwise leave a grant with zero active sources).
+ */
+async function lockWorkspaceForGrantSync(tx: DatabaseTransaction, workspaceId: string) {
+  await tx`
+    select id from workspaces
+     where tenant_id = ${tenantId} and id = ${workspaceId}
+     for update
+  `
 }
 
 /**
