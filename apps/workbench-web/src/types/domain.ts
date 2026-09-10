@@ -124,6 +124,28 @@ export interface Workspace {
   files: WorkspaceFile[]
 }
 
+/** 团队空间员工角色：负责人、管理员、成员、只读成员。 */
+export type TeamMemberRole = 'owner' | 'admin' | 'member' | 'viewer'
+
+/** 成员选择所需的最小员工字段；不暴露管理端全量身份数据。 */
+export interface MemberCandidate {
+  id: string
+  displayName: string
+  department: string
+}
+
+export interface MemberCandidatePage {
+  items: MemberCandidate[]
+  nextCursor: string | null
+}
+
+export interface WorkspaceMember {
+  userId: string
+  displayName: string
+  role: TeamMemberRole
+  joinedAt: string
+}
+
 export interface WorkbenchSession {
   user: UserProfile
   identityProvider: 'prototype-sso' | 'ai-hub-oidc'

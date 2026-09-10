@@ -56,6 +56,128 @@
         "responses": { "201": { "$ref": "#/components/responses/Ok" }, "413": { "$ref": "#/components/responses/Error" } }
       }
     },
+    "/workspaces/{workspaceId}/member-candidates": {
+      "parameters": [{ "$ref": "#/components/parameters/WorkspaceId" }],
+      "get": {
+        "operationId": "listMemberCandidates",
+        "summary": "搜索可添加为团队空间成员的企业业务员工（仅负责人/管理员）",
+        "description": "仅返回团队空间成员选择所需的姓名、部门等最小字段；离职、停用、无应用访问资格与已加入成员不可选。个人工作空间不支持。",
+        "parameters": [
+          { "name": "query", "in": "query", "schema": { "type": "string" }, "description": "按姓名模糊搜索；省略时按目录顺序返回。" },
+          { "name": "cursor", "in": "query", "schema": { "type": "string" }, "description": "上一页返回的 nextCursor 游标。" },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "候选人分页结果（envelope.data 为 MemberCandidatePage）",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Envelope" } } }
+          },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "422": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/workspaces/{workspaceId}/members": {
+      "parameters": [{ "$ref": "#/components/parameters/WorkspaceId" }],
+      "post": {
+        "operationId": "addWorkspaceMember",
+        "summary": "从企业业务员工目录添加团队成员（仅负责人/管理员）",
+        "description": "管理员只能添加成员/只读成员，负责人可任命管理员；重复添加同一角色幂等，角色变更请使用 PATCH。个人工作空间不支持。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/MemberAddRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": { "$ref": "#/components/responses/Ok" },
+          "200": { "description": "重复添加同一角色时返回当前成员状态", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Envelope" } } } },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "409": { "$ref": "#/components/responses/Error" },
+          "422": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/workspaces/{workspaceId}/members/{userId}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/WorkspaceId" },
+        { "name": "userId", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "patch": {
+        "operationId": "updateMemberRole",
+        "summary": "调整团队成员角色（仅负责人/管理员）",
+        "description": "管理员仅可调整成员/只读成员；负责人可任免管理员；负责人角色只能通过负责人转交变更。个人工作空间不支持。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/MemberRoleChangeRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "409": { "$ref": "#/components/responses/Error" },
+          "422": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "delete": {
+        "operationId": "removeWorkspaceMember",
+        "summary": "移除团队成员（仅负责人/管理员）",
+        "description": "保留其共享贡献与作者归属；管理员不能移除管理员或负责人，唯一负责人必须先行转交。个人工作空间不支持。",
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "409": { "$ref": "#/components/responses/Error" },
+          "422": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/workspaces/{workspaceId}/exit": {
+      "parameters": [{ "$ref": "#/components/parameters/WorkspaceId" }],
+      "post": {
+        "operationId": "exitWorkspace",
+        "summary": "非负责人成员主动退出团队空间",
+        "description": "退出保留共享贡献与作者归属；负责人必须先转交。个人工作空间不支持。",
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "409": { "$ref": "#/components/responses/Error" },
+          "422": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/workspaces/{workspaceId}/owner-transfer": {
+      "parameters": [{ "$ref": "#/components/parameters/WorkspaceId" }],
+      "post": {
+        "operationId": "transferWorkspaceOwner",
+        "summary": "转交团队空间负责人（仅负责人）",
+        "description": "事务内锁定空间并互换新旧负责人角色，任何时刻恰好一名负责人；内容创建者字段保持不变。并发转交只允许一次成功。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/OwnerTransferRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "409": { "$ref": "#/components/responses/Error" },
+          "422": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
     "/sessions": {
       "post": {
         "operationId": "createSession",
@@ -251,6 +373,61 @@
           "requestId": { "type": "string" },
           "timestamp": { "type": "string", "format": "date-time" },
           "nextCursor": { "type": ["string", "null"] }
+        }
+      },
+      "TeamMemberRole": {
+        "type": "string",
+        "enum": ["owner", "admin", "member", "viewer"],
+        "description": "团队空间员工角色：负责人、管理员、成员、只读成员。"
+      },
+      "MemberCandidate": {
+        "type": "object",
+        "required": ["id", "displayName", "department"],
+        "properties": {
+          "id": { "type": "string" },
+          "displayName": { "type": "string" },
+          "department": { "type": "string" }
+        },
+        "description": "成员选择所需的最小员工字段；不暴露管理端全量身份数据。"
+      },
+      "MemberCandidatePage": {
+        "type": "object",
+        "required": ["items", "nextCursor"],
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/MemberCandidate" } },
+          "nextCursor": { "type": ["string", "null"] }
+        }
+      },
+      "WorkspaceMember": {
+        "type": "object",
+        "required": ["userId", "displayName", "role", "joinedAt"],
+        "properties": {
+          "userId": { "type": "string" },
+          "displayName": { "type": "string" },
+          "role": { "$ref": "#/components/schemas/TeamMemberRole" },
+          "joinedAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "MemberAddRequest": {
+        "type": "object",
+        "required": ["userId", "role"],
+        "properties": {
+          "userId": { "type": "string" },
+          "role": { "$ref": "#/components/schemas/TeamMemberRole" }
+        }
+      },
+      "MemberRoleChangeRequest": {
+        "type": "object",
+        "required": ["role"],
+        "properties": {
+          "role": { "$ref": "#/components/schemas/TeamMemberRole" }
+        }
+      },
+      "OwnerTransferRequest": {
+        "type": "object",
+        "required": ["toUserId"],
+        "properties": {
+          "toUserId": { "type": "string" }
         }
       }
     }

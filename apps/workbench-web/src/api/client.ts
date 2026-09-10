@@ -1,4 +1,15 @@
-import type { Artifact, TaskRun, WorkbenchAgent, WorkbenchSession, WorkbenchSkill, Workspace, WorkspaceFile } from '../types/domain'
+import type {
+  Artifact,
+  MemberCandidatePage,
+  TaskRun,
+  TeamMemberRole,
+  WorkbenchAgent,
+  WorkbenchSession,
+  WorkbenchSkill,
+  Workspace,
+  WorkspaceFile,
+  WorkspaceMember,
+} from '../types/domain'
 
 interface ApiEnvelope<T> {
   data: T
@@ -139,4 +150,42 @@ export const workbenchApi = {
   artifactDownloadUrl: (artifactId: string, version: number) =>
     `${baseUrl}/artifacts/${encodeURIComponent(artifactId)}/versions/${version}/download`,
   fileDownloadUrl: (fileId: string) => `${baseUrl}/files/${encodeURIComponent(fileId)}/download`,
+  listMemberCandidates: (workspaceId: string, input: { query?: string; cursor?: string; limit?: number } = {}) => {
+    const search = new URLSearchParams()
+    if (input.query) search.set('query', input.query)
+    if (input.cursor) search.set('cursor', input.cursor)
+    if (input.limit !== undefined) search.set('limit', String(input.limit))
+    const suffix = search.size > 0 ? `?${search.toString()}` : ''
+    return request<MemberCandidatePage>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/member-candidates${suffix}`,
+      { method: 'GET' },
+    )
+  },
+  addWorkspaceMember: (workspaceId: string, input: { userId: string; role: TeamMemberRole }) =>
+    request<WorkspaceMember>(`/workspaces/${encodeURIComponent(workspaceId)}/members`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  updateMemberRole: (workspaceId: string, userId: string, input: { role: TeamMemberRole }) =>
+    request<WorkspaceMember>(`/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(userId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    }),
+  removeWorkspaceMember: (workspaceId: string, userId: string) =>
+    request<{ userId: string; removed: true }>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(userId)}`,
+      { method: 'DELETE' },
+    ),
+  exitWorkspace: (workspaceId: string) =>
+    request<{ workspaceId: string; exited: true }>(`/workspaces/${encodeURIComponent(workspaceId)}/exit`, {
+      method: 'POST',
+    }),
+  transferWorkspaceOwner: (workspaceId: string, input: { toUserId: string }) =>
+    request<{ workspaceId: string; previousOwnerId: string; newOwnerId: string }>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/owner-transfer`,
+      {
+        method: 'POST',
+        body: JSON.stringify(input),
+      },
+    ),
 }

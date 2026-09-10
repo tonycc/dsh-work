@@ -36,6 +36,7 @@
     "test:m5:faults:integration": "pnpm --filter @dsh-work/server test:m5:faults:integration",
     "test:m5:capacity:integration": "pnpm --filter @dsh-work/server test:m5:capacity:integration",
     "test:m5:workspace:integration": "pnpm --filter @dsh-work/server test:m5:workspace:integration",
+    "test:m5:members:integration": "pnpm --filter @dsh-work/server test:m5:members:integration",
     "test:e2e": "playwright test",
     "check:secrets": "node scripts/check-secrets.mjs",
     "verify": "node scripts/verify.mjs",
