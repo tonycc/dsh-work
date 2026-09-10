@@ -36,6 +36,16 @@ export function registerWorkspaceMemberRoutes(
     return envelope('workbench', await members.listMemberCandidates(workspaceId, { query, cursor, limit }), 'postgres')
   })
 
+  // Any current member may read the roster (it is not a management action);
+  // the response carries the caller's own role so the client renders allowed
+  // actions from the server instead of guessing ownership.
+  router.get(`${basePath}/workspaces/:workspaceId/members`, async (_request, context) => {
+    const identity = requireRequestIdentity(context, 'workbench')
+    const workspaceId = context.params['workspaceId'] ?? ''
+    await requireTeamActor(authorization, identity, workspaceId, ['owner', 'admin', 'member', 'viewer'])
+    return envelope('workbench', await members.listMembers(workspaceId, identity.userId), 'postgres')
+  })
+
   router.post(`${basePath}/workspaces/:workspaceId/members`, async (request, context) => {
     const identity = requireRequestIdentity(context, 'workbench')
     const workspaceId = context.params['workspaceId'] ?? ''

@@ -28,6 +28,17 @@ export interface MemberRecord {
   joinedAt: string
 }
 
+/**
+ * Team member roster plus the caller's own role. The caller's role is what lets
+ * the workbench render allowed actions from the server rather than guessing
+ * ownership from the workspace creator (which stays the creator after a
+ * transfer).
+ */
+export interface MemberDirectory {
+  items: MemberRecord[]
+  currentUserRole: MemberRole | null
+}
+
 const memberRoles: MemberRole[] = ['owner', 'admin', 'member', 'viewer']
 
 /**
@@ -102,6 +113,43 @@ export class PostgresWorkspaceMemberService {
     return {
       items,
       nextCursor: hasMore && last ? encodeCandidateCursor(last.displayName, last.id) : null,
+    }
+  }
+
+  /**
+   * Team member roster readable by any current member (owner/admin/member/
+   * viewer) — reading who is in the space is not a management action. Personal
+   * workspaces are rejected so team semantics never leak into them, and a
+   * non-member is denied rather than shown the roster.
+   */
+  async listMembers(workspaceId: string, actorUserId: string): Promise<MemberDirectory> {
+    await this.assertTeamWorkspace(workspaceId)
+    const currentUserRole = await this.memberRoleOf(workspaceId, actorUserId)
+    if (!currentUserRole) throw new Error('当前用户不是该空间的成员')
+
+    const rows = await this.database<{
+      userId: string
+      displayName: string
+      role: MemberRole
+      joinedAt: Date
+    }[]>`
+      select wm.user_id as "userId", u.display_name as "displayName",
+             wm.member_role as role, wm.joined_at as "joinedAt"
+        from workspace_members wm
+        join users u on u.tenant_id = wm.tenant_id and u.id = wm.user_id
+       where wm.tenant_id = ${tenantId} and wm.workspace_id = ${workspaceId}
+       order by case wm.member_role
+                  when 'owner' then 0 when 'admin' then 1 when 'member' then 2 else 3 end,
+                u.display_name asc, wm.user_id asc
+    `
+    return {
+      currentUserRole,
+      items: rows.map(row => ({
+        userId: row.userId,
+        displayName: row.displayName,
+        role: row.role,
+        joinedAt: row.joinedAt.toISOString(),
+      })),
     }
   }
 

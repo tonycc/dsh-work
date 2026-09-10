@@ -5,39 +5,73 @@
     "version": "0.6.0-m6",
     "description": "请求使用 AI Hub OIDC 登录后由 dsh-work 签发的 HttpOnly 服务端 Session；AI Hub 只提供用户身份，工作台角色、权限和数据范围由 dsh-work 本地配置且不接受浏览器传入。每位用户具有唯一默认个人工作空间，所有 Session、文件与成果均归属个人或团队工作空间。"
   },
-  "servers": [{ "url": "/api/workbench/v1" }],
-  "security": [{ "enterpriseSession": [] }],
+  "servers": [
+    {
+      "url": "/api/workbench/v1"
+    }
+  ],
+  "security": [
+    {
+      "enterpriseSession": []
+    }
+  ],
   "paths": {
     "/session": {
       "get": {
         "operationId": "getCurrentSession",
         "summary": "获取当前员工身份与权限上下文",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" }, "401": { "$ref": "#/components/responses/Error" } }
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
       }
     },
     "/agents": {
       "get": {
         "operationId": "listAvailableAgents",
         "summary": "按当前员工角色查询可用的已发布 Agent",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          }
+        }
       }
     },
     "/skills": {
       "get": {
         "operationId": "listAvailableSkills",
         "summary": "查询当前员工可查看的已发布 Skill 广场目录",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" }, "401": { "$ref": "#/components/responses/Error" } }
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
       }
     },
     "/workspaces": {
       "get": {
         "operationId": "listMyWorkspaces",
         "summary": "查询当前员工的个人工作空间和已加入的团队工作空间",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          }
+        }
       }
     },
     "/workspaces/{workspaceId}/files": {
-      "parameters": [{ "$ref": "#/components/parameters/WorkspaceId" }],
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/WorkspaceId"
+        }
+      ],
       "post": {
         "operationId": "uploadWorkspaceFile",
         "summary": "上传工作空间共享文件",
@@ -47,39 +81,115 @@
             "multipart/form-data": {
               "schema": {
                 "type": "object",
-                "required": ["file"],
-                "properties": { "file": { "type": "string", "format": "binary" } }
+                "required": [
+                  "file"
+                ],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                }
               }
             }
           }
         },
-        "responses": { "201": { "$ref": "#/components/responses/Ok" }, "413": { "$ref": "#/components/responses/Error" } }
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
       }
     },
     "/workspaces/{workspaceId}/member-candidates": {
-      "parameters": [{ "$ref": "#/components/parameters/WorkspaceId" }],
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/WorkspaceId"
+        }
+      ],
       "get": {
         "operationId": "listMemberCandidates",
         "summary": "搜索可添加为团队空间成员的企业业务员工（仅负责人/管理员）",
         "description": "仅返回团队空间成员选择所需的姓名、部门等最小字段；离职、停用、无应用访问资格与已加入成员不可选。个人工作空间不支持。",
         "parameters": [
-          { "name": "query", "in": "query", "schema": { "type": "string" }, "description": "按姓名模糊搜索；省略时按目录顺序返回。" },
-          { "name": "cursor", "in": "query", "schema": { "type": "string" }, "description": "上一页返回的 nextCursor 游标。" },
-          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 } }
+          {
+            "name": "query",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "按姓名模糊搜索；省略时按目录顺序返回。"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "上一页返回的 nextCursor 游标。"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          }
         ],
         "responses": {
           "200": {
             "description": "候选人分页结果（envelope.data 为 MemberCandidatePage）",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Envelope" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
           },
-          "403": { "$ref": "#/components/responses/Error" },
-          "404": { "$ref": "#/components/responses/Error" },
-          "422": { "$ref": "#/components/responses/Error" }
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       }
     },
     "/workspaces/{workspaceId}/members": {
-      "parameters": [{ "$ref": "#/components/parameters/WorkspaceId" }],
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/WorkspaceId"
+        }
+      ],
+      "get": {
+        "operationId": "listWorkspaceMembers",
+        "summary": "查询团队空间的员工成员列表（所有成员）",
+        "description": "任何当前成员都可读取成员名册；响应额外返回调用者自己的角色 currentUserRole，供员工端按服务端判定渲染允许动作（负责人转交后创建者不再是负责人）。个人工作空间不支持，非成员被拒绝。",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
       "post": {
         "operationId": "addWorkspaceMember",
         "summary": "从企业业务员工目录添加团队成员（仅负责人/管理员）",
@@ -88,24 +198,54 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/MemberAddRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/MemberAddRequest"
+              }
             }
           }
         },
         "responses": {
-          "201": { "$ref": "#/components/responses/Ok" },
-          "200": { "description": "重复添加同一角色时返回当前成员状态", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Envelope" } } } },
-          "403": { "$ref": "#/components/responses/Error" },
-          "404": { "$ref": "#/components/responses/Error" },
-          "409": { "$ref": "#/components/responses/Error" },
-          "422": { "$ref": "#/components/responses/Error" }
+          "201": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "200": {
+            "description": "重复添加同一角色时返回当前成员状态",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       }
     },
     "/workspaces/{workspaceId}/members/{userId}": {
       "parameters": [
-        { "$ref": "#/components/parameters/WorkspaceId" },
-        { "name": "userId", "in": "path", "required": true, "schema": { "type": "string" } }
+        {
+          "$ref": "#/components/parameters/WorkspaceId"
+        },
+        {
+          "name": "userId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
       ],
       "patch": {
         "operationId": "updateMemberRole",
@@ -115,16 +255,28 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/MemberRoleChangeRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/MemberRoleChangeRequest"
+              }
             }
           }
         },
         "responses": {
-          "200": { "$ref": "#/components/responses/Ok" },
-          "403": { "$ref": "#/components/responses/Error" },
-          "404": { "$ref": "#/components/responses/Error" },
-          "409": { "$ref": "#/components/responses/Error" },
-          "422": { "$ref": "#/components/responses/Error" }
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       },
       "delete": {
@@ -132,47 +284,108 @@
         "summary": "移除团队成员（仅负责人/管理员）",
         "description": "保留其共享贡献与作者归属；管理员不能移除管理员或负责人，唯一负责人必须先行转交。个人工作空间不支持。",
         "responses": {
-          "200": { "$ref": "#/components/responses/Ok" },
-          "403": { "$ref": "#/components/responses/Error" },
-          "404": { "$ref": "#/components/responses/Error" },
-          "409": { "$ref": "#/components/responses/Error" },
-          "422": { "$ref": "#/components/responses/Error" }
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       }
     },
     "/workspaces/{workspaceId}/agent-candidates": {
-      "parameters": [{ "$ref": "#/components/parameters/WorkspaceId" }],
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/WorkspaceId"
+        }
+      ],
       "get": {
         "operationId": "listWorkspaceAgentCandidates",
         "summary": "搜索可加入团队空间的平台 Agent 候选（仅负责人）",
         "description": "返回平台已发布、允许加入团队空间且对当前员工角色可见的 Agent 摘要（名称、职责、活动版本、状态），不返回模型、凭据与 Skill/Tool 配置明细；已加入的 Agent 不在候选内。个人工作空间不支持。",
         "parameters": [
-          { "name": "query", "in": "query", "schema": { "type": "string" }, "description": "按名称或职责关键字过滤；省略时返回全部候选。" },
-          { "name": "cursor", "in": "query", "schema": { "type": "string" }, "description": "上一页返回的 nextCursor 游标。" },
-          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 } }
+          {
+            "name": "query",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "按名称或职责关键字过滤；省略时返回全部候选。"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "上一页返回的 nextCursor 游标。"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          }
         ],
         "responses": {
           "200": {
             "description": "Agent 候选分页结果（envelope.data 为 AgentCandidatePage）",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Envelope" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope"
+                }
+              }
+            }
           },
-          "403": { "$ref": "#/components/responses/Error" },
-          "404": { "$ref": "#/components/responses/Error" },
-          "422": { "$ref": "#/components/responses/Error" }
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       }
     },
     "/workspaces/{workspaceId}/agent-members": {
-      "parameters": [{ "$ref": "#/components/parameters/WorkspaceId" }],
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/WorkspaceId"
+        }
+      ],
       "get": {
         "operationId": "listWorkspaceAgentMembers",
         "summary": "查询团队空间的 Agent 成员列表（所有成员）",
         "description": "仅返回未移除的 Agent 成员，包含固定版本、加入人与当前操作人允许的动作；负责人看到管理动作，成员在可用状态看到「开始对话」。Agent 成员不套用员工角色语义。个人工作空间不支持。",
         "responses": {
-          "200": { "$ref": "#/components/responses/Ok" },
-          "403": { "$ref": "#/components/responses/Error" },
-          "404": { "$ref": "#/components/responses/Error" },
-          "422": { "$ref": "#/components/responses/Error" }
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       },
       "post": {
@@ -183,23 +396,45 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/AgentMemberAddRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/AgentMemberAddRequest"
+              }
             }
           }
         },
         "responses": {
-          "201": { "$ref": "#/components/responses/Ok" },
-          "403": { "$ref": "#/components/responses/Error" },
-          "404": { "$ref": "#/components/responses/Error" },
-          "409": { "$ref": "#/components/responses/Error" },
-          "422": { "$ref": "#/components/responses/Error" }
+          "201": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       }
     },
     "/workspaces/{workspaceId}/agent-members/{id}": {
       "parameters": [
-        { "$ref": "#/components/parameters/WorkspaceId" },
-        { "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Agent 成员关联 ID（wam- 前缀）。" }
+        {
+          "$ref": "#/components/parameters/WorkspaceId"
+        },
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "Agent 成员关联 ID（wam- 前缀）。"
+        }
       ],
       "patch": {
         "operationId": "updateWorkspaceAgentMember",
@@ -209,16 +444,28 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/AgentMemberUpdateRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/AgentMemberUpdateRequest"
+              }
             }
           }
         },
         "responses": {
-          "200": { "$ref": "#/components/responses/Ok" },
-          "403": { "$ref": "#/components/responses/Error" },
-          "404": { "$ref": "#/components/responses/Error" },
-          "409": { "$ref": "#/components/responses/Error" },
-          "422": { "$ref": "#/components/responses/Error" }
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       },
       "delete": {
@@ -226,31 +473,59 @@
         "summary": "移出 Agent 成员（仅负责人）",
         "description": "撤销该关联的授权来源并写入撤权事件，阻止后续会话启动；历史 Run、消息与成果保留，成员行保留审计并可重新加入。个人工作空间不支持。",
         "responses": {
-          "200": { "$ref": "#/components/responses/Ok" },
-          "403": { "$ref": "#/components/responses/Error" },
-          "404": { "$ref": "#/components/responses/Error" },
-          "409": { "$ref": "#/components/responses/Error" },
-          "422": { "$ref": "#/components/responses/Error" }
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       }
     },
     "/workspaces/{workspaceId}/exit": {
-      "parameters": [{ "$ref": "#/components/parameters/WorkspaceId" }],
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/WorkspaceId"
+        }
+      ],
       "post": {
         "operationId": "exitWorkspace",
         "summary": "非负责人成员主动退出团队空间",
         "description": "退出保留共享贡献与作者归属；负责人必须先转交。个人工作空间不支持。",
         "responses": {
-          "200": { "$ref": "#/components/responses/Ok" },
-          "403": { "$ref": "#/components/responses/Error" },
-          "404": { "$ref": "#/components/responses/Error" },
-          "409": { "$ref": "#/components/responses/Error" },
-          "422": { "$ref": "#/components/responses/Error" }
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       }
     },
     "/workspaces/{workspaceId}/owner-transfer": {
-      "parameters": [{ "$ref": "#/components/parameters/WorkspaceId" }],
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/WorkspaceId"
+        }
+      ],
       "post": {
         "operationId": "transferWorkspaceOwner",
         "summary": "转交团队空间负责人（仅负责人）",
@@ -259,16 +534,28 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/OwnerTransferRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/OwnerTransferRequest"
+              }
             }
           }
         },
         "responses": {
-          "200": { "$ref": "#/components/responses/Ok" },
-          "403": { "$ref": "#/components/responses/Error" },
-          "404": { "$ref": "#/components/responses/Error" },
-          "409": { "$ref": "#/components/responses/Error" },
-          "422": { "$ref": "#/components/responses/Error" }
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       }
     },
@@ -283,51 +570,126 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "workspaceId": { "type": "string", "description": "个人或团队工作空间 ID；省略时由服务端选择默认个人空间。" },
-                  "agentId": { "type": ["string", "null"], "description": "个人空间按当前可用 Agent 解析版本；团队空间不允许通过原始 agentId 选择，必须使用 workspaceAgentMemberId。" },
-                  "skillId": { "type": ["string", "null"], "description": "员工从 Skill 广场选择的 Skill；服务端锁定其当前已发布版本。" },
-                  "workspaceAgentMemberId": { "type": ["string", "null"], "description": "团队空间发起对话必须携带的 Agent 成员关联 ID；服务端使用其固定版本并校验当前可用。个人空间忽略该字段。" },
-                  "title": { "type": ["string", "null"], "maxLength": 120 }
+                  "workspaceId": {
+                    "type": "string",
+                    "description": "个人或团队工作空间 ID；省略时由服务端选择默认个人空间。"
+                  },
+                  "agentId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "个人空间按当前可用 Agent 解析版本；团队空间不允许通过原始 agentId 选择，必须使用 workspaceAgentMemberId。"
+                  },
+                  "skillId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "员工从 Skill 广场选择的 Skill；服务端锁定其当前已发布版本。"
+                  },
+                  "workspaceAgentMemberId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "团队空间发起对话必须携带的 Agent 成员关联 ID；服务端使用其固定版本并校验当前可用。个人空间忽略该字段。"
+                  },
+                  "title": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 120
+                  }
                 }
               }
             }
           }
         },
-        "responses": { "201": { "$ref": "#/components/responses/Ok" } }
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Ok"
+          }
+        }
       }
     },
     "/sessions/{sessionId}/files": {
-      "parameters": [{ "$ref": "#/components/parameters/SessionId" }],
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/SessionId"
+        }
+      ],
       "post": {
         "operationId": "uploadSessionFile",
         "summary": "上传、扫描并基础解析当前对话输入文件",
         "parameters": [
-          { "name": "X-File-Name", "in": "header", "required": true, "schema": { "type": "string" }, "description": "encodeURIComponent 编码后的原文件名" }
+          {
+            "name": "X-File-Name",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "encodeURIComponent 编码后的原文件名"
+          }
         ],
         "requestBody": {
           "required": true,
           "content": {
-            "application/octet-stream": { "schema": { "type": "string", "format": "binary", "maxLength": 20971520 } }
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary",
+                "maxLength": 20971520
+              }
+            }
           }
         },
-        "responses": { "201": { "$ref": "#/components/responses/Ok" }, "413": { "$ref": "#/components/responses/Error" }, "422": { "$ref": "#/components/responses/Error" } }
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
       }
     },
     "/sessions/{sessionId}": {
-      "parameters": [{ "$ref": "#/components/parameters/SessionId" }],
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/SessionId"
+        }
+      ],
       "delete": {
         "operationId": "deleteSession",
         "summary": "删除当前员工拥有的对话；保留审计记录与已发布成果",
         "responses": {
-          "200": { "$ref": "#/components/responses/Ok" },
-          "403": { "$ref": "#/components/responses/Error" },
-          "404": { "$ref": "#/components/responses/Error" },
-          "409": { "$ref": "#/components/responses/Error" }
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       }
     },
     "/sessions/{sessionId}/runs": {
-      "parameters": [{ "$ref": "#/components/parameters/SessionId" }],
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/SessionId"
+        }
+      ],
       "post": {
         "operationId": "startRun",
         "summary": "提交消息并启动一次 Run；企业知识和解析文件在进入 Runtime 前完成权限过滤并固化版本来源",
@@ -337,31 +699,75 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["prompt", "idempotencyKey"],
+                "required": [
+                  "prompt",
+                  "idempotencyKey"
+                ],
                 "properties": {
-                  "prompt": { "type": "string", "minLength": 1, "maxLength": 20000 },
-                  "fileIds": { "type": "array", "items": { "type": "string" }, "maxItems": 5, "uniqueItems": true },
-                  "idempotencyKey": { "type": "string", "minLength": 8, "maxLength": 128 }
+                  "prompt": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 20000
+                  },
+                  "fileIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 5,
+                    "uniqueItems": true
+                  },
+                  "idempotencyKey": {
+                    "type": "string",
+                    "minLength": 8,
+                    "maxLength": 128
+                  }
                 }
               }
             }
           }
         },
-        "responses": { "202": { "$ref": "#/components/responses/Ok" }, "409": { "$ref": "#/components/responses/Error" } }
+        "responses": {
+          "202": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
       }
     },
     "/runs/{runId}": {
-      "parameters": [{ "$ref": "#/components/parameters/RunId" }],
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/RunId"
+        }
+      ],
       "get": {
         "operationId": "getRun",
         "summary": "获取 Run 当前状态",
-        "responses": { "200": { "$ref": "#/components/responses/Ok" }, "404": { "$ref": "#/components/responses/Error" } }
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
       }
     },
     "/runs/{runId}/events": {
       "parameters": [
-        { "$ref": "#/components/parameters/RunId" },
-        { "name": "Last-Event-ID", "in": "header", "schema": { "type": "string" } }
+        {
+          "$ref": "#/components/parameters/RunId"
+        },
+        {
+          "name": "Last-Event-ID",
+          "in": "header",
+          "schema": {
+            "type": "string"
+          }
+        }
       ],
       "get": {
         "operationId": "streamRunEvents",
@@ -369,25 +775,53 @@
         "responses": {
           "200": {
             "description": "SSE 事件流；事件结构见 run-event.schema.json",
-            "content": { "text/event-stream": { "schema": { "type": "string" } } }
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         }
       }
     },
     "/runs/{runId}/cancel": {
-      "parameters": [{ "$ref": "#/components/parameters/RunId" }],
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/RunId"
+        }
+      ],
       "post": {
         "operationId": "cancelRun",
         "summary": "取消正在执行或排队中的 Run",
-        "responses": { "202": { "$ref": "#/components/responses/Ok" }, "409": { "$ref": "#/components/responses/Error" } }
+        "responses": {
+          "202": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
       }
     },
     "/runs/{runId}/retry": {
-      "parameters": [{ "$ref": "#/components/parameters/RunId" }],
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/RunId"
+        }
+      ],
       "post": {
         "operationId": "retryRun",
         "summary": "基于原输入创建新的 Run Attempt",
-        "responses": { "202": { "$ref": "#/components/responses/Ok" }, "409": { "$ref": "#/components/responses/Error" } }
+        "responses": {
+          "202": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
       }
     },
     "/artifacts": {
@@ -395,188 +829,455 @@
         "operationId": "listArtifacts",
         "summary": "查询当前员工可见成果",
         "parameters": [
-          { "name": "workspaceId", "in": "query", "schema": { "type": "string" } },
-          { "name": "sessionId", "in": "query", "schema": { "type": ["string", "null"] } }
+          {
+            "name": "workspaceId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sessionId",
+            "in": "query",
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
         ],
-        "responses": { "200": { "$ref": "#/components/responses/Ok" } }
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          }
+        }
       }
     },
     "/artifacts/{artifactId}/versions/{versionId}/download": {
       "parameters": [
-        { "name": "artifactId", "in": "path", "required": true, "schema": { "type": "string" } },
-        { "name": "versionId", "in": "path", "required": true, "schema": { "type": "string" } }
+        {
+          "name": "artifactId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "versionId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
       ],
       "get": {
         "operationId": "downloadArtifactVersion",
         "summary": "鉴权后下载指定成果版本",
         "responses": {
-          "200": { "description": "文件内容", "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } } },
-          "403": { "$ref": "#/components/responses/Error" }
+          "200": {
+            "description": "文件内容",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          }
         }
       }
     }
   },
   "components": {
     "securitySchemes": {
-      "enterpriseSession": { "type": "apiKey", "in": "cookie", "name": "dsh_work_session", "description": "AI Hub OIDC 回调后由 dsh-work 设置的不透明 HttpOnly Session Cookie；生产名称使用 __Host- 前缀。" }
+      "enterpriseSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "dsh_work_session",
+        "description": "AI Hub OIDC 回调后由 dsh-work 设置的不透明 HttpOnly Session Cookie；生产名称使用 __Host- 前缀。"
+      }
     },
     "parameters": {
-      "WorkspaceId": { "name": "workspaceId", "in": "path", "required": true, "schema": { "type": "string" } },
-      "SessionId": { "name": "sessionId", "in": "path", "required": true, "schema": { "type": "string" } },
-      "RunId": { "name": "runId", "in": "path", "required": true, "schema": { "type": "string" } }
+      "WorkspaceId": {
+        "name": "workspaceId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "SessionId": {
+        "name": "sessionId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "RunId": {
+        "name": "runId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      }
     },
     "responses": {
       "Ok": {
         "description": "成功",
-        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Envelope" } } }
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Envelope"
+            }
+          }
+        }
       },
       "Error": {
         "description": "失败",
-        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } }
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
       }
     },
     "schemas": {
       "Envelope": {
         "type": "object",
-        "required": ["data", "meta"],
+        "required": [
+          "data",
+          "meta"
+        ],
         "properties": {
           "data": {},
-          "meta": { "$ref": "#/components/schemas/Meta" }
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
         }
       },
       "ErrorEnvelope": {
         "type": "object",
-        "required": ["error"],
+        "required": [
+          "error"
+        ],
         "properties": {
           "error": {
             "type": "object",
-            "required": ["code", "message", "object", "suggestion", "traceId"],
+            "required": [
+              "code",
+              "message",
+              "object",
+              "suggestion",
+              "traceId"
+            ],
             "properties": {
-              "code": { "type": "string" },
-              "message": { "type": "string" },
-              "object": { "type": "string" },
-              "suggestion": { "type": "string" },
-              "traceId": { "type": "string" }
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "object": {
+                "type": "string"
+              },
+              "suggestion": {
+                "type": "string"
+              },
+              "traceId": {
+                "type": "string"
+              }
             }
           }
         }
       },
       "Meta": {
         "type": "object",
-        "required": ["requestId", "timestamp"],
+        "required": [
+          "requestId",
+          "timestamp"
+        ],
         "properties": {
-          "requestId": { "type": "string" },
-          "timestamp": { "type": "string", "format": "date-time" },
-          "nextCursor": { "type": ["string", "null"] }
+          "requestId": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         }
       },
       "TeamMemberRole": {
         "type": "string",
-        "enum": ["owner", "admin", "member", "viewer"],
+        "enum": [
+          "owner",
+          "admin",
+          "member",
+          "viewer"
+        ],
         "description": "团队空间员工角色：负责人、管理员、成员、只读成员。"
       },
       "MemberCandidate": {
         "type": "object",
-        "required": ["id", "displayName", "department"],
+        "required": [
+          "id",
+          "displayName",
+          "department"
+        ],
         "properties": {
-          "id": { "type": "string" },
-          "displayName": { "type": "string" },
-          "department": { "type": "string" }
+          "id": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "department": {
+            "type": "string"
+          }
         },
         "description": "成员选择所需的最小员工字段；不暴露管理端全量身份数据。"
       },
       "MemberCandidatePage": {
         "type": "object",
-        "required": ["items", "nextCursor"],
+        "required": [
+          "items",
+          "nextCursor"
+        ],
         "properties": {
-          "items": { "type": "array", "items": { "$ref": "#/components/schemas/MemberCandidate" } },
-          "nextCursor": { "type": ["string", "null"] }
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MemberCandidate"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         }
       },
       "WorkspaceMember": {
         "type": "object",
-        "required": ["userId", "displayName", "role", "joinedAt"],
+        "required": [
+          "userId",
+          "displayName",
+          "role",
+          "joinedAt"
+        ],
         "properties": {
-          "userId": { "type": "string" },
-          "displayName": { "type": "string" },
-          "role": { "$ref": "#/components/schemas/TeamMemberRole" },
-          "joinedAt": { "type": "string", "format": "date-time" }
+          "userId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/TeamMemberRole"
+          },
+          "joinedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       },
       "MemberAddRequest": {
         "type": "object",
-        "required": ["userId", "role"],
+        "required": [
+          "userId",
+          "role"
+        ],
         "properties": {
-          "userId": { "type": "string" },
-          "role": { "$ref": "#/components/schemas/TeamMemberRole" }
+          "userId": {
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/TeamMemberRole"
+          }
         }
       },
       "MemberRoleChangeRequest": {
         "type": "object",
-        "required": ["role"],
+        "required": [
+          "role"
+        ],
         "properties": {
-          "role": { "$ref": "#/components/schemas/TeamMemberRole" }
+          "role": {
+            "$ref": "#/components/schemas/TeamMemberRole"
+          }
         }
       },
       "OwnerTransferRequest": {
         "type": "object",
-        "required": ["toUserId"],
+        "required": [
+          "toUserId"
+        ],
         "properties": {
-          "toUserId": { "type": "string" }
+          "toUserId": {
+            "type": "string"
+          }
         }
       },
       "AgentCandidate": {
         "type": "object",
-        "required": ["agentId", "name", "description", "activeVersionId", "activeVersion", "status"],
+        "required": [
+          "agentId",
+          "name",
+          "description",
+          "activeVersionId",
+          "activeVersion",
+          "status"
+        ],
         "properties": {
-          "agentId": { "type": "string" },
-          "name": { "type": "string" },
-          "description": { "type": "string", "description": "Agent 职责说明。" },
-          "activeVersionId": { "type": "string" },
-          "activeVersion": { "type": "string" },
-          "status": { "type": "string", "enum": ["published"] }
+          "agentId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "description": "Agent 职责说明。"
+          },
+          "activeVersionId": {
+            "type": "string"
+          },
+          "activeVersion": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "published"
+            ]
+          }
         },
         "description": "候选选择所需的最小 Agent 字段；不暴露模型、凭据与 Skill/Tool 配置明细。"
       },
       "AgentCandidatePage": {
         "type": "object",
-        "required": ["items", "nextCursor"],
+        "required": [
+          "items",
+          "nextCursor"
+        ],
         "properties": {
-          "items": { "type": "array", "items": { "$ref": "#/components/schemas/AgentCandidate" } },
-          "nextCursor": { "type": ["string", "null"] }
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentCandidate"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         }
       },
       "WorkspaceAgentMember": {
         "type": "object",
-        "required": ["id", "agentId", "name", "description", "status", "version", "addedBy", "createdAt", "allowedActions"],
+        "required": [
+          "id",
+          "agentId",
+          "name",
+          "description",
+          "status",
+          "version",
+          "addedBy",
+          "createdAt",
+          "allowedActions"
+        ],
         "properties": {
-          "id": { "type": "string", "description": "Agent 成员关联 ID（wam- 前缀）。" },
-          "agentId": { "type": "string" },
-          "name": { "type": "string" },
-          "description": { "type": "string" },
-          "status": { "type": "string", "enum": ["available", "disabled"] },
-          "version": { "type": "string", "description": "成员固定（pinned）的 Agent 版本。" },
-          "addedBy": { "type": "string" },
-          "createdAt": { "type": "string", "format": "date-time" },
+          "id": {
+            "type": "string",
+            "description": "Agent 成员关联 ID（wam- 前缀）。"
+          },
+          "agentId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "available",
+              "disabled"
+            ]
+          },
+          "version": {
+            "type": "string",
+            "description": "成员固定（pinned）的 Agent 版本。"
+          },
+          "addedBy": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
           "allowedActions": {
             "type": "array",
-            "items": { "type": "string", "enum": ["start_conversation", "disable", "enable", "upgrade", "remove"] },
+            "items": {
+              "type": "string",
+              "enum": [
+                "start_conversation",
+                "disable",
+                "enable",
+                "upgrade",
+                "remove"
+              ]
+            },
             "description": "当前操作人允许的动作：负责人可用状态为 start_conversation/disable/upgrade/remove，停用状态为 enable/remove；管理员与成员仅在可用状态有 start_conversation；只读成员为空。"
           }
         }
       },
       "AgentMemberAddRequest": {
         "type": "object",
-        "required": ["agentId"],
+        "required": [
+          "agentId"
+        ],
         "properties": {
-          "agentId": { "type": "string" }
+          "agentId": {
+            "type": "string"
+          }
         }
       },
       "AgentMemberUpdateRequest": {
         "type": "object",
-        "required": ["action"],
+        "required": [
+          "action"
+        ],
         "properties": {
-          "action": { "type": "string", "enum": ["disable", "enable", "upgrade"] }
+          "action": {
+            "type": "string",
+            "enum": [
+              "disable",
+              "enable",
+              "upgrade"
+            ]
+          }
         }
       }
     }

@@ -151,6 +151,15 @@ export interface WorkspaceMember {
   joinedAt: string
 }
 
+/**
+ * 团队员工成员名册 + 调用者自己的角色。服务端返回调用者角色，使员工端按服务端
+ * 状态渲染允许动作：负责人转交后创建者不再是负责人，不能按创建者推断权限。
+ */
+export interface WorkspaceMemberDirectory {
+  items: WorkspaceMember[]
+  currentUserRole: TeamMemberRole | null
+}
+
 /** Agent 成员候选的最小字段；不暴露模型、凭据与 Skill/Tool 配置明细。 */
 export interface AgentCandidate {
   agentId: string

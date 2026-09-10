@@ -12,6 +12,7 @@ import type {
   WorkspaceAgentMember,
   WorkspaceFile,
   WorkspaceMember,
+  WorkspaceMemberDirectory,
 } from '../types/domain'
 
 interface ApiEnvelope<T> {
@@ -164,6 +165,10 @@ export const workbenchApi = {
       { method: 'GET' },
     )
   },
+  listWorkspaceMembers: (workspaceId: string) =>
+    request<WorkspaceMemberDirectory>(`/workspaces/${encodeURIComponent(workspaceId)}/members`, {
+      method: 'GET',
+    }),
   addWorkspaceMember: (workspaceId: string, input: { userId: string; role: TeamMemberRole }) =>
     request<WorkspaceMember>(`/workspaces/${encodeURIComponent(workspaceId)}/members`, {
       method: 'POST',

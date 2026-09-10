@@ -189,6 +189,59 @@ test('候选人搜索拒绝无效分页游标与越界 limit', async () => {
 // 添加成员
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// 成员名册读取
+// ---------------------------------------------------------------------------
+
+test('任何成员可读取员工名册并拿到自己的角色，非成员被拒绝', async () => {
+  const workspaceId = 'ws-1a-roster'
+  const ownerId = 'user-1a-roster-owner'
+  const adminId = 'user-1a-roster-admin'
+  const memberId = 'user-1a-roster-member'
+  const viewerId = 'user-1a-roster-viewer'
+  const outsiderId = 'user-1a-roster-outsider'
+  await createDirectoryUser(ownerId, '名册负责人')
+  await createDirectoryUser(adminId, '名册管理员')
+  await createDirectoryUser(memberId, '名册成员')
+  await createDirectoryUser(viewerId, '名册只读')
+  await createDirectoryUser(outsiderId, '名册外部人')
+  await createTeamWorkspace(workspaceId, [
+    { userId: ownerId, role: 'owner' },
+    { userId: adminId, role: 'admin' },
+    { userId: memberId, role: 'member' },
+    { userId: viewerId, role: 'viewer' },
+  ])
+
+  // 每个成员看到同一份名册，但 currentUserRole 是自己的角色。
+  const asOwner = await api('GET', `/api/workbench/v1/workspaces/${workspaceId}/members`, { as: ownerId })
+  assert.equal(asOwner.status, 200)
+  const directory = asOwner.body.data as { items: Array<{ userId: string; role: string }>; currentUserRole: string }
+  assert.equal(directory.currentUserRole, 'owner')
+  assert.deepEqual(
+    directory.items.map(item => item.userId),
+    [ownerId, adminId, memberId, viewerId],
+    '按负责人→管理员→成员→只读排序',
+  )
+  assert.equal(directory.items.length, 4)
+
+  for (const [userId, role] of [[adminId, 'admin'], [memberId, 'member'], [viewerId, 'viewer']] as const) {
+    const result = await api('GET', `/api/workbench/v1/workspaces/${workspaceId}/members`, { as: userId })
+    assert.equal(result.status, 200)
+    assert.equal((result.body.data as { currentUserRole: string }).currentUserRole, role)
+  }
+
+  const outsider = await api('GET', `/api/workbench/v1/workspaces/${workspaceId}/members`, { as: outsiderId })
+  assert.equal(outsider.status, 403, '非成员不得读取名册')
+})
+
+test('成员名册对个人工作空间被拒绝', async () => {
+  const personalId = 'ws-personal-user-1a-roster-personal'
+  await createDirectoryUser('user-1a-roster-personal', '名册个人空间用户')
+  const result = await api('GET', `/api/workbench/v1/workspaces/${personalId}/members`, { as: 'user-1a-roster-personal' })
+  assert.equal(result.status, 422)
+  assert.match(errorMessage(result), /仅支持团队工作空间/)
+})
+
 test('负责人添加成员成功后写入成员关系、提升团队授权修订号', async () => {
   const workspaceId = 'ws-1a-add'
   const ownerId = 'user-1a-add-owner'
