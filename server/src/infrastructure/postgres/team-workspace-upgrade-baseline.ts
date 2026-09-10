@@ -34,11 +34,13 @@ export async function inspectPersonalWorkspaceBaseline(
      where n.nspname = 'public'
        and c.relname = ${PERSONAL_WORKSPACE_UNIQUE_INDEX}
        and i.indisunique
+       and i.indrelid = 'public.workspaces'::regclass
   `
   const [constraintRow] = await database<{ count: number }[]>`
     select count(*)::integer as count
       from pg_constraint
      where conname = ${PERSONAL_WORKSPACE_STATUS_CONSTRAINT}
+       and conrelid = 'public.workspaces'::regclass
   `
   const nullableRows = await database<{ tableName: string }[]>`
     select table_name as "tableName"
@@ -49,11 +51,16 @@ export async function inspectPersonalWorkspaceBaseline(
        and is_nullable = 'YES'
      order by table_name
   `
+  // 触发器必须挂在各自的预期表上（users / workspace_members）：仅按名称匹配时，
+  // 同名对象若存在于其他表会误判基线完好。
   const triggerRows = await database<{ triggerName: string }[]>`
     select tgname as "triggerName"
       from pg_trigger
      where not tgisinternal
-       and tgname in ${database([...PERSONAL_WORKSPACE_GUARD_TRIGGERS])}
+       and (
+         (tgname = 'users_personal_workspace_provisioning' and tgrelid = 'public.users'::regclass)
+         or (tgname = 'personal_workspace_membership_guard' and tgrelid = 'public.workspace_members'::regclass)
+       )
   `
   const presentTriggers = new Set(triggerRows.map(row => row.triggerName))
   return {

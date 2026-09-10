@@ -55,12 +55,20 @@ function workspaceUnresolvedCount(workspaceId: string) {
  * Agent 所有。对账完成前，涉及该来源的 Agent 移出/停用会被服务端拒绝。
  */
 async function reconcile(sourceIds: string[], scopeLabel: string) {
+  // 确认对话框与接口调用分开处理：用户点「取消」时 Element Plus 会 reject，
+  // 不应把它当作失败而弹出错误提示。
   try {
     await ElMessageBox.confirm(
       '对账完成后这些历史授权来源会改写为「明确人工授权」并记录审计；不会自动归属到某个 Agent，也不会改变当前有效授权集合。完成前涉及的 Agent 移出/停用会被拒绝。',
       `确认完成对账：${scopeLabel}？`,
       { confirmButtonText: '确认对账完成', cancelButtonText: '取消', type: 'warning' },
     )
+  } catch {
+    reconcilingSourceId.value = ''
+    reconcilingWorkspaceId.value = ''
+    return
+  }
+  try {
     const result = await contentStore.reconcileGrantSources(sourceIds)
     ElMessage.success(`已对账 ${result.reconciled} 条授权来源，操作已写入审计`)
   } catch (cause) {
