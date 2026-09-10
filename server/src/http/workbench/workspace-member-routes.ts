@@ -91,9 +91,10 @@ export function registerWorkspaceMemberRoutes(
  * 1A-T3 contract. Only requireTeamRole's two known denial messages are
  * re-thrown as typed 403s so the shared error classifier surfaces them as
  * permission_denied; anything else — e.g. a database outage — propagates
- * unchanged and is classified on its own merits.
+ * unchanged and is classified on its own merits. Shared by the 1A-T4 agent
+ * member routes.
  */
-async function requireTeamActor(
+export async function requireTeamActor(
   authorization: PostgresAuthorizationService,
   identity: RequestIdentity,
   workspaceId: string,
@@ -128,12 +129,12 @@ function parseMemberRole(value: unknown): MemberRole {
   return value
 }
 
-function requireNonEmptyString(value: unknown, field: string) {
+export function requireNonEmptyString(value: unknown, field: string) {
   if (typeof value !== 'string' || value.trim() === '') throw new Error(`${field} 不能为空`)
   return value.trim()
 }
 
-function parseLimit(raw: string | null) {
+export function parseLimit(raw: string | null) {
   if (raw === null || raw === '') return 20
   const limit = Number(raw)
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('limit 必须为 1 到 100 之间的整数')

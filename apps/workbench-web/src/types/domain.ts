@@ -146,6 +146,41 @@ export interface WorkspaceMember {
   joinedAt: string
 }
 
+/** Agent 成员候选的最小字段；不暴露模型、凭据与 Skill/Tool 配置明细。 */
+export interface AgentCandidate {
+  agentId: string
+  name: string
+  description: string
+  activeVersionId: string
+  activeVersion: string
+  status: 'published'
+}
+
+export interface AgentCandidatePage {
+  items: AgentCandidate[]
+  nextCursor: string | null
+}
+
+/** Agent 成员状态：可用、已停用；移出不出现在列表中。 */
+export type AgentMemberStatus = 'available' | 'disabled'
+
+/** 当前操作人允许的动作；Agent 成员不套用员工角色语义。 */
+export type AgentMemberAction = 'start_conversation' | 'disable' | 'enable' | 'upgrade' | 'remove'
+
+export type AgentMemberPatchAction = 'disable' | 'enable' | 'upgrade'
+
+export interface WorkspaceAgentMember {
+  id: string
+  agentId: string
+  name: string
+  description: string
+  status: AgentMemberStatus
+  version: string
+  addedBy: string
+  createdAt: string
+  allowedActions: AgentMemberAction[]
+}
+
 export interface WorkbenchSession {
   user: UserProfile
   identityProvider: 'prototype-sso' | 'ai-hub-oidc'

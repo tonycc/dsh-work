@@ -1,4 +1,6 @@
 import type {
+  AgentCandidatePage,
+  AgentMemberPatchAction,
   Artifact,
   MemberCandidatePage,
   TaskRun,
@@ -7,6 +9,7 @@ import type {
   WorkbenchSession,
   WorkbenchSkill,
   Workspace,
+  WorkspaceAgentMember,
   WorkspaceFile,
   WorkspaceMember,
 } from '../types/domain'
@@ -99,7 +102,7 @@ export const workbenchApi = {
   getAgents: () => request<WorkbenchAgent[]>('/agents'),
   getSkills: () => request<WorkbenchSkill[]>('/skills'),
   getRun: (runId: string) => request<TaskRun>(`/runs/${encodeURIComponent(runId)}`),
-  createSession: (input: { title: string; workspaceId?: string; agentId?: string; skillId?: string }) =>
+  createSession: (input: { title: string; workspaceId?: string; agentId?: string; skillId?: string; workspaceAgentMemberId?: string }) =>
     request<{ id: string; workspaceId: string; agentVersionId: string; title: string; createdAt: string }>('/sessions', {
       method: 'POST',
       body: JSON.stringify(input),
@@ -187,5 +190,38 @@ export const workbenchApi = {
         method: 'POST',
         body: JSON.stringify(input),
       },
+    ),
+  listWorkspaceAgentCandidates: (workspaceId: string, input: { query?: string; cursor?: string; limit?: number } = {}) => {
+    const search = new URLSearchParams()
+    if (input.query) search.set('query', input.query)
+    if (input.cursor) search.set('cursor', input.cursor)
+    if (input.limit !== undefined) search.set('limit', String(input.limit))
+    const suffix = search.size > 0 ? `?${search.toString()}` : ''
+    return request<AgentCandidatePage>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/agent-candidates${suffix}`,
+      { method: 'GET' },
+    )
+  },
+  listWorkspaceAgentMembers: (workspaceId: string) =>
+    request<WorkspaceAgentMember[]>(`/workspaces/${encodeURIComponent(workspaceId)}/agent-members`, {
+      method: 'GET',
+    }),
+  addWorkspaceAgentMember: (workspaceId: string, input: { agentId: string }) =>
+    request<WorkspaceAgentMember>(`/workspaces/${encodeURIComponent(workspaceId)}/agent-members`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  updateWorkspaceAgentMember: (workspaceId: string, id: string, input: { action: AgentMemberPatchAction }) =>
+    request<WorkspaceAgentMember>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/agent-members/${encodeURIComponent(id)}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(input),
+      },
+    ),
+  removeWorkspaceAgentMember: (workspaceId: string, id: string) =>
+    request<{ id: string; removed: true }>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/agent-members/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
     ),
 }

@@ -140,6 +140,100 @@
         }
       }
     },
+    "/workspaces/{workspaceId}/agent-candidates": {
+      "parameters": [{ "$ref": "#/components/parameters/WorkspaceId" }],
+      "get": {
+        "operationId": "listWorkspaceAgentCandidates",
+        "summary": "搜索可加入团队空间的平台 Agent 候选（仅负责人）",
+        "description": "返回平台已发布、允许加入团队空间且对当前员工角色可见的 Agent 摘要（名称、职责、活动版本、状态），不返回模型、凭据与 Skill/Tool 配置明细；已加入的 Agent 不在候选内。个人工作空间不支持。",
+        "parameters": [
+          { "name": "query", "in": "query", "schema": { "type": "string" }, "description": "按名称或职责关键字过滤；省略时返回全部候选。" },
+          { "name": "cursor", "in": "query", "schema": { "type": "string" }, "description": "上一页返回的 nextCursor 游标。" },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Agent 候选分页结果（envelope.data 为 AgentCandidatePage）",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Envelope" } } }
+          },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "422": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/workspaces/{workspaceId}/agent-members": {
+      "parameters": [{ "$ref": "#/components/parameters/WorkspaceId" }],
+      "get": {
+        "operationId": "listWorkspaceAgentMembers",
+        "summary": "查询团队空间的 Agent 成员列表（所有成员）",
+        "description": "仅返回未移除的 Agent 成员，包含固定版本、加入人与当前操作人允许的动作；负责人看到管理动作，成员在可用状态看到「开始对话」。Agent 成员不套用员工角色语义。个人工作空间不支持。",
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "422": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "post": {
+        "operationId": "addWorkspaceAgentMember",
+        "summary": "加入 Agent 成员并固定当前已发布版本（仅负责人）",
+        "description": "服务端解析 Agent 活动版本并校验依赖（Agent 必须显式授权其 Skill 依赖的全部工具）；成员关系、授权来源与有效授权在同一事务写入，失败不部分保存；重复加入非移除成员返回冲突，移出后重新加入复用原成员行。个人工作空间不支持。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AgentMemberAddRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": { "$ref": "#/components/responses/Ok" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "409": { "$ref": "#/components/responses/Error" },
+          "422": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/workspaces/{workspaceId}/agent-members/{id}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/WorkspaceId" },
+        { "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Agent 成员关联 ID（wam- 前缀）。" }
+      ],
+      "patch": {
+        "operationId": "updateWorkspaceAgentMember",
+        "summary": "停用、重新启用或升级 Agent 成员（仅负责人）",
+        "description": "停用撤销该关联的授权来源并写入撤权事件，共享工具授权由其他来源保留；重新启用以当前固定版本恢复授权来源（已移出成员须重新加入）；升级固定新版本并保留旧版本来源（既有会话继续执行）。个人工作空间不支持。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AgentMemberUpdateRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "409": { "$ref": "#/components/responses/Error" },
+          "422": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "delete": {
+        "operationId": "removeWorkspaceAgentMember",
+        "summary": "移出 Agent 成员（仅负责人）",
+        "description": "撤销该关联的授权来源并写入撤权事件，阻止后续会话启动；历史 Run、消息与成果保留，成员行保留审计并可重新加入。个人工作空间不支持。",
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "409": { "$ref": "#/components/responses/Error" },
+          "422": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
     "/workspaces/{workspaceId}/exit": {
       "parameters": [{ "$ref": "#/components/parameters/WorkspaceId" }],
       "post": {
@@ -190,8 +284,9 @@
                 "type": "object",
                 "properties": {
                   "workspaceId": { "type": "string", "description": "个人或团队工作空间 ID；省略时由服务端选择默认个人空间。" },
-                  "agentId": { "type": ["string", "null"] },
+                  "agentId": { "type": ["string", "null"], "description": "个人空间按当前可用 Agent 解析版本；团队空间不允许通过原始 agentId 选择，必须使用 workspaceAgentMemberId。" },
                   "skillId": { "type": ["string", "null"], "description": "员工从 Skill 广场选择的 Skill；服务端锁定其当前已发布版本。" },
+                  "workspaceAgentMemberId": { "type": ["string", "null"], "description": "团队空间发起对话必须携带的 Agent 成员关联 ID；服务端使用其固定版本并校验当前可用。个人空间忽略该字段。" },
                   "title": { "type": ["string", "null"], "maxLength": 120 }
                 }
               }
@@ -428,6 +523,60 @@
         "required": ["toUserId"],
         "properties": {
           "toUserId": { "type": "string" }
+        }
+      },
+      "AgentCandidate": {
+        "type": "object",
+        "required": ["agentId", "name", "description", "activeVersionId", "activeVersion", "status"],
+        "properties": {
+          "agentId": { "type": "string" },
+          "name": { "type": "string" },
+          "description": { "type": "string", "description": "Agent 职责说明。" },
+          "activeVersionId": { "type": "string" },
+          "activeVersion": { "type": "string" },
+          "status": { "type": "string", "enum": ["published"] }
+        },
+        "description": "候选选择所需的最小 Agent 字段；不暴露模型、凭据与 Skill/Tool 配置明细。"
+      },
+      "AgentCandidatePage": {
+        "type": "object",
+        "required": ["items", "nextCursor"],
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/AgentCandidate" } },
+          "nextCursor": { "type": ["string", "null"] }
+        }
+      },
+      "WorkspaceAgentMember": {
+        "type": "object",
+        "required": ["id", "agentId", "name", "description", "status", "version", "addedBy", "createdAt", "allowedActions"],
+        "properties": {
+          "id": { "type": "string", "description": "Agent 成员关联 ID（wam- 前缀）。" },
+          "agentId": { "type": "string" },
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "status": { "type": "string", "enum": ["available", "disabled"] },
+          "version": { "type": "string", "description": "成员固定（pinned）的 Agent 版本。" },
+          "addedBy": { "type": "string" },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "allowedActions": {
+            "type": "array",
+            "items": { "type": "string", "enum": ["start_conversation", "disable", "enable", "upgrade", "remove"] },
+            "description": "当前操作人允许的动作：负责人可用状态为 start_conversation/disable/upgrade/remove，停用状态为 enable/upgrade/remove；管理员与成员仅在可用状态有 start_conversation；只读成员为空。"
+          }
+        }
+      },
+      "AgentMemberAddRequest": {
+        "type": "object",
+        "required": ["agentId"],
+        "properties": {
+          "agentId": { "type": "string" }
+        }
+      },
+      "AgentMemberUpdateRequest": {
+        "type": "object",
+        "required": ["action"],
+        "properties": {
+          "action": { "type": "string", "enum": ["disable", "enable", "upgrade"] }
         }
       }
     }

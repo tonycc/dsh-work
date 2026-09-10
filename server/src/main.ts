@@ -14,6 +14,7 @@ import { registerWorkbenchRoutes } from './http/workbench/routes.ts'
 import { registerConversationRoutes } from './http/workbench/conversation-routes.ts'
 import { registerContentRoutes } from './http/workbench/content-routes.ts'
 import { registerWorkspaceMemberRoutes } from './http/workbench/workspace-member-routes.ts'
+import { registerWorkspaceAgentMemberRoutes } from './http/workbench/workspace-agent-member-routes.ts'
 import { registerWorkbenchAgentRoutes } from './http/workbench/agent-routes.ts'
 import { registerUnavailableWorkbenchCommandRoutes } from './http/workbench/unavailable-routes.ts'
 import { registerOidcRoutes } from './http/auth-routes.ts'
@@ -37,6 +38,7 @@ import {
 } from './modules/runtime/dsh-runtime-installation.ts'
 import { PostgresContentService } from './modules/workbench/application/postgres-content-service.ts'
 import { PostgresWorkspaceMemberService } from './modules/workbench/application/postgres-workspace-member-service.ts'
+import { PostgresWorkspaceAgentMemberService } from './modules/workbench/application/postgres-workspace-agent-member-service.ts'
 import { PostgresAgentService } from './modules/agent/postgres-agent-service.ts'
 import { PostgresSkillService } from './modules/skill/postgres-skill-service.ts'
 import { PostgresToolConnectorService } from './modules/tool/postgres-tool-connector-service.ts'
@@ -121,6 +123,7 @@ async function start() {
     const skills = new PostgresSkillService(database, operations, tools)
     const agents = new PostgresAgentService(database, operations, skills, tools)
     const knowledge = new PostgresKnowledgeService(database)
+    const workspaceAgentMembers = new PostgresWorkspaceAgentMemberService(database, authorization, agents)
     orchestration = new RunOrchestrationService(
       runs,
       conversations,
@@ -136,9 +139,10 @@ async function start() {
     if (restartRecovery.failed > 0 || restartRecovery.resumedQueued > 0) {
       console.warn('service restart recovery completed', restartRecovery)
     }
-    registerConversationRoutes(router, conversations, orchestration, runs, agents, authorization, operations, skills)
+    registerConversationRoutes(router, conversations, orchestration, runs, agents, authorization, operations, skills, workspaceAgentMembers)
     registerContentRoutes(router, content, authorization)
     registerWorkspaceMemberRoutes(router, workspaceMembers, authorization)
+    registerWorkspaceAgentMemberRoutes(router, workspaceAgentMembers, authorization)
     registerOperationsRoutes(router, operations)
     registerAgentRoutes(router, agents)
     registerSkillRoutes(router, skills)

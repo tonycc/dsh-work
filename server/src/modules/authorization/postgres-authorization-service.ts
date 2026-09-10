@@ -87,21 +87,15 @@ export class PostgresAuthorizationService {
         roleIds: input.roleIds,
         dataScopes: input.dataScopes,
       })
-      const agent = await this.requireAgentVersion(input.agentVersionId)
+      const { agent, skillVersions } = await this.assertAgentDependencyClosure(
+        input.agentVersionId,
+        input.additionalSkillReferences ?? [],
+      )
       if (!intersects(context.roleIds, agent.visibleRoleIds)) {
         throw new Error('当前用户角色不可使用所选 Agent')
       }
       requireScopes(context.dataScopes, agent.dataScopes, 'Agent')
 
-      const skillVersions = await this.resolveSkillVersions(
-        mergeSkillReferences(agent.skillReferences, input.additionalSkillReferences ?? []),
-      )
-      const authorizedToolReferences = new Set(unique(agent.toolReferences))
-      const missingSkillTools = unique(skillVersions.flatMap(skill => skill.toolReferences ?? []))
-        .filter(reference => !authorizedToolReferences.has(reference))
-      if (missingSkillTools.length) {
-        throw new Error(`Agent 必须显式授权所选 Skill 依赖的工具：${missingSkillTools.join('、')}`)
-      }
       const toolVersions = await this.resolveAndAuthorizeTools(
         agent.toolReferences,
         context.roleIds,
@@ -129,6 +123,74 @@ export class PostgresAuthorizationService {
       await this.recordDecision(input.userId, input.agentVersionId, 'authorization.runtime', 'blocked', error)
       throw error
     }
+  }
+
+  /**
+   * Structural dependency validation shared by runtime authorization and the
+   * team agent-member join/upgrade/enable flows (1A-T4): the agent version
+   * must be published and must explicitly authorize every tool its selected
+   * skills require — skills cannot widen the agent's tool allowlist. Returns
+   * the loaded agent version and the resolved skill versions so callers can
+   * build capability grant sources without duplicating the resolution logic.
+   */
+  async assertAgentDependencyClosure(
+    agentVersionId: string,
+    additionalSkillReferences: string[] = [],
+  ): Promise<{ agent: AgentAuthorizationRow; skillVersions: CapabilityVersion[] }> {
+    const agent = await this.requireAgentVersion(agentVersionId)
+    const skillVersions = await this.resolveSkillVersions(
+      mergeSkillReferences(agent.skillReferences, additionalSkillReferences),
+    )
+    const authorizedToolReferences = new Set(unique(agent.toolReferences))
+    const missingSkillTools = unique(skillVersions.flatMap(skill => skill.toolReferences ?? []))
+      .filter(reference => !authorizedToolReferences.has(reference))
+    if (missingSkillTools.length) {
+      throw new Error(`Agent 必须显式授权所选 Skill 依赖的工具：${missingSkillTools.join('、')}`)
+    }
+    return { agent, skillVersions }
+  }
+
+  /**
+   * Resolves tool references to published tool version IDs with the same
+   * availability checks as runtime authorization but without role or data
+   * scope checks: used by the team agent-member join flow (1A-T4) to build
+   * grant sources. Runtime calls keep the full role/scope checks via
+   * resolveAndAuthorizeTools.
+   */
+  async resolveToolVersions(references: string[]): Promise<CapabilityVersion[]> {
+    const rows = await this.resolveToolVersionRows(references)
+    return rows.map(row => ({ reference: row.reference, versionId: row.versionId }))
+  }
+
+  /**
+   * Read-only workspace type lookup for team-branch routing (1A-T4 session
+   * start). Returns 'team' only when the user is a member of that team
+   * workspace, so non-members and personal-space edge cases keep the exact
+   * existing conversation-path behavior; personal owners get 'personal' and
+   * everything else falls through as null.
+   */
+  async resolveWorkspaceType(
+    workspaceId: string | null | undefined,
+    userId: string,
+  ): Promise<'personal' | 'team' | null> {
+    const id = normalizeWorkspaceId(workspaceId)
+    if (!id) return null
+    const [row] = await this.database<{ type: 'personal' | 'team' }[]>`
+      select w.workspace_type as type from workspaces w
+       where w.tenant_id = ${tenantId} and w.id = ${id} and w.status = 'active'
+         and (
+           (w.workspace_type = 'personal' and w.created_by = ${userId})
+           or (
+             w.workspace_type = 'team'
+             and exists (
+               select 1 from workspace_members wm
+                where wm.tenant_id = w.tenant_id and wm.workspace_id = w.id
+                  and wm.user_id = ${userId}
+             )
+           )
+         )
+    `
+    return row?.type ?? null
   }
 
   async requirePlatformAdmin(userId: string) {
@@ -317,7 +379,18 @@ export class PostgresAuthorizationService {
     roleIds: string[],
     dataScopes: string[],
   ): Promise<CapabilityVersion[]> {
-    const resolved: CapabilityVersion[] = []
+    const resolved = await this.resolveToolVersionRows(references)
+    for (const tool of resolved) {
+      if (!intersects(roleIds, tool.allowedRoleIds)) throw new Error(`当前用户角色不可调用工具：${tool.reference}`)
+      requireScopes(dataScopes, tool.requiredDataScopes, `工具 ${tool.reference}`)
+    }
+    return resolved.map(tool => ({ reference: tool.reference, versionId: tool.versionId }))
+  }
+
+  private async resolveToolVersionRows(
+    references: string[],
+  ): Promise<Array<CapabilityVersion & { allowedRoleIds: string[]; requiredDataScopes: string[] }>> {
+    const resolved: Array<CapabilityVersion & { allowedRoleIds: string[]; requiredDataScopes: string[] }> = []
     for (const reference of unique(references)) {
       const { id, version } = parseReference(reference, '工具')
       const [row] = await this.database<{
@@ -335,9 +408,7 @@ export class PostgresAuthorizationService {
            and tv.status = 'published' and c.status = 'healthy'
       `
       if (!row) throw new Error(`工具不存在、未发布、不可用或不符合一期只读策略：${reference}`)
-      if (!intersects(roleIds, row.allowedRoleIds)) throw new Error(`当前用户角色不可调用工具：${reference}`)
-      requireScopes(dataScopes, row.requiredDataScopes, `工具 ${reference}`)
-      resolved.push({ reference, versionId: row.versionId })
+      resolved.push({ reference, versionId: row.versionId, allowedRoleIds: row.allowedRoleIds, requiredDataScopes: row.requiredDataScopes })
     }
     return resolved
   }

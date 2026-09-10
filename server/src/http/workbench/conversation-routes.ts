@@ -1,4 +1,5 @@
 import type { PostgresConversationRepository } from '../../modules/workbench/application/postgres-conversation-repository.ts'
+import type { PostgresWorkspaceAgentMemberService } from '../../modules/workbench/application/postgres-workspace-agent-member-service.ts'
 import type { RunOrchestrationService } from '../../modules/run/run-orchestration-service.ts'
 import type { RunRepository } from '../../modules/run/run-repository.ts'
 import type { PostgresAgentService } from '../../modules/agent/postgres-agent-service.ts'
@@ -26,6 +27,7 @@ export function registerConversationRoutes(
   authorization?: PostgresAuthorizationService,
   operations?: PostgresOperationsService,
   skills?: PostgresSkillService,
+  agentMembers?: PostgresWorkspaceAgentMemberService,
 ) {
   router.get(`${basePath}/tasks`, async (_request, context) => {
     const identity = requireRequestIdentity(context, 'workbench')
@@ -38,13 +40,26 @@ export function registerConversationRoutes(
     const identity = requireRequestIdentity(context, 'workbench')
     const userId = identity.userId
     const authorizationContext = sessionAuthorizationContext(identity)
-    const body = await readJsonBody<{ title: string; workspaceId?: string; agentId?: string; skillId?: string }>(request)
+    const body = await readJsonBody<{
+      title: string
+      workspaceId?: string
+      agentId?: string
+      skillId?: string
+      workspaceAgentMemberId?: string
+    }>(request)
     const access = await authorization?.authorizeWorkbench({ userId, ...authorizationContext })
-    const agentVersionId = await agents.resolveWorkbenchAgentVersion(
-      body.agentId,
-      userId,
-      access?.roleIds ?? identity.roleIds,
-    )
+    // Team workspaces must start sessions through the agent member
+    // association (pinned version); personal workspaces, non-members and
+    // omitted workspaceIds keep the existing resolution path untouched
+    // (AC-23).
+    const workspaceType = await authorization?.resolveWorkspaceType(body.workspaceId, userId)
+    const agentVersionId = workspaceType === 'team'
+      ? await resolveTeamSessionAgentVersion(agentMembers, agents, body, userId, access?.roleIds ?? identity.roleIds)
+      : await agents.resolveWorkbenchAgentVersion(
+          body.agentId,
+          userId,
+          access?.roleIds ?? identity.roleIds,
+        )
     const selectedSkillVersion = body.skillId && skills
       ? await skills.resolveWorkbenchSkillVersion(body.skillId)
       : undefined
@@ -153,6 +168,37 @@ export function registerConversationRoutes(
     if (!task) return httpResult(404, { error: { code: 'run_not_found', message: 'Run 不存在或不可访问' } })
     await streamRunEvents(response, request.headers['last-event-id'], runId, runs)
   })
+}
+
+/**
+ * Team session start must go through the agent member association (TW-02
+ * 单一会话绑定): the member's pinned version is used instead of the
+ * platform's current active version. A team request without the association
+ * — or one whose raw agentId resolves to a version different from the
+ * member's pinned version — is rejected so the session can never silently
+ * switch agent versions.
+ */
+async function resolveTeamSessionAgentVersion(
+  agentMembers: PostgresWorkspaceAgentMemberService | undefined,
+  agents: PostgresAgentService,
+  body: { workspaceId?: string; agentId?: string; workspaceAgentMemberId?: string },
+  userId: string,
+  roleIds: string[],
+) {
+  if (!agentMembers || !body.workspaceId || !body.workspaceAgentMemberId) {
+    throw new Error('团队空间对话必须通过 Agent 成员关联发起')
+  }
+  const member = await agentMembers.requireAvailableAgentMemberVersion(
+    body.workspaceId,
+    body.workspaceAgentMemberId,
+  )
+  if (body.agentId !== undefined) {
+    const rawVersionId = await agents.resolveWorkbenchAgentVersion(body.agentId, userId, roleIds)
+    if (rawVersionId !== member.agentVersionId) {
+      throw new Error('团队空间对话必须通过 Agent 成员关联发起')
+    }
+  }
+  return member.agentVersionId
 }
 
 export async function streamRunEvents(

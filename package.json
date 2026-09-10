@@ -51,7 +51,8 @@
     "ci:check": "pnpm verify && pnpm test:scripts && pnpm check:secrets && pnpm typecheck && pnpm test:m1 && pnpm test:m2 && pnpm test:m4:file && pnpm test:m4:error && pnpm test:m5:frontend && pnpm test:m5:api && pnpm test:m5:security && pnpm test:m5:faults && pnpm test:sso && pnpm lint && pnpm build",
     "check:architecture": "node scripts/check-architecture.mjs",
     "validate:ui": "pnpm --filter @dsh-work/admin-web --filter @dsh-work/workbench-web validate:ui",
-    "lint": "pnpm check:architecture && pnpm validate:ui && eslint apps packages server scripts --max-warnings=0"
+    "lint": "pnpm check:architecture && pnpm validate:ui && eslint apps packages server scripts --max-warnings=0",
+    "test:m5:agent-members:integration": "pnpm --filter @dsh-work/server test:m5:agent-members:integration"
   },
   "devDependencies": {
     "@eslint/js": "^9.37.0",
