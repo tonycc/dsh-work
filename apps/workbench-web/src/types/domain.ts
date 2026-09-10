@@ -122,6 +122,11 @@ export interface Workspace {
   owner: string
   members: string[]
   files: WorkspaceFile[]
+  /**
+   * 团队空间归档状态（design §2.5 归档态）。服务端当前 `/workspaces` 契约
+   * 尚未返回该字段，前端只在收到 `archived` 时渲染归档态。
+   */
+  status?: 'active' | 'archived'
 }
 
 /** 团队空间员工角色：负责人、管理员、成员、只读成员。 */

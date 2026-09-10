@@ -189,7 +189,8 @@ describe('WorkspaceMemberDialog', () => {
 
     const memberSelect = panelOf(wrapper).findAllComponents(ElSelect)[3]
     const options = memberSelect.findAllComponents(ElOption)
-    expect(options.map(option => option.props('value'))).toEqual(['owner', 'admin', 'member', 'viewer'])
+    expect(options.map((option: { props: (name: string) => unknown }) => option.props('value')))
+      .toEqual(['owner', 'admin', 'member', 'viewer'])
     memberSelect.vm.$emit('change', 'admin')
     await flushPromises()
     expect(changeRole).toHaveBeenCalledWith('ws-team', 'u-member', { role: 'admin' })
@@ -209,8 +210,8 @@ describe('WorkspaceMemberDialog', () => {
     expect(selects[3].props('disabled')).toBe(false)
     expect(selects[4].props('disabled')).toBe(false)
     expect(selects[3].findAllComponents(ElOption)
-      .filter(option => option.props('disabled') === false)
-      .map(option => option.props('value'))).toEqual(['member', 'viewer'])
+      .filter((option: { props: (name: string) => unknown }) => option.props('disabled') === false)
+      .map((option: { props: (name: string) => unknown }) => option.props('value'))).toEqual(['member', 'viewer'])
     // 只能移除「成员/只读成员」：负责人（行 0/1）与自己（行 2）都没有移除入口。
     expect(panelOf(wrapper).findAll('[data-testid="member-remove"]')).toHaveLength(2)
   })

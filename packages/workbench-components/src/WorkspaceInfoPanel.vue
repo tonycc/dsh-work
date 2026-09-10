@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { ArrowRight, FolderOpened, Lock, UserFilled } from '@element-plus/icons-vue'
+import { ArrowRight, Cpu, FolderOpened, Lock, Setting, UserFilled } from '@element-plus/icons-vue'
 
 import { StatusTag } from '@dsh-work/ui-core'
+
+type TeamMemberRole = 'owner' | 'admin' | 'member' | 'viewer'
 
 interface WorkspaceInfo {
   name: string
@@ -10,6 +12,15 @@ interface WorkspaceInfo {
   memberCount: number
   owner: string
   members: string[]
+  /** 服务端返回的团队归档状态；契约补齐前缺省视为未归档。 */
+  status?: 'active' | 'archived'
+}
+
+interface WorkspaceAgentMemberInfo {
+  id: string
+  name: string
+  description?: string
+  status: 'available' | 'disabled'
 }
 
 withDefaults(
@@ -17,18 +28,30 @@ withDefaults(
     workspace: WorkspaceInfo
     dataScopes: string[]
     collapsible?: boolean
+    /** 当前操作人在该团队的员工角色；无法判定时传 null，团队写入口不渲染。 */
+    currentUserRole?: TeamMemberRole | null
+    /** Agent 成员摘要：由宿主按既有 T4 接口加载后传入，面板自身不发请求。 */
+    agentMembers?: WorkspaceAgentMemberInfo[]
   }>(),
   {
     collapsible: false,
+    currentUserRole: null,
+    agentMembers: () => [],
   },
 )
 
 const emit = defineEmits<{
   collapse: []
+  'manage-members': []
+  'open-settings': []
 }>()
 
 function memberInitial(name: string) {
   return Array.from(name)[0] ?? '成'
+}
+
+function agentStatusLabel(status: WorkspaceAgentMemberInfo['status']) {
+  return status === 'available' ? '可用' : '已停用'
 }
 </script>
 
@@ -53,7 +76,15 @@ function memberInitial(name: string) {
     <section class="workspace-info-panel__hero">
       <div class="workspace-info-panel__status">
         <span class="workspace-info-panel__folder"><el-icon><FolderOpened /></el-icon></span>
-        <StatusTag status="neutral" :label="workspace.type === 'personal' ? '个人工作空间' : '团队工作空间'" />
+        <span class="workspace-info-panel__tags">
+          <StatusTag status="neutral" :label="workspace.type === 'personal' ? '个人工作空间' : '团队工作空间'" />
+          <StatusTag
+            v-if="workspace.type === 'team' && workspace.status === 'archived'"
+            data-testid="panel-archived-tag"
+            status="warning"
+            label="已归档"
+          />
+        </span>
       </div>
       <h2>{{ workspace.name }}</h2>
       <p>{{ workspace.description }}</p>
@@ -84,10 +115,24 @@ function memberInitial(name: string) {
       <div class="workspace-info-panel__section-heading">
         <div>
           <h3>成员</h3>
-          <span>{{ workspace.memberCount }} 人</span>
+          <span data-testid="panel-employee-count">{{ workspace.memberCount }} 位员工</span>
         </div>
+        <button
+          v-if="currentUserRole === 'owner' || currentUserRole === 'admin'"
+          data-testid="panel-manage-members"
+          class="workspace-info-panel__link"
+          type="button"
+          @click="emit('manage-members')"
+        >
+          管理成员
+        </button>
       </div>
-      <div class="workspace-member-list" :aria-label="`${workspace.name}成员`">
+
+      <div
+        data-testid="panel-employee-section"
+        class="workspace-member-list"
+        :aria-label="`${workspace.name}员工成员`"
+      >
         <span
           v-for="(member, index) in workspace.members.slice(0, 5)"
           :key="member"
@@ -104,9 +149,48 @@ function memberInitial(name: string) {
       </div>
     </section>
 
+    <section
+      v-if="workspace.type === 'team'"
+      data-testid="panel-agent-section"
+      class="workspace-info-panel__section"
+    >
+      <div class="workspace-info-panel__section-heading">
+        <div>
+          <h3>Agent</h3>
+          <span data-testid="panel-agent-count">{{ agentMembers.length }} 个 Agent</span>
+        </div>
+      </div>
+      <div v-if="agentMembers.length" class="workspace-agent-list">
+        <article
+          v-for="agent in agentMembers"
+          :key="agent.id"
+          data-testid="panel-agent-row"
+          class="workspace-agent"
+        >
+          <span class="workspace-agent__icon"><el-icon><Cpu /></el-icon></span>
+          <strong>{{ agent.name }}</strong>
+          <span
+            data-testid="panel-agent-status"
+            class="workspace-agent__status"
+            :class="{ 'workspace-agent__status--available': agent.status === 'available' }"
+            :aria-label="`Agent 状态：${agentStatusLabel(agent.status)}`"
+          />
+        </article>
+      </div>
+      <p v-else class="workspace-info-panel__empty">尚未加入 Agent</p>
+    </section>
+
+    <div v-if="workspace.type === 'team' && currentUserRole === 'owner'" class="workspace-info-panel__settings">
+      <el-button data-testid="panel-workspace-settings" plain :icon="Setting" @click="emit('open-settings')">
+        空间设置
+      </el-button>
+    </div>
+
     <footer class="workspace-info-panel__footer">
       <el-icon><UserFilled /></el-icon>
-      {{ workspace.type === 'personal' ? '系统已为你创建唯一的默认个人空间' : '团队工作空间用于成员之间协作和内容归档' }}
+      <span v-if="workspace.type === 'personal'">系统已为你创建唯一的默认个人空间</span>
+      <span v-else-if="workspace.status === 'archived'">该空间已归档，仅保留有权限的只读查看与下载；恢复入口由负责人操作。</span>
+      <span v-else>团队工作空间用于成员之间协作和内容归档</span>
     </footer>
   </div>
 </template>
@@ -169,6 +253,12 @@ function memberInitial(name: string) {
 
 .workspace-info-panel__hero {
   padding: 20px 2px 17px;
+}
+
+.workspace-info-panel__tags {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .workspace-info-panel__status {
@@ -326,6 +416,78 @@ function memberInitial(name: string) {
   font-size: var(--dsh-font-size-micro);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.workspace-info-panel__link {
+  padding: 0;
+  border: 0;
+  color: #2a7a63;
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--dsh-font-size-micro);
+  font-weight: 650;
+}
+
+.workspace-info-panel__link:hover {
+  color: #1c5c49;
+  text-decoration: underline;
+}
+
+.workspace-agent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.workspace-agent {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) 5px;
+  align-items: center;
+  gap: 8px;
+}
+
+.workspace-agent__icon {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 7px;
+  color: #176750;
+  background: #e8f5f0;
+  font-size: var(--dsh-font-size-badge);
+}
+
+.workspace-agent strong {
+  overflow: hidden;
+  color: #3b403c;
+  font-size: var(--dsh-font-size-micro);
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-agent__status {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #c3c8c4;
+}
+
+.workspace-agent__status--available {
+  background: #2e8b70;
+}
+
+.workspace-info-panel__empty {
+  margin: 10px 0 0;
+  color: #9ba09c;
+  font-size: var(--dsh-font-size-micro);
+}
+
+.workspace-info-panel__settings {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 18px;
 }
 
 .workspace-info-panel__footer {

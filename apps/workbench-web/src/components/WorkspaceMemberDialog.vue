@@ -70,11 +70,12 @@ const candidate = ref<{
 const addingAgent = ref(false)
 
 const employeeSearch = ref<{
+  open: boolean
   loading: boolean
   query: string
   items: Array<{ id: string; displayName: string; department: string }>
   nextCursor: string | null
-}>({ loading: false, query: '', items: [], nextCursor: null })
+}>({ open: false, loading: false, query: '', items: [], nextCursor: null })
 const addingEmployee = ref('')
 
 const agentMembers = ref<WorkspaceAgentMember[]>(props.agentMembers)
