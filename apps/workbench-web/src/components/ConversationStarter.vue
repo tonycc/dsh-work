@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
+  Cpu,
   Document,
   DocumentChecked,
   Files,
@@ -21,6 +22,11 @@ const props = withDefaults(
     workspaceLocked?: boolean
     embedded?: boolean
     title?: string
+    /**
+     * 团队空间 Agent 成员的行内「开始对话」预选（plan TW-02）。个人空间不传，
+     * 启动参数保持现状（AC-23）。
+     */
+    presetAgentMember?: { id: string; name: string; status: 'available' | 'disabled' } | null
   }>(),
   {
     workspaceId: '',
@@ -28,6 +34,7 @@ const props = withDefaults(
     workspaceLocked: false,
     embedded: false,
     title: 'dsh-work，我帮你',
+    presetAgentMember: null,
   },
 )
 
@@ -111,6 +118,10 @@ function useWorkspaceFile(file: WorkspaceFile) {
 
 async function submitTask(payload: { prompt: string; files: File[]; workspaceId: string }) {
   try {
+    const agentMemberId = props.presetAgentMember?.status === 'available'
+      ? props.presetAgentMember.id
+      : undefined
+    const workspaceAgentMemberId = props.workspaceLocked ? agentMemberId : undefined
     const task = selectedSkillId.value
       ? await taskStore.createTask(
           payload.prompt,
@@ -120,6 +131,7 @@ async function submitTask(payload: { prompt: string; files: File[]; workspaceId:
           undefined,
           referencedWorkspaceFileIds.value,
           selectedSkillId.value,
+          workspaceAgentMemberId,
         )
       : await taskStore.createTask(
           payload.prompt,
@@ -128,6 +140,8 @@ async function submitTask(payload: { prompt: string; files: File[]; workspaceId:
           props.workspaceLocked ? props.workspaceName : composerWorkspaceName.value,
           undefined,
           referencedWorkspaceFileIds.value,
+          undefined,
+          workspaceAgentMemberId,
         )
     referencedWorkspaceFileIds.value = []
     await router.push(`/conversations/${task.id}`)
@@ -186,6 +200,15 @@ defineExpose({ useWorkspaceFile })
           <h1 id="conversation-starter-title">{{ title }}</h1>
           <p>整理文档、查询制度、分析文件并形成可交付报告</p>
         </div>
+
+        <p
+          v-if="presetAgentMember"
+          data-testid="preset-agent-member"
+          class="conversation-starter__agent"
+        >
+          <el-icon><Cpu /></el-icon>
+          <span>本次对话使用 Agent 成员：<strong>{{ presetAgentMember.name }}</strong>（{{ presetAgentMember.status === 'available' ? '可用' : '已停用，暂不可用' }}）</span>
+        </p>
 
         <nav class="capability-strip" aria-label="常用任务">
           <button
@@ -313,6 +336,20 @@ defineExpose({ useWorkspaceFile })
 
 .capability-chip .el-icon {
   font-size: var(--dsh-font-size-body);
+}
+
+.conversation-starter__agent {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 18px 0 -6px;
+  color: #4a5a54;
+  font-size: var(--dsh-font-size-badge);
+}
+
+.conversation-starter__agent strong {
+  font-weight: 650;
 }
 
 .workbench-composer {

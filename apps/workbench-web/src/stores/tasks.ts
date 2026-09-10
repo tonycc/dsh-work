@@ -66,6 +66,7 @@ export const useTaskStore = defineStore('tasks', () => {
     agentId?: string,
     referencedFileIds: string[] = [],
     skillId?: string,
+    workspaceAgentMemberId?: string,
   ) {
     void _workspaceName
     const session = await workbenchApi.createSession({
@@ -73,6 +74,8 @@ export const useTaskStore = defineStore('tasks', () => {
       ...(workspaceId ? { workspaceId } : {}),
       ...(agentId ? { agentId } : {}),
       ...(skillId ? { skillId } : {}),
+      // 团队分支：服务端据此解析获准的 Agent 版本（plan TW-02 发起对话）。
+      ...(workspaceAgentMemberId ? { workspaceAgentMemberId } : {}),
     })
     const uploadedFileIds = await uploadSessionFiles(session.id, attachments)
     const fileIds = [...new Set([...referencedFileIds, ...uploadedFileIds])]

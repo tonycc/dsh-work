@@ -145,6 +145,41 @@ describe('task store', () => {
     }))
   })
 
+  it('binds the team Agent member association when starting a conversation from an Agent row', async () => {
+    const { useTaskStore } = await import('./tasks')
+    api.createSession.mockResolvedValue({ id: 'session-agent-001', workspaceId: 'ws-team' })
+    api.startRun.mockResolvedValue({ ...baseTask, sessionId: 'session-agent-001', workspaceId: 'ws-team' })
+    const store = useTaskStore()
+
+    await store.createTask(
+      '分析订单波动',
+      [],
+      'ws-team',
+      '供应链团队',
+      undefined,
+      [],
+      undefined,
+      'wam-001',
+    )
+
+    expect(api.createSession).toHaveBeenCalledWith({
+      title: '分析订单波动',
+      workspaceId: 'ws-team',
+      workspaceAgentMemberId: 'wam-001',
+    })
+  })
+
+  it('omits the team Agent member association for personal conversations (AC-23)', async () => {
+    const { useTaskStore } = await import('./tasks')
+    api.createSession.mockResolvedValue({ id: 'session-personal-002', workspaceId: 'ws-personal-U00001' })
+    api.startRun.mockResolvedValue(baseTask)
+    const store = useTaskStore()
+
+    await store.createTask('整理个人材料', [], undefined, undefined, undefined, [], undefined, undefined)
+
+    expect(api.createSession).toHaveBeenCalledWith({ title: '整理个人材料' })
+  })
+
   it('binds the selected Skill to the new Session while keeping the DSH run API unchanged', async () => {
     const { useTaskStore } = await import('./tasks')
     api.createSession.mockResolvedValue({ id: 'session-skill-001' })
