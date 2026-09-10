@@ -56,7 +56,6 @@ const roleLabels: Record<TeamMemberRole, string> = {
 }
 const roleValues: TeamMemberRole[] = ['owner', 'admin', 'member', 'viewer']
 
-const activeSection = ref<'employees' | 'agents'>('employees')
 const loadingAgents = ref(false)
 const loadAgentError = ref('')
 
@@ -128,11 +127,6 @@ function isLastOwner(member: WorkspaceMember) {
   }).lastOwner
 }
 
-function onToggleSection(section: 'employees' | 'agents') {
-  activeSection.value = section
-  if (section === 'agents') void refreshAgentMembers()
-}
-
 async function refreshAgentMembers() {
   if (!props.loadAgentMembers || !props.workspaceId) return
   loadingAgents.value = true
@@ -195,7 +189,6 @@ function onEmployeeSearchInput(value: string) {
 
 function openEmployeeSearch() {
   employeeSearch.value.open = true
-  activeSection.value = 'employees'
   void ensureEmployeeCandidates()
 }
 
@@ -249,7 +242,6 @@ async function removeMember(member: WorkspaceMember) {
 function openAgentSearch() {
   candidate.value.open = true
   candidate.value.selected = null
-  activeSection.value = 'agents'
   void searchAgentCandidates('')
 }
 
@@ -370,7 +362,7 @@ defineExpose({ ensureEmployeeCandidates })
 
       <section data-testid="member-section-employee" class="member-dialog__section">
         <header class="member-dialog__section-heading">
-          <h3 @click="onToggleSection('employees')">员工</h3>
+          <h3>员工</h3>
           <span>{{ members.length }} 位员工</span>
         </header>
 
@@ -474,7 +466,7 @@ defineExpose({ ensureEmployeeCandidates })
 
       <section data-testid="member-section-agent" class="member-dialog__section">
         <header class="member-dialog__section-heading">
-          <h3 @click="onToggleSection('agents')">Agent</h3>
+          <h3>Agent</h3>
           <span>{{ agentMemberList.length }} 个 Agent</span>
         </header>
 
