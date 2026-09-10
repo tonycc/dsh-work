@@ -383,3 +383,51 @@ test('moving a team membership into a personal workspace hits the 0013 guard', a
   `
   assert.equal(owners?.count, 1)
 })
+
+test('记录决策：0013 守卫不校验 personal→team 移动后的旧个人空间（1A 不修）', async () => {
+  // 交接文档 §5 遗留观察：protect_personal_workspace_membership 只看 NEW.workspace_id，
+  // 因此把个人空间唯一 owner 的成员行移动到团队空间时，旧个人空间不会被校验，也不会被
+  // 阻止。核实结论：该路径当前可被直接的 UPDATE 触发，导致个人空间失去 owner 成员行。
+  //
+  // 决策（1A-T7）：本批次不修。理由：plan 6.4 明确「不改写个人空间已有唯一索引、成员
+  // 保护触发器和创建者规则」，AC-23/AC-27 要求个人空间零改动；此路径无任何 API 入口，
+  // 属潜在数据完整性缺口而非可利用越权。建议后续批次用独立迁移扩展 0013 守卫（在
+  // UPDATE 时同时校验 OLD 个人空间）；本测试固定当前行为，修复时需同步更新。
+  const targetTeamWorkspaceId = `ws-1a-team-personal-move-${suffix}`
+  await database`
+    insert into workspaces (id, tenant_id, name, description, workspace_type, created_by, status)
+    values (${targetTeamWorkspaceId}, 'tenant-dsh-work', '1A 个人空间迁移目标', '', 'team', 'U00001', 'active')
+  `
+
+  await database`
+    update workspace_members
+       set workspace_id = ${targetTeamWorkspaceId}
+     where tenant_id = 'tenant-dsh-work'
+       and workspace_id = ${personalWorkspaceId}
+       and user_id = ${personalUserId}
+  `
+
+  const [oldPersonalMembers] = await database<{ count: number }[]>`
+    select count(*)::integer as count
+      from workspace_members
+     where tenant_id = 'tenant-dsh-work'
+       and workspace_id = ${personalWorkspaceId}
+  `
+  assert.equal(oldPersonalMembers?.count, 0, '当前行为：旧个人空间失去 owner 成员行（已知缺口，见上述决策）')
+
+  const [targetOwners] = await database<{ count: number }[]>`
+    select count(*)::integer as count
+      from workspace_members
+     where tenant_id = 'tenant-dsh-work'
+       and workspace_id = ${targetTeamWorkspaceId}
+       and member_role = 'owner'
+  `
+  assert.equal(targetOwners?.count, 1)
+
+  // 个人空间唯一索引与空间记录本身不受该移动影响。
+  const [personalWorkspace] = await database<{ id: string }[]>`
+    select id from workspaces
+     where tenant_id = 'tenant-dsh-work' and id = ${personalWorkspaceId}
+  `
+  assert.equal(personalWorkspace?.id, personalWorkspaceId)
+})
