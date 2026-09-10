@@ -153,6 +153,12 @@ export class PostgresGrantReconciliationService {
     await this.requirePlatformAdmin(input.actor)
 
     const reconciled = await this.database.begin(async transaction => {
+      // Lock order matters: the member service takes the workspace row lock and
+      // then reads/locks the grant-source rows. Reconcile must use the SAME order
+      // (workspace -> sources); locking sources first made concurrent
+      // reconcile + Agent removal acquire the two locks in opposite order and
+      // PostgreSQL aborted one side with a deadlock. Read unlocked, lock the
+      // workspaces, then lock the sources.
       const rows = await transaction<{
         id: string
         workspaceId: string
@@ -167,7 +173,6 @@ export class PostgresGrantReconciliationService {
           from workspace_grant_sources
          where tenant_id = ${tenantId} and id in ${transaction(sourceIds)}
          order by workspace_id asc, id asc
-         for update
       `
       if (rows.length !== sourceIds.length) {
         throw new Error('部分授权来源不存在，请刷新对账清单后重试')
@@ -177,10 +182,22 @@ export class PostgresGrantReconciliationService {
         throw new Error('部分授权来源已完成对账或已撤销，不能重复对账，请刷新对账清单后重试')
       }
 
-      // 与 Agent 移出/停用的门禁共用 workspace 行锁，保证对账与破坏性调整不交错。
+      // 与 Agent 移出/停用共用 workspace 行锁，且顺序一致（先 workspace、后来源）。
       const workspaceIds = [...new Set(rows.map(row => row.workspaceId))].sort()
       for (const workspaceId of workspaceIds) {
         await lockWorkspaceRow(transaction, workspaceId)
+      }
+      // 复核并锁定来源行：等待 workspace 锁期间状态可能已变化。
+      const locked = await transaction<{ sourceType: string; status: string }[]>`
+        select source_type as "sourceType", status
+          from workspace_grant_sources
+         where tenant_id = ${tenantId} and id in ${transaction(sourceIds)}
+         order by workspace_id asc, id asc
+         for update
+      `
+      const stale = locked.filter(row => row.sourceType !== 'legacy_unresolved' || row.status !== 'active')
+      if (stale.length) {
+        throw new Error('部分授权来源已完成对账或已撤销，不能重复对账，请刷新对账清单后重试')
       }
       await transaction`
         update workspace_grant_sources

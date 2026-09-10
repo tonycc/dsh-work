@@ -28,6 +28,7 @@ adminUrl.pathname = '/postgres'
 
 let adminDatabase: DatabaseClient
 let database: DatabaseClient
+let testDatabaseUrl = ''
 let server: Server
 let baseUrl = ''
 let reconciliation: PostgresGrantReconciliationService
@@ -42,7 +43,8 @@ before(async () => {
   await adminDatabase.unsafe(`create database "${testDatabaseName}"`)
   const testUrl = new URL(databaseUrl)
   testUrl.pathname = `/${testDatabaseName}`
-  database = createDatabase({ url: testUrl.toString(), maxConnections: 8 })
+  testDatabaseUrl = testUrl.toString()
+  database = createDatabase({ url: testDatabaseUrl, maxConnections: 8 })
   await runMigrations(database)
 
   const authorization = new PostgresAuthorizationService(database)
@@ -406,10 +408,55 @@ test('存在 legacy 来源时移除或停用 Agent 被拒绝并提示先对账�
   assert.equal(preservedGrant?.count, 1, '来源不明的存量授权不能因移出 Agent 顺带删除')
 })
 
+test('并发「对账 + 移出 Agent 成员」按同一锁序串行化，不死锁', async () => {
+  const workspaceId = `ws-t7-deadlock-${suffix}`
+  const ownerId = `user-t7-deadlock-${suffix}`
+  await createDirectoryUser(ownerId, 'T7 死锁负责人')
+  await createTeamWorkspace(workspaceId, [{ userId: ownerId, role: 'owner' }])
+  const tool = await createTool({ id: `tool-t7-deadlock-${suffix}` })
+  const legacySourceId = await seedLegacySource({
+    workspaceId,
+    capabilityType: 'tool',
+    capabilityVersionId: tool.versionId,
+  })
+  const agent = await createPublishedAgent({
+    id: `agent-t7-deadlock-${suffix}`,
+    name: 'T7 死锁 Agent',
+    ownerId,
+    toolRefs: [`tool-t7-deadlock-${suffix}@1.0.0`],
+  })
+  const joined = await api('POST', `/api/workbench/v1/workspaces/${workspaceId}/agent-members`, {
+    as: ownerId,
+    body: { agentId: agent.id },
+  })
+  assert.equal(joined.status, 201)
+  const memberId = (joined.body.data as { id: string }).id
+
+  // 对账（admin）与移出（员工端 HTTP）并发提交。旧实现里 reconcile 先锁
+  // workspace_grant_sources 行、再锁 workspace 行，而移出先锁 workspace 行、
+  // 再读来源行——相反锁序会被 PostgreSQL 判为死锁。二者必须都成功。
+  const [reconciled, removed] = await Promise.all([
+    api('POST', '/api/admin/v1/grant-sources/reconcile', {
+      as: adminUserId,
+      body: { sourceIds: [legacySourceId] },
+    }),
+    api('DELETE', `/api/workbench/v1/workspaces/${workspaceId}/agent-members/${memberId}`, { as: ownerId }),
+  ])
+  assert.equal(/deadlock/i.test(errorMessage(reconciled)), false, '对账不得死锁')
+  assert.equal(/deadlock/i.test(errorMessage(removed)), false, '移出不得死锁')
+  assert.equal(reconciled.status, 200)
+  assert.equal(removed.status, 200)
+  const [legacySource] = await database<{ sourceType: string; status: string }[]>`
+    select source_type as "sourceType", status from workspace_grant_sources
+     where tenant_id = ${tenantId} and id = ${legacySourceId}
+  `
+  assert.equal(legacySource?.sourceType, 'manual')
+  assert.equal(legacySource?.status, 'active')
+})
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
 function testApiAuthenticator(request: IncomingMessage, audience: ApiAudience): Promise<RequestIdentity> {
   const header = request.headers['x-test-user-id']
   const userId = Array.isArray(header) ? header[0] : header
