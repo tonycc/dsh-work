@@ -229,6 +229,12 @@ test('对账完成把 legacy 来源改写为 manual、不删除任何行、不�
     capabilityType: 'tool',
     capabilityVersionId: tool.versionId,
   })
+  // 第二个 legacy 来源：覆盖 admin UI 的「按空间批量对账」多 id 路径。
+  const secondLegacySourceId = await seedLegacySource({
+    workspaceId,
+    capabilityType: 'tool',
+    capabilityVersionId: tool.versionId,
+  })
   // 一条已撤销的来源行，用于验证对账不会物理删除撤销行。
   await database`
     insert into workspace_grant_sources (
@@ -248,20 +254,21 @@ test('对账完成把 legacy 来源改写为 manual、不删除任何行、不�
 
   const result = await api('POST', '/api/admin/v1/grant-sources/reconcile', {
     as: adminUserId,
-    body: { sourceIds: [legacySourceId] },
+    body: { sourceIds: [legacySourceId, secondLegacySourceId] },
   })
   assert.equal(result.status, 200)
   const payload = result.body.data as { reconciled: number, sourceIds: string[], workspaceIds: string[] }
-  assert.equal(payload.reconciled, 1)
-  assert.deepEqual(payload.sourceIds, [legacySourceId])
+  assert.equal(payload.reconciled, 2)
+  assert.deepEqual([...payload.sourceIds].sort(), [legacySourceId, secondLegacySourceId].sort())
   assert.deepEqual(payload.workspaceIds, [workspaceId])
 
-  const [rewritten] = await database<{ sourceType: string; status: string }[]>`
+  const rewrittenRows = await database<{ sourceType: string; status: string }[]>`
     select source_type as "sourceType", status from workspace_grant_sources
-     where tenant_id = ${tenantId} and id = ${legacySourceId}
+     where tenant_id = ${tenantId} and id in ${database([legacySourceId, secondLegacySourceId])}
+     order by id
   `
-  assert.equal(rewritten?.sourceType, 'manual')
-  assert.equal(rewritten?.status, 'active')
+  assert.equal(rewrittenRows.length, 2)
+  assert.ok(rewrittenRows.every(row => row.sourceType === 'manual' && row.status === 'active'))
 
   // 撤销行保留，不物理删除；来源与授权行数不变（有效授权集合未变）。
   const [revoked] = await database<{ status: string }[]>`
