@@ -57,6 +57,14 @@ before(async () => {
   testUrl.pathname = `/${testDatabaseName}`
   database = createDatabase({ url: testUrl.toString(), maxConnections: 10 })
   await runMigrations(database)
+  // 本套件用共享的 runtime-local-01 跑真实调度（startRun / recoverAfterServiceRestart）。
+  // claimAttempt 按 runtime 全局统计 status='running' 的 attempt 占用容量，而多个用例
+  // 会直接落库 running 的 run/attempt 作为夹具，会跨用例耗尽默认容量 2，导致后续用例
+  // 无法领取任务（表现为 waitFor 超时）。这里给测试 runtime 充足容量以隔离该相互影响。
+  await database`
+    update runtimes set capacity = 32
+     where tenant_id = ${tenantId} and id = ${runtimeId}
+  `
 
   runtime = new FakeRuntime()
   authorization = new PostgresAuthorizationService(database)
@@ -233,8 +241,8 @@ test('收权清扫：member_removed 取消该成员在本空间的排队与运�
   const terminalRunId = `${ws}-run-terminal`
   await createRunWithAttempt({ id: terminalRunId, sessionId, requestedBy: revokedId, status: 'succeeded', agentVersionId: versionId, workspaceId: ws })
   const peerRunId = `${ws}-run-peer`
-  await createRunWithAttempt({ id: peerRunId, sessionId: `${ws}-peer-session`, requestedBy: peerId, status: 'queued', agentVersionId: versionId, workspaceId: ws })
   await createSession(`${ws}-peer-session`, ws, peerId, versionId)
+  await createRunWithAttempt({ id: peerRunId, sessionId: `${ws}-peer-session`, requestedBy: peerId, status: 'queued', agentVersionId: versionId, workspaceId: ws })
   const otherRunId = `${otherWs}-run`
   await createRunWithAttempt({ id: otherRunId, sessionId: otherSessionId, requestedBy: otherUserId, status: 'queued', agentVersionId: versionId, workspaceId: otherWs })
 
@@ -251,8 +259,11 @@ test('收权清扫：member_removed 取消该成员在本空间的排队与运�
   if (!running) throw new Error('Run 创建失败')
   await waitFor(async () => (await runRow(running.id)).status === 'running', 'run 进入 running')
 
-  await insertRevocationEvent(ws, revokedId, 'member_removed', { by: ownerId })
-  await bumpRevision(ws)
+  // 事件是触发提示，当前授权状态才是事实来源：成员必须真的已被移出，否则
+  // isRevocationEffective 的当前状态门会（正确地）跳过清扫。
+  // members.removeMember 自身会写入 member_removed 撤权事件并推进修订号，
+  // 这里不再手工重复插入（会撞 workspace_revocation_events 去重键）。
+  await members.removeMember(ws, revokedId, ownerId)
   await sweep.sweepOnce()
 
   await waitFor(async () => (await runRow(queuedRunId)).status === 'cancelled', '排队任务被取消')
@@ -278,7 +289,9 @@ test('收权清扫：agent_disabled 只取消锁定在该 Agent 成员版本上�
   await seedUser(ownerId, '清扫 Agent 负责人')
   await seedUser(userId, '清扫 Agent 成员')
   await createTeamWorkspace(ws, [{ userId: ownerId, role: 'owner' }, { userId: userId, role: 'member' }])
-  await createTeamWorkspace(otherWs, [{ userId: ownerId, role: 'owner' }])
+  // 对照空间：请求人必须是该空间的合法成员，否则修订号全量复核会（正确地）
+  // 以「非成员」为由取消该运行，掩盖本用例真正要验证的跨空间隔离。
+  await createTeamWorkspace(otherWs, [{ userId: ownerId, role: 'owner' }, { userId: userId, role: 'member' }])
   await seedAgent(ws, versionA, 'a')
   await seedAgent(ws, versionB, 'b')
   await grantAgentVersion(ws, versionA)
@@ -345,6 +358,9 @@ test('消费者：pending 事件处理后取消运行并标记 processed，重�
   const runId = `${ws}-run`
   await createRunWithAttempt({ id: runId, sessionId, requestedBy: userId, status: 'queued', agentVersionId: versionId, workspaceId: ws })
 
+  // 事件是触发提示，当前授权状态才是事实来源：成员必须真的已被移出，否则
+  // isRevocationEffective 的当前状态门会（正确地）跳过清扫，用例就测不到消费链路。
+  await database`delete from workspace_members where tenant_id = ${tenantId} and workspace_id = ${ws} and user_id = ${userId}`
   await insertRevocationEvent(ws, userId, 'member_removed', { by: ownerId })
   await bumpRevision(ws)
   await sweep.sweepOnce()
@@ -516,15 +532,23 @@ test('执行前复核：团队运行成员被移除后置 failed 且不调用 Ru
 })
 
 test('执行前复核：个人空间运行不复核，正常执行', async () => {
-  const ws = uniqueWorkspace('recheck-personal')
-  const userId = `${ws}-owner`
-  const versionId = `${ws}-version`
+  const prefix = uniqueWorkspace('recheck-personal')
+  const userId = `${prefix}-owner`
+  const versionId = `${prefix}-version`
   await seedUser(userId, '复核个人空间用户')
-  await createPersonalWorkspace(ws, userId)
-  await seedAgent(ws, versionId)
-  const sessionId = `${ws}-session`
+  // 0013 的 users_personal_workspace_provisioning 触发器在插入 users 时已自动
+  // 创建个人空间；直接使用它，不要再次插入（会撞 one_personal_workspace_per_user）。
+  const ws = await database<{ id: string }[]>`
+    select id from workspaces
+     where tenant_id = ${tenantId} and workspace_type = 'personal' and created_by = ${userId}
+  `.then(rows => {
+    if (!rows[0]) throw new Error(`个人空间未自动创建：${userId}`)
+    return rows[0].id
+  })
+  await seedAgent(prefix, versionId)
+  const sessionId = `${prefix}-session`
   await createSession(sessionId, ws, userId, versionId)
-  const runId = `${ws}-run`
+  const runId = `${prefix}-run`
   await createRunWithAttempt({ id: runId, sessionId, requestedBy: userId, status: 'queued', agentVersionId: versionId, workspaceId: ws })
 
   runtime.holdCompletions = false
@@ -589,8 +613,6 @@ test('SSE：授权缓存按修订号失效（同修订号缓存命中，修订�
   const runId = `${ws}-run`
   await createRunWithAttempt({ id: runId, sessionId, requestedBy: userId, status: 'running', agentVersionId: versionId, workspaceId: ws })
   const firstEvent = await appendRunEvent(runId, `${runId}-attempt`, 1, 'assistant.delta', '缓存第一批')
-  const cachedEvent = await appendRunEvent(runId, `${runId}-attempt`, 2, 'assistant.delta', '缓存命中批次')
-  const deniedEvent = await appendRunEvent(runId, `${runId}-attempt`, 3, 'assistant.delta', '修订失效批次')
 
   const response = new MemorySseResponse()
   const stream = streamRunEvents(response, undefined, runId, runs, 20, 60_000, {
@@ -603,10 +625,12 @@ test('SSE：授权缓存按修订号失效（同修订号缓存命中，修订�
 
   // 同修订号内直接删除成员（不推进修订号）：授权缓存命中，批次仍可交付。
   await database`delete from workspace_members where tenant_id = ${tenantId} and workspace_id = ${ws} and user_id = ${userId}`
+  const cachedEvent = await appendRunEvent(runId, `${runId}-attempt`, 2, 'assistant.delta', '缓存命中批次')
   await waitFor(() => response.body.includes(cachedEvent), '同修订号缓存命中，内容继续交付')
 
-  // 修订号推进后缓存立即失效：新鲜授权检查拒绝，流终止。
+  // 修订号推进后缓存立即失效：下一批写出前的检查新鲜复核并拒绝，流终止。
   await bumpRevision(ws)
+  const deniedEvent = await appendRunEvent(runId, `${runId}-attempt`, 3, 'assistant.delta', '修订失效批次')
   await Promise.race([
     stream,
     new Promise((_resolve, reject) => setTimeout(() => reject(new Error('修订变更后 SSE 流未终止')), 5_000)),
@@ -630,14 +654,19 @@ test('SSE 写出竞态：检查通过后、写出前提交的撤权不得交付�
   const runId = `${ws}-run`
   await createRunWithAttempt({ id: runId, sessionId, requestedBy: userId, status: 'running', agentVersionId: versionId, workspaceId: ws })
   const deliveredEvent = await appendRunEvent(runId, `${runId}-attempt`, 1, 'assistant.delta', '竞态第一批')
-  const racedEvent = await appendRunEvent(runId, `${runId}-attempt`, 2, 'assistant.delta', '竞态第二批次')
 
-  // 模拟「复核通过后、写出前」的撤权提交：读取第二批次的同时提交成员移除。
+  // 模拟「复核通过后、写出前」的撤权提交：读取第二批次的同一刻提交成员移除 +
+  // 修订号推进。第二批次必须在此之后才写入 run_events，否则首轮全量读取会把
+  // 「撤权后」的内容当成在途批次交付，竞态窗口就不再存在。
+  let racedEventWritten = false
+  let racedEventId = ''
   const racingRuns = {
     async readEventsAfterEvent(tenant: string, run: string, cursor?: string) {
-      if (cursor === deliveredEvent) {
+      if (cursor === deliveredEvent && !racedEventWritten) {
+        racedEventWritten = true
         await database`delete from workspace_members where tenant_id = ${tenantId} and workspace_id = ${ws} and user_id = ${userId}`
         await bumpRevision(ws)
+        racedEventId = await appendRunEvent(run, `${runId}-attempt`, 2, 'assistant.delta', '竞态第二批次')
       }
       return runs.readEventsAfterEvent(tenant, run, cursor)
     },
@@ -656,8 +685,9 @@ test('SSE 写出竞态：检查通过后、写出前提交的撤权不得交付�
     stream,
     new Promise((_resolve, reject) => setTimeout(() => reject(new Error('竞态撤权后 SSE 流未终止')), 5_000)),
   ])
+  assert.equal(racedEventWritten, true, '竞态撤权应当在第二批次读取时提交')
   assert.equal(response.ended, true)
-  assert.equal(response.body.includes(racedEvent), false, '撤权提交后的批次不得交付')
+  assert.equal(response.body.includes(racedEventId), false, '撤权提交后的批次不得交付')
 })
 
 test('SSE HTTP 路由：成员被移出团队空间后事件流终止', async () => {
@@ -768,13 +798,6 @@ async function createTeamWorkspace(workspaceId: string, members: Array<{ userId:
       values (${tenantId}, ${workspaceId}, ${member.userId}, ${member.role}, ${ownerId})
     `
   }
-}
-
-async function createPersonalWorkspace(workspaceId: string, ownerId: string) {
-  await database`
-    insert into workspaces (id, tenant_id, name, description, workspace_type, created_by, status)
-    values (${workspaceId}, ${tenantId}, 'T5 个人空间', '', 'personal', ${ownerId}, 'active')
-  `
 }
 
 async function seedAgent(workspacePrefix: string, versionId: string, suffix = '') {

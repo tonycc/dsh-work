@@ -181,23 +181,67 @@ export class RunOrchestrationService {
     const result = await this.runtime.cancel(runId, 'system', cause)
     const detail = `系统撤权取消：${reason ?? '授权已撤销'}`
     await this.operations?.appendAudit('system', 'run.cancel.request', runId, 'success', `trace-${runId}`, detail)
-    if (!result.accepted && run.status === 'queued') {
-      if (run.currentAttemptId) {
-        await this.runs.transitionAttempt(tenantId, run.currentAttemptId, 'cancelled')
-      }
-      const cancelled = await this.runs.transitionRun(tenantId, runId, 'cancelled')
-      await this.runs.appendSystemEvent({
-        tenantId,
-        runId,
-        attemptId: run.currentAttemptId ?? `attempt-${run.id}`,
-        eventType: 'run.cancelled',
-        displayMessage: '授权已撤销，任务未执行',
-        safeMetadata: { cause, reason: reason ?? '授权已撤销' },
-        traceId: `trace-${runId}`,
-      })
-      return cancelled
+    // Convergence when the Runtime adapter has NO execution record and reports
+    // accepted=false. This covers two windows that would otherwise strand the
+    // run in a non-terminal state forever:
+    //   - 'queued': claimed for accounting but not yet dispatched;
+    //   - 'running' (phantom): the scheduler claim sets runs.status='running'
+    //     before Runtime.execute() has registered the execution, so a
+    //     revocation landing in that window is invisible to the adapter. A real
+    //     in-flight execution always has a record, so accepted=false here means
+    //     no Runtime work is running and converging in the database is safe.
+    // The status is re-read under the transition guard so a concurrent real
+    // cancellation/completion is never overwritten.
+    if (!result.accepted && ['queued', 'running'].includes(run.status)) {
+      return (await this.cancelRunBySystem(run.id, cause, reason)) ?? run
     }
     return (await this.runs.getRun(tenantId, runId)) ?? run
+  }
+
+  /**
+   * Terminal convergence for a system-revoked run whose Runtime adapter has no
+   * live execution: cancels the attempt and run, then writes the explanatory
+   * run_events note.
+   */
+  private async cancelRunBySystem(runId: string, cause: 'system_revoke', reason?: string) {
+    const current = await this.runs.getRun(tenantId, runId)
+    if (!current) return null
+    return this.convergeCancelledRun(runId, {
+      attemptId: current.currentAttemptId ?? `attempt-${current.id}`,
+      displayMessage: '授权已撤销，任务未执行',
+      safeMetadata: { cause, reason: reason ?? '授权已撤销' },
+    })
+  }
+
+  /**
+   * Cancels the attempt and run of a non-terminal run whose Runtime adapter has
+   * no live execution, then writes the explanatory run_events note. Re-reads
+   * the status first, so a concurrent completion/cancellation is never
+   * overwritten and an already-terminal run is returned untouched.
+   */
+  private async convergeCancelledRun(
+    runId: string,
+    note: { attemptId: string; displayMessage: string; safeMetadata: JsonObject },
+  ) {
+    const current = await this.runs.getRun(tenantId, runId)
+    if (!current || !['queued', 'running'].includes(current.status)) return current
+    if (current.currentAttemptId) {
+      const attempt = await this.runs.getAttempt(tenantId, current.currentAttemptId)
+      if (attempt && !['failed', 'cancelled', 'succeeded'].includes(attempt.status)) {
+        await this.runs.transitionAttempt(tenantId, current.currentAttemptId, 'cancelled')
+      }
+    }
+    const cancelled = await this.runs.transitionRun(tenantId, runId, 'cancelled')
+    await this.runs.appendSystemEvent({
+      tenantId,
+      runId,
+      attemptId: note.attemptId,
+      eventType: 'run.cancelled',
+      displayMessage: note.displayMessage,
+      safeMetadata: note.safeMetadata,
+      traceId: `trace-${runId}`,
+    })
+    return cancelled
   }
 
   async retry(runId: string, userId: string, authorizationContext?: SessionAuthorizationContext) {

@@ -309,12 +309,28 @@ export class PostgresRunRepository implements RunRepository {
    * Server-authored events (system cancel notes, execution-time authorization
    * denials — 1A-T5). The next per-attempt sequence is computed inside the
    * transaction; the insert-select aggregate always produces exactly one row.
-   * Callers only append to attempts that never reached the Runtime (queued or
-   * recheck-denied), so no writer contends on the sequence.
+   *
+   * Idempotent per (attempt, event type): a run may be converged twice — e.g. a
+   * revocation sweep cancels a phantom-running run while the Runtime adapter's
+   * own cancel request is still in flight — and `run_events` is unique on
+   * (tenant_id, attempt_id, sequence). Re-emitting the same lifecycle note
+   * would collide on that key, so the first note wins and later calls return it.
    */
   async appendSystemEvent(input: AppendSystemEventInput): Promise<StoredRunEvent> {
-    const id = `event-system-${randomUUID()}`
     return this.database.begin(async (transaction) => {
+      const [existing] = await transaction<EventRow[]>`
+        select id, tenant_id as "tenantId", run_id as "runId", attempt_id as "attemptId",
+               sequence, event_type as "eventType", display_message as "displayMessage",
+               safe_metadata as "safeMetadata", trace_id as "traceId", occurred_at as "occurredAt",
+               stream_position as "streamPosition"
+          from run_events
+         where tenant_id = ${input.tenantId} and attempt_id = ${input.attemptId}
+           and event_type = ${input.eventType}
+         limit 1
+      `
+      if (existing) return mapEvent(existing)
+
+      const id = `event-system-${randomUUID()}`
       const [created] = await transaction<EventRow[]>`
         insert into run_events (
           id, tenant_id, run_id, attempt_id, sequence, event_type, display_message,
