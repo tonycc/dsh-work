@@ -14,23 +14,44 @@ import {
 import { ArtifactCard } from '@dsh-work/ui-core'
 import { useAuthStore } from '@/stores/auth'
 import { useContentStore } from '@/stores/content'
-import type { Artifact, WorkspaceFile } from '@/types/domain'
+import { workbenchApi } from '@/api/client'
+import type { Artifact, TeamMemberRole, WorkspaceAgentMember, WorkspaceFile } from '@/types/domain'
 import ConversationStarter from '@/components/ConversationStarter.vue'
+import WorkspaceMemberDialog from '@/components/WorkspaceMemberDialog.vue'
+import WorkspaceSettingsDialog from '@/components/WorkspaceSettingsDialog.vue'
 import { WorkspaceInfoPanel } from '@dsh-work/workbench-components'
 import { downloadArtifactFile, notifyActionFailure } from '@/utils/feedback'
+import { resolveCurrentUserRole } from '@/utils/member-roles'
 
 type WorkspaceTab = 'conversation' | 'files' | 'artifacts'
+
+/**
+ * 当前操作人角色可由路由宿主注入（测试与后续服务端返回角色字段时使用）；
+ * 缺省时按 utils/member-roles 的保守口径从空间负责人推导。
+ */
+const props = withDefaults(
+  defineProps<{ currentUserRole?: TeamMemberRole | null }>(),
+  { currentUserRole: undefined },
+)
 
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 const contentStore = useContentStore()
-const starterRef = ref<{ useWorkspaceFile: (file: WorkspaceFile) => void }>()
+const starterRef = ref<{
+  useWorkspaceFile: (file: WorkspaceFile) => void
+}>()
 const tabButtonRefs = ref<HTMLButtonElement[]>([])
 const panelCollapsed = ref(false)
 const mobileInfoOpen = ref(false)
 const uploadInput = ref<HTMLInputElement>()
 const uploading = ref(false)
+
+const memberDialogOpen = ref(false)
+const settingsDialogOpen = ref(false)
+const agentMembers = ref<WorkspaceAgentMember[]>([])
+const agentMembersWarning = ref('')
+const presetAgentMember = ref<WorkspaceAgentMember | null>(null)
 
 const requestedTab = String(route.query.tab ?? 'conversation')
 const activeTab = ref<WorkspaceTab>(
@@ -44,6 +65,26 @@ const workspace = computed(() =>
   contentStore.workspaces.find((item) => item.id === workspaceId.value),
 )
 const isPersonal = computed(() => workspace.value?.type === 'personal')
+const isTeam = computed(() => workspace.value?.type === 'team')
+/**
+ * 团队分支只在服务端返回归档状态时进入只读态；`/workspaces` 契约补齐前，
+ * 缺省视为活动空间（不会影响个人空间）。
+ */
+const isArchived = computed(() => isTeam.value && workspace.value?.status === 'archived')
+/**
+ * 当前操作人的团队角色。服务端未返回操作人角色字段（见 T6 报告缺口）：
+ * 仅在「工作空间负责人姓名 == 当前登录用户姓名」这一可判定情形下推导为
+ * 负责人，其余一律为 null，团队写入口不渲染（不臆造权限，不误开入口）。
+ */
+const currentUserRole = computed<TeamMemberRole | null>(() => {
+  if (props.currentUserRole !== undefined) return props.currentUserRole
+  return resolveCurrentUserRole({
+    workspaceType: workspace.value?.type,
+    archived: isArchived.value,
+    owner: workspace.value?.owner,
+    userName: authStore.user.name,
+  })
+})
 const workspaceArtifacts = computed(() =>
   contentStore.artifacts.filter((artifact) => artifact.workspaceId === workspaceId.value),
 )
@@ -135,9 +176,50 @@ watch(
   },
 )
 
+/**
+ * Agent 成员列表只按既有 T4 接口加载，且严格限定团队空间：个人空间既不发
+ * 请求也不渲染（AC-23）。员工成员列表接口缺失时给出说明而不是臆造数据。
+ */
+async function loadAgentMembers(workspaceId = workspace.value?.id ?? '') {
+  if (!workspaceId || !isTeam.value) return
+  agentMembersWarning.value = ''
+  try {
+    agentMembers.value = await workbenchApi.listWorkspaceAgentMembers(workspaceId)
+  } catch (error) {
+    agentMembers.value = []
+    agentMembersWarning.value = 'Agent 成员列表加载失败，可稍后重新打开空间信息查看。'
+    notifyActionFailure('加载 Agent 成员', `工作空间“${workspace.value?.name ?? workspaceId}”`, error, '稍后刷新页面重试。')
+  }
+}
+
+function startAgentConversation(agentMemberId: string) {
+  const member = agentMembers.value.find(item => item.id === agentMemberId)
+  if (!member) return
+  presetAgentMember.value = member
+  memberDialogOpen.value = false
+  selectTab('conversation')
+}
+
+function refreshTeamMembers() {
+  void loadAgentMembers()
+}
+
 onMounted(() => {
   void contentStore.refresh()
 })
+
+/**
+ * 空间详情依赖 Store 里的空间对象：解析结果可能是团队或个人。团队分支在
+ * 对象就绪后再加载 Agent 成员；个人空间分支不产生任何新请求（AC-23）。
+ */
+watch(workspace, (value) => {
+  presetAgentMember.value = null
+  memberDialogOpen.value = false
+  settingsDialogOpen.value = false
+  agentMembers.value = []
+  agentMembersWarning.value = ''
+  if (value?.type === 'team') void loadAgentMembers(value.id)
+}, { immediate: true })
 </script>
 
 <template>
@@ -222,6 +304,7 @@ onMounted(() => {
           :workspace-name="workspace.name"
           workspace-locked
           :title="`在“${workspace.name}”中开始对话`"
+          :preset-agent-member="isTeam ? presetAgentMember : null"
         />
 
         <section
@@ -291,8 +374,12 @@ onMounted(() => {
       <WorkspaceInfoPanel
         :workspace="workspace"
         :data-scopes="authStore.user.dataScopes"
+        :current-user-role="currentUserRole"
+        :agent-members="agentMembers"
         collapsible
         @collapse="panelCollapsed = true"
+        @manage-members="memberDialogOpen = true"
+        @open-settings="settingsDialogOpen = true"
       />
     </aside>
 
@@ -306,8 +393,39 @@ onMounted(() => {
       <WorkspaceInfoPanel
         :workspace="workspace"
         :data-scopes="authStore.user.dataScopes"
+        :current-user-role="currentUserRole"
+        :agent-members="agentMembers"
+        @manage-members="memberDialogOpen = true"
+        @open-settings="settingsDialogOpen = true"
       />
     </el-drawer>
+
+    <template v-if="isTeam">
+      <WorkspaceMemberDialog
+        v-model:open="memberDialogOpen"
+        :workspace-id="workspace.id"
+        :workspace-name="workspace.name"
+        :current-user-role="currentUserRole"
+        :members="[]"
+        :agent-members="agentMembers"
+        :load-agent-members="false"
+        members-warning="员工成员列表接口尚未就绪，暂无法在此查看或调整员工角色。"
+        @refresh="refreshTeamMembers"
+        @start-conversation="startAgentConversation"
+      />
+
+      <WorkspaceSettingsDialog
+        v-model:open="settingsDialogOpen"
+        :workspace-id="workspace.id"
+        :workspace-name="workspace.name"
+        :workspace-description="workspace.description"
+        :current-user-role="currentUserRole"
+        :members="[]"
+        save-warning="名称与说明的保存接口尚未就绪，本次修改不会提交到服务端。"
+        @transferred="refreshTeamMembers"
+        @exited="router.push('/workspaces')"
+      />
+    </template>
 
   </div>
 </template>

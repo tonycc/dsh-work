@@ -11,6 +11,7 @@ import type {
   WorkspaceMember,
 } from '@/types/domain'
 import { notifyActionFailure } from '@/utils/feedback'
+import { memberRoleCapabilities } from '@/utils/member-roles'
 
 const props = withDefaults(
   defineProps<{
@@ -78,23 +79,23 @@ const employeeSearch = ref<{
 }>({ open: false, loading: false, query: '', items: [], nextCursor: null })
 const addingEmployee = ref('')
 
-const agentMembers = ref<WorkspaceAgentMember[]>(props.agentMembers)
+const agentMemberList = ref<WorkspaceAgentMember[]>(props.agentMembers)
 
 const isOwner = computed(() => props.currentUserRole === 'owner')
 const canManageEmployees = computed(() => isOwner.value || props.currentUserRole === 'admin')
 const ownerCount = computed(() => props.members.filter(member => member.role === 'owner').length)
 
 /**
- * 严格照 plan 第 5 节权限矩阵推导员工段可写动作：负责人可改全员；管理员只
- * 能改「成员／只读成员」，且不能改自己和其他管理员；最后负责人锁定。
+ * 严格照 plan 第 5 节权限矩阵推导员工段可写动作（实现见 utils/member-roles）：
+ * 负责人可改全员；管理员只能改「成员／只读成员」，且不能改自己和其他管理员；
+ * 最后负责人锁定。
  */
 function editableRoles(member: WorkspaceMember): TeamMemberRole[] {
-  if (member.role === 'owner' && ownerCount.value <= 1) return []
-  if (isOwner.value) return roleValues
-  if (props.currentUserRole === 'admin' && ['member', 'viewer'].includes(member.role)) {
-    return ['member', 'viewer']
-  }
-  return []
+  return memberRoleCapabilities({
+    actorRole: props.currentUserRole,
+    member,
+    ownerCount: ownerCount.value,
+  }).editableRoles
 }
 
 /**
@@ -108,9 +109,11 @@ function isSelf(member: WorkspaceMember) {
 
 /** 权限矩阵：负责人可移除全员；管理员只能移除「成员／只读成员」。 */
 function canRemove(member: WorkspaceMember) {
-  if (member.role === 'owner' && ownerCount.value <= 1) return false
-  if (isOwner.value) return true
-  return props.currentUserRole === 'admin' && ['member', 'viewer'].includes(member.role)
+  return memberRoleCapabilities({
+    actorRole: props.currentUserRole,
+    member,
+    ownerCount: ownerCount.value,
+  }).removable
 }
 
 function roleSelectValue(member: WorkspaceMember) {
@@ -118,20 +121,24 @@ function roleSelectValue(member: WorkspaceMember) {
 }
 
 function isLastOwner(member: WorkspaceMember) {
-  return member.role === 'owner' && ownerCount.value <= 1
+  return memberRoleCapabilities({
+    actorRole: props.currentUserRole,
+    member,
+    ownerCount: ownerCount.value,
+  }).lastOwner
 }
 
 function onToggleSection(section: 'employees' | 'agents') {
   activeSection.value = section
-  if (section === 'agents') void loadAgentMembers()
+  if (section === 'agents') void refreshAgentMembers()
 }
 
-async function loadAgentMembers() {
+async function refreshAgentMembers() {
   if (!props.loadAgentMembers || !props.workspaceId) return
   loadingAgents.value = true
   loadAgentError.value = ''
   try {
-    agentMembers.value = await workbenchApi.listWorkspaceAgentMembers(props.workspaceId)
+    agentMemberList.value = await workbenchApi.listWorkspaceAgentMembers(props.workspaceId)
   } catch (error) {
     notifyActionFailure('加载 Agent 成员', `工作空间“${props.workspaceName}”`, error, '重新打开弹窗或稍后刷新页面重试。')
     loadAgentError.value = error instanceof Error ? error.message : '加载失败'
@@ -141,12 +148,12 @@ async function loadAgentMembers() {
 }
 
 watch(() => props.agentMembers, (value) => {
-  if (!props.loadAgentMembers) agentMembers.value = value
+  if (!props.loadAgentMembers) agentMemberList.value = value
 })
 
 watch(() => props.open, (open) => {
   if (!open) return
-  if (props.loadAgentMembers) void loadAgentMembers()
+  if (props.loadAgentMembers) void refreshAgentMembers()
 }, { immediate: true })
 
 watch(() => props.members, () => {
@@ -285,7 +292,7 @@ async function confirmAddAgent() {
     candidate.value.open = false
     candidate.value.selected = null
     emit('refresh')
-    if (props.loadAgentMembers) await loadAgentMembers()
+    if (props.loadAgentMembers) await refreshAgentMembers()
   } catch (error) {
     notifyActionFailure('添加 Agent 成员', `Agent“${selected.name}”`, error, '确认该 Agent 已发布、允许加入且 Skill／Tool 依赖完整。')
   } finally {
@@ -316,7 +323,7 @@ async function runAgentAction(member: WorkspaceAgentMember, action: 'disable' | 
     else await workbenchApi.updateWorkspaceAgentMember(props.workspaceId, member.id, { action })
     ElMessage.success(`已${agentActionCopy[action].label}“${member.name}”`)
     emit('refresh')
-    if (props.loadAgentMembers) await loadAgentMembers()
+    if (props.loadAgentMembers) await refreshAgentMembers()
   } catch (error) {
     notifyActionFailure(`${agentActionCopy[action].label} Agent`, `Agent“${member.name}”`, error, '刷新成员列表确认当前状态后重试。')
   }
@@ -468,12 +475,12 @@ defineExpose({ ensureEmployeeCandidates })
       <section data-testid="member-section-agent" class="member-dialog__section">
         <header class="member-dialog__section-heading">
           <h3 @click="onToggleSection('agents')">Agent</h3>
-          <span>{{ agentMembers.length }} 个 Agent</span>
+          <span>{{ agentMemberList.length }} 个 Agent</span>
         </header>
 
-        <div v-if="agentMembers.length" class="member-dialog__list">
+        <div v-if="agentMemberList.length" class="member-dialog__list">
           <article
-            v-for="member in agentMembers"
+            v-for="member in agentMemberList"
             :key="member.id"
             data-testid="agent-member-row"
             class="member-dialog__row"
