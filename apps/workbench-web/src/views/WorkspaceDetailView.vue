@@ -50,7 +50,6 @@ const uploading = ref(false)
 const memberDialogOpen = ref(false)
 const settingsDialogOpen = ref(false)
 const agentMembers = ref<WorkspaceAgentMember[]>([])
-const agentMembersWarning = ref('')
 const presetAgentMember = ref<WorkspaceAgentMember | null>(null)
 
 const requestedTab = String(route.query.tab ?? 'conversation')
@@ -182,12 +181,10 @@ watch(
  */
 async function loadAgentMembers(workspaceId = workspace.value?.id ?? '') {
   if (!workspaceId || !isTeam.value) return
-  agentMembersWarning.value = ''
   try {
     agentMembers.value = await workbenchApi.listWorkspaceAgentMembers(workspaceId)
   } catch (error) {
     agentMembers.value = []
-    agentMembersWarning.value = 'Agent 成员列表加载失败，可稍后重新打开空间信息查看。'
     notifyActionFailure('加载 Agent 成员', `工作空间“${workspace.value?.name ?? workspaceId}”`, error, '稍后刷新页面重试。')
   }
 }
@@ -204,6 +201,14 @@ function refreshTeamMembers() {
   void loadAgentMembers()
 }
 
+/**
+ * 空间设置保存：1A 无名称/说明更新接口（见 T6 报告缺口），此处只给出明确
+ * 反馈，不伪造成功，也不改动个人空间路径。
+ */
+function saveWorkspaceSettings() {
+  ElMessage.warning('名称与说明的保存接口尚未开放，本次修改未提交。')
+}
+
 onMounted(() => {
   void contentStore.refresh()
 })
@@ -217,7 +222,6 @@ watch(workspace, (value) => {
   memberDialogOpen.value = false
   settingsDialogOpen.value = false
   agentMembers.value = []
-  agentMembersWarning.value = ''
   if (value?.type === 'team') void loadAgentMembers(value.id)
 }, { immediate: true })
 </script>
@@ -422,6 +426,7 @@ watch(workspace, (value) => {
         :current-user-role="currentUserRole"
         :members="[]"
         save-warning="名称与说明的保存接口尚未就绪，本次修改不会提交到服务端。"
+        @save="saveWorkspaceSettings"
         @transferred="refreshTeamMembers"
         @exited="router.push('/workspaces')"
       />
