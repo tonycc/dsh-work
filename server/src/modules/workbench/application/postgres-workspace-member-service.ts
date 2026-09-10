@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 import type { DatabaseClient, DatabaseTransaction } from '../../../infrastructure/postgres/database.ts'
+import type { PostgresAuthorizationService } from '../../authorization/postgres-authorization-service.ts'
 import { bumpTeamAuthRevision } from '../../authorization/postgres-workspace-grant-source-service.ts'
 
 const tenantId = 'tenant-dsh-work'
@@ -37,9 +38,11 @@ const memberRoles: MemberRole[] = ['owner', 'admin', 'member', 'viewer']
  */
 export class PostgresWorkspaceMemberService {
   private readonly database: DatabaseClient
+  private readonly authorization: PostgresAuthorizationService
 
-  constructor(database: DatabaseClient) {
+  constructor(database: DatabaseClient, authorization: PostgresAuthorizationService) {
     this.database = database
+    this.authorization = authorization
   }
 
   /**
@@ -105,7 +108,8 @@ export class PostgresWorkspaceMemberService {
   /**
    * Adds an employee to the team workspace. Idempotent for identical roles;
    * a different role for an existing member is rejected so role changes stay
-   * on the dedicated PATCH endpoint.
+   * on the dedicated PATCH endpoint. Re-asserts the actor holds owner/admin
+   * at service level so a demotion racing the route guard cannot slip in.
    */
   async addMember(
     workspaceId: string,
@@ -114,11 +118,16 @@ export class PostgresWorkspaceMemberService {
     actorUserId: string,
   ): Promise<{ member: MemberRecord; created: boolean }> {
     await this.assertTeamWorkspace(workspaceId)
+    const actorRole = await this.requireActorRole(workspaceId, actorUserId, ['owner', 'admin'])
     await this.assertAddableEmployee(targetUserId)
     if (role === 'owner') throw new Error('负责人不能直接设置，请通过负责人转交功能')
-    const actorRole = await this.requireActorRole(workspaceId, actorUserId)
     if (actorRole === 'admin' && role === 'admin') throw new Error('管理员没有权限任命管理员')
 
+    // Existing-membership check runs outside the transaction: two concurrent
+    // adds of the same employee can both pass it and both report
+    // created: true (the insert below is on conflict do nothing). Benign —
+    // the read-back after the transaction reflects the committed state, so
+    // one caller may simply see the other's role.
     const existing = await this.findMemberRecord(workspaceId, targetUserId)
     if (existing) {
       if (existing.role === role) return { member: existing, created: false }
@@ -141,6 +150,9 @@ export class PostgresWorkspaceMemberService {
   /**
    * Changes an existing member's role. The owner role is never assignable
    * here — owner changes go through the owner transfer endpoint (AC-02).
+   * Re-asserts the actor holds owner/admin at service level so a demotion
+   * racing the route guard cannot slip in; a concurrent owner transfer is
+   * translated into a friendly conflict error by runMembershipMutation.
    */
   async changeMemberRole(
     workspaceId: string,
@@ -149,13 +161,13 @@ export class PostgresWorkspaceMemberService {
     actorUserId: string,
   ): Promise<MemberRecord> {
     await this.assertTeamWorkspace(workspaceId)
-    const actorRole = await this.requireActorRole(workspaceId, actorUserId)
+    const actorRole = await this.requireActorRole(workspaceId, actorUserId, ['owner', 'admin'])
     const member = await this.findMemberRecord(workspaceId, targetUserId)
     if (!member) throw new Error('目标成员不存在于该空间')
     this.assertRoleChangeAllowed(actorRole, member.role, role)
     if (member.role === role) return member
 
-    await this.database.begin(async (transaction) => {
+    await this.runMembershipMutation(async (transaction) => {
       await transaction`
         update workspace_members
            set member_role = ${role}
@@ -178,6 +190,9 @@ export class PostgresWorkspaceMemberService {
   /**
    * Removes a member. Their shared contributions and authorship are kept —
    * only the membership row and the team authorization revision change.
+   * Re-asserts the actor holds owner/admin at service level so a demotion
+   * racing the route guard cannot slip in; a concurrent owner transfer is
+   * translated into a friendly conflict error by runMembershipMutation.
    */
   async removeMember(
     workspaceId: string,
@@ -185,7 +200,7 @@ export class PostgresWorkspaceMemberService {
     actorUserId: string,
   ): Promise<{ userId: string; removed: true }> {
     await this.assertTeamWorkspace(workspaceId)
-    const actorRole = await this.requireActorRole(workspaceId, actorUserId)
+    const actorRole = await this.requireActorRole(workspaceId, actorUserId, ['owner', 'admin'])
     const targetRole = await this.memberRoleOf(workspaceId, targetUserId)
     if (!targetRole) throw new Error('目标成员不存在于该空间')
     if (targetRole === 'owner') {
@@ -198,7 +213,7 @@ export class PostgresWorkspaceMemberService {
       throw new Error('管理员没有权限移除管理员或负责人')
     }
 
-    await this.database.begin(async (transaction) => {
+    await this.runMembershipMutation(async (transaction) => {
       await transaction`
         delete from workspace_members
          where tenant_id = ${tenantId}
@@ -215,16 +230,23 @@ export class PostgresWorkspaceMemberService {
 
   /**
    * Self exit for any non-owner member. The owner must transfer first.
+   * Re-asserts membership at service level; a concurrent owner transfer
+   * (actor becomes owner mid-request) is translated into a friendly
+   * conflict error by runMembershipMutation.
    */
   async exitWorkspace(
     workspaceId: string,
     actorUserId: string,
   ): Promise<{ workspaceId: string; exited: true }> {
     await this.assertTeamWorkspace(workspaceId)
-    const actorRole = await this.requireActorRole(workspaceId, actorUserId)
+    const actorRole = await this.requireActorRole(
+      workspaceId,
+      actorUserId,
+      ['owner', 'admin', 'member', 'viewer'],
+    )
     if (actorRole === 'owner') throw new Error('负责人不能直接退出空间，请先转交负责人')
 
-    await this.database.begin(async (transaction) => {
+    await this.runMembershipMutation(async (transaction) => {
       await transaction`
         delete from workspace_members
          where tenant_id = ${tenantId}
@@ -243,9 +265,10 @@ export class PostgresWorkspaceMemberService {
    * Owner transfer: locks the workspace row so concurrent transfers serialize
    * (AC-02), swaps the two membership roles, bumps the revision and records
    * one role_changed event per affected user. Content creator fields are
-   * never touched. The deferred single-owner trigger validates the swap at
-   * commit; a concurrent loser's trigger failure is translated to a friendly
-   * conflict error.
+   * never touched. The actor is fully re-verified against the current owner;
+   * the deferred single-owner trigger validates the swap at commit and a
+   * concurrent loser's trigger failure is translated to a friendly conflict
+   * error by runMembershipMutation.
    */
   async transferWorkspaceOwner(
     workspaceId: string,
@@ -253,54 +276,47 @@ export class PostgresWorkspaceMemberService {
     actorUserId: string,
   ): Promise<{ workspaceId: string; previousOwnerId: string; newOwnerId: string }> {
     await this.assertTeamWorkspace(workspaceId)
-    const previousOwnerId = await this.resolveOwner(workspaceId)
+    const previousOwnerId = await this.authorization.resolveWorkspaceOwner(workspaceId)
     if (previousOwnerId !== actorUserId) throw new Error('没有权限转交负责人')
     if (toUserId === previousOwnerId) throw new Error('转交目标不能是当前负责人')
     const targetRole = await this.memberRoleOf(workspaceId, toUserId)
     if (!targetRole) throw new Error('转交目标必须是该空间的现有成员')
 
-    try {
-      await this.database.begin(async (transaction) => {
-        // Serialize owner transfers per workspace: a second concurrent
-        // transfer blocks here until the first commits, then fails the
-        // single-owner trigger at commit time.
-        await transaction`
-          select id from workspaces
-           where tenant_id = ${tenantId} and id = ${workspaceId}
-           for update
-        `
-        await transaction`
-          update workspace_members
-             set member_role = 'member'
-           where tenant_id = ${tenantId}
-             and workspace_id = ${workspaceId}
-             and user_id = ${previousOwnerId}
-        `
-        await transaction`
-          update workspace_members
-             set member_role = 'owner'
-           where tenant_id = ${tenantId}
-             and workspace_id = ${workspaceId}
-             and user_id = ${toUserId}
-        `
-        await this.writeRevocationEvent(transaction, workspaceId, previousOwnerId, 'role_changed', {
-          from: 'owner',
-          to: 'member',
-          by: actorUserId,
-        })
-        await this.writeRevocationEvent(transaction, workspaceId, toUserId, 'role_changed', {
-          from: targetRole,
-          to: 'owner',
-          by: actorUserId,
-        })
-        await bumpTeamAuthRevision(transaction, workspaceId)
+    await this.runMembershipMutation(async (transaction) => {
+      // Serialize owner transfers per workspace: a second concurrent
+      // transfer blocks here until the first commits, then fails the
+      // single-owner trigger at commit time.
+      await transaction`
+        select id from workspaces
+         where tenant_id = ${tenantId} and id = ${workspaceId}
+         for update
+      `
+      await transaction`
+        update workspace_members
+           set member_role = 'member'
+         where tenant_id = ${tenantId}
+           and workspace_id = ${workspaceId}
+           and user_id = ${previousOwnerId}
+      `
+      await transaction`
+        update workspace_members
+           set member_role = 'owner'
+         where tenant_id = ${tenantId}
+           and workspace_id = ${workspaceId}
+           and user_id = ${toUserId}
+      `
+      await this.writeRevocationEvent(transaction, workspaceId, previousOwnerId, 'role_changed', {
+        from: 'owner',
+        to: 'member',
+        by: actorUserId,
       })
-    } catch (error) {
-      if (isSingleOwnerViolation(error)) {
-        throw new Error('负责人转交冲突：负责人已经变更，不能重复转交，请刷新后重试')
-      }
-      throw error
-    }
+      await this.writeRevocationEvent(transaction, workspaceId, toUserId, 'role_changed', {
+        from: targetRole,
+        to: 'owner',
+        by: actorUserId,
+      })
+      await bumpTeamAuthRevision(transaction, workspaceId)
+    })
     return { workspaceId, previousOwnerId, newOwnerId: toUserId }
   }
 
@@ -350,9 +366,20 @@ export class PostgresWorkspaceMemberService {
     return member?.role ?? null
   }
 
-  private async requireActorRole(workspaceId: string, actorUserId: string): Promise<MemberRole> {
+  /**
+   * Service-level re-verification of the actor's current role. Route guards
+   * run before this read, so a demotion racing in between (TOCTOU) must be
+   * caught here: the actor must be a member and hold one of `allowedRoles`,
+   * otherwise a permission denial is thrown.
+   */
+  private async requireActorRole(
+    workspaceId: string,
+    actorUserId: string,
+    allowedRoles: MemberRole[],
+  ): Promise<MemberRole> {
     const role = await this.memberRoleOf(workspaceId, actorUserId)
     if (!role) throw new Error('当前用户不是该空间的成员')
+    if (!allowedRoles.includes(role)) throw new Error('当前用户角色没有权限执行此操作')
     return role
   }
 
@@ -390,19 +417,27 @@ export class PostgresWorkspaceMemberService {
   }
 
   /**
-   * Same single-owner query as PostgresAuthorizationService.resolveWorkspaceOwner,
-   * kept local so this service stays independent of the authorization module
-   * (the routes already call requireTeamRole before reaching here).
+   * Runs a membership mutation in a transaction and translates the deferred
+   * single-owner trigger failure (team_workspace_single_owner, migration
+   * 0022 — raise text "must have exactly one owner") into a friendly
+   * conflict error. The trigger can only abort here when a concurrent owner
+   * transfer committed between the role pre-checks (which run outside the
+   * transaction) and the mutation, so the error instructs a refresh instead
+   * of surfacing the raw trigger message as a 500.
    */
-  private async resolveOwner(workspaceId: string) {
-    const rows = await this.database<{ userId: string }[]>`
-      select user_id as "userId" from workspace_members
-       where tenant_id = ${tenantId}
-         and workspace_id = ${workspaceId}
-         and member_role = 'owner'
-    `
-    if (rows.length !== 1) throw new Error('工作空间负责人异常，无法执行转交')
-    return rows[0]?.userId ?? ''
+  private async runMembershipMutation(
+    action: (transaction: DatabaseTransaction) => Promise<void>,
+  ): Promise<void> {
+    try {
+      await this.database.begin(async (transaction) => {
+        await action(transaction)
+      })
+    } catch (error) {
+      if (isSingleOwnerViolation(error)) {
+        throw new Error('负责人信息已变化，不能继续操作，请刷新后重试')
+      }
+      throw error
+    }
   }
 
   private async writeRevocationEvent(

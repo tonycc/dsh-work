@@ -10,6 +10,7 @@ import {
   httpResult,
   readJsonBody,
   requireRequestIdentity,
+  routePermissionDenied,
   sessionAuthorizationContext,
   type Router,
 } from '../router.ts'
@@ -87,8 +88,10 @@ export function registerWorkspaceMemberRoutes(
 
 /**
  * Identity + workspace resolution + team-only boundary + role check, per the
- * 1A-T3 contract. requireTeamRole failures are re-thrown as typed 403s so the
- * shared error classifier surfaces them as permission_denied.
+ * 1A-T3 contract. Only requireTeamRole's two known denial messages are
+ * re-thrown as typed 403s so the shared error classifier surfaces them as
+ * permission_denied; anything else — e.g. a database outage — propagates
+ * unchanged and is classified on its own merits.
  */
 async function requireTeamActor(
   authorization: PostgresAuthorizationService,
@@ -105,8 +108,19 @@ async function requireTeamActor(
   try {
     await authorization.requireTeamRole(workspaceId, identity.userId, allowedRoles)
   } catch (error) {
-    throw permissionDenied(error instanceof Error ? error.message : '当前用户角色无权执行此操作')
+    if (isTeamRoleDenial(error)) throw routePermissionDenied(error.message)
+    throw error
   }
+}
+
+/**
+ * The two denial messages PostgresAuthorizationService.requireTeamRole
+ * raises: missing workspace/membership and role outside the allowed set.
+ */
+function isTeamRoleDenial(error: unknown): error is Error {
+  if (!(error instanceof Error)) return false
+  return error.message === '工作空间不存在、已归档或当前用户不是成员'
+    || error.message.startsWith('当前用户角色无权执行此操作')
 }
 
 function parseMemberRole(value: unknown): MemberRole {
@@ -124,11 +138,4 @@ function parseLimit(raw: string | null) {
   const limit = Number(raw)
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('limit 必须为 1 到 100 之间的整数')
   return limit
-}
-
-function permissionDenied(message: string) {
-  const error = new Error(message) as Error & { status: number; code: string }
-  error.status = 403
-  error.code = 'permission_denied'
-  return error
 }

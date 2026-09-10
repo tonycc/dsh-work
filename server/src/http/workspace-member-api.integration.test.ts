@@ -23,6 +23,8 @@ let adminDatabase: DatabaseClient
 let database: DatabaseClient
 let server: Server
 let baseUrl = ''
+let authorization: PostgresAuthorizationService
+let members: PostgresWorkspaceMemberService
 
 interface MemberRow {
   userId: string
@@ -45,8 +47,8 @@ before(async () => {
   database = createDatabase({ url: testUrl.toString(), maxConnections: 8 })
   await runMigrations(database)
 
-  const authorization = new PostgresAuthorizationService(database)
-  const members = new PostgresWorkspaceMemberService(database)
+  authorization = new PostgresAuthorizationService(database)
+  members = new PostgresWorkspaceMemberService(database, authorization)
   const router = new Router({ authenticateApi: testApiAuthenticator })
   registerWorkspaceMemberRoutes(router, members, authorization)
   server = createServer((request, response) => void router.handle(request, response))
@@ -872,6 +874,113 @@ test('并发转交只有一次成功，最终恰好保留一名负责人（AC-02
 })
 
 // ---------------------------------------------------------------------------
+// 并发竞争与操作人降级回归
+// ---------------------------------------------------------------------------
+
+test('退出与并发负责人转交竞争：失败方得到友好 409，而不是 500 或原始触发器错误', async () => {
+  const workspaceId = 'ws-1a-race-exit'
+  const ownerId = 'user-1a-race-exit-owner'
+  const targetId = 'user-1a-race-exit-target'
+  await createDirectoryUser(ownerId, '竞争退出负责人')
+  await createDirectoryUser(targetId, '竞争退出成员')
+  await createTeamWorkspace(workspaceId, [
+    { userId: ownerId, role: 'owner' },
+    { userId: targetId, role: 'member' },
+  ])
+
+  // 确定性模拟竞争：退出预检读到旧角色后，代理立刻通过真实连接提交一次
+  // 负责人转交，随后退出事务的删除就会命中新负责人，延迟单负责人触发器
+  // 在提交时中止事务（真实并发下无法保证时序，且存在死锁窗口）。
+  const racyDatabase = commitTransferAfterRoleRead(database, {
+    workspaceId,
+    actorUserId: targetId,
+    previousOwnerId: ownerId,
+    newOwnerId: targetId,
+  })
+  const racyMembers = new PostgresWorkspaceMemberService(racyDatabase, authorization)
+  const racyRouter = new Router({ authenticateApi: testApiAuthenticator })
+  registerWorkspaceMemberRoutes(racyRouter, racyMembers, authorization)
+  const racyServer = createServer((request, response) => void racyRouter.handle(request, response))
+  await new Promise<void>((resolve, reject) => {
+    racyServer.once('error', reject)
+    racyServer.listen(0, '127.0.0.1', () => resolve())
+  })
+  const address = racyServer.address()
+  assert.ok(address && typeof address !== 'string')
+  const racyBaseUrl = `http://127.0.0.1:${address.port}`
+  try {
+    const result = await request(racyBaseUrl, 'POST', `/api/workbench/v1/workspaces/${workspaceId}/exit`, {
+      as: targetId,
+    })
+    assert.equal(result.status, 409)
+    assert.match(errorMessage(result), /负责人/)
+    assert.match(errorMessage(result), /刷新后重试/)
+    assert.doesNotMatch(errorMessage(result), /exactly one owner/)
+
+    // 竞争转交保留了下来，最终恰好一名负责人。
+    assert.deepEqual(await memberRoles(workspaceId), [
+      { userId: ownerId, role: 'member' },
+      { userId: targetId, role: 'owner' },
+    ])
+  } finally {
+    await new Promise<void>((resolve, reject) => racyServer.close(error => error ? reject(error) : resolve()))
+  }
+})
+
+test('操作人在请求处理中被降级后，服务层重新校验并拒绝成员增删改（TOCTOU）', async () => {
+  const workspaceId = 'ws-1a-toctou'
+  const ownerId = 'user-1a-toctou-owner'
+  const demotedAdminId = 'user-1a-toctou-admin'
+  const memberId = 'user-1a-toctou-member'
+  const candidateId = 'user-1a-toctou-candidate'
+  await createDirectoryUser(ownerId, 'TOCTOU 负责人')
+  await createDirectoryUser(demotedAdminId, 'TOCTOU 管理员')
+  await createDirectoryUser(memberId, 'TOCTOU 成员')
+  await createDirectoryUser(candidateId, 'TOCTOU 候选员工')
+  await createTeamWorkspace(workspaceId, [
+    { userId: ownerId, role: 'owner' },
+    { userId: demotedAdminId, role: 'admin' },
+    { userId: memberId, role: 'member' },
+  ])
+
+  // 模拟路由守卫通过后被降级：守卫读到的还是 admin，服务层读到时已是 member。
+  await database`
+    update workspace_members
+       set member_role = 'member'
+     where tenant_id = ${tenantId}
+       and workspace_id = ${workspaceId}
+       and user_id = ${demotedAdminId}
+  `
+
+  await assert.rejects(
+    () => members.addMember(workspaceId, candidateId, 'member', demotedAdminId),
+    /当前用户角色没有权限执行此操作/,
+  )
+  await assert.rejects(
+    () => members.changeMemberRole(workspaceId, memberId, 'viewer', demotedAdminId),
+    /当前用户角色没有权限执行此操作/,
+  )
+  await assert.rejects(
+    () => members.removeMember(workspaceId, memberId, demotedAdminId),
+    /当前用户角色没有权限执行此操作/,
+  )
+
+  // 降级后的操作人走 HTTP 也被路由守卫拒绝（403）。
+  const viaHttp = await api('PATCH', `/api/workbench/v1/workspaces/${workspaceId}/members/${memberId}`, {
+    as: demotedAdminId,
+    body: { role: 'viewer' },
+  })
+  assert.equal(viaHttp.status, 403)
+
+  // 三次拒绝都没有留下任何变更：候选人未加入，原有角色不变。
+  assert.deepEqual(await memberRoles(workspaceId), [
+    { userId: ownerId, role: 'owner' },
+    { userId: demotedAdminId, role: 'member' },
+    { userId: memberId, role: 'member' },
+  ])
+})
+
+// ---------------------------------------------------------------------------
 // 个人工作空间拒绝
 // ---------------------------------------------------------------------------
 
@@ -973,6 +1082,10 @@ async function createTeamWorkspace(workspaceId: string, members: MemberRow[]) {
 }
 
 async function api(method: string, path: string, options: { as?: string; body?: unknown } = {}) {
+  return request(baseUrl, method, path, options)
+}
+
+async function request(base: string, method: string, path: string, options: { as?: string; body?: unknown } = {}) {
   const headers: Record<string, string> = { Accept: 'application/json' }
   if (options.as) headers['x-test-user-id'] = options.as
   const init: RequestInit = { method, headers }
@@ -980,12 +1093,60 @@ async function api(method: string, path: string, options: { as?: string; body?: 
     headers['Content-Type'] = 'application/json'
     init.body = JSON.stringify(options.body)
   }
-  const response = await fetch(`${baseUrl}${path}`, init)
+  const response = await fetch(`${base}${path}`, init)
   const body = await response.json().catch(() => null) as {
     data?: unknown
     error?: { code: string; message: string }
   }
   return { status: response.status, body }
+}
+
+/**
+ * 确定性模拟“预检读到旧角色”的竞争：包装数据库客户端，在成员角色读取
+ * （memberRoleOf 的查询）完成后立刻通过真实客户端提交一次负责人转交，
+ * 再返回读到的旧角色。随后服务端的删除/降级就会命中新负责人，由延迟
+ * 单负责人触发器在提交时中止事务。
+ */
+function commitTransferAfterRoleRead(
+  real: DatabaseClient,
+  options: {
+    workspaceId: string
+    actorUserId: string
+    previousOwnerId: string
+    newOwnerId: string
+  },
+): DatabaseClient {
+  let injected = false
+  return new Proxy(real, {
+    get(target, property) {
+      const value = Reflect.get(target, property, target)
+      if (typeof value !== 'function') return value
+      return (...args: unknown[]) => Reflect.apply(value, target, args)
+    },
+    async apply(target, _thisArg, args) {
+      const [first] = args as [unknown, ...unknown[]]
+      const sqlText = Array.isArray(first) && Array.isArray((first as { raw?: unknown }).raw)
+        ? (first as string[]).join('?')
+        : ''
+      const isActorRoleRead = sqlText.includes('select member_role as role from workspace_members')
+        && args.includes(options.actorUserId)
+      const result = await Reflect.apply(target, target, args)
+      if (!injected && isActorRoleRead) {
+        injected = true
+        await real`
+          update workspace_members
+             set member_role = case
+               when user_id = ${options.previousOwnerId} then 'member'
+               when user_id = ${options.newOwnerId} then 'owner'
+             end
+           where tenant_id = ${tenantId}
+             and workspace_id = ${options.workspaceId}
+             and user_id in (${options.previousOwnerId}, ${options.newOwnerId})
+        `
+      }
+      return result
+    },
+  })
 }
 
 function errorMessage(result: { body: { error?: { message: string } } }): string {

@@ -108,6 +108,7 @@ async function start() {
     const content = new PostgresContentService(database, resolve(dataRoot, 'storage'))
     const runs = new PostgresRunRepository(database)
     const authorization = new PostgresAuthorizationService(database)
+    const workspaceMembers = new PostgresWorkspaceMemberService(database, authorization)
     const operations = new PostgresOperationsService(
       database,
       runtime,
@@ -137,7 +138,7 @@ async function start() {
     }
     registerConversationRoutes(router, conversations, orchestration, runs, agents, authorization, operations, skills)
     registerContentRoutes(router, content, authorization)
-    registerWorkspaceMemberRoutes(router, new PostgresWorkspaceMemberService(database), authorization)
+    registerWorkspaceMemberRoutes(router, workspaceMembers, authorization)
     registerOperationsRoutes(router, operations)
     registerAgentRoutes(router, agents)
     registerSkillRoutes(router, skills)

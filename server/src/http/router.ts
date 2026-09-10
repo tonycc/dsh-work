@@ -313,7 +313,7 @@ function isIdentityAccessError(
     && /^[a-z0-9_]{1,80}$/i.test(candidate.code)
 }
 
-function routePermissionDenied(message: string) {
+export function routePermissionDenied(message: string) {
   const error = new Error(message) as Error & { status: number; code: string }
   error.status = 403
   error.code = 'permission_denied'
