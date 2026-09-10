@@ -10,7 +10,7 @@ import { ModelGovernanceService } from '../../modules/model/model-governance-ser
 import { PostgresModelGovernanceRepository } from '../../modules/model/postgres-model-governance-repository.ts'
 import { PostgresRunRepository } from '../../modules/run/postgres-run-repository.ts'
 import { RunOrchestrationService } from '../../modules/run/run-orchestration-service.ts'
-import { RunRevocationSweep } from '../../modules/run/run-revocation-sweep.ts'
+import { MAX_EVENT_ATTEMPTS, RunRevocationSweep } from '../../modules/run/run-revocation-sweep.ts'
 import type {
   AgentRuntimePort,
   RuntimeEvent,
@@ -782,6 +782,58 @@ test('SSE HTTP 路由：成员被移出团队空间后事件流终止', async ()
 })
 
 // ---------------------------------------------------------------------------
+// 5.5 事件重试上限与死信
+// ---------------------------------------------------------------------------
+
+test('收权事件持续处理失败时达到重试上限后转为 dead_letter，不再无限重试', async () => {
+  const ws = uniqueWorkspace('deadletter')
+  const ownerId = `${ws}-owner`
+  const userId = `${ws}-user`
+  const versionId = `${ws}-version`
+  await seedUser(ownerId, '死信负责人')
+  await seedUser(userId, '死信成员')
+  await createTeamWorkspace(ws, [{ userId: ownerId, role: 'owner' }, { userId: userId, role: 'member' }])
+  await seedAgent(ws, versionId)
+  await grantAgentVersion(ws, versionId)
+  const sessionId = `${ws}-session`
+  await createSession(sessionId, ws, userId, versionId)
+  const runId = `${ws}-run`
+  await createRunWithAttempt({ id: runId, sessionId, requestedBy: userId, status: 'queued', agentVersionId: versionId, workspaceId: ws })
+
+  await members.removeMember(ws, userId, ownerId)
+
+  // 先让事件被正常消费一次（含修订号全量复核），再用同一个事件验证「持续处理
+  // 失败 → 重试上限 → 死信」：重置为 pending 后修订号不再变化，后续 sweep 只会
+  // 走事件消费路径，不会与修订号全量复核相互干扰。
+  await sweep.sweepOnce()
+  await database`
+    update workspace_revocation_events
+       set status = 'pending', processed_at = null, attempts = 0, last_error = null
+     where tenant_id = ${tenantId} and workspace_id = ${ws}
+  `
+
+  // 让该事件在当前状态门下有效、但清扫本身持续抛错（模拟持久故障）。
+  const originalList = runs.listActiveRunsForWorkspaceUser.bind(runs)
+  ;(runs as unknown as { listActiveRunsForWorkspaceUser: typeof runs.listActiveRunsForWorkspaceUser }).listActiveRunsForWorkspaceUser =
+    async () => { throw new Error('模拟持久清扫故障') }
+  try {
+    for (let i = 0; i < MAX_EVENT_ATTEMPTS; i += 1) await sweep.sweepOnce()
+  } finally {
+    ;(runs as unknown as { listActiveRunsForWorkspaceUser: typeof runs.listActiveRunsForWorkspaceUser }).listActiveRunsForWorkspaceUser = originalList
+  }
+
+  const [event] = await revocationEventRows(ws)
+  assert.equal(event?.status, 'dead_letter', '达到上限后应转为终态 dead_letter')
+  assert.equal(event?.attempts, MAX_EVENT_ATTEMPTS)
+  assert.match(event?.lastError ?? '', /模拟持久清扫故障/)
+
+  // 终态事件不再被消费：后续 sweep 不改变它的尝试次数。
+  await sweep.sweepOnce()
+  assert.equal((await revocationEventRows(ws))[0]?.attempts, MAX_EVENT_ATTEMPTS)
+  assert.equal((await revocationEventRows(ws))[0]?.status, 'dead_letter')
+})
+
+// ---------------------------------------------------------------------------
 // 5.3 领取与执行竞态（AC-09）
 // ---------------------------------------------------------------------------
 
@@ -1147,8 +1199,8 @@ async function runEventRows(runId: string) {
 }
 
 async function revocationEventRows(workspaceId: string) {
-  const rows = await database<{ kind: string; status: string; processedAt: Date | null }[]>`
-    select kind, status, processed_at as "processedAt"
+  const rows = await database<{ kind: string; status: string; processedAt: Date | null; attempts: number; lastError: string | null }[]>`
+    select kind, status, processed_at as "processedAt", attempts, last_error as "lastError"
       from workspace_revocation_events
      where tenant_id = ${tenantId} and workspace_id = ${workspaceId}
      order by created_at asc

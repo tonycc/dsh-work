@@ -7,6 +7,12 @@ import type { JsonObject } from './run-types.ts'
 const tenantId = 'tenant-dsh-work'
 const POLL_INTERVAL_MS = 2_000
 const EVENT_BATCH_LIMIT = 25
+/**
+ * Bounded retry budget for a single revocation event. With the ~2s poll this is
+ * roughly 40s of retries — enough for a transient database blip, short enough
+ * that a permanently broken event stops and becomes inspectable.
+ */
+export const MAX_EVENT_ATTEMPTS = 20
 
 export type RevocationEventKind =
   | 'member_removed'
@@ -195,10 +201,12 @@ export class RunRevocationSweep {
         if (effective) await this.sweepForEvent(event)
         await this.markProcessed(event.id)
       } catch (error) {
-        // Unexpected error: increment attempts, leave pending, continue with
-        // the next event. The loop must never crash on a single bad event.
+        // Unexpected error: count the attempt and leave the event pending so a
+        // transient failure recovers. After MAX_EVENT_ATTEMPTS the event is
+        // dead-lettered (terminal) instead of retrying forever, so a permanently
+        // broken event is inspectable rather than drowning the logs.
         console.error('revocation event processing failed', event.id, error)
-        await this.bumpAttempts(event.id).catch(() => undefined)
+        await this.recordFailedAttempt(event.id, error).catch(() => undefined)
       }
     }
   }
@@ -307,16 +315,29 @@ export class RunRevocationSweep {
   private async markProcessed(eventId: string) {
     await this.database`
       update workspace_revocation_events
-         set status = 'processed', processed_at = now(), attempts = attempts + 1
+         set status = 'processed', processed_at = now(), attempts = attempts + 1, last_error = null
        where tenant_id = ${tenantId} and id = ${eventId}
     `
   }
 
-  private async bumpAttempts(eventId: string) {
-    await this.database`
-      update workspace_revocation_events set attempts = attempts + 1
+  /**
+   * Counts a failed processing attempt and dead-letters the event once it
+   * exhausts MAX_EVENT_ATTEMPTS. The increment and the escalation are one
+   * statement so concurrent sweeps cannot both write the terminal state.
+   */
+  private async recordFailedAttempt(eventId: string, error: unknown) {
+    const message = error instanceof Error ? error.message : String(error)
+    const [updated] = await this.database<{ status: string; attempts: number }[]>`
+      update workspace_revocation_events
+         set attempts = attempts + 1,
+             status = case when attempts + 1 >= ${MAX_EVENT_ATTEMPTS} then 'dead_letter' else 'pending' end,
+             last_error = ${message.slice(0, 500)}
        where tenant_id = ${tenantId} and id = ${eventId}
+      returning status, attempts
     `
+    if (updated?.status === 'dead_letter') {
+      console.error('revocation event dead-lettered', eventId, `after ${updated.attempts} attempts`, message)
+    }
   }
 }
 
