@@ -30,6 +30,19 @@
     "/agents/rollback": {
       "post": { "operationId": "rollbackAgent", "summary": "将活动版本指针回滚到指定已发布版本", "responses": { "200": { "$ref": "#/components/responses/Ok" } } }
     },
+    "/agents/{agentId}": {
+      "parameters": [{ "$ref": "#/components/parameters/AgentId" }],
+      "patch": {
+        "operationId": "setAgentWorkspaceJoin",
+        "summary": "平台治理开关：允许或禁止该 Agent 加入团队空间；关闭后不再出现在团队空间「添加 Agent」候选",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SetAgentWorkspaceJoinInput" } } } },
+        "responses": { "200": { "$ref": "#/components/responses/Ok" }, "404": { "$ref": "#/components/responses/Error" }, "422": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/agents/{agentId}/workspaces": {
+      "parameters": [{ "$ref": "#/components/parameters/AgentId" }],
+      "get": { "operationId": "listAgentJoinedWorkspaces", "summary": "查询该 Agent 只读的「已加入空间」清单，用于评估停用影响", "responses": { "200": { "$ref": "#/components/responses/Ok" }, "404": { "$ref": "#/components/responses/Error" } } }
+    },
     "/agent-versions": {
       "get": { "operationId": "listAgentVersions", "summary": "查询不可变 Agent 版本历史", "responses": { "200": { "$ref": "#/components/responses/Ok" } } }
     },
@@ -76,6 +89,17 @@
     },
     "/workspaces": {
       "get": { "operationId": "listWorkspaces", "summary": "查询团队工作空间", "responses": { "200": { "$ref": "#/components/responses/Ok" } } }
+    },
+    "/grant-sources/unresolved": {
+      "get": { "operationId": "listUnresolvedGrantSources", "summary": "授权来源对账清单：列出 legacy_unresolved 来源及按 agent_versions 推断的可能归属 Agent（仅提示不自动回填）", "responses": { "200": { "$ref": "#/components/responses/Ok" } } }
+    },
+    "/grant-sources/reconcile": {
+      "post": {
+        "operationId": "reconcileGrantSources",
+        "summary": "对账完成：把 legacy_unresolved 来源改写为 manual 并记审计；撤销行保留不物理删除",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ReconcileGrantSourcesInput" } } } },
+        "responses": { "200": { "$ref": "#/components/responses/Ok" }, "403": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" }, "422": { "$ref": "#/components/responses/Error" } }
+      }
     },
     "/model-usage": { "get": { "operationId": "getModelUsage", "summary": "查询包含员工归属的 Token 和延迟明细", "responses": { "200": { "$ref": "#/components/responses/Ok" } } } },
     "/model-providers": {
@@ -157,6 +181,28 @@
           { "$ref": "#/components/schemas/AgentConfiguration" },
           { "type": "object", "required": ["agentId"], "properties": { "agentId": { "type": "string" } } }
         ]
+      },
+      "SetAgentWorkspaceJoinInput": {
+        "type": "object",
+        "unevaluatedProperties": false,
+        "required": ["allowWorkspaceJoin"],
+        "properties": {
+          "allowWorkspaceJoin": { "type": "boolean", "description": "true 允许加入团队空间（默认）；false 后不再出现在团队空间「添加 Agent」候选，也不能被加入" }
+        }
+      },
+      "ReconcileGrantSourcesInput": {
+        "type": "object",
+        "unevaluatedProperties": false,
+        "required": ["sourceIds"],
+        "properties": {
+          "sourceIds": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 200,
+            "uniqueItems": true,
+            "items": { "type": "string", "description": "workspace_grant_sources.id；必须是 active 的 legacy_unresolved 来源" }
+          }
+        }
       },
       "SkillConfiguration": {
         "type": "object",

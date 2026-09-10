@@ -5,11 +5,13 @@ const requiredPaths = {
   ],
   admin: [
     '/agents', '/agents/draft', '/agents/test', '/agents/status', '/agents/rollback',
+    '/agents/{agentId}', '/agents/{agentId}/workspaces',
     '/agent-versions', '/agent-release-records', '/skills', '/skills/test', '/skills/status',
     '/skills/rollback', '/skill-versions', '/skill-release-records', '/tools', '/tools/status',
     '/tools/permissions', '/connectors', '/connectors/check', '/runtimes', '/runtimes/check',
     '/runtimes/configuration', '/sessions', '/workspaces', '/audit-events', '/health',
     '/model-providers', '/provider-models', '/model-routes', '/operations/summary', '/operations/runs/{runId}',
+    '/grant-sources/unresolved', '/grant-sources/reconcile',
   ],
 }
 
