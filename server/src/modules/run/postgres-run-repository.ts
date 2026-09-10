@@ -66,6 +66,23 @@ interface RecoveryRow extends AttemptRow {
   runUpdatedAt: Date
 }
 
+/**
+ * The Runtime adapter numbers its own events while server-authored notes
+ * allocate `max(sequence)+1`; two concurrent writers can therefore pick the
+ * same per-attempt sequence. Writers retry on that unique key instead of
+ * failing the event. Bounded so a persistent conflict surfaces as an error.
+ */
+const SEQUENCE_CONFLICT_RETRIES = 3
+const RUN_EVENT_SEQUENCE_CONSTRAINT = 'run_events_tenant_id_attempt_id_sequence_key'
+/** Server-authored notes are identifiable by id, so dedupe never matches a runtime event of the same type. */
+const SYSTEM_EVENT_ID_PREFIX_LIKE = 'event-system-%'
+
+function isSequenceConflict(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false
+  const candidate = error as { code?: unknown; constraint_name?: unknown }
+  return candidate.code === '23505' && candidate.constraint_name === RUN_EVENT_SEQUENCE_CONSTRAINT
+}
+
 export class PostgresRunRepository implements RunRepository {
   private readonly database: DatabaseClient
 
@@ -275,6 +292,33 @@ export class PostgresRunRepository implements RunRepository {
   }
 
   async appendEvent(event: StoredRunEvent): Promise<StoredRunEvent> {
+    // Runtime adapters number their own events; a server-authored note written
+    // at the same moment can take that sequence first. Retry by re-allocating
+    // the sequence from the current per-attempt maximum — a fixed sequence would
+    // keep colliding, and losing the write would also lose that event's state
+    // transition (a dropped run.cancelled/run.completed would strand the run).
+    let sequence = event.sequence
+    for (let attempt = 0; attempt < SEQUENCE_CONFLICT_RETRIES; attempt += 1) {
+      try {
+        return await this.insertEvent({ ...event, sequence })
+      } catch (error) {
+        if (!isSequenceConflict(error) || attempt === SEQUENCE_CONFLICT_RETRIES - 1) throw error
+        const current = await this.maxSequenceForAttempt(event.tenantId, event.attemptId)
+        sequence = current + 1
+      }
+    }
+    throw new Error('Run Event 写入失败：序列冲突重试耗尽')
+  }
+
+  private async maxSequenceForAttempt(tenantId: string, attemptId: string): Promise<number> {
+    const [row] = await this.database<{ max: number | null }[]>`
+      select max(sequence)::integer as max from run_events
+       where tenant_id = ${tenantId} and attempt_id = ${attemptId}
+    `
+    return Number(row?.max ?? 0)
+  }
+
+  private async insertEvent(event: StoredRunEvent): Promise<StoredRunEvent> {
     const [created] = await this.database<EventRow[]>`
       insert into run_events (
         id, tenant_id, run_id, attempt_id, sequence, event_type, display_message,
@@ -291,6 +335,9 @@ export class PostgresRunRepository implements RunRepository {
                 stream_position as "streamPosition"
     `
     if (created) return mapEvent(created)
+    // The id already exists: this is an idempotent re-delivery of the same
+    // event. The stored row wins (its allocated sequence may differ from the
+    // freshly computed one).
     const [existing] = await this.database<EventRow[]>`
       select id, tenant_id as "tenantId", run_id as "runId", attempt_id as "attemptId",
              sequence, event_type as "eventType", display_message as "displayMessage",
@@ -299,7 +346,7 @@ export class PostgresRunRepository implements RunRepository {
         from run_events where tenant_id = ${event.tenantId} and id = ${event.id}
     `
     if (!existing) throw new Error(`Run Event 幂等查询失败：${event.id}`)
-    if (existing.runId !== event.runId || existing.attemptId !== event.attemptId || Number(existing.sequence) !== event.sequence) {
+    if (existing.runId !== event.runId || existing.attemptId !== event.attemptId) {
       throw new Error(`Run Event 幂等键冲突：${event.id}`)
     }
     return mapEvent(existing)
@@ -307,49 +354,55 @@ export class PostgresRunRepository implements RunRepository {
 
   /**
    * Server-authored events (system cancel notes, execution-time authorization
-   * denials — 1A-T5). The next per-attempt sequence is computed inside the
-   * transaction; the insert-select aggregate always produces exactly one row.
+   * denials — 1A-T5). The per-attempt sequence is computed inside the insert,
+   * and the write retries when a concurrent writer (the Runtime adapter, which
+   * numbers its own events) has taken that sequence first.
    *
-   * Idempotent per (attempt, event type): a run may be converged twice — e.g. a
-   * revocation sweep cancels a phantom-running run while the Runtime adapter's
-   * own cancel request is still in flight — and `run_events` is unique on
-   * (tenant_id, attempt_id, sequence). Re-emitting the same lifecycle note
-   * would collide on that key, so the first note wins and later calls return it.
+   * Idempotent per (attempt, event type): converging the same run twice must not
+   * duplicate its lifecycle note, so an existing note of that type is returned.
    */
   async appendSystemEvent(input: AppendSystemEventInput): Promise<StoredRunEvent> {
-    return this.database.begin(async (transaction) => {
-      const [existing] = await transaction<EventRow[]>`
-        select id, tenant_id as "tenantId", run_id as "runId", attempt_id as "attemptId",
-               sequence, event_type as "eventType", display_message as "displayMessage",
-               safe_metadata as "safeMetadata", trace_id as "traceId", occurred_at as "occurredAt",
-               stream_position as "streamPosition"
-          from run_events
-         where tenant_id = ${input.tenantId} and attempt_id = ${input.attemptId}
-           and event_type = ${input.eventType}
-         limit 1
-      `
-      if (existing) return mapEvent(existing)
+    for (let attempt = 0; attempt < SEQUENCE_CONFLICT_RETRIES; attempt += 1) {
+      try {
+        return await this.database.begin(async (transaction) => {
+          const [existing] = await transaction<EventRow[]>`
+            select id, tenant_id as "tenantId", run_id as "runId", attempt_id as "attemptId",
+                   sequence, event_type as "eventType", display_message as "displayMessage",
+                   safe_metadata as "safeMetadata", trace_id as "traceId", occurred_at as "occurredAt",
+                   stream_position as "streamPosition"
+              from run_events
+             where tenant_id = ${input.tenantId} and attempt_id = ${input.attemptId}
+               and event_type = ${input.eventType}
+               and id like ${SYSTEM_EVENT_ID_PREFIX_LIKE}
+             limit 1
+          `
+          if (existing) return mapEvent(existing)
 
-      const id = `event-system-${randomUUID()}`
-      const [created] = await transaction<EventRow[]>`
-        insert into run_events (
-          id, tenant_id, run_id, attempt_id, sequence, event_type, display_message,
-          safe_metadata, trace_id, occurred_at
-        )
-        select ${id}, ${input.tenantId}, ${input.runId}, ${input.attemptId},
-               coalesce(max(sequence), 0)::bigint + 1, ${input.eventType}, ${input.displayMessage},
-               ${transaction.json(input.safeMetadata ?? {})}, ${input.traceId},
-               ${input.occurredAt ?? new Date().toISOString()}
-          from run_events
-         where tenant_id = ${input.tenantId} and attempt_id = ${input.attemptId}
-        returning id, tenant_id as "tenantId", run_id as "runId", attempt_id as "attemptId",
-                  sequence, event_type as "eventType", display_message as "displayMessage",
-                  safe_metadata as "safeMetadata", trace_id as "traceId", occurred_at as "occurredAt",
-                  stream_position as "streamPosition"
-      `
-      if (!created) throw new Error('系统事件写入失败')
-      return mapEvent(created)
-    })
+          const id = `event-system-${randomUUID()}`
+          const [created] = await transaction<EventRow[]>`
+            insert into run_events (
+              id, tenant_id, run_id, attempt_id, sequence, event_type, display_message,
+              safe_metadata, trace_id, occurred_at
+            )
+            select ${id}, ${input.tenantId}, ${input.runId}, ${input.attemptId},
+                   coalesce(max(sequence), 0)::bigint + 1, ${input.eventType}, ${input.displayMessage},
+                   ${transaction.json(input.safeMetadata ?? {})}, ${input.traceId},
+                   ${input.occurredAt ?? new Date().toISOString()}
+              from run_events
+             where tenant_id = ${input.tenantId} and attempt_id = ${input.attemptId}
+            returning id, tenant_id as "tenantId", run_id as "runId", attempt_id as "attemptId",
+                      sequence, event_type as "eventType", display_message as "displayMessage",
+                      safe_metadata as "safeMetadata", trace_id as "traceId", occurred_at as "occurredAt",
+                      stream_position as "streamPosition"
+          `
+          if (!created) throw new Error('系统事件写入失败')
+          return mapEvent(created)
+        })
+      } catch (error) {
+        if (!isSequenceConflict(error) || attempt === SEQUENCE_CONFLICT_RETRIES - 1) throw error
+      }
+    }
+    throw new Error('系统事件写入失败：序列冲突重试耗尽')
   }
 
   async readEvents(tenantId: string, runId: string, afterSequence = 0) {

@@ -513,10 +513,10 @@ test('停用撤销本成员授权来源并写入事件，共享工具授权由�
   const events = await revocationEvents(workspaceId)
   assert.equal(events.length, 1)
   const [event] = events
-  assert.equal(event?.userId, ownerId)
+  assert.equal(event?.userId, wamA, '撤权事件主体是被停用的 Agent 成员；操作人由审计链路记录')
   assert.equal(event?.kind, 'agent_disabled')
   assert.equal(event?.status, 'pending')
-  assert.deepEqual(event?.payload, { agentMemberId: wamA, agentId: agentA.id, by: ownerId })
+  assert.deepEqual(event?.payload, { agentMemberId: wamA, agentId: agentA.id })
   assert.ok(event?.payloadHash && /^[0-9a-f]{32}$/.test(event?.payloadHash ?? ''))
 
   // 停用后新会话启动被阻止并给出具体原因（TW-02）。
@@ -585,6 +585,44 @@ test('重新启用恢复授权来源与有效授权，会话启动恢复；无�
   const enableRemoved = await api('PATCH', `/api/workbench/v1/workspaces/${workspaceId}/agent-members/${wamId}`, { as: ownerId, body: { action: 'enable' } })
   assert.equal(enableRemoved.status, 409)
   assert.match(errorMessage(enableRemoved), /已移出/)
+})
+
+// ---------------------------------------------------------------------------
+// 撤权事件去重语义
+// ---------------------------------------------------------------------------
+
+test('停用→启用→停用只产生一行 agent_disabled 事件（去重由被撤销对象决定）', async () => {
+  const workspaceId = 'ws-1a-ag-dedupe'
+  const ownerId = 'user-1a-ag-dd-owner'
+  await createDirectoryUser(ownerId, '去重负责人')
+  await createTeamWorkspace(workspaceId, [{ userId: ownerId, role: 'owner' }])
+  await createTool({ id: 'tool-1a-dd' })
+  await createSkill({ id: 'skill-1a-dd', toolRefs: ['tool-1a-dd@1.0.0'] })
+  const agent = await createPublishedAgent({
+    id: 'agent-1a-dd',
+    name: '去重Agent',
+    skillRefs: ['skill-1a-dd@1.0.0'],
+    toolRefs: ['tool-1a-dd@1.0.0'],
+  })
+  const joined = await api('POST', `/api/workbench/v1/workspaces/${workspaceId}/agent-members`, { as: ownerId, body: { agentId: agent.id } })
+  assert.equal(joined.status, 201)
+  const wamId = (joined.body.data as { id: string }).id
+  const path = `/api/workbench/v1/workspaces/${workspaceId}/agent-members/${wamId}`
+
+  const disable = () => api('PATCH', path, { as: ownerId, body: { action: 'disable' } })
+  const enable = () => api('PATCH', path, { as: ownerId, body: { action: 'enable' } })
+
+  // 两次停用中间启用一次：payload_hash 若含生命周期状态或操作人就会产生多行，
+  // 违反「重复生命周期事件只产生一条」的去重语义。
+  assert.equal((await disable()).status, 200)
+  assert.equal((await enable()).status, 200)
+  assert.equal((await disable()).status, 200)
+
+  const events = await revocationEvents(workspaceId)
+  const disabledEvents = events.filter(event => event.kind === 'agent_disabled')
+  assert.equal(disabledEvents.length, 1, '重复停用只应产生一行事件')
+  assert.equal(disabledEvents[0]?.userId, wamId)
+  assert.deepEqual(disabledEvents[0]?.payload, { agentMemberId: wamId, agentId: agent.id })
 })
 
 // ---------------------------------------------------------------------------
@@ -714,9 +752,9 @@ test('移出撤销授权来源并写入 agent_removed 事件，新会话被阻�
   const events = await revocationEvents(workspaceId)
   assert.equal(events.length, 1)
   const [event] = events
-  assert.equal(event?.userId, ownerId)
+  assert.equal(event?.userId, wamId, '撤权事件主体是被移出的 Agent 成员；操作人由审计链路记录')
   assert.equal(event?.kind, 'agent_removed')
-  assert.deepEqual(event?.payload, { agentMemberId: wamId, agentId: agent.id, by: ownerId })
+  assert.deepEqual(event?.payload, { agentMemberId: wamId, agentId: agent.id })
 
   const start = await api('POST', '/api/workbench/v1/sessions', {
     as: memberId,

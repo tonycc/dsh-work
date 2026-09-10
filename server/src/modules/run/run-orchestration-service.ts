@@ -182,17 +182,19 @@ export class RunOrchestrationService {
     const detail = `系统撤权取消：${reason ?? '授权已撤销'}`
     await this.operations?.appendAudit('system', 'run.cancel.request', runId, 'success', `trace-${runId}`, detail)
     // Convergence when the Runtime adapter has NO execution record and reports
-    // accepted=false. This covers two windows that would otherwise strand the
-    // run in a non-terminal state forever:
+    // accepted=false. This covers every non-terminal state that would otherwise
+    // be stranded forever:
     //   - 'queued': claimed for accounting but not yet dispatched;
     //   - 'running' (phantom): the scheduler claim sets runs.status='running'
     //     before Runtime.execute() has registered the execution, so a
     //     revocation landing in that window is invisible to the adapter. A real
     //     in-flight execution always has a record, so accepted=false here means
-    //     no Runtime work is running and converging in the database is safe.
+    //     no Runtime work is running and converging in the database is safe;
+    //   - 'cancel_requested': already asked to cancel, but the runtime's
+    //     terminal event was lost, so nothing else will ever terminate it.
     // The status is re-read under the transition guard so a concurrent real
     // cancellation/completion is never overwritten.
-    if (!result.accepted && ['queued', 'running'].includes(run.status)) {
+    if (!result.accepted && ['queued', 'running', 'cancel_requested'].includes(run.status)) {
       return (await this.cancelRunBySystem(run.id, cause, reason)) ?? run
     }
     return (await this.runs.getRun(tenantId, runId)) ?? run
@@ -204,13 +206,11 @@ export class RunOrchestrationService {
    * run_events note.
    */
   private async cancelRunBySystem(runId: string, cause: 'system_revoke', reason?: string) {
-    const current = await this.runs.getRun(tenantId, runId)
-    if (!current) return null
-    return this.convergeCancelledRun(runId, {
+    return this.convergeCancelledRun(runId, current => ({
       attemptId: current.currentAttemptId ?? `attempt-${current.id}`,
       displayMessage: '授权已撤销，任务未执行',
       safeMetadata: { cause, reason: reason ?? '授权已撤销' },
-    })
+    }))
   }
 
   /**
@@ -221,10 +221,10 @@ export class RunOrchestrationService {
    */
   private async convergeCancelledRun(
     runId: string,
-    note: { attemptId: string; displayMessage: string; safeMetadata: JsonObject },
+    buildNote: (run: RunRecord) => { attemptId: string; displayMessage: string; safeMetadata: JsonObject },
   ) {
     const current = await this.runs.getRun(tenantId, runId)
-    if (!current || !['queued', 'running'].includes(current.status)) return current
+    if (!current || !['queued', 'running', 'cancel_requested'].includes(current.status)) return current
     if (current.currentAttemptId) {
       const attempt = await this.runs.getAttempt(tenantId, current.currentAttemptId)
       if (attempt && !['failed', 'cancelled', 'succeeded'].includes(attempt.status)) {
@@ -232,6 +232,7 @@ export class RunOrchestrationService {
       }
     }
     const cancelled = await this.runs.transitionRun(tenantId, runId, 'cancelled')
+    const note = buildNote(current)
     await this.runs.appendSystemEvent({
       tenantId,
       runId,

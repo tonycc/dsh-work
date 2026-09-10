@@ -521,6 +521,11 @@ test('执行前复核：团队运行成员被移除后置 failed 且不调用 Ru
   runtime.holdCompletions = true
   await orchestration.recoverAfterServiceRestart()
   await waitFor(async () => (await runRow(runId)).status === 'failed', '复核失败置 failed')
+  // run 先置 failed、说明事件随后写入，断言需等待事件落库而不是假定同一时刻可见。
+  await waitFor(
+    async () => (await runEventRows(runId)).some(event => event.eventType === 'run.failed'),
+    '复核失败说明事件写入',
+  )
 
   assert.equal(runtime.executions.has(runId), false, '不得调用 Runtime')
   assert.equal((await attemptRow(`${runId}-attempt`)).errorCode, 'AUTHORIZATION_REVOKED')
@@ -742,19 +747,19 @@ test('执行前复核通过后、调用 Runtime 前被系统取消的运行不�
   const sessionId = `${ws}-session`
   await createSession(sessionId, ws, userId, versionId)
 
-  // 在「复核通过 → runtime.execute」之间插入撤权：复核判定通过后、守卫读取状态前
-  // 同步完成成员移除与系统取消收敛，精确命中 executeClaimed 的终态守卫。
-  let revoked = false
+  // 确定性构造「复核通过 → runtime.execute 之间被系统取消」：复核通过后在回调里
+  // 暂停，等测试用 systemCancelRun 完成取消收敛，再放行执行，精确命中终态守卫。
+  // 不在此处触发清扫：那会引入用例范围之外的异步活动，使用例结果依赖时序。
+  let recheckCompleted = false
+  let released: () => void = () => undefined
+  const holdAtGuard = new Promise<void>(resolve => { released = resolve })
   const racingAuthorization = new Proxy(authorization, {
     get(target, property, receiver) {
       if (property === 'authorizeTeamRunExecution') {
         return async (input: { userId: string; workspaceId: string; agentVersionId: string }) => {
           const decision = await target.authorizeTeamRunExecution(input)
-          if (!revoked) {
-            revoked = true
-            await members.removeMember(ws, userId, ownerId)
-            await sweep.sweepOnce()
-          }
+          recheckCompleted = true
+          await holdAtGuard
           return decision
         }
       }
@@ -783,16 +788,72 @@ test('执行前复核通过后、调用 Runtime 前被系统取消的运行不�
       idempotencyKey: `${runIdPrefix(ws)}-claim-exec-race`,
     })
     if (!started) throw new Error('Run 创建失败')
-    await waitFor(async () => ['cancelled', 'failed', 'succeeded'].includes((await runRow(started.id)).status), '运行收敛为终态')
+    // startRun 在调度执行前就返回；等复核真正通过、执行停在守卫之前。
+    await waitFor(() => recheckCompleted, '复核通过并停在调用 Runtime 之前')
 
-    assert.equal(revoked, true, '撤权应当在调用 Runtime 前提交')
+    await orchestration.systemCancelRun(started.id, 'system_revoke', '成员已被移出团队空间')
+    // 等取消在库内可见后再放行：守卫读到的必须是已收敛状态，否则用例会依赖时序。
+    await waitFor(async () => (await runRow(started.id)).status === 'cancelled', '取消已收敛可见')
+
+    // 放行执行：守卫必须看到终态并跳过 Runtime。
+    released()
+    await new Promise(resolve => setTimeout(resolve, 100))
+
+    const finalStatus = (await runRow(started.id)).status
+    assert.ok(['cancelled', 'failed'].includes(finalStatus), `守卫生效时运行应为终态，实际 ${finalStatus}`)
     assert.equal(runtime.executions.has(started.id), false, '被取消的运行不得进入 Runtime')
+    // 只统计「系统撤销说明」，运行时自身取消也会写 run.cancelled，不能混为一谈。
     const events = await runEventRows(started.id)
-    const cancelledEvents = events.filter(event => event.eventType === 'run.cancelled')
-    assert.equal(cancelledEvents.length, 1, '系统取消说明事件只应写入一次')
+    const cancelNotes = events.filter(event => event.eventType === 'run.cancelled' && event.displayMessage === '授权已撤销，任务未执行')
+    assert.equal(cancelNotes.length, 1, '系统取消说明事件只应写入一次')
   } finally {
+    released()
     await racingOrchestration.close()
   }
+})
+
+// ---------------------------------------------------------------------------
+// 5.4 复核故障不得误取消（AC-26）
+// ---------------------------------------------------------------------------
+
+test('收权清扫：复核抛出基础设施故障时不得取消运行', async () => {
+  const ws = uniqueWorkspace('sweep-infra')
+  const ownerId = `${ws}-owner`
+  const userId = `${ws}-user`
+  const versionId = `${ws}-version`
+  await seedUser(ownerId, '基础设施故障负责人')
+  await seedUser(userId, '基础设施故障成员')
+  await createTeamWorkspace(ws, [{ userId: ownerId, role: 'owner' }, { userId: userId, role: 'member' }])
+  await seedAgent(ws, versionId)
+  await grantAgentVersion(ws, versionId)
+  const sessionId = `${ws}-session`
+  await createSession(sessionId, ws, userId, versionId)
+  const runId = `${ws}-run`
+  await createRunWithAttempt({ id: runId, sessionId, requestedBy: userId, status: 'queued', agentVersionId: versionId, workspaceId: ws })
+
+  // 复核抛出非授权类错误（模拟 DB 故障）：清扫必须放行，绝不能把基础设施故障
+  // 当作「授权已撤销」而误取消合法运行（AC-26 误删防护）。
+  const flakyAuthorization = new Proxy(authorization, {
+    get(target, property, receiver) {
+      if (property === 'authorizeTeamRunExecution') {
+        return async () => { throw new Error('connect ECONNREFUSED 127.0.0.1:15433') }
+      }
+      const value = Reflect.get(target, property, receiver) as unknown
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  }) as PostgresAuthorizationService
+  const infraSweep = new RunRevocationSweep(
+    database,
+    runs,
+    { systemCancelRun: (id: string, cause: 'system_revoke', reason?: string) => orchestration.systemCancelRun(id, cause, reason) },
+    flakyAuthorization,
+  )
+
+  await bumpRevision(ws)
+  await infraSweep.sweepOnce()
+
+  assert.equal((await runRow(runId)).status, 'queued', '基础设施故障不得取消运行')
+  assert.equal(runtime.cancels.some(entry => entry.runId === runId), false, '不得调用 runtime.cancel')
 })
 
 // ---------------------------------------------------------------------------

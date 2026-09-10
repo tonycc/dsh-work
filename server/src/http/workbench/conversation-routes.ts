@@ -11,6 +11,7 @@ import {
   httpResult,
   readJsonBody,
   requireRequestIdentity,
+  routePermissionDenied,
   sessionAuthorizationContext,
   type Router,
 } from '../router.ts'
@@ -167,13 +168,29 @@ export function registerConversationRoutes(
     const task = await conversations.getTask(runId, userId)
     if (!task) return httpResult(404, { error: { code: 'run_not_found', message: 'Run 不存在或不可访问' } })
     // 团队空间运行启用逐批写出拦截（1A-T5）；个人/独立空间保持原路径（AC-23）。
+    // 空间类型必须用不依赖调用者当前成员身份的 workspaceTypeOf 判定：被移出团队
+    // 空间的用户仍是该 run 的 requested_by（getTask 只按 requested_by 判定），若用
+    // 成员相关的 resolveWorkspaceType，他会解析出 null 并**降级到无拦截的个人路径**，
+    // 建连与逐批检查全部失效。这里是 fail-closed：非成员一律 403，不降级。
     const workspaceType = task.workspaceId && authorization
-      ? await authorization.resolveWorkspaceType(task.workspaceId, userId)
+      ? await authorization.workspaceTypeOf(task.workspaceId)
       : null
-    const teamAccess = workspaceType === 'team' && authorization && task.workspaceId
-      ? { workspaceId: task.workspaceId, userId, authorization }
-      : undefined
-    await streamRunEvents(response, request.headers['last-event-id'], runId, runs, 250, 15_000, teamAccess)
+    if (workspaceType === 'team' && task.workspaceId && authorization) {
+      // 非成员一律 fail-closed 拒绝（403），不降级为无拦截的个人路径。显式包装为
+      // 权限错误，避免依赖错误消息文本分类。
+      try {
+        await authorization.authorizeTeamReadAccess(task.workspaceId, userId)
+      } catch (error) {
+        throw routePermissionDenied(error instanceof Error ? error.message : '当前用户不能读取该团队空间运行')
+      }
+      await streamRunEvents(response, request.headers['last-event-id'], runId, runs, 250, 15_000, {
+        workspaceId: task.workspaceId,
+        userId,
+        authorization,
+      })
+      return
+    }
+    await streamRunEvents(response, request.headers['last-event-id'], runId, runs)
   })
 }
 
@@ -277,6 +294,8 @@ export async function streamRunEvents(
       emptyTerminalPolls = 0
     }
     if (Date.now() - heartbeatAt >= heartbeatIntervalMs) {
+      // Check the interval first: the heartbeat authorization probe is the only
+      // extra query here, so do not pay for it on every poll.
       if (teamAccess && !(await hasStreamAccess(teamAccess))) break
       response.write(`: heartbeat ${Date.now()}\n\n`)
       heartbeatAt = Date.now()

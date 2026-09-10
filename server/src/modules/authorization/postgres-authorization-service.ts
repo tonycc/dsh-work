@@ -192,7 +192,8 @@ export class PostgresAuthorizationService {
        where tenant_id = ${tenantId} and id = ${workspaceId}
     `
     if (!row) throw new Error('工作空间不存在或已归档')
-    const key = `${workspaceId}:${userId}`
+    // Key includes tenant so a future multi-tenant deployment cannot mix entries.
+    const key = `${tenantId}:${workspaceId}:${userId}`
     const cached = this.teamReadAccessCache.get(key)
     if (cached && cached.revision === row.revision && Date.now() - cached.checkedAt < ttlMs) return
     await this.authorizeWorkbench({ userId, workspaceId })

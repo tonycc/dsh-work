@@ -252,10 +252,12 @@ export class PostgresWorkspaceAgentMemberService {
          where tenant_id = ${tenantId} and id = ${memberId}
       `
       await this.grantSources.revokeGrantSourcesByRef(transaction, workspaceId, memberId)
-      await this.writeRevocationEvent(transaction, workspaceId, actorUserId, 'agent_removed', {
+      // payload_hash 必须只由「被撤销对象」决定：把操作人（actor）写进 payload 会让
+      // 停用→启用→停用（或不同操作人）产生多行事件，违反「重复生命周期事件只产生
+      // 一条」的去重语义。actor 已由审计链路记录，这里不再参与去重键。
+      await this.writeRevocationEvent(transaction, workspaceId, memberId, 'agent_removed', {
         agentMemberId: memberId,
         agentId: locked.agentId,
-        by: actorUserId,
       })
     })
     return { id: memberId, removed: true }
@@ -317,10 +319,10 @@ export class PostgresWorkspaceAgentMemberService {
          where tenant_id = ${tenantId} and id = ${memberId}
       `
       await this.grantSources.revokeGrantSourcesByRef(transaction, workspaceId, memberId)
-      await this.writeRevocationEvent(transaction, workspaceId, actorUserId, 'agent_disabled', {
+      // 同 agent_removed：去重键只由被停用的 Agent 成员决定，不含操作人。
+      await this.writeRevocationEvent(transaction, workspaceId, memberId, 'agent_disabled', {
         agentMemberId: memberId,
         agentId: locked.agentId,
-        by: actorUserId,
       })
     })
     return this.requireAgentMemberRecord(workspaceId, memberId, actorUserId)

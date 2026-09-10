@@ -21,24 +21,47 @@
 | 1A-T2 授权层 | ✅ 双评审通过 | `a39a560`、`aaf10e9` 修复 |
 | 1A-T3 员工成员 API | ✅ 双评审通过 | `35b9fc2`、`b5ca093` 修复 |
 | 1A-T4 Agent 成员 API | ✅ 双评审通过 | `eb28e47`、`3f897f1` 契约修复 |
-| **1A-T5 收权链路** | ⚠️ **进行中**：WIP 提交 `f45686b`（+1808 行，typecheck 通过，**集成测试未跑**，未经任何评审） | — |
+| **1A-T5 收权链路** | ✅ **实现完成、两级评审已修**：`f45686b` + `8a95574`/`94d1ddd` + 评审修复；`pnpm test:m5:revocation:integration` **18/18 且连续 10 次稳定**，typecheck/verify/lint 通过 | `f45686b`、`8a95574`、`94d1ddd` |
 | 1A-T6 前端成员管理 | 待开始 | — |
 | 1A-T7 对账清单与迁移验证 | 待开始 | — |
 
-## 3. T5 接手步骤（最优先）
+## 3. T5 收权链路（实现完成、两级评审已修）
 
-`f45686b` 是被打断的实现代理留下的 WIP，含：`run-revocation-sweep.ts`（新）、`systemCancelRun`、`cancelCause='system_revoke'`（runtime adapter + types）、execute 前复核、SSE 团队分支逐批写出检查、新测试文件 `m5-revocation-pipeline.integration.test.ts`（1808 行中含大量测试，但**未在 WIP 状态运行过**）。
+`f45686b` 是被打断的实现代理留下的 WIP，含：`run-revocation-sweep.ts`（新）、`systemCancelRun`、`cancelCause='system_revoke'`（runtime adapter + types）、execute 前复核、SSE 团队分支逐批写出检查、新测试文件 `m5-revocation-pipeline.integration.test.ts`。
 
-接手顺序：
+**验收状态（2026-09-10）：** `pnpm test:m5:revocation:integration` **18/18 通过且连续 10 次稳定**；`typecheck` / `pnpm verify` / `pnpm lint` 通过。规格符合性与对抗性质量评审各一轮，发现项均已修或有明确排期。
 
-1. **先读规格**：`team-workspace-batch-1a-convergence.md` §4（七条机制 + 已确认决策）与 `team-workspace-plan.md` §5 执行原则 5/6、AC-09。
-2. **跑 WIP 测试**：`pnpm test:m5:revocation:integration`（若脚本已加）或直接跑新测试文件；先修到绿再评审（此时不要信任未验证的代码）。
-3. **规格评审**：对照 T5 规格逐项核对（系统取消幂等收敛、清扫范围——成员移除/角色降级/Agent 停用各自取消哪些 run、SSE 拦截、execute 复核、个人路径零改动）。
-4. **质量评审**，修复后复审，流程同前序任务。
+WIP 首次运行是 **16 个用例 8 失败**，修复分两类：
 
-**T5 两条硬约束（前序评审遗留，规格里必须体现）：**
-- 事件表按 `(workspace_id, user_id, kind, payload_hash)` 去重——重复生命周期事件（降级→升回→再降级、停用→启用→停用）只产生一条事件。**消费者必须基于当前授权状态 + `team_auth_revision` 重新判定**，事件只是触发清扫的提示，不是事实来源。必须有测试覆盖"第二次停用仍会取消期间新起的运行"。
-- 个人空间/standalone 路径零改动（AC-23）：SSE 拦截、execute 复核只在团队分支生效。
+**产品缺陷（均已修 + 有回归测试）：**
+1. **幽灵态 running 永久卡死。** 调度器 `claimAttempt` 在调用 Runtime **之前**就把 `runs.status` 置为 `running`，而 Runtime 适配器此时还没有执行记录。撤权落在该窗口时 `runtime.cancel` 返回 `accepted:false`，旧 `systemCancelRun` 只处理 `queued` 分支，run 永久停在 `running`。修复：`queued`/`running`/`cancel_requested` 三态统一走 `convergeCancelledRun` 库内收敛。
+2. **`cancel_requested` 无收敛兜底（质量评审 D3）。** 该状态非终态，但适配器对二次取消返回 `accepted:true`，一旦终结事件丢失就永久滞留。已并入上面的收敛集合。
+3. **事件序列双写者竞态（规格+质量评审一致定位，flaky ~40%）。** 适配器按自身计数器定 `sequence`，系统说明事件按 `max(sequence)+1` 定，两者撞 `run_events_tenant_id_attempt_id_sequence_key`；写入失败会连带丢失该事件的状态迁移副作用（`run.cancelled`/`run.completed` 不生效）。修复：`appendEvent` 冲突时**重算**序列重试，`appendSystemEvent` 同样重试；二者共享 `isSequenceConflict`（限定 23505 + 具体约束名）。
+4. **系统说明事件被运行时事件静默吞掉（质量评审 D4）。** 去重键为 `(attempt_id, event_type)` 时，适配器先写的 `run.failed` 会让授权撤销说明被丢弃。修复：去重额外限定系统作者前缀 `id like 'event-system-%'`。
+5. **复核异常一律当作「授权已撤销」（质量评审 D2，高危）。** `sweepWorkspaceActiveRuns` 吞掉任何异常并取消该空间**全部**在途运行——一次 DB 抖动即造成 AC-26 所防的误删。修复：新增 `isAuthorizationDenial` 只对可分类的授权拒绝取消；基础设施故障记日志并放行（执行前复核与下一轮修订变更仍会兜底）。
+6. **SSE 建连降级绕过（规格评审 GAP-1，高危，已实证）。** 建连用成员相关的 `resolveWorkspaceType` 判定团队分支，被移出成员重连解析为 `null` → 退化为无逐批拦截的个人路径并继续交付内容。修复：改用不依赖成员身份的 `workspaceTypeOf`，非成员 fail-closed 403（显式包装为权限错误，不依赖错误消息分类）。有专测：先移除再建连，去掉修复即失败。
+7. **`executeClaimed` 终态守卫。** 复核通过后、`runtime.execute` 前再确认状态，被撤权取消的 run 不得进入 Runtime（AC-09「取消与完成」竞态）。
+
+**测试夹具缺陷（9 处，均为夹具与产品语义不一致，非产品缺陷）：**
+- 两处「成员已移除 / Agent 已停用」只在事件表插了行、没有真正改业务状态，被 `isRevocationEffective` 当前状态门（正确地）跳过；须真调 `members.removeMember` / 置 `disabled`（并移除与事件去重键冲突的手工插入）。
+- 一处对照空间的 run 请求人不是该空间成员，修订号全量复核会以「非成员」正确取消它，掩盖跨空间隔离断言。
+- 一处 run 先于其 session 插入，违反 `runs_tenant_id_session_id_fkey`。
+- 一处重复插入个人空间：`0013` 的 `users_personal_workspace_provisioning` 触发器已在插入 users 时自动创建，夹具应复用而非再插。
+- 调度容量：`claimAttempt` 按 runtime 全局统计 `status='running'` 的 attempt，多个用例直接落库 `running` 夹具会跨用例耗尽默认容量 2。测试运行时容量提升到 32。
+- 两处 SSE 竞态用例在流启动前就落库了「撤权后」的事件，首轮即全量交付、竞态窗口根本不存在；改为在竞态点之后才写入事件。
+- 一处复核失败断言在 run 置 `failed` 后立即读说明事件，而说明事件是随后写入的；改为等待事件落库。
+
+**两条硬约束的落地证据：**
+- 事件去重 + 当前状态门：`isRevocationEffective` 逐事件复核当前授权状态；`team_auth_revision` 变更触发全空间复核兜底。`team_auth_revision` 全仓只有 `+1` 自增（不可能回退，重启重放安全）。Agent 事件此前把操作人写进 payload/`user_id`，导致重复生命周期产生多行、违反去重语义，已改为只由被撤销对象决定。
+- 个人空间零改动：`recheckExecutionAuthorization` 在 `workspaceType !== 'team'` 时早退；`streamRunEvents` 的 `teamAccess` 可选，路由只在团队分支传入；授权层 workspace capabilities 仅在 `workspaceType === 'team'` 时校验；用户 `cancel()` 逐字未改。
+
+**已知遗留（评审记录，非 T5 阻断项，转 T7 或后续批次）：**
+- 清扫器错误处理无 attempts 上限/死信，永久失败事件会以 2s 周期无限重试（D7）。
+- `readWorkspacesNeedingSweep` 的 pending 事件不限空间状态，归档/非 active 空间的 pending 事件无归宿（D8）。
+- 清扫器 `close()` 不 await 在飞清扫，关闭序列有竞态噪声（D9）。
+- 三个 `listActiveRuns*` 查询缺少 `(tenant_id, status)` 起始索引，修订号变更时是 O(active runs × 查询数)（D10）。
+- `teamReadAccessCache` 只写不淘汰（D5）；缓存键已加租户维度（D6 已缓解）。
+- `failRunForRevokedAuthorization` 先置 `failed`、后写说明事件，二者之间事件不可见（产品可接受，测试已等待）。
 
 ## 4. T6 前端成员管理（待开始，规格要点）
 
