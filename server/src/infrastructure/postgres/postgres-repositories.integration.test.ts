@@ -122,8 +122,21 @@ test('retry creates a new immutable Attempt and events are idempotent', async ()
   assert.equal(repeated.id, created.id)
   assert.equal((await runs.readEvents(run.tenantId, run.id)).length, 1)
 
+  // 1A-T5: the per-attempt sequence is no longer a hard rejection for a
+  // different event id — the Runtime adapter numbers its own events while
+  // server-authored notes allocate max(sequence)+1, so a concurrent collision
+  // must be retried rather than dropped (losing the write also loses that
+  // event's state transition). The writer re-allocates a free sequence.
+  const reallocated = await runs.appendEvent({ ...event, id: `event-m2-${suffix}-002` })
+  assert.equal(reallocated.id, `event-m2-${suffix}-002`)
+  assert.notEqual(reallocated.sequence, created.sequence)
+  assert.equal((await runs.readEvents(run.tenantId, run.id)).length, 2)
+  // The (tenant, attempt, sequence) unique key is still enforced underneath.
   await assert.rejects(
-    runs.appendEvent({ ...event, id: `event-m2-${suffix}-002` }),
+    database`
+      insert into run_events (id, tenant_id, run_id, attempt_id, sequence, event_type, display_message, safe_metadata, trace_id, occurred_at)
+      values (${`event-m2-${suffix}-dup-seq`}, ${run.tenantId}, ${run.id}, ${second.id}, ${reallocated.sequence}, 'attempt.started', '重复序列', ${database.json({})}, 'trace-dup', now())
+    `,
     /duplicate key|unique constraint/i,
   )
 
