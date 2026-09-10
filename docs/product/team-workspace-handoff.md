@@ -56,12 +56,13 @@ WIP 首次运行是 **16 个用例 8 失败**，修复分两类：
 - 个人空间零改动：`recheckExecutionAuthorization` 在 `workspaceType !== 'team'` 时早退；`streamRunEvents` 的 `teamAccess` 可选，路由只在团队分支传入；授权层 workspace capabilities 仅在 `workspaceType === 'team'` 时校验；用户 `cancel()` 逐字未改。
 
 **已知遗留（评审记录，非 T5 阻断项，转 T7 或后续批次）：**
-- 清扫器错误处理无 attempts 上限/死信，永久失败事件会以 2s 周期无限重试（D7）。
+- ~~清扫器错误处理无 attempts 上限/死信（D7）~~ **已修**：迁移 `0023` 增加终态 `dead_letter` + `last_error`，`MAX_EVENT_ATTEMPTS=20`（约 40s）后单语句升级，有回归测试。
 - `readWorkspacesNeedingSweep` 的 pending 事件不限空间状态，归档/非 active 空间的 pending 事件无归宿（D8）。
 - 清扫器 `close()` 不 await 在飞清扫，关闭序列有竞态噪声（D9）。
 - 三个 `listActiveRuns*` 查询缺少 `(tenant_id, status)` 起始索引，修订号变更时是 O(active runs × 查询数)（D10）。
-- `teamReadAccessCache` 只写不淘汰（D5）；缓存键已加租户维度（D6 已缓解）。
+- ~~`teamReadAccessCache` 只写不淘汰（D5）~~ **已修**：超阈值清理 TTL 过期项并硬性封顶；缓存键已加租户维度（D6 已缓解）。
 - `failRunForRevokedAuthorization` 先置 `failed`、后写说明事件，二者之间事件不可见（产品可接受，测试已等待）。
+- `isAuthorizationDenial` 仍按 15 条错误文案子串判定（授权服务抛普通 Error）；已加单测锁定契约（`test:m5:revocation`），后续若引入类型化错误码应替换。
 
 ## 4. T6 前端成员管理（待开始，规格要点）
 
