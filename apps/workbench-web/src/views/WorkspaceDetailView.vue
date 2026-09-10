@@ -15,7 +15,7 @@ import { ArtifactCard } from '@dsh-work/ui-core'
 import { useAuthStore } from '@/stores/auth'
 import { useContentStore } from '@/stores/content'
 import { workbenchApi } from '@/api/client'
-import type { Artifact, TeamMemberRole, WorkspaceAgentMember, WorkspaceFile } from '@/types/domain'
+import type { Artifact, TeamMemberRole, WorkspaceAgentMember, WorkspaceFile, WorkspaceMember } from '@/types/domain'
 import ConversationStarter from '@/components/ConversationStarter.vue'
 import WorkspaceMemberDialog from '@/components/WorkspaceMemberDialog.vue'
 import WorkspaceSettingsDialog from '@/components/WorkspaceSettingsDialog.vue'
@@ -50,6 +50,9 @@ const uploading = ref(false)
 const memberDialogOpen = ref(false)
 const settingsDialogOpen = ref(false)
 const agentMembers = ref<WorkspaceAgentMember[]>([])
+const workspaceMembers = ref<WorkspaceMember[]>([])
+/** 服务端返回的调用者角色（负责人转交后不再等于创建者，不能靠姓名推断）。 */
+const serverUserRole = ref<TeamMemberRole | null>(null)
 const presetAgentMember = ref<WorkspaceAgentMember | null>(null)
 
 const requestedTab = String(route.query.tab ?? 'conversation')
@@ -71,12 +74,17 @@ const isTeam = computed(() => workspace.value?.type === 'team')
  */
 const isArchived = computed(() => isTeam.value && workspace.value?.status === 'archived')
 /**
- * 当前操作人的团队角色。服务端未返回操作人角色字段（见 T6 报告缺口）：
- * 仅在「工作空间负责人姓名 == 当前登录用户姓名」这一可判定情形下推导为
- * 负责人，其余一律为 null，团队写入口不渲染（不臆造权限，不误开入口）。
+ * 当前操作人的团队角色。优先采用 `GET /workspaces/:id/members` 返回的
+ * `currentUserRole`（负责人转交后创建者不再是负责人，按姓名推断会失效）；
+ * 名册未就绪或加载失败时才回退到「负责人姓名 == 当前用户姓名」的保守判断，
+ * 其余一律 null，团队写入口不渲染（不臆造权限，不误开入口）。
  */
 const currentUserRole = computed<TeamMemberRole | null>(() => {
   if (props.currentUserRole !== undefined) return props.currentUserRole
+  // 优先采用服务端返回的角色：负责人转交后创建者不再是负责人，按姓名推断会让
+  // 新负责人失去全部写入口、旧创建者被误判。仅在名册尚未加载完成/加载失败时
+  // 才回退到「负责人姓名 == 当前用户姓名」的保守判断。
+  if (serverUserRole.value !== null) return serverUserRole.value
   return resolveCurrentUserRole({
     workspaceType: workspace.value?.type,
     archived: isArchived.value,
@@ -177,7 +185,7 @@ watch(
 
 /**
  * Agent 成员列表只按既有 T4 接口加载，且严格限定团队空间：个人空间既不发
- * 请求也不渲染（AC-23）。员工成员列表接口缺失时给出说明而不是臆造数据。
+ * 请求也不渲染（AC-23）。
  */
 async function loadAgentMembers(workspaceId = workspace.value?.id ?? '') {
   if (!workspaceId || !isTeam.value) return
@@ -186,6 +194,23 @@ async function loadAgentMembers(workspaceId = workspace.value?.id ?? '') {
   } catch (error) {
     agentMembers.value = []
     notifyActionFailure('加载 Agent 成员', `工作空间“${workspace.value?.name ?? workspaceId}”`, error, '稍后刷新页面重试。')
+  }
+}
+
+/**
+ * 加载员工名册与服务端判定的调用者角色。团队成员均可读取；个人空间不请求
+ * （AC-23）。名册同时用于成员弹窗与设置弹窗的转交候选项。
+ */
+async function loadWorkspaceMembers(workspaceId = workspace.value?.id ?? '') {
+  if (!workspaceId || !isTeam.value) return
+  try {
+    const directory = await workbenchApi.listWorkspaceMembers(workspaceId)
+    workspaceMembers.value = directory.items
+    serverUserRole.value = directory.currentUserRole
+  } catch (error) {
+    workspaceMembers.value = []
+    serverUserRole.value = null
+    notifyActionFailure('加载员工成员', `工作空间“${workspace.value?.name ?? workspaceId}”`, error, '稍后刷新页面重试。')
   }
 }
 
@@ -199,6 +224,7 @@ function startAgentConversation(agentMemberId: string) {
 
 function refreshTeamMembers() {
   void loadAgentMembers()
+  void loadWorkspaceMembers()
 }
 
 /**
@@ -222,7 +248,12 @@ watch(workspace, (value) => {
   memberDialogOpen.value = false
   settingsDialogOpen.value = false
   agentMembers.value = []
-  if (value?.type === 'team') void loadAgentMembers(value.id)
+  workspaceMembers.value = []
+  serverUserRole.value = null
+  if (value?.type === 'team') {
+    void loadAgentMembers(value.id)
+    void loadWorkspaceMembers(value.id)
+  }
 }, { immediate: true })
 </script>
 
@@ -410,10 +441,9 @@ watch(workspace, (value) => {
         :workspace-id="workspace.id"
         :workspace-name="workspace.name"
         :current-user-role="currentUserRole"
-        :members="[]"
+        :members="workspaceMembers"
         :agent-members="agentMembers"
         :load-agent-members="false"
-        members-warning="员工成员列表接口尚未就绪，暂无法在此查看或调整员工角色。"
         @refresh="refreshTeamMembers"
         @start-conversation="startAgentConversation"
       />
@@ -424,7 +454,7 @@ watch(workspace, (value) => {
         :workspace-name="workspace.name"
         :workspace-description="workspace.description"
         :current-user-role="currentUserRole"
-        :members="[]"
+        :members="workspaceMembers"
         save-warning="名称与说明的保存接口尚未就绪，本次修改不会提交到服务端。"
         @save="saveWorkspaceSettings"
         @transferred="refreshTeamMembers"

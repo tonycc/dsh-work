@@ -62,6 +62,7 @@ describe('WorkspaceDetailView 团队分支与个人空间红线', () => {
   beforeEach(() => {
     route.params = { id: 'ws-team' }
     vi.spyOn(workbenchApi, 'listWorkspaceAgentMembers').mockResolvedValue([])
+    vi.spyOn(workbenchApi, 'listWorkspaceMembers').mockResolvedValue({ items: [], currentUserRole: null })
     vi.spyOn(workbenchApi, 'listMemberCandidates').mockResolvedValue({ items: [], nextCursor: null })
     vi.spyOn(workbenchApi, 'listWorkspaceAgentCandidates').mockResolvedValue({ items: [], nextCursor: null })
   })
@@ -70,8 +71,37 @@ describe('WorkspaceDetailView 团队分支与个人空间红线', () => {
     const { wrapper } = await mountView(workspace())
 
     expect(workbenchApi.listWorkspaceAgentMembers).toHaveBeenCalledWith('ws-team')
+    expect(workbenchApi.listWorkspaceMembers).toHaveBeenCalledWith('ws-team')
     expect(wrapper.find('[data-testid="panel-agent-section"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="panel-employee-section"]').exists()).toBe(true)
+  })
+
+  it('uses the server roster and server-resolved role instead of inferring ownership from the creator name', async () => {
+    // 当前登录用户是空间创建者（owner 字段），但服务端说其角色是 member：
+    // 负责人已转交给别人，创建者不得再看到写入口。
+    vi.mocked(workbenchApi.listWorkspaceMembers).mockResolvedValue({
+      items: [
+        { userId: 'u-new-owner', displayName: '周航', role: 'owner', joinedAt: '2026-09-01T00:00:00.000Z' },
+        { userId: 'u-current', displayName: '林岚', role: 'member', joinedAt: '2026-09-01T00:00:00.000Z' },
+      ],
+      currentUserRole: 'member',
+    })
+    const { wrapper } = await mountView(workspace(), { ownerName: '林岚' })
+
+    expect(wrapper.find('[data-testid="panel-manage-members"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="panel-workspace-settings"]').exists()).toBe(false)
+  })
+
+  it('treats the server-declared owner as owner even when they are not the workspace creator', async () => {
+    vi.mocked(workbenchApi.listWorkspaceMembers).mockResolvedValue({
+      items: [{ userId: 'u-current', displayName: '周航', role: 'owner', joinedAt: '2026-09-01T00:00:00.000Z' }],
+      currentUserRole: 'owner',
+    })
+    // 创建者是「林岚」，当前用户是转交后的新负责人「周航」。
+    const { wrapper } = await mountView(workspace(), { ownerName: '周航' })
+
+    expect(wrapper.find('[data-testid="panel-manage-members"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="panel-workspace-settings"]').exists()).toBe(true)
   })
 
   it('opens the team management entry only for the resolved owner', async () => {
@@ -108,6 +138,7 @@ describe('WorkspaceDetailView 团队分支与个人空间红线', () => {
 
     // AC-23 红线：个人空间不新增任何成员相关请求，也不渲染团队 UI。
     expect(workbenchApi.listWorkspaceAgentMembers).not.toHaveBeenCalled()
+    expect(workbenchApi.listWorkspaceMembers).not.toHaveBeenCalled()
     expect(workbenchApi.listMemberCandidates).not.toHaveBeenCalled()
     expect(wrapper.find('[data-testid="panel-agent-section"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="panel-employee-section"]').exists()).toBe(false)
