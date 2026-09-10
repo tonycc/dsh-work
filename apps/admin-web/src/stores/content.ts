@@ -7,10 +7,12 @@ import type {
   AdminTaskSummary,
   AgentDefinition,
   AgentDraftConfiguration,
+  AgentJoinedWorkspaceRecord,
   AgentReleaseRecord,
   AgentVersionRecord,
   AuditEvent,
   ConnectorDefinition,
+  GrantSourceReconciliationView,
   HealthComponent,
   ManagedWorkspaceDefinition,
   ModelUsageRecord,
@@ -47,6 +49,8 @@ export const useContentStore = defineStore('admin-content', () => {
   const usage = ref<UsagePoint[]>([])
   const modelUsage = ref<ModelUsageRecord[]>([])
   const platformStatus = ref<PlatformStatus | null>(null)
+  const agentJoinedWorkspaces = ref<Record<string, AgentJoinedWorkspaceRecord[]>>({})
+  const grantReconciliation = ref<GrantSourceReconciliationView | null>(null)
   const loading = ref(false)
   const error = ref('')
   const adminInitialized = ref(false)
@@ -192,6 +196,32 @@ export const useContentStore = defineStore('admin-content', () => {
     return result.agent
   }
 
+  /** 平台治理开关（convergence §1）：关闭后该 Agent 不再出现在团队空间候选。 */
+  async function setAgentWorkspaceJoin(agentId: string, allowWorkspaceJoin: boolean) {
+    const result = await adminApi.setAgentWorkspaceJoin({ agentId, allowWorkspaceJoin })
+    replaceById(agents.value, result.agent)
+    return result.agent
+  }
+
+  /** 只读的「已加入空间」清单；按 Agent 缓存，供详情页评估停用影响。 */
+  async function loadAgentJoinedWorkspaces(agentId: string) {
+    const result = await adminApi.getAgentJoinedWorkspaces(agentId)
+    agentJoinedWorkspaces.value = { ...agentJoinedWorkspaces.value, [agentId]: result.items }
+    return result.items
+  }
+
+  async function loadGrantSourceReconciliation() {
+    grantReconciliation.value = await adminApi.getGrantSourceReconciliation()
+    return grantReconciliation.value
+  }
+
+  /** 对账完成后刷新清单：legacy 来源被改写为 manual，不再出现在列表中。 */
+  async function reconcileGrantSources(sourceIds: string[]) {
+    const result = await adminApi.reconcileGrantSources({ sourceIds })
+    await loadGrantSourceReconciliation()
+    return result
+  }
+
   async function updateToolPermissions(input: {
     toolId: string
     allowedRoles: string[]
@@ -298,6 +328,8 @@ export const useContentStore = defineStore('admin-content', () => {
     usage,
     modelUsage,
     platformStatus,
+    agentJoinedWorkspaces,
+    grantReconciliation,
     loading,
     error,
     initialized,
@@ -307,6 +339,10 @@ export const useContentStore = defineStore('admin-content', () => {
     setAgentStatus,
     testAgent,
     rollbackAgent,
+    setAgentWorkspaceJoin,
+    loadAgentJoinedWorkspaces,
+    loadGrantSourceReconciliation,
+    reconcileGrantSources,
     createSkill,
     updateSkill,
     setSkillStatus,

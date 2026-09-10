@@ -19,6 +19,8 @@ const editorOpen = ref(false)
 const editingAgent = ref<AgentDefinition>()
 const activeDetailTab = ref<'config' | 'versions' | 'releases'>('config')
 const actionLoading = ref('')
+const workspaceJoinSaving = ref(false)
+const joinedWorkspacesLoading = ref(false)
 const agentRoleLabels: Record<string, string> = {
   'role-platform-admin': '平台管理员',
   'role-employee': '试点员工',
@@ -50,6 +52,43 @@ function inspect(agent: AgentDefinition) {
   selectedAgentId.value = agent.id
   activeDetailTab.value = 'config'
   drawerOpen.value = true
+  void loadJoinedWorkspaces(agent.id)
+}
+
+async function loadJoinedWorkspaces(agentId: string) {
+  joinedWorkspacesLoading.value = true
+  try {
+    await contentStore.loadAgentJoinedWorkspaces(agentId)
+  } catch (cause) {
+    if (cause instanceof Error) ElMessage.error(cause.message)
+  } finally {
+    joinedWorkspacesLoading.value = false
+  }
+}
+
+/**
+ * 平台治理开关（convergence §1）：关闭后该 Agent 不再出现在团队空间「添加 Agent」
+ * 搜索结果，也不能被加入；已加入的空间与既有授权不受影响。
+ */
+async function toggleWorkspaceJoin(next: boolean) {
+  const agent = selectedAgent.value
+  if (!agent) return
+  try {
+    await ElMessageBox.confirm(
+      next
+        ? '开启后该 Agent 会重新出现在团队空间的「添加 Agent」搜索结果中。'
+        : '关闭后该 Agent 不再出现在团队空间的「添加 Agent」搜索结果中，也不能被加入；已加入的成员关联与既有授权不受影响。',
+      `${next ? '开启' : '关闭'}「允许加入团队空间」“${agent.name}”？`,
+      { confirmButtonText: `确认${next ? '开启' : '关闭'}`, cancelButtonText: '取消', type: 'warning' },
+    )
+    workspaceJoinSaving.value = true
+    await contentStore.setAgentWorkspaceJoin(agent.id, next)
+    ElMessage.success(`已${next ? '开启' : '关闭'}「允许加入团队空间」，操作已写入审计`)
+  } catch (cause) {
+    if (cause instanceof Error) ElMessage.error(cause.message)
+  } finally {
+    workspaceJoinSaving.value = false
+  }
 }
 
 function openCreate() {
@@ -66,6 +105,7 @@ function handleDraftSaved(agent: AgentDefinition) {
   selectedAgentId.value = agent.id
   activeDetailTab.value = 'config'
   drawerOpen.value = true
+  void loadJoinedWorkspaces(agent.id)
 }
 
 function agentRoleNames(agent: AgentDefinition) {
@@ -207,6 +247,41 @@ onMounted(() => contentStore.load())
           <section class="agent-detail__section"><h3>Skill 引用</h3><div class="chip-list"><span v-for="skill in selectedAgent.skills" :key="skill">{{ skill }}</span></div></section>
           <section class="agent-detail__section"><h3>工具允许列表</h3><div class="chip-list chip-list--code"><span v-for="tool in selectedAgent.tools" :key="tool">{{ tool }}</span></div></section>
           <section class="agent-detail__section"><h3>业务数据范围</h3><div class="chip-list"><span v-for="scope in selectedAgent.dataScopes" :key="scope">{{ scope }}</span></div></section>
+          <section class="agent-detail__section">
+            <h3>团队空间治理</h3>
+            <div class="governance-row">
+              <div>
+                <strong>允许加入团队空间</strong>
+                <p>关闭后该 Agent 不再出现在团队空间「添加 Agent」搜索结果中，也不能被加入；已加入的空间、成员关联与既有授权不受影响。</p>
+              </div>
+              <el-switch
+                v-if="authStore.canManage"
+                :model-value="selectedAgent.allowWorkspaceJoin"
+                :loading="workspaceJoinSaving"
+                active-text="允许"
+                inactive-text="禁止"
+                data-action="toggle-agent-workspace-join"
+                @change="(value: string | number | boolean) => toggleWorkspaceJoin(value === true)"
+              />
+              <StatusTag v-else :status="selectedAgent.allowWorkspaceJoin ? 'published' : 'disabled'" :label="selectedAgent.allowWorkspaceJoin ? '允许加入' : '禁止加入'" />
+            </div>
+            <div class="joined-workspaces">
+              <h4>已加入空间 <span class="tab-count">{{ (contentStore.agentJoinedWorkspaces[selectedAgent.id] ?? []).length }}</span></h4>
+              <el-table
+                v-loading="joinedWorkspacesLoading"
+                class="data-table"
+                :data="contentStore.agentJoinedWorkspaces[selectedAgent.id] ?? []"
+                empty-text="该 Agent 尚未加入任何团队空间"
+              >
+                <el-table-column prop="workspaceName" label="空间" min-width="180" />
+                <el-table-column label="固定版本" width="100"><template #default="scope"><span class="mono">v{{ scope.row.version }}</span></template></el-table-column>
+                <el-table-column label="成员状态" width="110"><template #default="scope"><StatusTag :status="scope.row.memberStatus === 'available' ? 'published' : 'disabled'" :label="scope.row.memberStatus === 'available' ? '可用' : '已停用'" /></template></el-table-column>
+                <el-table-column prop="addedBy" label="加入人" min-width="120" />
+                <el-table-column prop="createdAt" label="加入时间" width="120" />
+              </el-table>
+              <el-alert type="info" :closable="false" show-icon title="停用或移出某个空间前，先确认该 Agent 的固定版本与成员状态，避免影响仍在使用它的团队会话。" />
+            </div>
+          </section>
           <section class="agent-detail__section"><h3>版本策略</h3><el-alert type="info" :closable="false" show-icon title="创建运行时锁定活动版本；已发布版本不可原地修改，回滚只切换活动版本指针。" /></section>
         </template>
 
@@ -267,6 +342,12 @@ onMounted(() => contentStore.load())
 .version-summary strong { color: var(--color-text-primary); font-size: var(--font-size-caption); font-weight: var(--font-weight-badge); }
 .version-summary small { margin-top: 4px; color: var(--color-text-muted); font-size: var(--font-size-badge); }
 .agent-detail__releases { margin-top: 18px; }
+.governance-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 14px; border: 1px solid var(--color-border); border-radius: var(--radius-button); background: var(--color-bg-subtle); }
+.governance-row strong { color: var(--color-text-heading); font-size: var(--font-size-caption); }
+.governance-row p { margin: 5px 0 0; color: var(--color-text-secondary); font-size: var(--font-size-badge); line-height: 1.6; }
+.joined-workspaces { margin-top: 16px; }
+.joined-workspaces h4 { margin: 0 0 9px; color: var(--color-text-heading); font-size: var(--font-size-body); }
+.joined-workspaces .data-table { margin-bottom: 12px; border: 1px solid var(--color-border); border-radius: var(--radius-card); overflow: hidden; }
 .release-record { padding: 12px 14px; border: 1px solid var(--color-border); border-radius: var(--radius-button); background: var(--color-bg-base); }
 .release-record > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .release-record strong { color: var(--color-text-heading); font-size: var(--font-size-caption); }

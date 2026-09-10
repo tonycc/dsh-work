@@ -161,6 +161,7 @@ export interface AgentDefinition {
   visibility: string
   roleIds: string[]
   dataScopes: string[]
+  allowWorkspaceJoin: boolean
   status: PublishStatus
   version: string
   welcomeMessage: string
@@ -171,6 +172,41 @@ export interface AgentDefinition {
   skills: string[]
   tools: string[]
   updatedAt: string
+}
+
+export interface AgentJoinedWorkspaceRecord {
+  workspaceId: string
+  workspaceName: string
+  workspaceType: 'personal' | 'team'
+  workspaceStatus: string
+  memberStatus: 'available' | 'disabled'
+  version: string
+  addedBy: string
+  createdAt: string
+}
+
+export interface GrantSourceReconciliationItem {
+  sourceId: string
+  workspaceId: string
+  workspaceName: string
+  capabilityType: 'agent' | 'skill' | 'tool'
+  capabilityVersionId: string
+  capabilityLabel: string
+  createdBy: string
+  createdAt: string
+  possibleAgents: Array<{
+    agentId: string
+    agentName: string
+    versionId: string
+    version: string
+    agentStatus: string
+  }>
+  inferenceNote: string
+}
+
+export interface GrantSourceReconciliationView {
+  items: GrantSourceReconciliationItem[]
+  workspaceSummary: Array<{ workspaceId: string, workspaceName: string, unresolvedCount: number }>
 }
 
 export interface AgentDraftConfiguration {

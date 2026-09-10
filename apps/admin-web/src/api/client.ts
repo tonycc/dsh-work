@@ -2,6 +2,7 @@ import type {
   AdminSession,
   AdminTaskSummary,
   AgentDefinition,
+  AgentJoinedWorkspaceRecord,
   CreateAgentDraftInput,
   CreateSkillInput,
   AgentReleaseRecord,
@@ -9,6 +10,7 @@ import type {
   AuditEvent,
   ConnectorDefinition,
   DirectorySyncState,
+  GrantSourceReconciliationView,
   HealthComponent,
   IdentityRoleSummary,
   IdentityUserPage,
@@ -141,6 +143,20 @@ export const adminApi = {
     }),
   rollbackAgent: (input: { agentId: string; version: string }) =>
     request<{ agent: AgentDefinition; release: AgentReleaseRecord }>('/agents/rollback', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  setAgentWorkspaceJoin: (input: { agentId: string; allowWorkspaceJoin: boolean }) =>
+    request<{ agent: AgentDefinition }>(`/agents/${encodeURIComponent(input.agentId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ allowWorkspaceJoin: input.allowWorkspaceJoin }),
+    }),
+  getAgentJoinedWorkspaces: (agentId: string) =>
+    request<{ items: AgentJoinedWorkspaceRecord[] }>(`/agents/${encodeURIComponent(agentId)}/workspaces`),
+  getGrantSourceReconciliation: () =>
+    request<GrantSourceReconciliationView>('/grant-sources/unresolved'),
+  reconcileGrantSources: (input: { sourceIds: string[] }) =>
+    request<{ reconciled: number; sourceIds: string[]; workspaceIds: string[] }>('/grant-sources/reconcile', {
       method: 'POST',
       body: JSON.stringify(input),
     }),
