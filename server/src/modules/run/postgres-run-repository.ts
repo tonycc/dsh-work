@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 import type { DatabaseClient } from '../../infrastructure/postgres/database.ts'
-import type { RestartRecoveryResult, RunRepository } from './run-repository.ts'
+import type { AppendSystemEventInput, RestartRecoveryResult, RunRepository, WorkspaceActiveRun } from './run-repository.ts'
 import { assertAttemptTransition, assertRunTransition, isTerminalState } from './run-state-machine.ts'
 import type {
   AttemptState,
@@ -305,6 +305,37 @@ export class PostgresRunRepository implements RunRepository {
     return mapEvent(existing)
   }
 
+  /**
+   * Server-authored events (system cancel notes, execution-time authorization
+   * denials — 1A-T5). The next per-attempt sequence is computed inside the
+   * transaction; the insert-select aggregate always produces exactly one row.
+   * Callers only append to attempts that never reached the Runtime (queued or
+   * recheck-denied), so no writer contends on the sequence.
+   */
+  async appendSystemEvent(input: AppendSystemEventInput): Promise<StoredRunEvent> {
+    const id = `event-system-${randomUUID()}`
+    return this.database.begin(async (transaction) => {
+      const [created] = await transaction<EventRow[]>`
+        insert into run_events (
+          id, tenant_id, run_id, attempt_id, sequence, event_type, display_message,
+          safe_metadata, trace_id, occurred_at
+        )
+        select ${id}, ${input.tenantId}, ${input.runId}, ${input.attemptId},
+               coalesce(max(sequence), 0)::bigint + 1, ${input.eventType}, ${input.displayMessage},
+               ${transaction.json(input.safeMetadata ?? {})}, ${input.traceId},
+               ${input.occurredAt ?? new Date().toISOString()}
+          from run_events
+         where tenant_id = ${input.tenantId} and attempt_id = ${input.attemptId}
+        returning id, tenant_id as "tenantId", run_id as "runId", attempt_id as "attemptId",
+                  sequence, event_type as "eventType", display_message as "displayMessage",
+                  safe_metadata as "safeMetadata", trace_id as "traceId", occurred_at as "occurredAt",
+                  stream_position as "streamPosition"
+      `
+      if (!created) throw new Error('系统事件写入失败')
+      return mapEvent(created)
+    })
+  }
+
   async readEvents(tenantId: string, runId: string, afterSequence = 0) {
     const rows = await this.database<EventRow[]>`
       select id, tenant_id as "tenantId", run_id as "runId", attempt_id as "attemptId",
@@ -424,6 +455,61 @@ export class PostgresRunRepository implements RunRepository {
         })),
       }
     })
+  }
+
+  async listActiveRunsForWorkspaceUser(tenantId: string, workspaceId: string, userId: string) {
+    const rows = await this.database<RunRow[]>`
+      select r.id, r.tenant_id as "tenantId", r.session_id as "sessionId",
+             r.requested_by as "requestedBy", r.idempotency_key as "idempotencyKey",
+             r.status, r.current_attempt_id as "currentAttemptId",
+             r.created_at as "createdAt", r.updated_at as "updatedAt"
+        from runs r
+        join sessions s on s.tenant_id = r.tenant_id and s.id = r.session_id
+       where r.tenant_id = ${tenantId}
+         and s.workspace_id = ${workspaceId}
+         and r.requested_by = ${userId}
+         and r.status in ('queued', 'running', 'cancel_requested')
+       order by r.created_at asc
+    `
+    return rows.map(mapRun)
+  }
+
+  async listActiveRunsForAgentMember(tenantId: string, workspaceId: string, agentMemberId: string) {
+    const rows = await this.database<RunRow[]>`
+      select r.id, r.tenant_id as "tenantId", r.session_id as "sessionId",
+             r.requested_by as "requestedBy", r.idempotency_key as "idempotencyKey",
+             r.status, r.current_attempt_id as "currentAttemptId",
+             r.created_at as "createdAt", r.updated_at as "updatedAt"
+        from runs r
+        join sessions s on s.tenant_id = r.tenant_id and s.id = r.session_id
+        join workspace_agent_members wam
+          on wam.tenant_id = s.tenant_id
+         and wam.workspace_id = s.workspace_id
+         and wam.id = ${agentMemberId}
+       where r.tenant_id = ${tenantId}
+         and s.workspace_id = ${workspaceId}
+         and s.agent_version_id = wam.agent_version_id
+         and r.status in ('queued', 'running', 'cancel_requested')
+       order by r.created_at asc
+    `
+    return rows.map(mapRun)
+  }
+
+  async listActiveRunsInWorkspace(tenantId: string, workspaceId: string): Promise<WorkspaceActiveRun[]> {
+    const rows = await this.database<(RunRow & { agentVersionId: string })[]>`
+      select r.id, r.tenant_id as "tenantId", r.session_id as "sessionId",
+             r.requested_by as "requestedBy", r.idempotency_key as "idempotencyKey",
+             r.status, r.current_attempt_id as "currentAttemptId",
+             r.created_at as "createdAt", r.updated_at as "updatedAt",
+             s.agent_version_id as "agentVersionId"
+        from runs r
+        join sessions s on s.tenant_id = r.tenant_id and s.id = r.session_id
+       where r.tenant_id = ${tenantId}
+         and s.workspace_id = ${workspaceId}
+         and r.status in ('queued', 'running', 'cancel_requested')
+       order by r.created_at asc
+    `
+    return rows.map(row => ({ ...mapRun(row), agentVersionId: row.agentVersionId }))
   }
 }
 

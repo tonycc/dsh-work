@@ -159,6 +159,47 @@ export class RunOrchestrationService {
     return this.runs.getRun(tenantId, runId)
   }
 
+  /**
+   * System-side cancellation for the revocation pipeline (1A-T5). Deliberately
+   * NOT ownership-gated: it must never call requireOwnedRun — a revoked
+   * employee is by definition not the actor here. Idempotent convergence by
+   * state, mirroring the existing user cancel flow:
+   * - terminal (succeeded/failed/cancelled): return the run unchanged;
+   * - queued: cancel the attempt + run directly and write a run_events note
+   *   (a queued run has no Runtime execution, so runtime.cancel reports
+   *   accepted=false and we converge in the database);
+   * - running/cancel_requested: call runtime.cancel with the system cause;
+   *   the existing adapter event path (run.cancel_requested → run.cancelled)
+   *   performs the downstream transitions.
+   * Audits through the existing cancel audit pattern with actor 'system'.
+   */
+  async systemCancelRun(runId: string, cause: 'system_revoke', reason?: string) {
+    const run = await this.runs.getRun(tenantId, runId)
+    if (!run) throw new Error(`Run 不存在：${runId}`)
+    if (!['queued', 'running', 'cancel_requested'].includes(run.status)) return run
+
+    const result = await this.runtime.cancel(runId, 'system', cause)
+    const detail = `系统撤权取消：${reason ?? '授权已撤销'}`
+    await this.operations?.appendAudit('system', 'run.cancel.request', runId, 'success', `trace-${runId}`, detail)
+    if (!result.accepted && run.status === 'queued') {
+      if (run.currentAttemptId) {
+        await this.runs.transitionAttempt(tenantId, run.currentAttemptId, 'cancelled')
+      }
+      const cancelled = await this.runs.transitionRun(tenantId, runId, 'cancelled')
+      await this.runs.appendSystemEvent({
+        tenantId,
+        runId,
+        attemptId: run.currentAttemptId ?? `attempt-${run.id}`,
+        eventType: 'run.cancelled',
+        displayMessage: '授权已撤销，任务未执行',
+        safeMetadata: { cause, reason: reason ?? '授权已撤销' },
+        traceId: `trace-${runId}`,
+      })
+      return cancelled
+    }
+    return (await this.runs.getRun(tenantId, runId)) ?? run
+  }
+
   async retry(runId: string, userId: string, authorizationContext?: SessionAuthorizationContext) {
     const run = await this.requireOwnedRun(runId, userId)
     if (!['failed', 'cancelled'].includes(run.status)) throw new Error('只有失败或已取消的 Run 可以重试')
@@ -368,6 +409,14 @@ export class RunOrchestrationService {
 
   private async executeClaimed(run: RunRecord, manifest: RuntimeManifest) {
     try {
+      // 5.2 执行前复核（1A-T5）：团队空间任务在调用 Runtime 前重新校验当前
+      // 授权（员工有效、团队成员与角色、Agent 关联与平台授权）。复核只决定
+      // 是否执行，绝不修改不可变 Manifest；个人/独立空间跳过复核（AC-23）。
+      const recheck = await this.recheckExecutionAuthorization(run, manifest)
+      if (recheck.denied) {
+        await this.failRunForRevokedAuthorization(run, manifest, recheck.reason)
+        return
+      }
       const handle = await this.runtime.execute(manifest)
       const unsubscribe = this.runtime.subscribe(run.id, (event) => this.queueEvent(run, event))
       await handle.done
@@ -386,6 +435,58 @@ export class RunOrchestrationService {
     } finally {
       if (!this.closing) void this.pumpScheduler()
     }
+  }
+
+  /**
+   * 5.2 execution-time authorization re-check. The workspace type is resolved
+   * independent of the requesting user's CURRENT membership (workspaceTypeOf)
+   * so a team workspace keeps re-checking even after the member was removed;
+   * only team workspaces are re-checked — personal/standalone runs keep the
+   * exact pre-T5 path with no re-check (AC-23).
+   */
+  private async recheckExecutionAuthorization(
+    _run: RunRecord,
+    manifest: RuntimeManifest,
+  ): Promise<{ denied: false } | { denied: true; reason: string }> {
+    if (!this.authorization) return { denied: false }
+    const workspaceType = await this.authorization.workspaceTypeOf(manifest.workspace_id)
+    if (workspaceType !== 'team') return { denied: false }
+    try {
+      await this.authorization.authorizeTeamRunExecution({
+        userId: manifest.user_context.user_id,
+        workspaceId: manifest.workspace_id,
+        agentVersionId: manifest.agent_version_id ?? '',
+      })
+      return { denied: false }
+    } catch (error) {
+      return { denied: true, reason: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /**
+   * Converges a recheck-denied run to failed with a clear run_events note.
+   * Defensive against concurrent convergence (systemCancelRun may already
+   * have cancelled the run): terminal states are left untouched.
+   */
+  private async failRunForRevokedAuthorization(run: RunRecord, manifest: RuntimeManifest, reason: string) {
+    const attempt = await this.runs.getAttempt(tenantId, manifest.attempt_id)
+    const currentRun = await this.runs.getRun(tenantId, run.id)
+    const attemptId = attempt?.id ?? manifest.attempt_id
+    if (attempt && !['failed', 'cancelled', 'succeeded'].includes(attempt.status)) {
+      await this.runs.transitionAttempt(tenantId, attemptId, 'failed', 'AUTHORIZATION_REVOKED')
+    }
+    if (currentRun && !['failed', 'cancelled', 'succeeded'].includes(currentRun.status)) {
+      await this.runs.transitionRun(tenantId, run.id, 'failed')
+    }
+    await this.runs.appendSystemEvent({
+      tenantId,
+      runId: run.id,
+      attemptId,
+      eventType: 'run.failed',
+      displayMessage: '授权已撤销，任务未执行',
+      safeMetadata: { error_code: 'AUTHORIZATION_REVOKED', reason },
+      traceId: `trace-${run.id}`,
+    })
   }
 
   private schedulePump() {

@@ -43,9 +43,21 @@ export type TeamMemberRole = 'owner' | 'admin' | 'member' | 'viewer'
 
 export class PostgresAuthorizationService {
   private readonly database: DatabaseClient
+  private readonly streamAccessTtlMs: number
+  /**
+   * In-process read-access cache for team-workspace SSE delivery (1A-T5,
+   * confirmed decision: in-process cache + revision invalidation, see
+   * docs/product/team-workspace-batch-1a-convergence.md §4). Entries are
+   * keyed by workspace+viewer and hold the workspace's team_auth_revision at
+   * check time: a revision change invalidates immediately, otherwise the
+   * cached grant is trusted for a short TTL so the 250ms SSE poll does not
+   * re-run full authorization on every batch.
+   */
+  private readonly teamReadAccessCache = new Map<string, { revision: number; checkedAt: number }>()
 
-  constructor(database: DatabaseClient) {
+  constructor(database: DatabaseClient, streamAccessTtlMs = 10_000) {
     this.database = database
+    this.streamAccessTtlMs = streamAccessTtlMs
   }
 
   async authorizeWorkbench(input: {
@@ -123,6 +135,68 @@ export class PostgresAuthorizationService {
       await this.recordDecision(input.userId, input.agentVersionId, 'authorization.runtime', 'blocked', error)
       throw error
     }
+  }
+
+  /**
+   * Execution-time re-check for team-workspace runs (1A-T5): the same
+   * closure as authorizeRuntime plus the team role predicate — a viewer
+   * (只读成员) cannot run or continue runs (plan §5 权限矩阵), so a demotion
+   * must stop in-flight execution. Personal/standalone callers must skip this
+   * method entirely and keep the existing path (AC-23).
+   */
+  async authorizeTeamRunExecution(input: {
+    userId: string
+    workspaceId: string
+    agentVersionId: string
+    roleIds?: string[]
+    dataScopes?: string[]
+    additionalSkillReferences?: string[]
+  }): Promise<RuntimeAuthorizationDecision> {
+    const decision = await this.authorizeRuntime(input)
+    const [member] = await this.database<{ role: TeamMemberRole }[]>`
+      select member_role as role from workspace_members
+       where tenant_id = ${tenantId} and workspace_id = ${input.workspaceId}
+         and user_id = ${input.userId}
+    `
+    if (!member) throw new Error('当前用户已不是该团队空间成员')
+    if (member.role === 'viewer') throw new Error('当前用户角色为只读，不能继续执行任务')
+    return decision
+  }
+
+  /**
+   * Read-only workspace type lookup that does NOT depend on the caller's
+   * current membership (unlike resolveWorkspaceType): the execution-time
+   * re-check must decide "is this a team workspace" even after the requesting
+   * user has already been removed.
+   */
+  async workspaceTypeOf(workspaceId: string | null | undefined): Promise<'personal' | 'team' | null> {
+    const id = normalizeWorkspaceId(workspaceId)
+    if (!id) return null
+    const [row] = await this.database<{ type: 'personal' | 'team' }[]>`
+      select w.workspace_type as type from workspaces w
+       where w.tenant_id = ${tenantId} and w.id = ${id} and w.status = 'active'
+    `
+    return row?.type ?? null
+  }
+
+  /**
+   * Per-batch read-access verification for team-workspace SSE streams
+   * (1A-T5): reads the workspace's team_auth_revision and only re-runs full
+   * authorization on a cache miss, a revision change (immediate invalidation)
+   * or TTL expiry. Throws when the viewer no longer has read access so the
+   * stream can terminate before delivering the batch.
+   */
+  async authorizeTeamReadAccess(workspaceId: string, userId: string, ttlMs = this.streamAccessTtlMs) {
+    const [row] = await this.database<{ revision: number }[]>`
+      select team_auth_revision as revision from workspaces
+       where tenant_id = ${tenantId} and id = ${workspaceId}
+    `
+    if (!row) throw new Error('工作空间不存在或已归档')
+    const key = `${workspaceId}:${userId}`
+    const cached = this.teamReadAccessCache.get(key)
+    if (cached && cached.revision === row.revision && Date.now() - cached.checkedAt < ttlMs) return
+    await this.authorizeWorkbench({ userId, workspaceId })
+    this.teamReadAccessCache.set(key, { revision: row.revision, checkedAt: Date.now() })
   }
 
   /**

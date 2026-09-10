@@ -12,6 +12,7 @@ import { compileRuntimeManifest } from './manifest-compiler.ts'
 import { redactSensitiveText, sanitizeSafeMetadata } from '../../security/safe-observability.ts'
 import type {
   AgentRuntimePort,
+  RuntimeCancelCause,
   RuntimeEvent,
   RuntimeEventListener,
   RuntimeExecutionHandle,
@@ -31,7 +32,7 @@ interface ExecutionRecord {
   client?: AcpJsonRpcClient
   acpSessionId?: string
   timeout?: NodeJS.Timeout
-  cancelCause?: 'user' | 'timeout' | 'shutdown'
+  cancelCause?: RuntimeCancelCause | 'timeout' | 'shutdown'
   assistantText: string
   terminal: boolean
 }
@@ -135,14 +136,21 @@ export class DshAcpRuntimeAdapter implements AgentRuntimePort {
     return () => { record.listeners.delete(listener) }
   }
 
-  async cancel(runId: string, requestedBy: string): Promise<{ accepted: boolean }> {
+  async cancel(
+    runId: string,
+    requestedBy: string,
+    cancelCause: RuntimeCancelCause = 'user',
+  ): Promise<{ accepted: boolean }> {
     const record = this.executions.get(runId)
     if (record === undefined || record.terminal) return { accepted: false }
     if (record.cancelCause !== undefined) return { accepted: true }
 
-    record.cancelCause = 'user'
+    // 1A-T5: the workbench cancel route keeps the default ('user'); the
+    // revocation sweep passes 'system_revoke'. The ACP cancel request itself
+    // is unchanged — only the recorded cause flows differently.
+    record.cancelCause = cancelCause
     this.setStatus(record, 'cancel_requested')
-    this.emit(record, 'run.cancel_requested', '正在取消任务', { requested_by: requestedBy })
+    this.emit(record, 'run.cancel_requested', '正在取消任务', { requested_by: requestedBy, cause: cancelCause })
     if (record.client !== undefined && record.acpSessionId !== undefined) {
       await record.client.cancel(record.acpSessionId)
       this.scheduleForcedClose(record)
@@ -371,7 +379,7 @@ export class DshAcpRuntimeAdapter implements AgentRuntimePort {
   private finishCancelled(record: ExecutionRecord): void {
     if (record.terminal) return
     this.setStatus(record, 'cancelled')
-    this.emit(record, 'run.cancelled', '任务已取消', { cause: 'user' })
+    this.emit(record, 'run.cancelled', '任务已取消', { cause: record.cancelCause ?? 'user' })
     this.finish(record)
   }
 

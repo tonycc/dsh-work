@@ -166,7 +166,14 @@ export function registerConversationRoutes(
     const runId = context.params['runId'] ?? ''
     const task = await conversations.getTask(runId, userId)
     if (!task) return httpResult(404, { error: { code: 'run_not_found', message: 'Run 不存在或不可访问' } })
-    await streamRunEvents(response, request.headers['last-event-id'], runId, runs)
+    // 团队空间运行启用逐批写出拦截（1A-T5）；个人/独立空间保持原路径（AC-23）。
+    const workspaceType = task.workspaceId && authorization
+      ? await authorization.resolveWorkspaceType(task.workspaceId, userId)
+      : null
+    const teamAccess = workspaceType === 'team' && authorization && task.workspaceId
+      ? { workspaceId: task.workspaceId, userId, authorization }
+      : undefined
+    await streamRunEvents(response, request.headers['last-event-id'], runId, runs, 250, 15_000, teamAccess)
   })
 }
 
@@ -201,6 +208,26 @@ async function resolveTeamSessionAgentVersion(
   return member.agentVersionId
 }
 
+export interface TeamStreamAccess {
+  workspaceId: string
+  userId: string
+  authorization: {
+    authorizeTeamReadAccess(workspaceId: string, userId: string, ttlMs?: number): Promise<void>
+  }
+  /** Cache TTL override; defaults to the authorization service's TTL (≤ 10s). */
+  ttlMs?: number
+}
+
+/**
+ * SSE delivery loop. The team branch (1A-T5) re-verifies the viewer's read
+ * access before each batch write AND before the heartbeat: the authorization
+ * cache is keyed by (workspace, team_auth_revision) with a short TTL, so a
+ * revocation (revision bump) terminates the stream on the next poll and
+ * undelivered content is dropped. The check runs immediately before the
+ * write — content read while the check passed is in-flight by definition
+ * (plan 6.5: 已经开始写出的内容无法回收); nothing after a failed check is
+ * ever written. The personal path stays exactly as before (AC-23).
+ */
 export async function streamRunEvents(
   response: RunEventStreamResponse,
   lastEventHeader: string | string[] | undefined,
@@ -208,6 +235,7 @@ export async function streamRunEvents(
   runs: Pick<RunRepository, 'readEventsAfterEvent' | 'getRun'>,
   pollIntervalMs = 250,
   heartbeatIntervalMs = 15_000,
+  teamAccess?: TeamStreamAccess,
 ) {
   response.writeHead(200, {
     'Cache-Control': 'no-cache, no-transform',
@@ -224,6 +252,7 @@ export async function streamRunEvents(
 
   while (!closed) {
     const events = await runs.readEventsAfterEvent(tenantId, runId, cursor)
+    if (events.length > 0 && teamAccess && !(await hasStreamAccess(teamAccess))) break
     for (const event of events) {
       cursor = event.id
       response.write(`id: ${event.id}\n`)
@@ -248,12 +277,30 @@ export async function streamRunEvents(
       emptyTerminalPolls = 0
     }
     if (Date.now() - heartbeatAt >= heartbeatIntervalMs) {
+      if (teamAccess && !(await hasStreamAccess(teamAccess))) break
       response.write(`: heartbeat ${Date.now()}\n\n`)
       heartbeatAt = Date.now()
     }
     await wait(pollIntervalMs)
   }
   if (!closed) response.end()
+}
+
+/**
+ * Returns false (stream must terminate) when the viewer lost read access.
+ * Any unexpected error also terminates the stream — fail closed.
+ */
+async function hasStreamAccess(teamAccess: TeamStreamAccess) {
+  try {
+    await teamAccess.authorization.authorizeTeamReadAccess(
+      teamAccess.workspaceId,
+      teamAccess.userId,
+      teamAccess.ttlMs,
+    )
+    return true
+  } catch {
+    return false
+  }
 }
 
 interface RunEventStreamResponse {

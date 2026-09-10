@@ -142,11 +142,20 @@ export interface RuntimeHealth {
 
 export type RuntimeEventListener = (event: RuntimeEvent) => void
 
+export type RuntimeCancelCause = 'user' | 'system_revoke'
+
 export interface AgentRuntimePort {
   /** Execute a manifest that the durable scheduler has already admitted. */
   execute(manifest: RuntimeManifest): Promise<RuntimeExecutionHandle>
   subscribe(runId: string, listener: RuntimeEventListener): () => void
-  cancel(runId: string, requestedBy: string): Promise<{ accepted: boolean }>
+  /**
+   * Cancels an accepted execution. `cancelCause` defaults to 'user' (the
+   * employee-facing workbench cancel path); the revocation sweep passes
+   * 'system_revoke' (1A-T5) so downstream events and audits can tell the
+   * two apart. The value flows into the ACP cancel request exactly as
+   * before — only the recorded cause changes.
+   */
+  cancel(runId: string, requestedBy: string, cancelCause?: RuntimeCancelCause): Promise<{ accepted: boolean }>
   status(runId: string): RuntimeExecutionSnapshot | undefined
   health(): Promise<RuntimeHealth>
   /** Mirror scheduler state for health reporting; admission remains database-owned. */

@@ -30,6 +30,7 @@ import { WorkbenchQueryService } from './modules/workbench/application/workbench
 import { PostgresConversationRepository } from './modules/workbench/application/postgres-conversation-repository.ts'
 import { PostgresRunRepository } from './modules/run/postgres-run-repository.ts'
 import { RunOrchestrationService } from './modules/run/run-orchestration-service.ts'
+import { RunRevocationSweep } from './modules/run/run-revocation-sweep.ts'
 import { DshAcpRuntimeAdapter } from './modules/runtime/dsh-acp-runtime-adapter.ts'
 import {
   preflightDshRuntime,
@@ -89,6 +90,7 @@ async function start() {
     : new MemoryModelGovernanceRepository()
 
   let orchestration: RunOrchestrationService | null = null
+  let revocationSweep: RunRevocationSweep | null = null
   let dshInstallation: DshRuntimeInstallation | null = null
   if (database) {
     const projectRoot = fileURLToPath(new URL('../..', import.meta.url))
@@ -139,6 +141,9 @@ async function start() {
     if (restartRecovery.failed > 0 || restartRecovery.resumedQueued > 0) {
       console.warn('service restart recovery completed', restartRecovery)
     }
+    // 1A-T5: 进程内撤权事件消费循环，与调度器同一生命周期（启动即开始、关停即停止）。
+    revocationSweep = new RunRevocationSweep(database, runs, orchestration, authorization)
+    revocationSweep.start()
     registerConversationRoutes(router, conversations, orchestration, runs, agents, authorization, operations, skills, workspaceAgentMembers)
     registerContentRoutes(router, content, authorization)
     registerWorkspaceMemberRoutes(router, workspaceMembers, authorization)
@@ -188,6 +193,7 @@ async function start() {
     server.close(() => {
       void (async () => {
         if (directorySyncTimer) clearInterval(directorySyncTimer)
+        if (revocationSweep) revocationSweep.close()
         if (orchestration) await orchestration.close()
         if (database) await database.end()
         process.exit(0)
