@@ -15,12 +15,25 @@ const tenantId = 'tenant-dsh-work'
 const suffix = randomUUID()
 
 let database: DatabaseClient
+let adminDatabase: DatabaseClient
 let authorization: PostgresAuthorizationService
 let grantSources: PostgresWorkspaceGrantSourceService
 let agents: PostgresAgentService
+// 一次性测试库：共享 dev 库的历史数据会让「候选列表」「种子 grants」等全量断言
+// 失真（交接文档已记录该陷阱）。
+const testDatabaseName = `dsh_work_t1a_auth_${suffix.replaceAll('-', '')}`
+const adminUrl = new URL(databaseUrl)
+adminUrl.pathname = '/postgres'
+/** 套件自身的测试库 URL；并发用例的第二个会话必须连同一个库。 */
+let testDatabaseUrl = ''
 
 before(async () => {
-  database = createDatabase({ url: databaseUrl, maxConnections: 4 })
+  adminDatabase = createDatabase({ url: adminUrl.toString(), maxConnections: 2 })
+  await adminDatabase.unsafe(`create database "${testDatabaseName}"`)
+  const testUrl = new URL(databaseUrl)
+  testUrl.pathname = `/${testDatabaseName}`
+  testDatabaseUrl = testUrl.toString()
+  database = createDatabase({ url: testDatabaseUrl, maxConnections: 4 })
   await runMigrations(database)
   authorization = new PostgresAuthorizationService(database)
   grantSources = new PostgresWorkspaceGrantSourceService()
@@ -29,6 +42,10 @@ before(async () => {
 
 after(async () => {
   if (database) await database.end()
+  if (adminDatabase) {
+    await adminDatabase.unsafe(`drop database "${testDatabaseName}" with (force)`)
+    await adminDatabase.end()
+  }
 })
 
 // ---------------------------------------------------------------------------
@@ -326,7 +343,7 @@ test('concurrent revokes of different sources serialize per workspace and never 
   // concurrently. A barrier ensures both transactions are open before either
   // revoke runs, so the update-then-sweep sequences interleave exactly like
   // the reported write-skew race.
-  const secondSession = createDatabase({ url: databaseUrl, maxConnections: 2 })
+  const secondSession = createDatabase({ url: testDatabaseUrl, maxConnections: 2 })
   try {
     const arrived = new Set<string>()
     let release: () => void = () => undefined

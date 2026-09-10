@@ -9,7 +9,13 @@ const databaseUrl = process.env.DSH_WORK_TEST_DATABASE_URL
 if (!databaseUrl) throw new Error('DSH_WORK_TEST_DATABASE_URL 未配置')
 
 let database: DatabaseClient
+let adminDatabase: DatabaseClient
 const suffix = randomUUID()
+// 迁移与回填计数必须跑在一次性库上：共享 dev 库的历史数据会污染 grants/sources
+// 计数，也会让「全新安装」断言失真（交接文档已记录该陷阱）。
+const testDatabaseName = `dsh_work_t1a_migration_${suffix.replaceAll('-', '')}`
+const adminUrl = new URL(databaseUrl)
+adminUrl.pathname = '/postgres'
 const agentId = `agent-1a-${suffix}`
 const teamWorkspaceId = `ws-1a-team-${suffix}`
 const secondUserId = `user-1a-second-${suffix}`
@@ -17,12 +23,20 @@ const personalUserId = `user-1a-personal-${suffix}`
 const personalWorkspaceId = `ws-personal-${personalUserId}`
 
 before(async () => {
-  database = createDatabase({ url: databaseUrl, maxConnections: 4 })
+  adminDatabase = createDatabase({ url: adminUrl.toString(), maxConnections: 2 })
+  await adminDatabase.unsafe(`create database "${testDatabaseName}"`)
+  const testUrl = new URL(databaseUrl)
+  testUrl.pathname = `/${testDatabaseName}`
+  database = createDatabase({ url: testUrl.toString(), maxConnections: 4 })
   await runMigrations(database)
 })
 
 after(async () => {
   if (database) await database.end()
+  if (adminDatabase) {
+    await adminDatabase.unsafe(`drop database "${testDatabaseName}" with (force)`)
+    await adminDatabase.end()
+  }
 })
 
 test('0022 applies once and installs the three authorization tables', async () => {

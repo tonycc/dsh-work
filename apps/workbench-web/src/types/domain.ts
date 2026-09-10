@@ -154,6 +154,13 @@ export interface AgentCandidate {
   activeVersionId: string
   activeVersion: string
   status: 'published'
+  /**
+   * 加入确认区展示项（design §2.6）。当前 T4 契约只返回职责与版本，这三项
+   * 为可选：服务端补齐前前端显示「详情待平台补充」，不伪造内容。
+   */
+  skillNames?: string[]
+  toolNames?: string[]
+  dataScope?: string
 }
 
 export interface AgentCandidatePage {
@@ -179,6 +186,11 @@ export interface WorkspaceAgentMember {
   addedBy: string
   createdAt: string
   allowedActions: AgentMemberAction[]
+  /**
+   * 状态为不可用时的具体原因（平台未授权／版本失效／Runtime 不可用，design
+   * §2.6）。T4 契约目前不返回该字段，前端只在服务端给出时展示 tooltip。
+   */
+  unavailableReason?: string
 }
 
 export interface WorkbenchSession {
