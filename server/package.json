@@ -37,7 +37,8 @@
     "test:runtime": "node --experimental-strip-types --test src/modules/runtime/runtime-adapter.test.ts config/dsh/dsh-work-tool-policy.test.js",
     "start": "node dist/main.js",
     "test:m5:agent-members:integration": "node --experimental-strip-types --test src/http/workspace-agent-member-api.integration.test.ts",
-    "test:m5:revocation:integration": "node --experimental-strip-types --test src/infrastructure/postgres/m5-revocation-pipeline.integration.test.ts"
+    "test:m5:revocation:integration": "node --experimental-strip-types --test src/infrastructure/postgres/m5-revocation-pipeline.integration.test.ts",
+    "test:m5:revocation": "node --experimental-strip-types --test src/modules/run/run-revocation-sweep.test.ts"
   },
   "devDependencies": {
     "@types/node": "^24.7.2",

@@ -335,8 +335,13 @@ function revocationReason(kind: RevocationEventKind) {
  * database outage/timeout surfaces as a pg error and is deliberately NOT
  * classified as a denial. Unknown errors default to "not a denial" so a bug in
  * this classifier fails safe instead of mass-cancelling runs.
+ *
+ * Exported so `run-revocation-sweep.test.ts` locks the message contract: the
+ * authorization service throws plain Errors, so a wording change would
+ * otherwise silently stop real revocations from cancelling runs. Prefer moving
+ * these checks to a typed denial error if the authorization service gains one.
  */
-function isAuthorizationDenial(error: unknown): boolean {
+export function isAuthorizationDenial(error: unknown): boolean {
   const message = error instanceof Error ? error.message : ''
   return AUTHORIZATION_DENIAL_MESSAGES.some(fragment => message.includes(fragment))
 }
