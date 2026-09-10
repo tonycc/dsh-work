@@ -726,6 +726,76 @@ test('SSE HTTP 路由：成员被移出团队空间后事件流终止', async ()
 })
 
 // ---------------------------------------------------------------------------
+// 5.3 领取与执行竞态（AC-09）
+// ---------------------------------------------------------------------------
+
+test('执行前复核通过后、调用 Runtime 前被系统取消的运行不得进入 Runtime', async () => {
+  const ws = uniqueWorkspace('claim-exec-race')
+  const ownerId = `${ws}-owner`
+  const userId = `${ws}-user`
+  const versionId = `${ws}-version`
+  await seedUser(ownerId, '领取竞态负责人')
+  await seedUser(userId, '领取竞态成员')
+  await createTeamWorkspace(ws, [{ userId: ownerId, role: 'owner' }, { userId: userId, role: 'member' }])
+  await seedAgent(ws, versionId)
+  await grantAgentVersion(ws, versionId)
+  const sessionId = `${ws}-session`
+  await createSession(sessionId, ws, userId, versionId)
+
+  // 在「复核通过 → runtime.execute」之间插入撤权：复核判定通过后、守卫读取状态前
+  // 同步完成成员移除与系统取消收敛，精确命中 executeClaimed 的终态守卫。
+  let revoked = false
+  const racingAuthorization = new Proxy(authorization, {
+    get(target, property, receiver) {
+      if (property === 'authorizeTeamRunExecution') {
+        return async (input: { userId: string; workspaceId: string; agentVersionId: string }) => {
+          const decision = await target.authorizeTeamRunExecution(input)
+          if (!revoked) {
+            revoked = true
+            await members.removeMember(ws, userId, ownerId)
+            await sweep.sweepOnce()
+          }
+          return decision
+        }
+      }
+      const value = Reflect.get(target, property, receiver) as unknown
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  }) as PostgresAuthorizationService
+  const racingOrchestration = new RunOrchestrationService(
+    runs,
+    conversations,
+    new ModelGovernanceService(new PostgresModelGovernanceRepository(database)),
+    runtime,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    racingAuthorization,
+  )
+
+  runtime.holdCompletions = true
+  try {
+    const started = await racingOrchestration.startRun({
+      userId,
+      sessionId,
+      prompt: '领取与执行竞态',
+      idempotencyKey: `${runIdPrefix(ws)}-claim-exec-race`,
+    })
+    if (!started) throw new Error('Run 创建失败')
+    await waitFor(async () => ['cancelled', 'failed', 'succeeded'].includes((await runRow(started.id)).status), '运行收敛为终态')
+
+    assert.equal(revoked, true, '撤权应当在调用 Runtime 前提交')
+    assert.equal(runtime.executions.has(started.id), false, '被取消的运行不得进入 Runtime')
+    const events = await runEventRows(started.id)
+    const cancelledEvents = events.filter(event => event.eventType === 'run.cancelled')
+    assert.equal(cancelledEvents.length, 1, '系统取消说明事件只应写入一次')
+  } finally {
+    await racingOrchestration.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
 // 测试辅助
 // ---------------------------------------------------------------------------
 

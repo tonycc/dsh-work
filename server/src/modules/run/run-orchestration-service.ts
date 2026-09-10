@@ -461,6 +461,12 @@ export class RunOrchestrationService {
         await this.failRunForRevokedAuthorization(run, manifest, recheck.reason)
         return
       }
+      // 撤权清扫可能在「领取 → 复核」之间已经把这个 run 收敛为终态（系统取消）。
+      // 复核只回答「还有没有授权」，不回答「这个 run 是否还该执行」；这里再确认
+      // 一次当前状态，避免对被取消的 run 仍然调用 Runtime（AC-09 取消与完成竞态）。
+      // 收敛方已负责 attempt 与 run 的共同收敛，这里只跳过执行、不重复改写终态。
+      const current = await this.runs.getRun(tenantId, run.id)
+      if (!current || !['queued', 'running'].includes(current.status)) return
       const handle = await this.runtime.execute(manifest)
       const unsubscribe = this.runtime.subscribe(run.id, (event) => this.queueEvent(run, event))
       await handle.done
