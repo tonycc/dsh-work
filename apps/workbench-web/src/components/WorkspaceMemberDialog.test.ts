@@ -1,6 +1,6 @@
 import ElementPlus, { ElMessageBox } from 'element-plus'
 import { flushPromises, mount } from '@vue/test-utils'
-import { ElOption, ElSelect } from 'element-plus'
+import { ElOption, ElSelect, ElTooltip } from 'element-plus'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { workbenchApi } from '@/api/client'
@@ -9,6 +9,7 @@ import WorkspaceMemberDialog from './WorkspaceMemberDialog.vue'
 
 const employees: WorkspaceMember[] = [
   { userId: 'u-owner', displayName: '林岚', role: 'owner', joinedAt: '2026-09-01T00:00:00.000Z' },
+  { userId: 'u-owner-2', displayName: '郑野', role: 'owner', joinedAt: '2026-09-01T06:00:00.000Z' },
   { userId: 'u-admin', displayName: '周航', role: 'admin', joinedAt: '2026-09-02T00:00:00.000Z' },
   { userId: 'u-member', displayName: '陈默', role: 'member', joinedAt: '2026-09-03T00:00:00.000Z' },
   { userId: 'u-viewer', displayName: '苏晚', role: 'viewer', joinedAt: '2026-09-04T00:00:00.000Z' },
@@ -85,7 +86,7 @@ describe('WorkspaceMemberDialog', () => {
     expect(wrapper.text()).toContain('管理成员')
     expect(panel.find('[data-testid="member-section-employee"]').exists()).toBe(true)
     expect(panel.find('[data-testid="member-section-agent"]').exists()).toBe(true)
-    expect(panel.findAll('[data-testid="member-role-select"]')).toHaveLength(4)
+    expect(panel.findAll('[data-testid="member-role-select"]')).toHaveLength(5)
     expect(panel.findAll('[data-testid="agent-member-row"]')).toHaveLength(2)
 
     const close = panel.find('[data-testid="member-dialog-close"]')
@@ -113,13 +114,13 @@ describe('WorkspaceMemberDialog', () => {
     await flushPromises()
 
     await panelOf(wrapper).find('[data-testid="member-add-employee"]').trigger('click')
-    await panelOf(wrapper).find('[data-testid="member-candidate-search"] input').setValue('何')
+    await panelOf(wrapper).find('[data-testid="member-candidate-search"]').setValue('何')
     await new Promise(resolve => setTimeout(resolve, 350))
     await flushPromises()
 
     expect(workbenchApi.listMemberCandidates).toHaveBeenCalledWith('ws-team', { query: '何', limit: 10 })
     const results = panelOf(wrapper).findAll('[data-testid="member-candidate-row"]')
-    expect(results.map(row => row.text())).toEqual(['何雨采购部'])
+    expect(results.map(row => row.find('.member-dialog__copy').text())).toEqual(['何雨采购部'])
   })
 
   it('adds a searched employee with the selected role (server-side paging respected)', async () => {
@@ -137,7 +138,7 @@ describe('WorkspaceMemberDialog', () => {
     await flushPromises()
 
     await panelOf(wrapper).find('[data-testid="member-add-employee"]').trigger('click')
-    await panelOf(wrapper).find('[data-testid="member-candidate-search"] input').setValue('何')
+    await panelOf(wrapper).find('[data-testid="member-candidate-search"]').setValue('何')
     await new Promise(resolve => setTimeout(resolve, 350))
     await flushPromises()
 
@@ -170,7 +171,9 @@ describe('WorkspaceMemberDialog', () => {
     await flushPromises()
 
     expect(workbenchApi.listMemberCandidates).toHaveBeenLastCalledWith('ws-team', { cursor: 'cursor-1', limit: 10 })
-    const names = panelOf(wrapper).findAll('[data-testid="member-candidate-row"]').map(row => row.text())
+    const names = panelOf(wrapper)
+      .findAll('[data-testid="member-candidate-row"]')
+      .map(row => row.find('.member-dialog__copy').text())
     expect(names).toEqual(['何雨采购部', '何晴财务部'])
   })
 
@@ -184,7 +187,7 @@ describe('WorkspaceMemberDialog', () => {
     const wrapper = mountDialog({ currentUserRole: 'owner' })
     await flushPromises()
 
-    const memberSelect = panelOf(wrapper).findAllComponents(ElSelect)[2]
+    const memberSelect = panelOf(wrapper).findAllComponents(ElSelect)[3]
     const options = memberSelect.findAllComponents(ElOption)
     expect(options.map(option => option.props('value'))).toEqual(['owner', 'admin', 'member', 'viewer'])
     memberSelect.vm.$emit('change', 'admin')
@@ -197,13 +200,14 @@ describe('WorkspaceMemberDialog', () => {
     await flushPromises()
     const selects = panelOf(wrapper).findAllComponents(ElSelect)
 
-    // 负责人行：管理员不能任免负责人。
+    // 两位负责人：管理员不能任免负责人。
     expect(selects[0].props('disabled')).toBe(true)
-    // 自己所在行。
     expect(selects[1].props('disabled')).toBe(true)
+    // 自己所在行。
+    expect(selects[2].props('disabled')).toBe(true)
     // 成员/只读成员行只提供两个可选项。
-    expect(selects[2].findAllComponents(ElOption).map(option => option.props('value'))).toEqual(['member', 'viewer'])
     expect(selects[3].findAllComponents(ElOption).map(option => option.props('value'))).toEqual(['member', 'viewer'])
+    expect(selects[4].findAllComponents(ElOption).map(option => option.props('value'))).toEqual(['member', 'viewer'])
     expect(panelOf(wrapper).findAll('[data-testid="member-remove"]')).toHaveLength(0)
   })
 
@@ -237,7 +241,7 @@ describe('WorkspaceMemberDialog', () => {
     const wrapper = mountDialog({ currentUserRole: 'owner' })
     await flushPromises()
 
-    await panelOf(wrapper).findAll('[data-testid="member-remove"]')[3].trigger('click')
+    await panelOf(wrapper).findAll('[data-testid="member-remove"]')[4].trigger('click')
     await flushPromises()
 
     expect(confirm).toHaveBeenCalled()
@@ -251,7 +255,7 @@ describe('WorkspaceMemberDialog', () => {
     const wrapper = mountDialog({ currentUserRole: 'owner' })
     await flushPromises()
 
-    await panelOf(wrapper).findAll('[data-testid="member-remove"]')[3].trigger('click')
+    await panelOf(wrapper).findAll('[data-testid="member-remove"]')[4].trigger('click')
     await flushPromises()
 
     expect(remove).not.toHaveBeenCalled()
@@ -304,9 +308,11 @@ describe('WorkspaceMemberDialog', () => {
     })
     await flushPromises()
 
-    const tooltip = panelOf(wrapper).find('[data-testid="agent-status-tooltip"]')
-    expect(tooltip.exists()).toBe(true)
-    expect(tooltip.props('content')).toContain('平台已撤权')
+    const status = panelOf(wrapper).find('[data-testid="agent-status-tooltip"]')
+    expect(status.exists()).toBe(true)
+    expect(status.attributes('aria-label')).toBe('Agent 状态：已停用')
+    const tooltip = wrapper.findAllComponents(ElTooltip)[0]
+    expect(tooltip?.props('content')).toContain('平台已撤权')
   })
 
   it('renders empty states with role-aware guidance', async () => {
@@ -339,7 +345,7 @@ describe('WorkspaceMemberDialog', () => {
     await flushPromises()
 
     await panelOf(wrapper).find('[data-testid="member-add-agent"]').trigger('click')
-    await panelOf(wrapper).find('[data-testid="member-agent-search"] input').setValue('排产')
+    await panelOf(wrapper).find('[data-testid="member-agent-search"]').setValue('排产')
     await new Promise(resolve => setTimeout(resolve, 350))
     await flushPromises()
 

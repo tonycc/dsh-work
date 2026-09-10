@@ -188,6 +188,57 @@ test('systemCancelRun：running 运行调用 runtime.cancel 并携带 system_rev
   await waitFor(async () => (await runRow(started.id)).status === 'cancelled', 'running run 收敛到 cancelled')
 })
 
+test('systemCancelRun：cancel_requested 且适配器无执行记录时仍收敛到 cancelled', async () => {
+  const ws = uniqueWorkspace('syscancel-requested')
+  const ownerId = `${ws}-owner`
+  const userId = `${ws}-user`
+  const versionId = `${ws}-version`
+  await seedUser(ownerId, '收权取消中负责人')
+  await seedUser(userId, '收权取消中成员')
+  await createTeamWorkspace(ws, [{ userId: ownerId, role: 'owner' }, { userId: userId, role: 'member' }])
+  await seedAgent(ws, versionId)
+  await grantAgentVersion(ws, versionId)
+  const sessionId = `${ws}-session`
+  await createSession(sessionId, ws, userId, versionId)
+  const runId = `${ws}-run`
+  await createRunWithAttempt({ id: runId, sessionId, requestedBy: userId, status: 'cancel_requested', agentVersionId: versionId, workspaceId: ws })
+
+  // cancel_requested 是非终态：若终结事件丢失、适配器又返回 accepted:false，
+  // 旧逻辑会直接返回而让 run 永久滞留。必须与其他非终态一样收敛。
+  const cancelled = await orchestration.systemCancelRun(runId, 'system_revoke', '成员已被移出团队空间')
+  assert.equal(cancelled.status, 'cancelled')
+  assert.equal((await runRow(runId)).status, 'cancelled')
+  assert.equal((await attemptRow(`${runId}-attempt`)).status, 'cancelled')
+  const note = (await runEventRows(runId)).find(event => event.eventType === 'run.cancelled')
+  assert.ok(note, '应当写入取消说明事件')
+  assert.equal(note.safeMetadata['cause'], 'system_revoke')
+})
+
+test('appendSystemEvent：去重限定服务端作者，不抑制同类型的运行时事件', async () => {
+  const ws = uniqueWorkspace('sysnote-runtime')
+  const ownerId = `${ws}-owner`
+  const userId = `${ws}-user`
+  const versionId = `${ws}-version`
+  await seedUser(ownerId, '说明去重负责人')
+  await seedUser(userId, '说明去重成员')
+  await createTeamWorkspace(ws, [{ userId: ownerId, role: 'owner' }, { userId: userId, role: 'member' }])
+  await seedAgent(ws, versionId)
+  await grantAgentVersion(ws, versionId)
+  const sessionId = `${ws}-session`
+  await createSession(sessionId, ws, userId, versionId)
+  const runId = `${ws}-run`
+  await createRunWithAttempt({ id: runId, sessionId, requestedBy: userId, status: 'running', agentVersionId: versionId, workspaceId: ws })
+  const attemptId = `${runId}-attempt`
+  // 运行时先写一条同类型事件：随后的服务端说明不得被它抑制。
+  await appendRunEvent(runId, attemptId, 1, 'run.failed', 'Runtime 执行失败')
+
+  await orchestration.systemCancelRun(runId, 'system_revoke', '成员已被移出团队空间')
+  const events = await runEventRows(runId)
+  const cancelNotes = events.filter(event => event.eventType === 'run.cancelled' && event.displayMessage === '授权已撤销，任务未执行')
+  assert.equal(cancelNotes.length, 1, '服务端说明事件不得被运行时事件抑制')
+  assert.equal(cancelNotes[0]?.safeMetadata['reason'], '成员已被移出团队空间')
+})
+
 test('systemCancelRun：终态运行幂等返回，不调用 runtime.cancel', async () => {
   const ws = uniqueWorkspace('syscancel-terminal')
   const ownerId = `${ws}-owner`
@@ -995,7 +1046,7 @@ async function createRunWithAttempt(input: {
   id: string
   sessionId: string
   requestedBy: string
-  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+  status: 'queued' | 'running' | 'cancel_requested' | 'succeeded' | 'failed' | 'cancelled'
   agentVersionId: string
   workspaceId: string
 }) {
