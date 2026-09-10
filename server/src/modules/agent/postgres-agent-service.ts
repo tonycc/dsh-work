@@ -98,6 +98,17 @@ export interface WorkbenchAgentDefinition {
   examplePrompts: string[]
 }
 
+export interface WorkspaceAgentCandidate {
+  id: string
+  name: string
+  description: string
+  activeVersion: {
+    id: string
+    version: string
+    status: PublishStatus
+  }
+}
+
 export interface RuntimeAgentSnapshot {
   versionId: string
   systemPrompt: string
@@ -448,6 +459,56 @@ export class PostgresAgentService {
     `
     if (!row?.activeVersionId) throw new Error('Agent 没有活动版本')
     return row.activeVersionId
+  }
+
+  async listWorkspaceAgentCandidates(
+    workspaceId: string,
+    requesterUserId: string,
+    sessionRoleIds?: string[],
+  ): Promise<WorkspaceAgentCandidate[]> {
+    const roleIds = sessionRoleIds === undefined
+      ? (await this.database<{ roleId: string }[]>`
+          select role_id as "roleId" from user_roles
+           where tenant_id = ${tenantId} and user_id = ${requesterUserId}
+             and (valid_until is null or valid_until > now())
+        `).map(row => row.roleId)
+      : unique(sessionRoleIds)
+    if (roleIds.length === 0) return []
+    const rows = await this.database<{
+      id: string
+      name: string
+      description: string
+      versionId: string
+      version: string
+      versionStatus: PublishStatus
+    }[]>`
+      select a.id, a.name, a.description,
+             av.id as "versionId", av.version, av.status as "versionStatus"
+        from agents a
+        join agent_versions av on av.tenant_id = a.tenant_id and av.id = a.active_version_id
+        join users u on u.tenant_id = a.tenant_id and u.id = ${requesterUserId} and u.status = 'active'
+       where a.tenant_id = ${tenantId}
+         and a.status = 'published'
+         and a.allow_workspace_join = true
+         and av.status = 'published'
+         and exists (
+           select 1 from roles r
+            where r.tenant_id = a.tenant_id and r.id in ${this.database(roleIds)}
+              and av.visible_role_ids ? r.id
+         )
+         and not exists (
+           select 1 from workspace_agent_members wam
+            where wam.tenant_id = a.tenant_id and wam.workspace_id = ${workspaceId}
+              and wam.agent_id = a.id and wam.status <> 'removed'
+         )
+       order by a.updated_at desc
+    `
+    return rows.map(row => ({
+      id: row.id,
+      name: row.name,
+      description: row.description,
+      activeVersion: { id: row.versionId, version: row.version, status: row.versionStatus },
+    }))
   }
 
   async getRuntimeSnapshot(versionId: string, additionalSkillReferences: string[] = []): Promise<RuntimeAgentSnapshot> {

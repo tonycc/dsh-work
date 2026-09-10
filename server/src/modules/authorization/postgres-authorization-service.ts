@@ -39,6 +39,8 @@ export interface SessionAuthorizationContext {
   dataScopes: string[]
 }
 
+export type TeamMemberRole = 'owner' | 'admin' | 'member' | 'viewer'
+
 export class PostgresAuthorizationService {
   private readonly database: DatabaseClient
 
@@ -147,6 +149,40 @@ export class PostgresAuthorizationService {
     `
     if (!row) throw new Error(`操作人不存在、已停用或不是平台管理员：${userId}`)
     return row
+  }
+
+  async requireTeamRole(
+    workspaceId: string,
+    userId: string,
+    allowedRoles: TeamMemberRole[],
+  ) {
+    const [workspace] = await this.database<{ type: 'personal' | 'team' }[]>`
+      select w.workspace_type as type from workspaces w
+       where w.tenant_id = ${tenantId} and w.id = ${workspaceId} and w.status = 'active'
+    `
+    if (!workspace) throw new Error('工作空间不存在、已归档或当前用户不是成员')
+    if (workspace.type === 'personal') return
+    const [member] = await this.database<{ role: TeamMemberRole }[]>`
+      select wm.member_role as role from workspace_members wm
+       where wm.tenant_id = ${tenantId} and wm.workspace_id = ${workspaceId}
+         and wm.user_id = ${userId}
+    `
+    if (!member) throw new Error('工作空间不存在、已归档或当前用户不是成员')
+    if (!allowedRoles.includes(member.role)) {
+      throw new Error(`当前用户角色无权执行此操作（允许角色：${allowedRoles.join('、')}）`)
+    }
+  }
+
+  async resolveWorkspaceOwner(workspaceId: string) {
+    const rows = await this.database<{ userId: string }[]>`
+      select wm.user_id as "userId" from workspace_members wm
+       where wm.tenant_id = ${tenantId} and wm.workspace_id = ${workspaceId}
+         and wm.member_role = 'owner'
+    `
+    if (rows.length !== 1) {
+      throw new Error(`工作空间负责人异常：需要且仅需要一名负责人，当前有 ${rows.length} 名`)
+    }
+    return rows[0].userId
   }
 
   private async requireIdentity(userId: string, sessionRoleIds?: string[]): Promise<IdentityRow> {
