@@ -21,9 +21,22 @@
 | 1A-T2 授权层 | ✅ 双评审通过 | `a39a560`、`aaf10e9` 修复 |
 | 1A-T3 员工成员 API | ✅ 双评审通过 | `35b9fc2`、`b5ca093` 修复 |
 | 1A-T4 Agent 成员 API | ✅ 双评审通过 | `eb28e47`、`3f897f1` 契约修复 |
-| **1A-T5 收权链路** | ✅ **实现完成、两级评审已修**：`f45686b` + `8a95574`/`94d1ddd` + 评审修复；`pnpm test:m5:revocation:integration` **18/18 且连续 10 次稳定**，typecheck/verify/lint 通过 | `f45686b`、`8a95574`、`94d1ddd` |
-| 1A-T6 前端成员管理 | 待开始 | — |
-| 1A-T7 对账清单与迁移验证 | 待开始 | — |
+| **1A-T5 收权链路** | ✅ **实现完成、两级评审已修**：`f45686b` + `8a95574`/`94d1ddd` + 评审修复；`pnpm test:m5:revocation:integration` **21/21 且连续多次稳定**，`test:m5:revocation`（分类器单测）接入 `ci:check` | `f45686b`、`8a95574`、`94d1ddd`、`b20a675`、`912497c`、`279e540`、`97b7c5e` |
+| **1A-T6 前端成员管理** | ✅ **实现完成、规格评审已修**：`a2a83ed`..`f16fb8c` 六个提交 + 对接修复 `462bfbb`/`dddc794`；`pnpm test:m5:frontend` **workbench 85 / admin 18 全绿** | `a2a83ed`、`2558908`、`db2e016`、`5f9cb67`、`1f2c226`、`f16fb8c`、`462bfbb`、`dddc794` |
+| **1A-T7 对账清单与迁移验证** | ✅ **实现完成、规格符合性 + 质量评审已修**：6 个提交 + 锁序/基线修复；reconciliation 8/8、upgrade 4/4、migration 10/10 | `09800d0`、`73578d6`、`27507bb`、`1fab46a`、`272fd10`、`2a09842`、`769fad9`、`a85b703` |
+
+**T6/T7 评审结论与关键技术结论（2026-09-10）：**
+
+- **T6 规格评审：有条件符合 → 已修。** 核心发现：实现者把「员工成员管理不可用」归因为后端缺口，但事实是 **`GET /workspaces/:id/members` 在 T3 就不存在**（我核实：`workspace-member-routes.ts` 有候选/增/改/删/退出/转交，**无读取名册**）。我补齐了 `listMembers`（返回名册 + 调用者 `currentUserRole`）+ 契约 + client 方法（`462bfbb`），并把视图接线到该接口、以服务端角色取代按「创建者姓名」推断（`dddc794`）——转交负责人后新负责人不再失去写入口。AC-23 由评审代理**独立**对 10 个团队 API 下 spy 验证通过。
+- **T7 规格评审：符合；质量评审：有条件合入 → 已修。** 实证缺陷 D1：`reconcile` 与 Agent 移出**锁序相反**（来源行→workspace 行 vs workspace 行→来源行），PostgreSQL 报 `deadlock detected`；已统一为「先 workspace、后来源」并加并发回归测试（`769fad9`）。D2 取消对账误报错误、D3 基线检查未按表限定（同名对象可误通过）已修（`a85b703`）。
+- **AC-27 独立验证**（评审代理自建场景）：运行完整迁移链后删除 `one_personal_workspace_per_user` 再重跑 → 0022 被中止且 `schema_migrations` 无 0022/0023 记录，无半升级。
+- **0013 触发器 personal→team 不校验旧空间**：确认为真实缺口，本批次按 plan 6.4「不得改写个人空间保护触发器」只记录决策、不修（见 `0022`/convergence §5），后续批次用独立迁移扩展。
+
+**T6/T7 已知遗留（不阻断 1A 退出条件）：**
+- Agent「不可用」第三态与具体原因未落地：服务端 `AgentMemberRecord` 不返回 `unavailableReason`，前端红点与 tooltip 因此永不显示（design §2.6）。需服务端补原因码，属后续小任务。
+- `GET /workspaces` 的 `owner` 仍是**创建者**显示名（非当前 owner）、缺 `status`，故右栏负责人展示与归档态在契约补齐前不准确。
+- 员工名册未返回 `department`（design §2.6 期望「姓名+部门」）；`PATCH /workspaces/:id`（名称/说明更新）缺失，设置弹窗保存只提示未提交、不伪造成功。
+- 平台级「停用工具」未加对账门禁（T7 决策：属平台治理，1A 唯一破坏性路径是 agent_member 撤销）。
 
 ## 3. T5 收权链路（实现完成、两级评审已修）
 
@@ -64,13 +77,13 @@ WIP 首次运行是 **16 个用例 8 失败**，修复分两类：
 - `failRunForRevokedAuthorization` 先置 `failed`、后写说明事件，二者之间事件不可见（产品可接受，测试已等待）。
 - `isAuthorizationDenial` 仍按 15 条错误文案子串判定（授权服务抛普通 Error）；已加单测锁定契约（`test:m5:revocation`），后续若引入类型化错误码应替换。
 
-## 4. T6 前端成员管理（待开始，规格要点）
+## 4. T6 前端成员管理（已完成，见 §2 与 §3 评审结论）
 
 - 依据 `team-workspace-design.md` §2.5/2.6/2.7：成员管理弹窗（员工/Agent 同屏分段、角色下拉、添加员工搜索、添加 Agent 确认流）、`WorkspaceInfoPanel` 团队分支（员工+Agent 分区、「管理成员」入口、「空间设置」入口）、`ConversationStarter` 预选 Agent（团队分支）。
 - 后端 API 已就绪（T3/T4），API client 方法已同步（`client.ts`/`domain.ts`），只需做 UI + store + 前端测试（`pnpm test:m5:frontend`）。
 - 空间设置弹窗中「归档」行为属批次 3，1A 只做入口或不做（按设计文档 2.7 的批次标注）。
 
-## 5. T7 对账清单与迁移验证（待开始，规格要点）
+## 5. T7 对账清单与迁移验证（已完成，见 §2 与 §3 评审结论）
 
 - admin 运营端 legacy 授权来源对账清单（`admin/operations-routes.ts` 现有 `GET /workspaces` 基础）+ 对账完成前阻止破坏性调整。
 - `agents.allow_workspace_join` 的 admin 治理开关（T4 迁移注释写明"no API yet"，此任务补）。
