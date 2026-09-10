@@ -561,7 +561,7 @@
           "allowedActions": {
             "type": "array",
             "items": { "type": "string", "enum": ["start_conversation", "disable", "enable", "upgrade", "remove"] },
-            "description": "当前操作人允许的动作：负责人可用状态为 start_conversation/disable/upgrade/remove，停用状态为 enable/upgrade/remove；管理员与成员仅在可用状态有 start_conversation；只读成员为空。"
+            "description": "当前操作人允许的动作：负责人可用状态为 start_conversation/disable/upgrade/remove，停用状态为 enable/remove；管理员与成员仅在可用状态有 start_conversation；只读成员为空。"
           }
         }
       },

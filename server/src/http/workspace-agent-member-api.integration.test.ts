@@ -434,7 +434,7 @@ test('成员列表仅返回非移除成员，并按当前角色给出允许动�
   const afterDisable = await api('GET', `/api/workbench/v1/workspaces/${workspaceId}/agent-members`, { as: ownerId })
   const [disabledItem] = afterDisable.body.data as Array<Record<string, unknown>>
   assert.equal(disabledItem?.status, 'disabled')
-  assert.deepEqual(disabledItem?.allowedActions, ['enable', 'upgrade', 'remove'])
+  assert.deepEqual(disabledItem?.allowedActions, ['enable', 'remove'])
   const memberAfterDisable = await api('GET', `/api/workbench/v1/workspaces/${workspaceId}/agent-members`, { as: memberId })
   assert.deepEqual((memberAfterDisable.body.data as Array<Record<string, unknown>>)[0]?.allowedActions, [])
 

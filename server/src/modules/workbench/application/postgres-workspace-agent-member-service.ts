@@ -577,7 +577,7 @@ function allowedActionsFor(
   if (role === 'owner') {
     return status === 'available'
       ? ['start_conversation', 'disable', 'upgrade', 'remove']
-      : ['enable', 'upgrade', 'remove']
+      : ['enable', 'remove']
   }
   if ((role === 'admin' || role === 'member') && status === 'available') {
     return ['start_conversation']
