@@ -182,6 +182,7 @@ export class AdminQueryService {
       status: 'draft',
       version,
       updatedAt: timestamp,
+      allowWorkspaceJoin: true,
     }
     const versionRecord: AgentVersionRecord = {
       id: `agent-version-${normalizedInput.id}-${Date.now()}`,

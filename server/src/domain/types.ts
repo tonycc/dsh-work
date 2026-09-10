@@ -198,6 +198,8 @@ export interface AgentDefinition {
   visibility: string
   roleIds: string[]
   dataScopes: string[]
+  /** 平台治理开关：关闭后不再出现在团队空间「添加 Agent」候选，也不能被加入（convergence §1）。 */
+  allowWorkspaceJoin: boolean
   status: PublishStatus
   version: string
   welcomeMessage: string

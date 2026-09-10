@@ -32,6 +32,7 @@ interface AgentRow {
   roleIds: string[]
   dataScopes: string[]
   examplePrompts: string[]
+  allowWorkspaceJoin: boolean
   maxTokens: number
   timeoutSeconds: number
   skills: string[]
@@ -107,6 +108,17 @@ export interface WorkspaceAgentCandidate {
     version: string
     status: PublishStatus
   }
+}
+
+export interface AgentJoinedWorkspaceRecord {
+  workspaceId: string
+  workspaceName: string
+  workspaceType: 'personal' | 'team'
+  workspaceStatus: string
+  memberStatus: 'available' | 'disabled'
+  version: string
+  addedBy: string
+  createdAt: string
 }
 
 export interface RuntimeAgentSnapshot {
@@ -419,6 +431,87 @@ export class PostgresAgentService {
     return { agent: await this.requireAgent(input.agentId), release }
   }
 
+  /**
+   * 平台治理开关（convergence §1）：关闭后该 Agent 不再出现在团队空间「添加 Agent」
+   * 候选，也不能被加入团队空间。只改 `agents.allow_workspace_join`，不触碰版本、
+   * 既有成员关联或既有授权来源；`updated_at` 保持不变以免影响 Agent 列表排序。
+   */
+  async setAgentWorkspaceJoin(input: {
+    agentId: string
+    allowWorkspaceJoin: boolean
+    actor: string
+  }): Promise<AgentDefinition> {
+    const actor = await this.requireActor(input.actor)
+    if (typeof input.allowWorkspaceJoin !== 'boolean') {
+      throw new Error('allowWorkspaceJoin 必须为布尔值')
+    }
+    const [current] = await this.readAgentRows(input.agentId)
+    if (!current) throw new Error(`Agent 不存在：${input.agentId}`)
+    await this.database.begin(async transaction => {
+      const [locked] = await transaction<{ id: string }[]>`
+        select id from agents
+         where tenant_id = ${tenantId} and id = ${input.agentId}
+         for update
+      `
+      if (!locked) throw new Error(`Agent 不存在：${input.agentId}`)
+      await transaction`
+        update agents set allow_workspace_join = ${input.allowWorkspaceJoin}
+         where tenant_id = ${tenantId} and id = ${input.agentId}
+      `
+    })
+    await this.audit(
+      actor.id,
+      'agent.workspace_join.update',
+      input.agentId,
+      'success',
+      input.allowWorkspaceJoin ? '允许该 Agent 加入团队空间' : '禁止该 Agent 加入团队空间',
+    )
+    return this.requireAgent(input.agentId)
+  }
+
+  /**
+   * 只读的「已加入空间」清单（convergence §1，admin Agent 详情页用于评估停用影响）。
+   * 已移出的成员不返回；返回的是当前成员关联与固定版本，不返回空间内容。
+   */
+  async listAgentJoinedWorkspaces(agentId: string): Promise<AgentJoinedWorkspaceRecord[]> {
+    const [agent] = await this.database<{ id: string }[]>`
+      select id from agents where tenant_id = ${tenantId} and id = ${agentId}
+    `
+    if (!agent) throw new Error(`Agent 不存在：${agentId}`)
+    const rows = await this.database<{
+      workspaceId: string
+      workspaceName: string
+      workspaceType: 'personal' | 'team'
+      workspaceStatus: string
+      memberStatus: 'available' | 'disabled'
+      version: string
+      addedBy: string
+      createdAt: Date
+    }[]>`
+      select wam.workspace_id as "workspaceId", w.name as "workspaceName",
+             w.workspace_type as "workspaceType", w.status as "workspaceStatus",
+             wam.status as "memberStatus", av.version,
+             wam.added_by as "addedBy", wam.created_at as "createdAt"
+        from workspace_agent_members wam
+        join workspaces w on w.tenant_id = wam.tenant_id and w.id = wam.workspace_id
+        join agent_versions av on av.tenant_id = wam.tenant_id and av.id = wam.agent_version_id
+       where wam.tenant_id = ${tenantId}
+         and wam.agent_id = ${agentId}
+         and wam.status <> 'removed'
+       order by wam.created_at desc, wam.id desc
+    `
+    return rows.map(row => ({
+      workspaceId: row.workspaceId,
+      workspaceName: row.workspaceName,
+      workspaceType: row.workspaceType,
+      workspaceStatus: row.workspaceStatus,
+      memberStatus: row.memberStatus,
+      version: row.version,
+      addedBy: row.addedBy,
+      createdAt: row.createdAt.toISOString(),
+    }))
+  }
+
   async listWorkbenchAgents(userId: string, sessionRoleIds?: string[]): Promise<WorkbenchAgentDefinition[]> {
     const roleIds = sessionRoleIds === undefined
       ? (await this.database<{ roleId: string }[]>`
@@ -654,6 +747,7 @@ export class PostgresAgentService {
              a.draft_version_id as "draftVersionId", av.id as "versionId", av.version,
              av.system_prompt as "systemPrompt", av.visible_role_ids as "roleIds",
              av.data_scopes as "dataScopes", av.example_prompts as "examplePrompts",
+             a.allow_workspace_join as "allowWorkspaceJoin",
              av.max_tokens as "maxTokens", av.timeout_seconds as "timeoutSeconds",
              av.skill_refs as skills, av.tool_refs as tools, a.updated_at as "updatedAt"
         from agents a
@@ -733,6 +827,7 @@ function toAgentDefinition(row: AgentRow): AgentDefinition {
     visibility: row.roleIds.includes('role-employee') ? '全体试点员工' : `指定 ${row.roleIds.length} 个角色`,
     roleIds: row.roleIds,
     dataScopes: row.dataScopes,
+    allowWorkspaceJoin: row.allowWorkspaceJoin,
     status: row.draftVersionId ? 'draft' : row.persistedStatus,
     version: row.version,
     welcomeMessage: row.welcomeMessage,

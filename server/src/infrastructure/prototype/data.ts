@@ -607,6 +607,7 @@ export const mockAgents: AgentDefinition[] = [
     skills: ['企业知识问答', '订单分析', '缺料风险分析', '表格分析'],
     tools: ['knowledge.search', 'erp.get_sales_order', 'mes.get_work_order_progress'],
     updatedAt: '2026-08-27 17:42',
+    allowWorkspaceJoin: true,
   },
   {
     id: 'operations-analyst',
@@ -627,6 +628,7 @@ export const mockAgents: AgentDefinition[] = [
     skills: ['订单分析', '表格分析'],
     tools: ['erp.get_orders', 'artifact.publish'],
     updatedAt: '2026-08-28 09:14',
+    allowWorkspaceJoin: true,
   },
 ]
 

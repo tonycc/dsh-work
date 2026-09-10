@@ -46,4 +46,20 @@ export function registerAgentRoutes(router: Router, service: PostgresAgentServic
       actor: requireRequestIdentity(context, 'admin').userId,
     }), 'postgres')
   })
+  // 平台治理开关（convergence §1）。注册顺序必须在 /agents/draft、/agents/status 之后，
+  // 否则参数路由会抢先匹配固定路径。
+  router.patch(`${basePath}/agents/:agentId`, async (request, context) => {
+    const input = await readJsonBody<{ allowWorkspaceJoin: boolean }>(request)
+    return envelope('admin', {
+      agent: await service.setAgentWorkspaceJoin({
+        agentId: context.params.agentId ?? '',
+        allowWorkspaceJoin: input.allowWorkspaceJoin,
+        actor: requireRequestIdentity(context, 'admin').userId,
+      }),
+    }, 'postgres')
+  })
+  router.get(`${basePath}/agents/:agentId/workspaces`, async (_request, context) =>
+    envelope('admin', {
+      items: await service.listAgentJoinedWorkspaces(context.params.agentId ?? ''),
+    }, 'postgres'))
 }
