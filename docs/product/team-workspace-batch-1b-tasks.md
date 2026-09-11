@@ -46,6 +46,28 @@
 - 建立含多成员、多会话、单会话 >50 Run 的数据基线，记录查询计划、延迟分位数、数据量与并发。
 - 产出一份可复核的基线记录；不预设物化方案。
 
+## 2.1 真实 DSH 端到端验证结果（2026-09-11，已完成一次）
+
+`scripts/runtime/team-workspace-e2e.ts`（一次性库 + 真实 `DshAcpRuntimeAdapter`）实测 `ok: true`：
+
+- A 上传 `e2e-inventory.md` → 共享文件列表可见、`scanStatus=clean`、不可变对象 + 解析结果落库；
+- 团队 Agent 成员关联走**真实服务**（同时建立 Agent/Skill/Tool 授权来源）；
+- **B（成员）**发起团队会话并引用该文件运行 → `succeeded`，助手回复**回显了文件内的标记**（证明文件内容真实进入 DSH 执行）；
+- 运行完成后**继续对话** → 第二个 Run `succeeded` 且仍能回显标记（满足 1B 退出条件「并能继续」）。
+
+**真实 DSH 事件与来源落点（T2 设计依据）：**
+
+| 观察 | 值 | 对 T2 的含义 |
+| --- | --- | --- |
+| 事件类型 | `run.queued/started`、`approval.required/resolved`、`assistant.delta/completed`、`run.completed` | **没有 tool 事件**；无 `tool.*` 事件类型 |
+| 工具调用痕迹 | `approval.required` 的 `safe_metadata` 带 `tool_name='read'`、`tool_call_id`、`option_kinds` | 工具来源信息来自**审批事件**，不是 tool 事件 |
+| 工具审计 | `tool_audit_logs` 落 1 行：`tool_version_id='tool-version-read-1'`、`parameter_summary={decision,tool_name,tool_call_id}`、`result='success'` | 工具来源可从 `tool_audit_logs` 关联到 Tool Version |
+| 工具返回值 | 审计只记参数与决策，**不记结果内容** | 若 T2 要追溯「工具返回了哪些数据」，现有链路缺少该落点 |
+| 文件来源 | 来自 `run_input_files` + attempt manifest 的 `input.file_mounts` | 文件来源可由此关联到不可变 `file_objects` |
+| 知识来源 | manifest 的 `knowledge_context`（含 `documentId/version/dataScope/contentChecksum`） | 知识来源已随不可变 Manifest 固化，可直接扩展限制字段 |
+
+**运行环境提示（本轮踩到）：** `pnpm probe:*` 原先不加载 `.env`，会按生产档（`0.1.2-rc.1`）比对本地开发档（`0.1.1-rc.2`）并 fail-closed 报 version mismatch；已修（`c196c82`）。本地/生产**双档并存**是刻意设计（`runtime-lock.json` 的 `compatibility` + `DSH_RUNTIME_COMPATIBILITY`），不是版本落后。
+
 ## 3. 顺序与依赖
 
 ```

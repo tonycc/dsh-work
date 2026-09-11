@@ -22,6 +22,7 @@ import { PostgresContentService } from '../../server/src/modules/workbench/appli
 import { PostgresRunRepository } from '../../server/src/modules/run/postgres-run-repository.ts'
 import { PostgresAuthorizationService } from '../../server/src/modules/authorization/postgres-authorization-service.ts'
 import { PostgresAgentService } from '../../server/src/modules/agent/postgres-agent-service.ts'
+import { PostgresOperationsService } from '../../server/src/modules/admin/application/postgres-operations-service.ts'
 import { PostgresWorkspaceAgentMemberService } from '../../server/src/modules/workbench/application/postgres-workspace-agent-member-service.ts'
 import { ModelGovernanceService } from '../../server/src/modules/model/model-governance-service.ts'
 import { PostgresModelGovernanceRepository } from '../../server/src/modules/model/postgres-model-governance-repository.ts'
@@ -79,13 +80,16 @@ try {
   const runs = new PostgresRunRepository(database)
   const authorization = new PostgresAuthorizationService(database)
   const agents = new PostgresAgentService(database)
+  // operations 必须接线：否则 approval.resolved 触发的工具审计被静默跳过（?），
+  // 而这个审计正是「工具返回数据来源」的可追溯落点（T2 关注点）。
+  const operations = new PostgresOperationsService(database, runtime, authorization, 'mock')
   const orchestration = new RunOrchestrationService(
     runs,
     conversations,
     new ModelGovernanceService(new PostgresModelGovernanceRepository(database)),
     runtime,
     content,
-    undefined,
+    operations,
     agents,
     undefined,
     authorization,
@@ -152,6 +156,13 @@ try {
   // --- 来源信息可采集性观察（T2 设计依据） ---
   const toolEvents = events.filter(event => event.eventType.startsWith('tool'))
   const toolMetadataKeys = [...new Set(toolEvents.flatMap(event => Object.keys(event.safeMetadata ?? {})))]
+  // 审批事件的元数据 + 工具审计：确认真实 DSH 运行里「谁读了什么」落在哪里。
+  const approvalEvents = events.filter(event => event.eventType.startsWith('approval'))
+  if (!database) throw new Error('database 未初始化')
+  const toolAuditRows = await database<{ toolVersionId: string; parameterSummary: Record<string, unknown>; result: string }[]>`
+    select tool_version_id as "toolVersionId", parameter_summary as "parameterSummary", result
+      from tool_audit_logs where tenant_id = ${tenantId} and run_id = ${started.id}
+  `
 
   console.log(JSON.stringify({
     ok: finished === 'succeeded' && secondFinished === 'succeeded',
@@ -170,7 +181,9 @@ try {
     sourceInformationObserved: {
       toolEventCount: toolEvents.length,
       toolEventMetadataKeys: toolMetadataKeys,
-      note: '用于判断 T2「来源限制采集」可从真实事件中取到哪些字段',
+      approvalEvents: approvalEvents.map(event => ({ type: event.eventType, metadata: event.safeMetadata })),
+      toolAuditRows,
+      note: '用于判断 T2「来源限制采集」可从真实事件/审计中取到哪些字段',
     },
   }, null, 2))
 } finally {
