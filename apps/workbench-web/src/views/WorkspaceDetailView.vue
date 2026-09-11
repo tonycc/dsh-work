@@ -18,12 +18,15 @@ import { workbenchApi } from '@/api/client'
 import type { Artifact, TeamMemberRole, WorkspaceAgentMember, WorkspaceFile, WorkspaceMember } from '@/types/domain'
 import ConversationStarter from '@/components/ConversationStarter.vue'
 import WorkspaceMemberDialog from '@/components/WorkspaceMemberDialog.vue'
+import WorkspaceSessionHistory from '@/components/WorkspaceSessionHistory.vue'
 import WorkspaceSettingsDialog from '@/components/WorkspaceSettingsDialog.vue'
 import { WorkspaceInfoPanel } from '@dsh-work/workbench-components'
 import { downloadArtifactFile, notifyActionFailure } from '@/utils/feedback'
 import { resolveCurrentUserRole } from '@/utils/member-roles'
 
 type WorkspaceTab = 'conversation' | 'files' | 'artifacts'
+/** 对话页签内的视图：新对话（默认）/ 历史对话（design §2.2）。 */
+type ConversationView = 'new' | 'history'
 
 /**
  * 当前操作人角色可由路由宿主注入（测试与后续服务端返回角色字段时使用）；
@@ -65,6 +68,12 @@ const activeTab = ref<WorkspaceTab>(
     ? (requestedTab as WorkspaceTab)
     : 'conversation',
 )
+/** 默认新对话；`?view=history` 深链在空间对象就绪后由 watch 恢复（仅团队）。 */
+const conversationView = ref<ConversationView>('new')
+const conversationViews: Array<{ id: ConversationView; label: string }> = [
+  { id: 'new', label: '新对话' },
+  { id: 'history', label: '历史对话' },
+]
 
 const workspaceId = computed(() => String(route.params.id ?? ''))
 const workspace = computed(() =>
@@ -128,6 +137,26 @@ function selectTab(tab: WorkspaceTab) {
   void router.replace({ query })
 }
 
+/**
+ * 视图切换写入 `?view=history`（design §2.2）。只有团队空间渲染切换行：
+ * 个人空间的 `conversationView` 恒为 `new`，既不渲染历史视图也不发历史请求（AC-23）。
+ */
+function setConversationView(view: ConversationView) {
+  conversationView.value = view
+  const query = { ...route.query }
+  if (view === 'history') query.view = 'history'
+  else delete query.view
+  void router.replace({ query })
+}
+
+watch(
+  () => [route.query.view, isTeam.value] as const,
+  ([view, team]) => {
+    conversationView.value = team && String(view ?? '') === 'history' ? 'history' : 'new'
+  },
+  { immediate: true },
+)
+
 function onTabKeydown(event: KeyboardEvent, index: number) {
   const keyTargets: Record<string, number> = {
     ArrowLeft: (index - 1 + workspaceTabs.value.length) % workspaceTabs.value.length,
@@ -145,6 +174,7 @@ function onTabKeydown(event: KeyboardEvent, index: number) {
 }
 
 function useWorkspaceFile(file: WorkspaceFile) {
+  if (isTeam.value) setConversationView('new')
   selectTab('conversation')
   mobileInfoOpen.value = false
   void nextTick(() => {
@@ -223,6 +253,7 @@ function startAgentConversation(agentMemberId: string) {
   if (!member) return
   presetAgentMember.value = member
   memberDialogOpen.value = false
+  setConversationView('new')
   selectTab('conversation')
 }
 
@@ -332,21 +363,57 @@ watch(workspace, (value) => {
       </header>
 
       <div class="workspace-context-page__content">
-        <ConversationStarter
+        <section
           v-show="activeTab === 'conversation'"
           id="workspace-panel-conversation"
-          ref="starterRef"
-          embedded
+          class="workspace-conversation-pane"
           role="tabpanel"
           aria-labelledby="workspace-tab-conversation"
-          :workspace-id="workspace.id"
-          :workspace-name="workspace.name"
-          workspace-locked
-          :title="`在“${workspace.name}”中开始对话`"
-          :preset-agent-member="isTeam ? presetAgentMember : null"
-          :startable-agent-member-ids="isTeam ? startableAgentMemberIds : []"
-          :requires-agent-member="isTeam"
-        />
+        >
+          <div
+            v-if="isTeam"
+            class="panel workspace-conversation-pane__viewbar"
+            data-testid="conversation-view-switch"
+            role="tablist"
+            aria-label="对话视图"
+          >
+            <button
+              v-for="view in conversationViews"
+              :key="view.id"
+              class="workspace-conversation-pane__view"
+              :class="{ 'is-active': conversationView === view.id }"
+              type="button"
+              role="tab"
+              :aria-selected="conversationView === view.id"
+              @click="setConversationView(view.id)"
+            >
+              {{ view.label }}
+            </button>
+          </div>
+
+          <div class="workspace-conversation-pane__body">
+            <ConversationStarter
+              v-show="conversationView === 'new'"
+              ref="starterRef"
+              embedded
+              :workspace-id="workspace.id"
+              :workspace-name="workspace.name"
+              workspace-locked
+              :title="`在“${workspace.name}”中开始对话`"
+              :preset-agent-member="isTeam ? presetAgentMember : null"
+              :startable-agent-member-ids="isTeam ? startableAgentMemberIds : []"
+              :requires-agent-member="isTeam"
+            />
+
+            <WorkspaceSessionHistory
+              v-if="isTeam && conversationView === 'history'"
+              :workspace-id="workspace.id"
+              :workspace-name="workspace.name"
+              :can-start-conversation="startableAgentMemberIds.length > 0"
+              @start-new="setConversationView('new')"
+            />
+          </div>
+        </section>
 
         <section
           v-if="activeTab === 'files'"
@@ -645,6 +712,65 @@ watch(workspace, (value) => {
   background: #fff;
 }
 
+.workspace-conversation-pane {
+  display: flex;
+  min-height: 0;
+  height: 100%;
+  flex-direction: column;
+  background: #fff;
+}
+
+.workspace-conversation-pane__viewbar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  min-height: 40px;
+  margin: 12px 20px 0;
+  padding: 4px;
+  border-radius: 10px;
+  box-shadow: none;
+}
+
+.workspace-conversation-pane__view {
+  display: inline-flex;
+  min-width: 92px;
+  min-height: 30px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 7px;
+  color: #626762;
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--dsh-font-size-badge);
+  transition: color 140ms ease, background 140ms ease;
+}
+
+.workspace-conversation-pane__view:hover {
+  color: #244d40;
+  background: #f0f5f2;
+}
+
+.workspace-conversation-pane__view:focus-visible {
+  outline: 2px solid #7bb8a6;
+  outline-offset: -2px;
+}
+
+.workspace-conversation-pane__view.is-active {
+  color: #1c5f4a;
+  background: #e8f4ef;
+  font-weight: 650;
+}
+
+.workspace-conversation-pane__body {
+  position: relative;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
 .workspace-context-page__aside {
   min-width: 0;
   height: 100vh;
@@ -806,6 +932,10 @@ watch(workspace, (value) => {
 
   .workspace-tab-pane {
     padding: 24px 14px 38px;
+  }
+
+  .workspace-conversation-pane__viewbar {
+    margin: 10px 14px 0;
   }
 
   .workspace-tab-pane__header {

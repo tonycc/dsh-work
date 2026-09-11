@@ -61,10 +61,12 @@ async function mountView(item: Workspace, options: { ownerName?: string } = {}) 
 describe('WorkspaceDetailView 团队分支与个人空间红线', () => {
   beforeEach(() => {
     route.params = { id: 'ws-team' }
+    route.query = {}
     vi.spyOn(workbenchApi, 'listWorkspaceAgentMembers').mockResolvedValue([])
     vi.spyOn(workbenchApi, 'listWorkspaceMembers').mockResolvedValue({ items: [], currentUserRole: null })
     vi.spyOn(workbenchApi, 'listMemberCandidates').mockResolvedValue({ items: [], nextCursor: null })
     vi.spyOn(workbenchApi, 'listWorkspaceAgentCandidates').mockResolvedValue({ items: [], nextCursor: null })
+    vi.spyOn(workbenchApi, 'listWorkspaceSessions').mockResolvedValue({ items: [], nextCursor: null })
   })
 
   it('renders the Agent segment for a team space and loads members via the T4 API', async () => {
@@ -126,6 +128,48 @@ describe('WorkspaceDetailView 团队分支与个人空间红线', () => {
     expect(wrapper.find('.settings-dialog__body').exists()).toBe(true)
   })
 
+  it('renders the 新对话／历史对话 switch for a team space and defaults to the new conversation', async () => {
+    const { wrapper } = await mountView(workspace())
+
+    const viewbar = wrapper.find('[data-testid="conversation-view-switch"]')
+    expect(viewbar.exists()).toBe(true)
+    expect(viewbar.findAll('button').map(button => button.text())).toEqual(['新对话', '历史对话'])
+    expect(viewbar.findAll('button')[0]?.classes()).toContain('is-active')
+    expect(wrapper.find('[data-testid="workspace-session-history"]').exists()).toBe(false)
+    // 默认新对话不拉取历史，避免无谓请求。
+    expect(workbenchApi.listWorkspaceSessions).not.toHaveBeenCalled()
+  })
+
+  it('writes ?view=history and replaces the starter with the history view', async () => {
+    const { wrapper } = await mountView(workspace())
+
+    await wrapper.findAll('[data-testid="conversation-view-switch"] button')[1]?.trigger('click')
+    await flushPromises()
+
+    expect(router.replace).toHaveBeenCalledWith({ query: { view: 'history' } })
+    expect(wrapper.find('[data-testid="workspace-session-history"]').exists()).toBe(true)
+    expect(workbenchApi.listWorkspaceSessions).toHaveBeenCalledWith('ws-team', { limit: 20 })
+  })
+
+  it('restores the history view from a ?view=history deep link after the workspace resolves', async () => {
+    route.query = { view: 'history' }
+    const { wrapper } = await mountView(workspace())
+
+    expect(wrapper.find('[data-testid="workspace-session-history"]').exists()).toBe(true)
+    expect(workbenchApi.listWorkspaceSessions).toHaveBeenCalledWith('ws-team', { limit: 20 })
+  })
+
+  it('returns from the history empty state to the new conversation and clears ?view', async () => {
+    route.query = { view: 'history' }
+    const { wrapper } = await mountView(workspace())
+
+    await wrapper.find('[data-testid="session-history-empty-workspace"] button').trigger('click')
+    await flushPromises()
+
+    expect(router.replace).toHaveBeenCalledWith({ query: {} })
+    expect(wrapper.find('[data-testid="workspace-session-history"]').exists()).toBe(false)
+  })
+
   it('renders no team UI and issues no member query for a personal space (AC-23)', async () => {
     route.params = { id: 'ws-personal' }
     const { wrapper } = await mountView(workspace({
@@ -140,6 +184,10 @@ describe('WorkspaceDetailView 团队分支与个人空间红线', () => {
     expect(workbenchApi.listWorkspaceAgentMembers).not.toHaveBeenCalled()
     expect(workbenchApi.listWorkspaceMembers).not.toHaveBeenCalled()
     expect(workbenchApi.listMemberCandidates).not.toHaveBeenCalled()
+    // AC-23 红线：个人空间既不渲染「新对话／历史对话」切换，也不请求团队历史会话。
+    expect(workbenchApi.listWorkspaceSessions).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="conversation-view-switch"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="workspace-session-history"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="panel-agent-section"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="panel-employee-section"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="panel-manage-members"]').exists()).toBe(false)
@@ -148,5 +196,23 @@ describe('WorkspaceDetailView 团队分支与个人空间红线', () => {
     expect(wrapper.find('.settings-dialog__body').exists()).toBe(false)
     // 个人空间右栏文案保持现状。
     expect(wrapper.text()).toContain('系统已为你创建唯一的默认个人空间')
+  })
+
+  it('ignores a ?view=history deep link on a personal space without any team request (AC-23)', async () => {
+    route.params = { id: 'ws-personal' }
+    route.query = { view: 'history' }
+    const { wrapper } = await mountView(workspace({
+      id: 'ws-personal',
+      type: 'personal',
+      owner: '周航',
+      members: ['周航'],
+      memberCount: 1,
+    }), { ownerName: '周航' })
+
+    expect(workbenchApi.listWorkspaceSessions).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="conversation-view-switch"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="workspace-session-history"]').exists()).toBe(false)
+    // 新对话仍是唯一内容：个人空间行为与现状一致。
+    expect(wrapper.find('conversation-starter-stub').exists()).toBe(true)
   })
 })
