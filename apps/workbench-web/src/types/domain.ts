@@ -160,6 +160,34 @@ export interface WorkspaceMemberDirectory {
   currentUserRole: TeamMemberRole | null
 }
 
+/**
+ * 团队历史会话摘要（1B-T1，design §2.2）：一条对应一个稳定 Session，只带最新
+ * Run 指针与状态，不携带对话正文。个人空间不会请求该数据（AC-23）。
+ */
+export interface WorkspaceSessionSummary {
+  sessionId: string
+  title: string
+  creatorId: string
+  creatorName: string
+  /** ISO 时间；列表固定按该字段倒序（服务端排序，前端不重排）。 */
+  lastActiveAt: string
+  runCount: number
+  latestRun: { id: string; status: RunStatus } | null
+}
+
+export interface WorkspaceSessionPage {
+  items: WorkspaceSessionSummary[]
+  /** null 表示已到末尾。 */
+  nextCursor: string | null
+}
+
+/** 团队历史会话查询参数；`limit` 服务端限定 1..100。 */
+export interface WorkspaceSessionQuery {
+  query?: string
+  cursor?: string
+  limit?: number
+}
+
 /** Agent 成员候选的最小字段；不暴露模型、凭据与 Skill/Tool 配置明细。 */
 export interface AgentCandidate {
   agentId: string

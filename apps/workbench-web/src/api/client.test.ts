@@ -161,6 +161,51 @@ describe('workbench API client', () => {
     expect(page.nextCursor).toBe('next')
   })
 
+  it('lists team workspace sessions with query, cursor and limit as query parameters', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: {
+        items: [{
+          sessionId: 'session-1',
+          title: '季度复盘',
+          creatorId: 'user-1',
+          creatorName: '林岚',
+          lastActiveAt: '2026-09-10T08:00:00.000Z',
+          runCount: 3,
+          latestRun: { id: 'run/3', status: 'running' },
+        }],
+        nextCursor: 'next',
+      },
+      meta: { api: 'workbench', adapter: 'postgres', timestamp: new Date().toISOString() },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const page = await workbenchApi.listWorkspaceSessions('ws/team-1', { query: '复盘', cursor: 'cur-1', limit: 20 })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/workbench/v1/workspaces/ws%2Fteam-1/sessions?query=%E5%A4%8D%E7%9B%98&cursor=cur-1&limit=20',
+      expect.objectContaining({ method: 'GET' }),
+    )
+    expect(page.items[0]).toMatchObject({ sessionId: 'session-1', title: '季度复盘', runCount: 3 })
+    expect(page.items[0]?.latestRun).toEqual({ id: 'run/3', status: 'running' })
+    expect(page.nextCursor).toBe('next')
+  })
+
+  it('omits the team session query string entirely when no filters are given', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: { items: [], nextCursor: null },
+      meta: { api: 'workbench', adapter: 'postgres', timestamp: new Date().toISOString() },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const page = await workbenchApi.listWorkspaceSessions('ws-team-1')
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/workbench/v1/workspaces/ws-team-1/sessions',
+      expect.objectContaining({ method: 'GET' }),
+    )
+    expect(page).toEqual({ items: [], nextCursor: null })
+  })
+
   it('lists workspace agent members through the agent-members endpoint', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       data: [{

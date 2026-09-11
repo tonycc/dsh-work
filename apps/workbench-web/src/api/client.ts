@@ -13,6 +13,8 @@ import type {
   WorkspaceFile,
   WorkspaceMember,
   WorkspaceMemberDirectory,
+  WorkspaceSessionPage,
+  WorkspaceSessionQuery,
 } from '../types/domain'
 
 interface ApiEnvelope<T> {
@@ -169,6 +171,21 @@ export const workbenchApi = {
     request<WorkspaceMemberDirectory>(`/workspaces/${encodeURIComponent(workspaceId)}/members`, {
       method: 'GET',
     }),
+  /**
+   * 团队历史会话分页（1B-T1）。只在团队分支调用：服务端对个人空间返回 422，
+   * 对非成员返回 403（AC-23）。
+   */
+  listWorkspaceSessions: (workspaceId: string, input: WorkspaceSessionQuery = {}) => {
+    const search = new URLSearchParams()
+    if (input.query) search.set('query', input.query)
+    if (input.cursor) search.set('cursor', input.cursor)
+    if (input.limit !== undefined) search.set('limit', String(input.limit))
+    const suffix = search.size > 0 ? `?${search.toString()}` : ''
+    return request<WorkspaceSessionPage>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/sessions${suffix}`,
+      { method: 'GET' },
+    )
+  },
   addWorkspaceMember: (workspaceId: string, input: { userId: string; role: TeamMemberRole }) =>
     request<WorkspaceMember>(`/workspaces/${encodeURIComponent(workspaceId)}/members`, {
       method: 'POST',
