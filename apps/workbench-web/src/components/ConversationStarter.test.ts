@@ -134,4 +134,72 @@ describe('ConversationStarter', () => {
       undefined,
     )
   })
+
+  it('团队空间未选中可用 Agent 成员时阻止提交并给出引导', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const wrapper = mount(ConversationStarter, {
+      props: {
+        workspaceId: 'ws-team',
+        workspaceName: '供应链空间',
+        workspaceLocked: true,
+        requiresAgentMember: true,
+        availableAgentMemberCount: 1,
+      },
+      global: { plugins: [pinia, ElementPlus] },
+    })
+    const taskStore = useTaskStore(pinia)
+    const createTask = vi.spyOn(taskStore, 'createTask').mockResolvedValue({ id: 'run-test' } as never)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="composer-blocked"]').text()).toContain('开始对话')
+    const send = wrapper.find('.composer__send')
+    expect(send.attributes('disabled')).toBeDefined()
+
+    // 即使强行触发 submit 也不得发起请求（后端只接受带关联 ID 的团队会话）。
+    wrapper.findComponent(TaskComposer).vm.$emit('submit', {
+      prompt: '帮我看看库存',
+      files: [],
+      workspaceId: 'ws-team',
+    })
+    await flushPromises()
+    expect(createTask).not.toHaveBeenCalled()
+  })
+
+  it('团队空间选中可用 Agent 成员后解除阻止并带上关联 ID', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const wrapper = mount(ConversationStarter, {
+      props: {
+        workspaceId: 'ws-team',
+        workspaceName: '供应链空间',
+        workspaceLocked: true,
+        requiresAgentMember: true,
+        availableAgentMemberCount: 1,
+        presetAgentMember: { id: 'wam-1', name: '订单分析助手', status: 'available' },
+      },
+      global: { plugins: [pinia, ElementPlus] },
+    })
+    const taskStore = useTaskStore(pinia)
+    const createTask = vi.spyOn(taskStore, 'createTask').mockResolvedValue({ id: 'run-test' } as never)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="composer-blocked"]').exists()).toBe(false)
+    wrapper.findComponent(TaskComposer).vm.$emit('submit', {
+      prompt: '帮我看看库存',
+      files: [],
+      workspaceId: 'ws-team',
+    })
+    await flushPromises()
+    expect(createTask).toHaveBeenCalledWith(
+      '帮我看看库存',
+      [],
+      'ws-team',
+      '供应链空间',
+      undefined,
+      [],
+      undefined,
+      'wam-1',
+    )
+  })
 })

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Cpu,
@@ -27,6 +28,13 @@ const props = withDefaults(
      * 启动参数保持现状（AC-23）。
      */
     presetAgentMember?: { id: string; name: string; status: 'available' | 'disabled' } | null
+    /** 团队空间当前可用的 Agent 成员数量，用于在未选中时给出准确引导。 */
+    availableAgentMemberCount?: number
+    /**
+     * 团队会话必须绑定 Agent 成员（TW-02）。只有团队空间详情为 true；个人空间
+     * 详情同样是 workspaceLocked，但不能被这条规则拦住（AC-23）。
+     */
+    requiresAgentMember?: boolean
   }>(),
   {
     workspaceId: '',
@@ -35,8 +43,22 @@ const props = withDefaults(
     embedded: false,
     title: 'dsh-work，我帮你',
     presetAgentMember: null,
+    availableAgentMemberCount: 0,
+    requiresAgentMember: false,
   },
 )
+
+/**
+ * 团队会话必须绑定可用的 Agent 成员（TW-02）：右栏点击可用 Agent 即完成选择。
+ * 普通成员看不到成员管理弹窗，这里给出可达的引导而不是提交后由服务端拒绝。
+ */
+const blockedReason = computed(() => {
+  if (!props.requiresAgentMember) return ''
+  if (props.presetAgentMember?.status === 'available') return ''
+  return props.availableAgentMemberCount > 0
+    ? '请先在右侧「Agent」区点击「开始对话」，选择本次使用的 Agent 成员。'
+    : '该团队空间尚无可用 Agent 成员，请联系负责人添加后再发起对话。'
+})
 
 const router = useRouter()
 const route = useRoute()
@@ -117,6 +139,10 @@ function useWorkspaceFile(file: WorkspaceFile) {
 }
 
 async function submitTask(payload: { prompt: string; files: File[]; workspaceId: string }) {
+  if (blockedReason.value) {
+    ElMessage.warning(blockedReason.value)
+    return
+  }
   try {
     const agentMemberId = props.presetAgentMember?.status === 'available'
       ? props.presetAgentMember.id
@@ -234,6 +260,7 @@ defineExpose({ useWorkspaceFile })
           :workspaces="contentStore.workspaces"
           :workspace-locked="workspaceLocked"
           :selected-skill-name="selectedSkill?.name"
+          :blocked-reason="blockedReason"
           @submit="submitTask"
           @clear-skill="clearSelectedSkill"
         />

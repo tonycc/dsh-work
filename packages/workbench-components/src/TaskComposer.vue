@@ -25,6 +25,11 @@ const props = withDefaults(
     compact?: boolean
     submitting?: boolean
     selectedSkillName?: string
+    /**
+     * 团队空间尚未选中可用 Agent 成员时阻止提交（TW-02）：后端只接受带
+     * workspaceAgentMemberId 的团队会话，前端先行拦住无意义的失败请求。
+     */
+    blockedReason?: string
   }>(),
   {
     initialPrompt: '',
@@ -35,6 +40,7 @@ const props = withDefaults(
     compact: false,
     submitting: false,
     selectedSkillName: '',
+    blockedReason: '',
   },
 )
 
@@ -50,7 +56,7 @@ const fileInput = ref<HTMLInputElement>()
 const inputRef = ref<HTMLTextAreaElement>()
 const isDragging = ref(false)
 
-const canSubmit = computed(() => prompt.value.trim().length > 0 && !props.submitting)
+const canSubmit = computed(() => prompt.value.trim().length > 0 && !props.submitting && !props.blockedReason)
 const workspaceLabel = computed(() => {
   const selected = props.workspaces.find(workspace => workspace.id === workspaceId.value)
   if (selected) return selected.name
@@ -230,6 +236,10 @@ function onKeydown(event: KeyboardEvent) {
           </span>
           <span v-if="files.length" class="composer__file-count">{{ files.length }} 个文件</span>
         </div>
+
+        <p v-if="blockedReason" data-testid="composer-blocked" class="composer__blocked">
+          {{ blockedReason }}
+        </p>
 
         <div class="composer__trailing-actions">
           <button
@@ -552,6 +562,12 @@ function onKeydown(event: KeyboardEvent) {
   background: #242724;
   font-size: var(--dsh-font-size-section);
   transition: transform 140ms ease, background 140ms ease;
+}
+
+.composer__blocked {
+  margin: 6px 0 0;
+  color: var(--dsh-color-warning, #b88230);
+  font-size: var(--dsh-font-size-badge);
 }
 
 .composer__send:not(:disabled):hover {

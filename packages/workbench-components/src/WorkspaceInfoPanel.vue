@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowRight, Cpu, FolderOpened, Lock, Setting, UserFilled } from '@element-plus/icons-vue'
+import { ArrowRight, ChatDotRound, Cpu, FolderOpened, Lock, Setting, UserFilled } from '@element-plus/icons-vue'
 
 import { StatusTag } from '@dsh-work/ui-core'
 
@@ -44,6 +44,11 @@ const emit = defineEmits<{
   collapse: []
   'manage-members': []
   'open-settings': []
+  /**
+   * 团队成员点击可用 Agent 发起对话（TW-02）：普通成员没有成员管理弹窗入口，
+   * 右栏 Agent 条目就是他们唯一可达的选择入口。不可用状态不触发。
+   */
+  'start-agent-conversation': [agentMemberId: string]
 }>()
 
 function memberInitial(name: string) {
@@ -175,6 +180,16 @@ function agentStatusLabel(status: WorkspaceAgentMemberInfo['status']) {
             :class="{ 'workspace-agent__status--available': agent.status === 'available' }"
             :aria-label="`Agent 状态：${agentStatusLabel(agent.status)}`"
           />
+          <el-button
+            v-if="agent.status === 'available'"
+            data-testid="panel-agent-start"
+            link
+            type="primary"
+            :icon="ChatDotRound"
+            @click="emit('start-agent-conversation', agent.id)"
+          >
+            开始对话
+          </el-button>
         </article>
       </div>
       <p v-else class="workspace-info-panel__empty">尚未加入 Agent</p>

@@ -83,6 +83,16 @@ describe('WorkspaceInfoPanel 团队分支', () => {
     expect(agentSection.findAll('[data-testid="panel-agent-status"]')).toHaveLength(2)
   })
 
+  it('任何成员都能从右栏可用 Agent 条目发起对话，停用条目不可点', async () => {
+    // 普通成员没有成员管理弹窗入口，右栏 Agent 条目是其唯一可达的选择入口。
+    const wrapper = mountPanel({ currentUserRole: 'member' })
+    const starts = wrapper.findAll('[data-testid="panel-agent-start"]')
+    expect(starts).toHaveLength(1)
+    expect(starts[0]?.text()).toContain('开始对话')
+    await starts[0]?.trigger('click')
+    expect(wrapper.emitted('start-agent-conversation')).toEqual([['wam-1']])
+  })
+
   it('shows 管理成员 to owners and admins only', async () => {
     for (const role of ['owner', 'admin']) {
       const wrapper = mountPanel({ currentUserRole: role })
