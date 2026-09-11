@@ -949,8 +949,22 @@
       "get": {
         "operationId": "listWorkspaceSessions",
         "summary": "分页查询团队空间的历史会话（所有成员）",
-        "description": "按最近活动倒序返回 Session 摘要（稳定 Session 身份、标题、发起人、最近活动时间、Run 计数与最新 Run 指针），不含对话正文。keyset 游标分页 + 标题关键词过滤；任何当前成员可读，非成员与个人空间被拒绝。",
+        "description": "按最近活动倒序返回 Session 摘要（稳定 Session 身份、标题、发起人、最近活动时间、Run 计数与最新 Run 指针），不含对话正文。keyset 游标分页 + 标题关键词过滤；scope 默认 mine（本人历史列表，TW-03），team 返回空间全部会话。任何当前成员可读，非成员与个人空间被拒绝。",
         "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mine",
+                "team"
+              ],
+              "default": "mine"
+            },
+            "description": "mine=本人历史列表（1B 默认）；team=空间全部会话（2A 的团队共享）"
+          },
           {
             "name": "query",
             "in": "query",

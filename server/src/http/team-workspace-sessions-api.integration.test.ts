@@ -157,6 +157,18 @@ test('团队 Session 列表对所有成员可读，非成员被拒绝，个人�
     assert.equal(result.status, 200, `${userId} 应可读取团队会话列表`)
   }
 
+  // 1B 默认本人范围（TW-03 本人历史列表）：成员看不到别人发起的会话。
+  const asMember = await api('GET', `/api/workbench/v1/workspaces/${workspaceId}/sessions`, { as: memberId })
+  assert.deepEqual((asMember.body.data as { items: unknown[] }).items, [], '成员本人尚无会话时为空')
+  // 2A 的「团队共享」范围可以读到其他成员的会话。
+  const asTeam = await api('GET', `/api/workbench/v1/workspaces/${workspaceId}/sessions?scope=team`, { as: memberId })
+  assert.deepEqual(
+    (asTeam.body.data as { items: Array<{ sessionId: string }> }).items.map(item => item.sessionId),
+    [sessionId],
+  )
+  const badScope = await api('GET', `/api/workbench/v1/workspaces/${workspaceId}/sessions?scope=all`, { as: ownerId })
+  assert.equal(badScope.status, 422, '未知 scope 被拒绝')
+
   const outsider = await api('GET', `/api/workbench/v1/workspaces/${workspaceId}/sessions`, { as: outsiderId })
   assert.equal(outsider.status, 403, '非成员不得读取团队会话列表')
 

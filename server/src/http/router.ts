@@ -153,11 +153,14 @@ export function classifyHttpError(error: unknown, path: string): { status: numbe
 
   if (isIdentityAccessError(error)) {
     const status = error.status
-    const suggestion = status === 401
-      ? '请重新登录后继续；若仍失败，请确认 AI Hub 应用与回调配置。'
-      : status === 403
-        ? '请联系业务应用管理员，在 dsh-work 中为当前账号配置角色与数据范围。'
-        : '稍后重试；若问题持续，请检查 AI Hub 与身份服务健康状态。'
+    const suggestions: Record<typeof status, string> = {
+      401: '请重新登录后继续；若仍失败，请确认 AI Hub 应用与回调配置。',
+      403: '请联系业务应用管理员，在 dsh-work 中为当前账号配置角色与数据范围。',
+      422: '按提示调整输入内容后重新提交。',
+      502: '稍后重试；若问题持续，请检查 AI Hub 与身份服务健康状态。',
+      503: '稍后重试；若问题持续，请检查 AI Hub 与身份服务健康状态。',
+    }
+    const suggestion = suggestions[status]
     return {
       status,
       error: {
@@ -305,12 +308,20 @@ function apiAudience(path: string): ApiAudience | null {
 
 function isIdentityAccessError(
   error: unknown,
-): error is Error & { status: 401 | 403 | 502 | 503; code: string } {
+): error is Error & { status: 401 | 403 | 422 | 502 | 503; code: string } {
   if (!(error instanceof Error)) return false
   const candidate = error as Error & { status?: unknown; code?: unknown }
-  return [401, 403, 502, 503].includes(Number(candidate.status))
+  return [401, 403, 422, 502, 503].includes(Number(candidate.status))
     && typeof candidate.code === 'string'
     && /^[a-z0-9_]{1,80}$/i.test(candidate.code)
+}
+
+/** Explicit 422 so input validation does not depend on message-text matching. */
+export function routeValidationFailed(message: string) {
+  const error = new Error(message) as Error & { status: number; code: string }
+  error.status = 422
+  error.code = 'invalid_request'
+  return error
 }
 
 export function routePermissionDenied(message: string) {
