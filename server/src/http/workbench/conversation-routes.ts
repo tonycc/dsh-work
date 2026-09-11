@@ -156,6 +156,11 @@ export function registerConversationRoutes(
       sessionAuthorizationContext(identity),
     )
     const task = await conversations.getTask(context.params['runId'] ?? '', userId)
+    // 取消与重试同样返回完整正文，必须与详情/列表用同一团队读取口径，否则被移出
+    // 成员可借这些接口读回回答内容（AC-09）。
+    if (!task || (authorization && !(await authorizeTeamTaskRead(authorization, task, userId)))) {
+      return httpResult(404, { error: { code: 'run_not_found', message: 'Run 不存在或不可访问' } })
+    }
     return httpResult(202, envelope('workbench', task, 'postgres'))
   })
 
@@ -168,6 +173,9 @@ export function registerConversationRoutes(
       sessionAuthorizationContext(identity),
     )
     const task = await conversations.getTask(context.params['runId'] ?? '', userId)
+    if (!task || (authorization && !(await authorizeTeamTaskRead(authorization, task, userId)))) {
+      return httpResult(404, { error: { code: 'run_not_found', message: 'Run 不存在或不可访问' } })
+    }
     return httpResult(202, envelope('workbench', task, 'postgres'))
   })
 

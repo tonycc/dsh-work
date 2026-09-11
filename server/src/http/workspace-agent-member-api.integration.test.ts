@@ -699,6 +699,30 @@ test('加入 Agent 时若负责人转交发生在前置检查与加锁之间，�
   assert.equal(members.length, 0, '旧负责人不得写入成员关系')
 })
 
+test('HTTP：提交负责人不可见的 Agent 返回 403 而不是 500', async () => {
+  const workspaceId = 'ws-1a-ag-role-scope-http'
+  const ownerId = 'user-1a-ag-role-scope-http-owner'
+  await createDirectoryUser(ownerId, '可见范围 HTTP 负责人')
+  await createTeamWorkspace(workspaceId, [{ userId: ownerId, role: 'owner' }])
+  await createTool({ id: 'tool-1a-role-scope-http' })
+  await createSkill({ id: 'skill-1a-role-scope-http', toolRefs: ['tool-1a-role-scope-http@1.0.0'] })
+  const hidden = await createPublishedAgent({
+    id: 'agent-1a-role-scope-http',
+    name: '不可见 HTTP Agent',
+    roleIds: ['role-platform-admin'],
+    skillRefs: ['skill-1a-role-scope-http@1.0.0'],
+    toolRefs: ['tool-1a-role-scope-http@1.0.0'],
+  })
+
+  const result = await api('POST', `/api/workbench/v1/workspaces/${workspaceId}/agent-members`, {
+    as: ownerId,
+    body: { agentId: hidden.id },
+  })
+  // 授权拒绝必须走类型化错误映射为 403，不能落到 500。
+  assert.equal(result.status, 403)
+  assert.equal((result.body.error as { code: string } | undefined)?.code, 'permission_denied')
+})
+
 test('加入 Agent 时复核角色可见范围：提交负责人不可见的 Agent 被拒绝', async () => {
   const workspaceId = 'ws-1a-ag-role-scope'
   const ownerId = 'user-1a-ag-role-scope-owner'

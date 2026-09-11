@@ -823,6 +823,7 @@ test('REST 读取：被移出的成员不得读取团队运行详情，列表也
   await createSession(sessionId, ws, userId, versionId)
   const runId = `${ws}-run`
   await createRunWithAttempt({ id: runId, sessionId, requestedBy: userId, status: 'running', agentVersionId: versionId, workspaceId: ws })
+  await appendRunEvent(runId, `${runId}-attempt`, 1, 'assistant.completed', '团队运行正文')
 
   const readRun = () => fetch(`${baseUrl}/api/workbench/v1/runs/${runId}`, { headers: { 'x-test-user-id': userId } })
   const readTasks = () => fetch(`${baseUrl}/api/workbench/v1/tasks`, { headers: { 'x-test-user-id': userId } })
@@ -840,6 +841,15 @@ test('REST 读取：被移出的成员不得读取团队运行详情，列表也
   // 撤权后：详情 404、列表不再返回该运行（与 SSE 同一收权口径）。
   assert.equal((await readRun()).status, 404, '被移出成员不得读取团队运行详情')
   assert.equal((await taskIds()).includes(runId), false, '被移出成员的运行列表不得包含该团队运行')
+
+  // 取消/重试同样返回完整正文，也必须被同一口径拦住，否则可借其读回回答内容。
+  const cancelAfterRemoval = await fetch(`${baseUrl}/api/workbench/v1/runs/${runId}/cancel`, {
+    method: 'POST',
+    headers: { 'x-test-user-id': userId },
+  })
+  assert.equal(cancelAfterRemoval.status, 404, '被移出成员不得通过取消接口读回正文')
+  const cancelBody = await cancelAfterRemoval.text()
+  assert.equal(cancelBody.includes('团队运行正文'), false, '取消响应不得包含正文')
 })
 
 // ---------------------------------------------------------------------------
@@ -1028,18 +1038,38 @@ test('执行鉴权：Agent 成员停用后即使仍有 manual 授权来源也拒
   )
 })
 
-test('执行鉴权：无 Agent 成员关联的固定版本授权（升级前基线）不被误拦', async () => {
-  const ws = uniqueWorkspace('agent-legacy-grant')
+test('执行鉴权：Agent 升级后停用成员，仍锁定旧版本的会话不得继续执行', async () => {
+  const ws = uniqueWorkspace('agent-upgrade')
   const ownerId = `${ws}-owner`
   const userId = `${ws}-user`
-  const versionId = `${ws}-version`
-  await seedUser(ownerId, '基线负责人')
-  await seedUser(userId, '基线成员')
+  const agentId = `${ws}-agent`
+  const versionV1 = `${ws}-version-v1`
+  const versionV2 = `${ws}-version-v2`
+  await seedUser(ownerId, '升级负责人')
+  await seedUser(userId, '升级成员')
   await createTeamWorkspace(ws, [{ userId: ownerId, role: 'owner' }, { userId, role: 'member' }])
-  await seedAgent(ws, versionId)
-  await grantAgentVersion(ws, versionId)
+  // 同一 Agent 的两个版本（已发布版本不可变，须一次性建好）。
+  await seedAgentWithVersions(agentId, [versionV1, versionV2])
+  await grantAgentVersion(ws, versionV1)
+  await grantAgentVersion(ws, versionV2)
+  const memberId = `${ws}-wam`
+  // 成员已升级到 v2，旧会话仍锁定 v1。
+  await addAgentMemberRow(ws, memberId, agentId, versionV2)
 
-  await authorization.authorizeTeamRunExecution({ userId, workspaceId: ws, agentVersionId: versionId })
+  // 可用时：v1 会话仍可执行（1A 保留旧版本授权）。
+  await authorization.authorizeTeamRunExecution({ userId, workspaceId: ws, agentVersionId: versionV1 })
+
+  await database`
+    update workspace_agent_members set status = 'disabled'
+     where tenant_id = ${tenantId} and workspace_id = ${ws} and id = ${memberId}
+  `
+  // 停用后必须按「版本所属 Agent」定位成员：仅按成员当前 agent_version_id 匹配会
+  // 查不到 v1 关联而误放行（P1-1）。
+  await assert.rejects(
+    authorization.authorizeTeamRunExecution({ userId, workspaceId: ws, agentVersionId: versionV1 }),
+    /Agent 成员已停用或已移出/,
+    '升级后旧版本会话也必须跟随成员状态',
+  )
 })
 
 test('收权清扫：复核抛出基础设施故障时不得取消运行', async () => {
@@ -1193,6 +1223,37 @@ async function grantAgentVersion(workspaceId: string, versionId: string) {
     insert into workspace_capability_grants (tenant_id, workspace_id, capability_type, capability_version_id)
     values (${tenantId}, ${workspaceId}, 'agent', ${versionId})
     on conflict do nothing
+  `
+}
+
+async function seedAgentWithVersions(agentId: string, versionIds: string[]) {
+  await database`
+    insert into agents (
+      id, tenant_id, name, description, welcome_message, owner_user_id, created_by,
+      status, active_version_id, allow_workspace_join
+    ) values (
+      ${agentId}, ${tenantId}, 'T5 多版本 Agent', 'T5 升级测试。',
+      '', 'U00008', 'U00008', 'published', null, true
+    )
+  `
+  for (const [index, versionId] of versionIds.entries()) {
+    await database`
+      insert into agent_versions (
+        id, tenant_id, agent_id, version, name, description, welcome_message,
+        example_prompts, system_prompt, visible_role_ids, data_scopes, max_tokens,
+        timeout_seconds, skill_refs, tool_refs, status, created_by, change_summary
+      ) values (
+        ${versionId}, ${tenantId}, ${agentId}, ${`1.0.${index}`}, 'T5 多版本 Agent', 'T5 版本。',
+        '', ${database.json([] as string[])}, '你是 T5 集成测试 Agent。',
+        ${database.json(['role-employee'] as string[])}, ${database.json(['enterprise:authorized'])},
+        12000, 300, ${database.json([] as string[])}, ${database.json([] as string[])},
+        'published', 'U00008', ${`T5 版本 ${index}`}
+      )
+    `
+  }
+  await database`
+    update agents set active_version_id = ${versionIds[versionIds.length - 1] ?? null}
+     where tenant_id = ${tenantId} and id = ${agentId}
   `
 }
 
