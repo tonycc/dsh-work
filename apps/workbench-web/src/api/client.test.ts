@@ -206,6 +206,21 @@ describe('workbench API client', () => {
     expect(page).toEqual({ items: [], nextCursor: null })
   })
 
+  it('serializes the session scope when provided (team probe)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: { items: [], nextCursor: null },
+      meta: { api: 'workbench', adapter: 'postgres', timestamp: new Date().toISOString() },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await workbenchApi.listWorkspaceSessions('ws-team-1', { scope: 'team', limit: 1 })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/workbench/v1/workspaces/ws-team-1/sessions?limit=1&scope=team',
+      expect.objectContaining({ method: 'GET' }),
+    )
+  })
+
   it('lists workspace agent members through the agent-members endpoint', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       data: [{

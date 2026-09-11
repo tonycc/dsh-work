@@ -181,11 +181,17 @@ export interface WorkspaceSessionPage {
   nextCursor: string | null
 }
 
-/** 团队历史会话查询参数；`limit` 服务端限定 1..100。 */
+/**
+ * 团队历史会话查询参数；`limit` 服务端限定 1..100。
+ *
+ * `scope=mine` 只返回调用者本人发起的会话（TW-03 的 1B 默认），`team` 返回空间
+ * 全部成员的会话（2A 的「团队共享」）。不传时服务端按 `mine` 处理。
+ */
 export interface WorkspaceSessionQuery {
   query?: string
   cursor?: string
   limit?: number
+  scope?: 'mine' | 'team'
 }
 
 /** Agent 成员候选的最小字段；不暴露模型、凭据与 Skill/Tool 配置明细。 */

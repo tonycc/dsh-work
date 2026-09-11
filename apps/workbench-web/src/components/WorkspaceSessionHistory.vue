@@ -5,7 +5,6 @@ import { Search } from '@element-plus/icons-vue'
 
 import { StatusTag } from '@dsh-work/ui-core'
 import { workbenchApi } from '@/api/client'
-import { useAuthStore } from '@/stores/auth'
 import type { WorkspaceSessionSummary } from '@/types/domain'
 import { notifyActionFailure } from '@/utils/feedback'
 import { formatActivityTime, formatActivityTimeShort } from '@/utils/activity-time'
@@ -15,6 +14,8 @@ import { formatActivityTime, formatActivityTimeShort } from '@/utils/activity-ti
  *
  * - 只由 `WorkspaceDetailView` 的团队分支挂载；个人空间不渲染本组件，因此也不会
  *   产生 `listWorkspaceSessions` 请求（AC-23）。
+ * - 默认按 `scope=mine` 拉取本人历史（TW-03 的 1B 口径）；本人历史为空时用一次
+ *   `scope=team` 轻量探测区分「本人尚无对话」与「空间尚无对话」（design §2.2）。
  * - 排序固定为服务端「最近活动倒序」，前端不再排序，首版不提供排序切换。
  * - 「我的对话／团队共享」与发起人筛选属 2A，这里不渲染任何空入口。
  */
@@ -46,7 +47,6 @@ const runStatusLabels: Record<string, string> = {
 }
 
 const router = useRouter()
-const authStore = useAuthStore()
 
 const items = ref<WorkspaceSessionSummary[]>([])
 const nextCursor = ref<string | null>(null)
@@ -58,34 +58,60 @@ const initialized = ref(false)
 const failed = ref(false)
 let searchTimer: ReturnType<typeof setTimeout> | undefined
 
+/**
+ * 「空间是否已有会话」探测结果（design §2.2 的三态空态依赖它区分后两种）：
+ * - `unknown`：尚未探测；
+ * - `has-sessions`：空间有会话、本人没有 → 「本人尚无对话」空态；
+ * - `no-sessions`：空间也没有会话，或探测失败 → 「本工作空间尚无对话」空态。
+ * 结果按当前 workspaceId 缓存，`loadMore`、搜索与「清除筛选」都不会重复探测。
+ */
+const spaceProbe = ref<'unknown' | 'has-sessions' | 'no-sessions'>('unknown')
+let probePromise: Promise<void> | null = null
+
 const searchedTitle = computed(() => appliedQuery.value)
-const hasOwnSessions = computed(() =>
-  items.value.some(item => item.creatorId === authStore.user.id),
-)
-/**
- * 空态（design §2.2）：筛选无结果 / 本空间尚无对话。
- * 「本人尚无对话」在首版列表为全空间可见会话时无法替空列表，见 ownSessionHint。
- */
-const emptyState = computed<'none' | 'workspace' | 'filter'>(() => {
+/** 三态空态（design §2.2）：筛选无结果 / 本人尚无对话 / 本空间尚无对话。 */
+const emptyState = computed<'none' | 'workspace' | 'own' | 'filter'>(() => {
   if (items.value.length || loading.value || !initialized.value || failed.value) return 'none'
-  return appliedQuery.value ? 'filter' : 'workspace'
+  if (appliedQuery.value) return 'filter'
+  return spaceProbe.value === 'has-sessions' ? 'own' : 'workspace'
 })
+
 /**
- * 「本人尚无对话」提示：首版历史列表展示全空间会话（决策 2 要求展示发起人），
- * 因此本人没有会话不会让列表为空；这里在已翻到末尾且没有任何本人会话时给出
- * 引导，而不隐藏团队会话。「我的对话」筛选随 2A 开放。
+ * 本人历史为空时，用一次 `scope=team` 的轻量探测区分「本人尚无对话」与
+ * 「空间尚无对话」。403/422 或网络失败一律按「空间无会话」处理，不上抛、
+ * 不让页面进入错误态。
  */
-const showOwnSessionHint = computed(() =>
-  initialized.value
-  && !failed.value
-  && !appliedQuery.value
-  && items.value.length > 0
-  && nextCursor.value === null
-  && !hasOwnSessions.value,
-)
+async function probeSpaceSessions() {
+  const workspaceId = props.workspaceId
+  try {
+    const page = await workbenchApi.listWorkspaceSessions(workspaceId, {
+      scope: 'team',
+      limit: 1,
+    })
+    if (workspaceId !== props.workspaceId) return
+    spaceProbe.value = page.items.length > 0 ? 'has-sessions' : 'no-sessions'
+  } catch {
+    if (workspaceId !== props.workspaceId) return
+    spaceProbe.value = 'no-sessions'
+  }
+}
+
+/** 探测在首次需要时只发一次：并发调用复用同一 Promise，结果缓存到 spaceProbe。 */
+function ensureSpaceProbe() {
+  if (spaceProbe.value !== 'unknown') return Promise.resolve()
+  if (probePromise) return probePromise
+  const wrapped = probeSpaceSessions().finally(() => {
+    // 只清理自己：换空间后 reset() 可能已把引用换成新的探测。
+    if (probePromise === wrapped) probePromise = null
+  })
+  probePromise = wrapped
+  return probePromise
+}
 
 async function fetchPage(cursor?: string) {
+  // 1B 的本人历史列表：显式传 mine，不依赖服务端默认值。
   return workbenchApi.listWorkspaceSessions(props.workspaceId, {
+    scope: 'mine',
     ...(appliedQuery.value ? { query: appliedQuery.value } : {}),
     ...(cursor ? { cursor } : {}),
     limit: PAGE_SIZE,
@@ -104,6 +130,11 @@ async function load() {
     items.value = page.items
     nextCursor.value = page.nextCursor
     failed.value = false
+    // 本人历史为空且无筛选：探测空间是否已有会话，以区分两种空态。探测保持
+    // loading 直到完成，避免先闪「空间无会话」再切成「本人无会话」。
+    if (!page.items.length && !appliedQuery.value) {
+      await ensureSpaceProbe()
+    }
   } catch (error) {
     if (token !== loadToken) return
     // 保留输入与已加载内容（design §3.3）；首屏失败时给出行内重试。
@@ -159,6 +190,9 @@ function reset() {
   keyword.value = ''
   initialized.value = false
   failed.value = false
+  // 换空间后探测结果失效：旧探测由 workspaceId 守卫丢弃，这里重新允许探测一次。
+  spaceProbe.value = 'unknown'
+  probePromise = null
 }
 
 function openSession(item: WorkspaceSessionSummary) {
@@ -226,22 +260,6 @@ onBeforeUnmount(() => {
       </span>
     </div>
 
-    <el-alert
-      v-if="showOwnSessionHint"
-      class="session-history__own-hint"
-      data-testid="session-history-own-hint"
-      type="info"
-      :closable="false"
-      show-icon
-      title="你还没有在本工作空间发起过对话"
-    >
-      <template v-if="canStartConversation">
-        <span>返回「新对话」即可开始第一段团队对话。</span>
-        <el-button link type="primary" @click="emit('start-new')">返回新对话</el-button>
-      </template>
-      <span v-else>联系负责人添加可用 Agent 成员后，即可发起团队对话。</span>
-    </el-alert>
-
     <el-skeleton v-if="loading && !items.length" class="session-history__skeleton" :rows="5" animated />
 
     <el-empty
@@ -258,6 +276,23 @@ onBeforeUnmount(() => {
       description="本工作空间尚无对话"
     >
       <el-button type="primary" @click="emit('start-new')">返回新对话</el-button>
+    </el-empty>
+
+    <el-empty
+      v-else-if="emptyState === 'own'"
+      data-testid="session-history-empty-own"
+      description="你还没有在本工作空间发起过对话"
+    >
+      <el-button
+        v-if="canStartConversation"
+        type="primary"
+        @click="emit('start-new')"
+      >
+        返回新对话
+      </el-button>
+      <p v-else class="session-history__own-guidance">
+        请联系负责人添加可用 Agent 成员后，即可发起团队对话。
+      </p>
     </el-empty>
 
     <el-empty
@@ -352,8 +387,11 @@ onBeforeUnmount(() => {
   font-size: var(--dsh-font-size-badge);
 }
 
-.session-history__own-hint {
-  flex: 0 0 auto;
+.session-history__own-guidance {
+  margin: 0;
+  color: #909691;
+  font-size: var(--dsh-font-size-micro);
+  line-height: 1.6;
 }
 
 .session-history__skeleton {

@@ -174,12 +174,16 @@ export const workbenchApi = {
   /**
    * 团队历史会话分页（1B-T1）。只在团队分支调用：服务端对个人空间返回 422，
    * 对非成员返回 403（AC-23）。
+   *
+   * `scope` 缺省为服务端的 `mine`（本人历史列表）；组件显式传 `mine` 以免
+   * 依赖服务端默认值，`team` 只用于「本人无会话」时的一次性空间探测。
    */
   listWorkspaceSessions: (workspaceId: string, input: WorkspaceSessionQuery = {}) => {
     const search = new URLSearchParams()
     if (input.query) search.set('query', input.query)
     if (input.cursor) search.set('cursor', input.cursor)
     if (input.limit !== undefined) search.set('limit', String(input.limit))
+    if (input.scope) search.set('scope', input.scope)
     const suffix = search.size > 0 ? `?${search.toString()}` : ''
     return request<WorkspaceSessionPage>(
       `/workspaces/${encodeURIComponent(workspaceId)}/sessions${suffix}`,
