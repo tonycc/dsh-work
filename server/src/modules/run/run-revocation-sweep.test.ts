@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { isAuthorizationDenial } from './run-revocation-sweep.ts'
+import { isAuthorizationDenial, AuthorizationDeniedError, authorizationDenied } from '../authorization/authorization-errors.ts'
 
 /**
  * Locks the authorization-denial classifier (1A-T5). The authorization service
@@ -29,6 +29,12 @@ test('isAuthorizationDenial classifies authorization denials', () => {
   for (const message of denials) {
     assert.equal(isAuthorizationDenial(new Error(message)), true, `应判定为授权拒绝：${message}`)
   }
+})
+
+test('isAuthorizationDenial recognizes the typed denial regardless of message', () => {
+  // 类型化错误：文案改动或新文案都不会漏判（这是 P1-2 的根因）。
+  assert.equal(isAuthorizationDenial(new AuthorizationDeniedError('任意新文案')), true)
+  assert.equal(isAuthorizationDenial(authorizationDenied('Agent 成员已停用或已移出该团队空间，不能继续执行任务')), true)
 })
 
 test('isAuthorizationDenial never classifies infrastructure failures as revocations', () => {

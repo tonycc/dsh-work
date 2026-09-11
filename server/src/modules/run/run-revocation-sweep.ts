@@ -1,3 +1,4 @@
+import { isAuthorizationDenial } from '../authorization/authorization-errors.ts'
 import type { DatabaseClient } from '../../infrastructure/postgres/database.ts'
 import type { PostgresAuthorizationService } from '../authorization/postgres-authorization-service.ts'
 import type { RunOrchestrationService } from './run-orchestration-service.ts'
@@ -349,38 +350,3 @@ function revocationReason(kind: RevocationEventKind) {
   return 'Agent 成员已移出'
 }
 
-/**
- * Distinguishes an authorization denial (a legitimate reason to cancel an
- * in-flight run) from an infrastructure failure (which must never cancel).
- * Denials come from the explicit checks in PostgresAuthorizationService; a
- * database outage/timeout surfaces as a pg error and is deliberately NOT
- * classified as a denial. Unknown errors default to "not a denial" so a bug in
- * this classifier fails safe instead of mass-cancelling runs.
- *
- * Exported so `run-revocation-sweep.test.ts` locks the message contract: the
- * authorization service throws plain Errors, so a wording change would
- * otherwise silently stop real revocations from cancelling runs. Prefer moving
- * these checks to a typed denial error if the authorization service gains one.
- */
-export function isAuthorizationDenial(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : ''
-  return AUTHORIZATION_DENIAL_MESSAGES.some(fragment => message.includes(fragment))
-}
-
-const AUTHORIZATION_DENIAL_MESSAGES = [
-  '当前用户没有员工工作台使用权限',
-  '当前用户不存在、已停用或所属企业不可用',
-  '当前用户角色不可使用所选 Agent',
-  '当前用户角色不可调用工具',
-  '当前用户已不是该团队空间成员',
-  '当前用户角色为只读',
-  '工作空间不存在、已归档或当前用户不是成员',
-  '工作空间不存在或已归档',
-  '工作空间未配置',
-  '工作空间未授权',
-  'Agent Version 不存在、未发布或所属 Agent 已停用',
-  'Skill 不存在、未发布或已停用',
-  '工具不存在、未发布、不可用或不符合一期只读策略',
-  'Agent 必须显式授权所选 Skill 依赖的工具',
-  '要求未授权的数据范围',
-]

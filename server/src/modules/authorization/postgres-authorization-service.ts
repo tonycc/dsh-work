@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 import type { DatabaseClient } from '../../infrastructure/postgres/database.ts'
 import { redactSensitiveText } from '../../security/safe-observability.ts'
+import { authorizationDenied } from './authorization-errors.ts'
 
 const tenantId = 'tenant-dsh-work'
 
@@ -167,18 +168,23 @@ export class PostgresAuthorizationService {
 
     // Agent 关联状态必须与能力授权分开校验：对账把 legacy 来源改写为 manual 后，
     // 停用 Agent 成员不会删除该 grant，仅靠 requireWorkspaceCapabilities 会放行已
-    // 停用/移出的关联，导致既有会话继续续写或重试。仅当该空间存在锁定此版本的
-    // Agent 成员时校验其可用状态；不存在关联（升级前仅靠精确版本授权、或种子空间）
-    // 时保持原有授权语义，不误拦历史会话。
+    // 停用/移出的关联，导致既有会话继续续写或重试。
+    //
+    // 必须通过「版本所属 Agent」定位成员，而不是按成员的当前 agent_version_id 匹配：
+    // Agent 从 v1 升级到 v2 后成员行指向 v2，v1 会话会查不到关联而被误当作历史无关联
+    // 场景放行。升级后旧版本是否仍可执行由成员状态决定（1A 保留旧版本授权）。
     const [agentMember] = await this.database<{ status: string }[]>`
-      select status from workspace_agent_members
-       where tenant_id = ${tenantId} and workspace_id = ${input.workspaceId}
-         and agent_version_id = ${input.agentVersionId}
-       order by case when status = 'available' then 0 else 1 end, created_at asc
+      select wam.status
+        from workspace_agent_members wam
+        join agent_versions av
+          on av.tenant_id = wam.tenant_id and av.id = ${input.agentVersionId}
+       where wam.tenant_id = ${tenantId} and wam.workspace_id = ${input.workspaceId}
+         and wam.agent_id = av.agent_id
+       order by case when wam.status = 'available' then 0 else 1 end, wam.created_at asc
        limit 1
     `
     if (agentMember && agentMember.status !== 'available') {
-      throw new Error('Agent 成员已停用或已移出该团队空间，不能继续执行任务')
+      throw authorizationDenied('Agent 成员已停用或已移出该团队空间，不能继续执行任务')
     }
     return decision
   }
@@ -250,7 +256,7 @@ export class PostgresAuthorizationService {
   async assertAgentVersionVisibleToRoles(agentVersionId: string, roleIds: string[], label = '所选 Agent') {
     const agent = await this.requireAgentVersion(agentVersionId)
     if (!intersects(roleIds, agent.visibleRoleIds)) {
-      throw new Error(`当前用户角色不可使用${label}`)
+      throw authorizationDenied(`当前用户角色不可使用${label}`)
     }
     return agent
   }
