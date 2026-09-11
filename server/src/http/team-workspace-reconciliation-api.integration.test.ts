@@ -434,18 +434,32 @@ test('并发「对账 + 移出 Agent 成员」按同一锁序串行化，不死�
 
   // 对账（admin）与移出（员工端 HTTP）并发提交。旧实现里 reconcile 先锁
   // workspace_grant_sources 行、再锁 workspace 行，而移出先锁 workspace 行、
-  // 再读来源行——相反锁序会被 PostgreSQL 判为死锁。二者必须都成功。
-  const [reconciled, removed] = await Promise.all([
+  // 再读来源行——相反锁序会被 PostgreSQL 判为死锁。
+  //
+  // Promise.all 不保证谁先拿到空间锁：若移出先持锁，此时 legacy 尚未对账，
+  // 门禁返回 409 是**正确**行为，不能强制要求 200。接受两种合法顺序：
+  //   - 移出 200：对账先完成，门禁已解除；
+  //   - 移出 409：移出先持锁、被门禁拒绝；等对账完成后重试，最终状态一致。
+  // 无论哪种顺序，都不得出现 deadlock。
+  const [reconciled, firstRemoval] = await Promise.all([
     api('POST', '/api/admin/v1/grant-sources/reconcile', {
       as: adminUserId,
       body: { sourceIds: [legacySourceId] },
     }),
     api('DELETE', `/api/workbench/v1/workspaces/${workspaceId}/agent-members/${memberId}`, { as: ownerId }),
   ])
-  assert.equal(/deadlock/i.test(errorMessage(reconciled)), false, '对账不得死锁')
-  assert.equal(/deadlock/i.test(errorMessage(removed)), false, '移出不得死锁')
-  assert.equal(reconciled.status, 200)
-  assert.equal(removed.status, 200)
+  assert.equal(/deadlock/i.test(errorMessage(reconciled)), false, `对账不得死锁：${errorMessage(reconciled)}`)
+  assert.equal(/deadlock/i.test(errorMessage(firstRemoval)), false, `移出不得死锁：${errorMessage(firstRemoval)}`)
+  assert.equal(reconciled.status, 200, '对账必须成功')
+
+  if (firstRemoval.status === 409) {
+    assert.match(errorMessage(firstRemoval), /待对账的历史授权来源/, '先持锁的移出应被门禁拒绝')
+    const retried = await api('DELETE', `/api/workbench/v1/workspaces/${workspaceId}/agent-members/${memberId}`, { as: ownerId })
+    assert.equal(retried.status, 200, '对账完成后重试移出应成功')
+  } else {
+    assert.equal(firstRemoval.status, 200)
+  }
+
   const [legacySource] = await database<{ sourceType: string; status: string }[]>`
     select source_type as "sourceType", status from workspace_grant_sources
      where tenant_id = ${tenantId} and id = ${legacySourceId}
