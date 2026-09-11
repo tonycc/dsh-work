@@ -34,7 +34,15 @@ export function registerConversationRoutes(
     const identity = requireRequestIdentity(context, 'workbench')
     const userId = identity.userId
     await authorization?.authorizeWorkbench({ userId, ...sessionAuthorizationContext(identity) })
-    return envelope('workbench', await conversations.listTasks(userId), 'postgres')
+    const tasks = await conversations.listTasks(userId)
+    // 团队空间运行在收权后必须停止交付：列表与详情同样只按发起人过滤，因此这里
+    // 逐条复核当前团队读权限，失权空间的条目直接不返回（与 SSE 同一口径）。
+    const visible = authorization
+      ? (await Promise.all(tasks.map(async task =>
+          (await authorizeTeamTaskRead(authorization, task, userId)) ? task : null,
+        ))).filter((task): task is (typeof tasks)[number] => task !== null)
+      : tasks
+    return envelope('workbench', visible, 'postgres')
   })
 
   router.post(`${basePath}/sessions`, async (request, context) => {
@@ -109,9 +117,12 @@ export function registerConversationRoutes(
     const userId = identity.userId
     await authorization?.authorizeWorkbench({ userId, ...sessionAuthorizationContext(identity) })
     const task = await conversations.getTask(context.params['runId'] ?? '', userId)
-    return task
-      ? envelope('workbench', task, 'postgres')
-      : httpResult(404, { error: { code: 'run_not_found', message: 'Run 不存在或不可访问' } })
+    if (!task) return httpResult(404, { error: { code: 'run_not_found', message: 'Run 不存在或不可访问' } })
+    // 团队空间运行详情与 SSE 同一收权口径：被移出的成员不得再读到正文。
+    if (authorization && !(await authorizeTeamTaskRead(authorization, task, userId))) {
+      return httpResult(404, { error: { code: 'run_not_found', message: 'Run 不存在或不可访问' } })
+    }
+    return envelope('workbench', task, 'postgres')
   })
 
   router.post(`${basePath}/sessions/:sessionId/runs`, async (request, context) => {
@@ -192,6 +203,28 @@ export function registerConversationRoutes(
     }
     await streamRunEvents(response, request.headers['last-event-id'], runId, runs)
   })
+}
+
+/**
+ * Team-run read gate shared by the REST detail and list routes (1A-T5 收权口径).
+ * Uses the membership-independent workspaceTypeOf so a removed member cannot be
+ * mistaken for a personal-space reader, and returns false instead of throwing so
+ * callers can 404/omit. Personal and standalone runs are unaffected (AC-23).
+ */
+async function authorizeTeamTaskRead(
+  authorization: PostgresAuthorizationService,
+  task: { workspaceId: string },
+  userId: string,
+): Promise<boolean> {
+  if (!task.workspaceId) return true
+  const workspaceType = await authorization.workspaceTypeOf(task.workspaceId)
+  if (workspaceType !== 'team') return true
+  try {
+    await authorization.authorizeTeamReadAccess(task.workspaceId, userId)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**
