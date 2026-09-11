@@ -4,6 +4,7 @@ import { extname, join, resolve } from 'node:path'
 
 import type { Artifact, Workspace } from '../../../domain/types.ts'
 import type { DatabaseClient } from '../../../infrastructure/postgres/database.ts'
+import { authorizationDenied } from '../../authorization/authorization-errors.ts'
 import type { FileMount } from '../../runtime/runtime-types.ts'
 import { BaselineFileSafetyScanner, type FileSafetyScannerPort } from './file-safety-scanner.ts'
 import { extractDocument } from './document-extractor.ts'
@@ -20,6 +21,23 @@ interface FileRow {
   sizeBytes: string | number
   createdAt: Date
   uploadedBy: string
+}
+
+export interface WorkspaceFileSummary {
+  id: string
+  name: string
+  type: string
+  size: string
+  uploadedBy: string
+  uploadedAt: string
+  scanStatus: string
+  removable: boolean
+  canDownload: boolean
+}
+
+export interface WorkspaceFilePage {
+  items: WorkspaceFileSummary[]
+  nextCursor: string | null
 }
 
 interface RuntimeFileRow {
@@ -188,8 +206,115 @@ export class PostgresContentService {
     return this.storeInputFile({ workspaceId, sessionId: null, name, mimeType, bytes, actorUserId })
   }
 
-  async storeSessionFile(sessionId: string, name: string, mimeType: string, bytes: Buffer, actorUserId: string) {
-    const [session] = await this.database<{ id: string; workspaceId: string }[]>`
+  /**
+   * Shared workspace files for the current space: name search, keyset paging and
+   * server-derived allowed actions (1B-T3 / 设计 §2.3). Removed files leave the
+   * referenceable set here; historical runs keep their own references (AC-13).
+   */
+  async listWorkspaceFiles(input: {
+    workspaceId: string
+    actorUserId: string
+    query?: string
+    cursor?: string
+    limit?: number
+  }): Promise<WorkspaceFilePage> {
+    const access = await this.workspaces.resolveAccessibleWorkspace(input.workspaceId, input.actorUserId)
+    if (access.type === 'personal') throw new Error('仅支持团队工作空间查询共享文件')
+    const role = await this.workspaceMemberRole(input.workspaceId, input.actorUserId)
+    const canManageAll = role === 'owner' || role === 'admin'
+    const limit = Math.min(Math.max(input.limit ?? 20, 1), 100)
+    const cursor = input.cursor ? decodeFileCursor(input.cursor) : null
+    const pattern = input.query?.trim()
+      ? `%${input.query.trim().replaceAll(/[\\%_]/g, match => `\\${match}`)}%`
+      : null
+
+    const rows = await this.database<{
+      id: string
+      originalName: string
+      mimeType: string
+      sizeBytes: string | number
+      scanStatus: string
+      uploadedById: string
+      uploadedBy: string
+      createdAt: Date
+    }[]>`
+      select f.id, f.original_name as "originalName", f.mime_type as "mimeType",
+             f.size_bytes as "sizeBytes", f.scan_status as "scanStatus",
+             f.uploaded_by as "uploadedById", u.display_name as "uploadedBy",
+             f.created_at as "createdAt"
+        from file_objects f
+        join users u on u.tenant_id = f.tenant_id and u.id = f.uploaded_by
+       where f.tenant_id = ${tenantId} and f.workspace_id = ${input.workspaceId}
+         and f.session_id is null and f.removed_at is null
+         and f.scan_status <> 'blocked'
+         and ${pattern === null ? this.database`true` : this.database`f.original_name ilike ${pattern} escape '\\'`}
+         and ${cursor === null
+           ? this.database`true`
+           : this.database`(f.created_at, f.id) < (${cursor.createdAt}::timestamptz, ${cursor.id})`}
+       order by f.created_at desc, f.id desc
+       limit ${limit + 1}
+    `
+
+    const hasMore = rows.length > limit
+    const items = rows.slice(0, limit).map(row => ({
+      id: row.id,
+      name: row.originalName,
+      type: extname(row.originalName).slice(1).toUpperCase() || 'FILE',
+      size: formatSize(Number(row.sizeBytes)),
+      uploadedBy: row.uploadedBy,
+      uploadedAt: formatDateTime(row.createdAt),
+      scanStatus: row.scanStatus,
+      // 权限在服务端判定：负责人/管理员可移除任何文件，成员只能移除自己上传的；
+      // 只读成员不能移除（仍可引用与下载）。
+      removable: canManageAll || row.uploadedById === input.actorUserId,
+      canDownload: row.scanStatus === 'clean',
+    }))
+    const last = items[items.length - 1]
+    return {
+      items,
+      nextCursor: hasMore && last ? encodeFileCursor(last.uploadedAt, last.id) : null,
+    }
+  }
+
+  /**
+   * Logical removal of a shared workspace file (1B-T3): the object, its parsed
+   * result and every historical run reference stay intact; only the
+   * referenceable listing and future reads lose the file (AC-13).
+   */
+  async removeWorkspaceFile(workspaceId: string, fileId: string, actorUserId: string): Promise<{ id: string; removed: true }> {
+    const access = await this.workspaces.resolveAccessibleWorkspace(workspaceId, actorUserId)
+    if (access.type === 'personal') throw new Error('仅支持团队工作空间移除共享文件')
+    const role = await this.workspaceMemberRole(workspaceId, actorUserId)
+    const [file] = await this.database<{ uploadedBy: string; removedAt: Date | null }[]>`
+      select uploaded_by as "uploadedBy", removed_at as "removedAt"
+        from file_objects
+       where tenant_id = ${tenantId} and id = ${fileId} and workspace_id = ${workspaceId}
+         and session_id is null
+    `
+    if (!file) throw new Error('文件不存在或不可访问')
+    if (file.removedAt) return { id: fileId, removed: true }
+    const canManageAll = role === 'owner' || role === 'admin'
+    if (!canManageAll && file.uploadedBy !== actorUserId) {
+      throw authorizationDenied('只有负责人、管理员或上传人本人可以移除该文件')
+    }
+    await this.database`
+      update file_objects set removed_at = now(), removed_by = ${actorUserId}
+       where tenant_id = ${tenantId} and id = ${fileId} and removed_at is null
+    `
+    return { id: fileId, removed: true }
+  }
+
+  /** Current team role of the actor, or null when not a member. */
+  private async workspaceMemberRole(workspaceId: string, actorUserId: string) {
+    const [member] = await this.database<{ role: 'owner' | 'admin' | 'member' | 'viewer' }[]>`
+      select member_role as role from workspace_members
+       where tenant_id = ${tenantId} and workspace_id = ${workspaceId} and user_id = ${actorUserId}
+    `
+    if (!member) throw authorizationDenied('当前用户不是该空间的成员')
+    return member.role
+  }
+
+  async storeSessionFile(sessionId: string, name: string, mimeType: string, bytes: Buffer, actorUserId: string) {    const [session] = await this.database<{ id: string; workspaceId: string }[]>`
       select id, workspace_id as "workspaceId" from sessions
        where tenant_id = ${tenantId} and id = ${sessionId} and created_by = ${actorUserId} and status = 'active'
     `
@@ -215,6 +340,7 @@ export class PostgresContentService {
           join file_extractions fe on fe.tenant_id = f.tenant_id and fe.file_id = f.id
           join sessions target on target.tenant_id = f.tenant_id and target.id = ${input.sessionId}
          where f.tenant_id = ${tenantId} and f.id = ${fileId} and f.scan_status = 'clean'
+         and f.removed_at is null
            and fe.status = 'succeeded' and fe.extractor_version = 'm4-basic-v1'
            and target.created_by = ${input.userId} and target.status = 'active'
            and (
@@ -347,6 +473,7 @@ export class PostgresContentService {
         from file_objects f
         join users u on u.tenant_id = f.tenant_id and u.id = f.uploaded_by
        where f.tenant_id = ${tenantId} and f.id = ${fileId} and f.scan_status = 'clean'
+         and f.removed_at is null
          and (
            f.session_id in (select id from sessions where tenant_id = ${tenantId} and created_by = ${actorUserId})
            or f.workspace_id in (
@@ -433,4 +560,19 @@ function formatDateTime(value: Date) {
   return new Intl.DateTimeFormat('zh-CN', {
     month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
   }).format(value)
+}
+
+/** Cursor for the (created_at, id) keyset of shared workspace files. */
+function encodeFileCursor(createdAt: string, id: string) {
+  return Buffer.from(JSON.stringify({ at: createdAt, id })).toString('base64url')
+}
+
+function decodeFileCursor(cursor: string): { createdAt: string; id: string } {
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { at?: unknown; id?: unknown }
+    if (typeof parsed.at !== 'string' || typeof parsed.id !== 'string') throw new Error('shape')
+    return { createdAt: parsed.at, id: parsed.id }
+  } catch {
+    throw new Error('无效的分页游标')
+  }
 }

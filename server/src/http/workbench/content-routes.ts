@@ -13,6 +13,13 @@ import {
 
 const basePath = '/api/workbench/v1'
 
+function parseFilePageLimit(raw: string | null) {
+  if (raw === null || raw === '') return undefined
+  const limit = Number(raw)
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('limit 必须为 1 到 100 之间的整数')
+  return limit
+}
+
 export function registerContentRoutes(
   router: Router,
   content: PostgresContentService,
@@ -65,6 +72,43 @@ export function registerContentRoutes(
       userId,
     )
     return httpResult(201, envelope('workbench', file, 'postgres'))
+  })
+
+  router.get(`${basePath}/workspaces/:workspaceId/files`, async (_request, context) => {
+    const identity = requireRequestIdentity(context, 'workbench')
+    const userId = identity.userId
+    const workspaceId = context.params['workspaceId'] ?? ''
+    await authorization?.authorizeWorkbench({
+      userId,
+      workspaceId,
+      ...sessionAuthorizationContext(identity),
+    })
+    const limit = parseFilePageLimit(context.url.searchParams.get('limit'))
+    const query = (context.url.searchParams.get('query') ?? '').trim()
+    const cursor = context.url.searchParams.get('cursor') ?? undefined
+    return envelope(
+      'workbench',
+      await content.listWorkspaceFiles({ workspaceId, actorUserId: userId, query, cursor, limit }),
+      'postgres',
+    )
+  })
+
+  // 逻辑移除（1B-T3）：负责人/管理员可移除任何文件，成员仅可移除自己上传的；
+  // 文件对象、解析结果与历史 Run 引用保留（AC-13）。
+  router.delete(`${basePath}/workspaces/:workspaceId/files/:fileId`, async (_request, context) => {
+    const identity = requireRequestIdentity(context, 'workbench')
+    const userId = identity.userId
+    const workspaceId = context.params['workspaceId'] ?? ''
+    await authorization?.authorizeWorkbench({
+      userId,
+      workspaceId,
+      ...sessionAuthorizationContext(identity),
+    })
+    return envelope(
+      'workbench',
+      await content.removeWorkspaceFile(workspaceId, context.params['fileId'] ?? '', userId),
+      'postgres',
+    )
   })
 
   router.post(`${basePath}/sessions/:sessionId/files`, async (request, context) => {
