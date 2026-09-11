@@ -144,7 +144,7 @@ describe('ConversationStarter', () => {
         workspaceName: '供应链空间',
         workspaceLocked: true,
         requiresAgentMember: true,
-        availableAgentMemberCount: 1,
+        startableAgentMemberIds: ['wam-1'],
       },
       global: { plugins: [pinia, ElementPlus] },
     })
@@ -175,7 +175,7 @@ describe('ConversationStarter', () => {
         workspaceName: '供应链空间',
         workspaceLocked: true,
         requiresAgentMember: true,
-        availableAgentMemberCount: 1,
+        startableAgentMemberIds: ['wam-1'],
         presetAgentMember: { id: 'wam-1', name: '订单分析助手', status: 'available' },
       },
       global: { plugins: [pinia, ElementPlus] },

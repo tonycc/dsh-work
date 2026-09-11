@@ -93,6 +93,14 @@ describe('WorkspaceInfoPanel 团队分支', () => {
     expect(wrapper.emitted('start-agent-conversation')).toEqual([['wam-1']])
   })
 
+  it('只读成员看不到开始对话入口（按服务端 allowedActions）', async () => {
+    const wrapper = mountPanel({
+      currentUserRole: 'viewer',
+      agentMembers: agentMembers.map(member => ({ ...member, allowedActions: [] })),
+    })
+    expect(wrapper.findAll('[data-testid="panel-agent-start"]')).toHaveLength(0)
+  })
+
   it('shows 管理成员 to owners and admins only', async () => {
     for (const role of ['owner', 'admin']) {
       const wrapper = mountPanel({ currentUserRole: role })

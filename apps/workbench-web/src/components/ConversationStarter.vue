@@ -28,8 +28,12 @@ const props = withDefaults(
      * 启动参数保持现状（AC-23）。
      */
     presetAgentMember?: { id: string; name: string; status: 'available' | 'disabled' } | null
-    /** 团队空间当前可用的 Agent 成员数量，用于在未选中时给出准确引导。 */
-    availableAgentMemberCount?: number
+    /**
+     * 团队空间中当前操作人**可发起对话**的 Agent 成员 id（服务端 allowedActions
+     * 含 start_conversation 且可用）。只读成员服务端返回空数组，因此既看不到入口
+     * 也不能提交；缺省空数组，宁可漏开不可误开。
+     */
+    startableAgentMemberIds?: string[]
     /**
      * 团队会话必须绑定 Agent 成员（TW-02）。只有团队空间详情为 true；个人空间
      * 详情同样是 workspaceLocked，但不能被这条规则拦住（AC-23）。
@@ -43,7 +47,7 @@ const props = withDefaults(
     embedded: false,
     title: 'dsh-work，我帮你',
     presetAgentMember: null,
-    availableAgentMemberCount: 0,
+    startableAgentMemberIds: () => [],
     requiresAgentMember: false,
   },
 )
@@ -54,10 +58,10 @@ const props = withDefaults(
  */
 const blockedReason = computed(() => {
   if (!props.requiresAgentMember) return ''
-  if (props.presetAgentMember?.status === 'available') return ''
-  return props.availableAgentMemberCount > 0
+  if (props.presetAgentMember && props.startableAgentMemberIds.includes(props.presetAgentMember.id)) return ''
+  return props.startableAgentMemberIds.length > 0
     ? '请先在右侧「Agent」区点击「开始对话」，选择本次使用的 Agent 成员。'
-    : '该团队空间尚无可用 Agent 成员，请联系负责人添加后再发起对话。'
+    : '当前角色不能发起团队对话，或该空间尚无可用 Agent 成员；请联系负责人。'
 })
 
 const router = useRouter()

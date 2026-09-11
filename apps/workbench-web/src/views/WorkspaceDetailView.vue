@@ -53,8 +53,10 @@ const agentMembers = ref<WorkspaceAgentMember[]>([])
 const workspaceMembers = ref<WorkspaceMember[]>([])
 /** 服务端返回的调用者角色（负责人转交后不再等于创建者，不能靠姓名推断）。 */
 const serverUserRole = ref<TeamMemberRole | null>(null)
-/** 团队空间当前可用 Agent 成员数：用于未选中时给出准确的提交引导。 */
-const availableAgentMemberCount = computed(() => agentMembers.value.filter(member => member.status === 'available').length)
+/** 当前操作人可发起对话的 Agent 成员：与服务端 allowedActions 一致（只读成员为空）。 */
+const startableAgentMemberIds = computed(() => agentMembers.value
+  .filter(member => member.status === 'available' && member.allowedActions.includes('start_conversation'))
+  .map(member => member.id))
 const presetAgentMember = ref<WorkspaceAgentMember | null>(null)
 
 const requestedTab = String(route.query.tab ?? 'conversation')
@@ -342,7 +344,7 @@ watch(workspace, (value) => {
           workspace-locked
           :title="`在“${workspace.name}”中开始对话`"
           :preset-agent-member="isTeam ? presetAgentMember : null"
-          :available-agent-member-count="isTeam ? availableAgentMemberCount : 0"
+          :startable-agent-member-ids="isTeam ? startableAgentMemberIds : []"
           :requires-agent-member="isTeam"
         />
 

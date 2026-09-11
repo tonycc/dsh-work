@@ -21,6 +21,11 @@ interface WorkspaceAgentMemberInfo {
   name: string
   description?: string
   status: 'available' | 'disabled'
+  /**
+   * 服务端返回的当前操作人允许动作。只读成员（viewer）为 []，因此不得只凭
+   * status 渲染「开始对话」——权限判定以服务端为准。
+   */
+  allowedActions?: string[]
 }
 
 withDefaults(
@@ -57,6 +62,11 @@ function memberInitial(name: string) {
 
 function agentStatusLabel(status: WorkspaceAgentMemberInfo['status']) {
   return status === 'available' ? '可用' : '已停用'
+}
+
+/** 与服务端 allowedActions 一致：缺省视为不允许，宁可漏开不可误开。 */
+function canStartAgentConversation(agent: WorkspaceAgentMemberInfo) {
+  return agent.status === 'available' && (agent.allowedActions?.includes('start_conversation') ?? false)
 }
 </script>
 
@@ -181,7 +191,7 @@ function agentStatusLabel(status: WorkspaceAgentMemberInfo['status']) {
             :aria-label="`Agent 状态：${agentStatusLabel(agent.status)}`"
           />
           <el-button
-            v-if="agent.status === 'available'"
+            v-if="canStartAgentConversation(agent)"
             data-testid="panel-agent-start"
             link
             type="primary"
