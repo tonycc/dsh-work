@@ -48,6 +48,13 @@
 4. **P2 新入口忽略只读成员允许动作。** 右栏「开始对话」原先只判断 `available`，导致服务端 `allowedActions=[]` 的 viewer 也看到入口并能解除输入区限制。现按 `allowedActions` 含 `start_conversation` 渲染，`ConversationStarter` 的阻止逻辑也改为由该集合驱动（入口、选择、提交三处一致）。
 5. **P2 可见范围拒绝被映射为 500。** 越权加入已能拒绝，但普通 `Error` 文案不匹配路由权限分类 → HTTP 500。类型化错误修复后为 403 `permission_denied`，并补了 POST 接口断言。
 
+**已确认的两处设计口径（外部复审确认，勿改）：**
+- **类型化授权错误**：新增授权拒绝统一抛 `authorizationDenied(...)`（`AuthorizationDeniedError`，status 403），同时满足撤权清扫器识别与 HTTP 403 映射。**本轮只迁移新增的两处**；旧文案列表 (`LEGACY_DENIAL_MESSAGES`) 作为回退保留，属后续技术债，不要求本轮全量迁移。
+- **可见范围按平台角色判定**：加入 Agent 成员必须**同时**满足「空间负责人」（`requireActorRole`，且在 workspace 行锁内复核）与「平台角色符合该 Agent 的 `visible_role_ids`」（`identity.roleIds`）。两者职责不同，**不要**把可见范围改成按空间员工角色判定：
+  - 平台角色决定「该员工是否获准使用/加入这个 Agent」；
+  - 空间角色决定「该员工能否管理当前空间的 Agent 成员」。
+  这保证候选查询（同样按 `sessionAuthorizationContext(identity).roleIds` 过滤）与提交校验口径一致。
+
 **T6/T7 已知遗留（不阻断 1A 退出条件）：**
 - Agent「不可用」第三态与具体原因未落地：服务端 `AgentMemberRecord` 不返回 `unavailableReason`，前端红点与 tooltip 因此永不显示（design §2.6）。需服务端补原因码，属后续小任务。
 - `GET /workspaces` 的 `owner` 仍是**创建者**显示名（非当前 owner）、缺 `status`，故右栏负责人展示与归档态在契约补齐前不准确。
