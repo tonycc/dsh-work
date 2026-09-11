@@ -32,6 +32,15 @@
 - **AC-27 独立验证**（评审代理自建场景）：运行完整迁移链后删除 `one_personal_workspace_per_user` 再重跑 → 0022 被中止且 `schema_migrations` 无 0022/0023 记录，无半升级。
 - **0013 触发器 personal→team 不校验旧空间**：确认为真实缺口，本批次按 plan 6.4「不得改写个人空间保护触发器」只记录决策、不修（见 `0022`/convergence §5），后续批次用独立迁移扩展。
 
+**合并前外部审查（main...feat/team-workspace）修复记录（2026-09-10）：**
+审查基线为 `main(404f885)...feat/team-workspace(3b335e5)`，结论「不建议合并，权限闭环与普通成员入口有缺口」。六项已全部修复并各有回归测试（提交 `92ace62`、`b2d50f4`、`20121ca`、`5b5ccd3`）：
+1. **P1 收权只覆盖 SSE，REST 读取仍可读。** 被移出成员的 `GET /runs/:runId` 仍 200 返回正文、`/tasks` 仍列出该运行。两个路由接入与 SSE 同一口径（不依赖成员身份判定空间类型 + `authorizeTeamReadAccess`）：详情 404、列表剔除；个人/standalone 不受影响（AC-23）。
+2. **P1 执行鉴权未独立校验 Agent 成员可用性。** 对账把 legacy 来源改写为 `manual` 后，停用成员不会撤销该 grant，`authorizeTeamRunExecution` 仍放行，既有会话可续写/重试。新增按 `agent_version_id` 的成员可用性校验；无关联的升级前固定版本授权保持可用。
+3. **P1 普通成员没有可达的 Agent 选择入口。** `presetAgentMember` 只能从仅负责人/管理员可见的成员弹窗设置，右栏 Agent 条目不可点 → 普通成员提交时关联 ID 为 `undefined` 被后端拒绝。右栏可用 Agent 条目现提供「开始对话」并对所有成员可用；同时在未选中可用 Agent 时于输入区阻止提交并给出引导（`requiresAgentMember` 仅团队为真，个人路径不变）。
+4. **P1 空间锁内未复核操作人角色。** 负责人检查在事务外，转交并发提交后旧负责人仍能写入成员与授权。新增在持有 workspace 行锁的事务内复核（add/disable/enable/upgrade/remove 五处）。
+5. **P2 加入接口未复核 Agent 角色可见范围。** 候选查询按 `visible_role_ids` 过滤只是展示，直接提交 ID 仍返回 201。写入前按添加人当前角色复核（`assertAgentVersionVisibleToRoles`）。
+6. **P2 并发对账测试假设对账先获锁。** `Promise.all` 不保证顺序：移出先持锁时门禁返回 409 是正确行为。改为接受两种顺序（移出被 409 后在对账完成时重试），仍断言不得死锁。
+
 **T6/T7 已知遗留（不阻断 1A 退出条件）：**
 - Agent「不可用」第三态与具体原因未落地：服务端 `AgentMemberRecord` 不返回 `unavailableReason`，前端红点与 tooltip 因此永不显示（design §2.6）。需服务端补原因码，属后续小任务。
 - `GET /workspaces` 的 `owner` 仍是**创建者**显示名（非当前 owner）、缺 `status`，故右栏负责人展示与归档态在契约补齐前不准确。
