@@ -185,6 +185,12 @@ export class PostgresWorkspaceMemberService {
     }
 
     await this.database.begin(async (transaction) => {
+      // 3-T2：所有成员关系变更都必须**先取空间行锁**再动 workspace_members。
+      // 否则与 owner-transfer（先锁 spaces 再改成员）形成反向锁对，PostgreSQL 会报
+      // 40P01 deadlock（评审实测 40 次里 39 次），并被 HTTP 分类成 500。
+      // 并在锁内复核空间仍活跃：此前状态只在事务外检查，归档若在此期间提交，
+      // 成员变更仍会成功（验证代理 D4 强制时序实测 8/8 复现）。
+      await lockWorkspaceRow(transaction, workspaceId)
       await transaction`
         insert into workspace_members (tenant_id, workspace_id, user_id, member_role, added_by)
         values (${tenantId}, ${workspaceId}, ${targetUserId}, ${role}, ${actorUserId})
@@ -217,7 +223,7 @@ export class PostgresWorkspaceMemberService {
     this.assertRoleChangeAllowed(actorRole, member.role, role)
     if (member.role === role) return member
 
-    await this.runMembershipMutation(async (transaction) => {
+    await this.runMembershipMutation(workspaceId, async (transaction) => {
       await transaction`
         update workspace_members
            set member_role = ${role}
@@ -266,7 +272,8 @@ export class PostgresWorkspaceMemberService {
       throw new Error('管理员没有权限移除管理员或负责人')
     }
 
-    await this.runMembershipMutation(async (transaction) => {
+    await this.runMembershipMutation(workspaceId, async (transaction) => {
+      // 治理例外：归档空间仍必须能紧急撤权。
       await transaction`
         delete from workspace_members
          where tenant_id = ${tenantId}
@@ -277,7 +284,7 @@ export class PostgresWorkspaceMemberService {
         by: actorUserId,
       })
       await bumpTeamAuthRevision(transaction, workspaceId)
-    })
+    }, { allowArchived: true })
     return { userId: targetUserId, removed: true }
   }
 
@@ -299,7 +306,7 @@ export class PostgresWorkspaceMemberService {
     )
     if (actorRole === 'owner') throw new Error('负责人不能直接退出空间，请先转交负责人')
 
-    await this.runMembershipMutation(async (transaction) => {
+    await this.runMembershipMutation(workspaceId, async (transaction) => {
       await transaction`
         delete from workspace_members
          where tenant_id = ${tenantId}
@@ -339,7 +346,8 @@ export class PostgresWorkspaceMemberService {
     const targetRole = await this.memberRoleOf(workspaceId, toUserId)
     if (!targetRole) throw new Error('转交目标必须是该空间的现有成员')
 
-    await this.runMembershipMutation(async (transaction) => {
+    await this.runMembershipMutation(workspaceId, async (transaction) => {
+      // 治理例外：归档空间仍必须能转交负责人。
       // Serialize owner transfers per workspace: a second concurrent
       // transfer blocks here until the first commits, then fails the
       // single-owner trigger at commit time.
@@ -373,7 +381,7 @@ export class PostgresWorkspaceMemberService {
         by: actorUserId,
       })
       await bumpTeamAuthRevision(transaction, workspaceId)
-    })
+    }, { allowArchived: true })
     return { workspaceId, previousOwnerId, newOwnerId: toUserId }
   }
 
@@ -498,10 +506,17 @@ export class PostgresWorkspaceMemberService {
    * of surfacing the raw trigger message as a 500.
    */
   private async runMembershipMutation(
+    workspaceId: string,
     action: (transaction: DatabaseTransaction) => Promise<void>,
+    options: { allowArchived?: boolean } = {},
   ): Promise<void> {
     try {
       await this.database.begin(async (transaction) => {
+        // 统一锁序：workspaces → workspace_members → events。转交内部会再取同一行锁
+        // （同事务重入，代价可忽略），四个成员变更入口因此锁序一致，不再与转交形成
+        // 反向锁对（3-T2；此前并发转交 + 移除成员实测 40 次里 39 次 40P01 → HTTP 500）。
+        // 治理例外（撤权、转交）必须能在归档空间执行，其余变更要求活跃空间。
+        await lockWorkspaceRow(transaction, workspaceId, options.allowArchived === true)
         await action(transaction)
       })
     } catch (error) {
@@ -566,3 +581,33 @@ function decodeCandidateCursor(cursor: string): { name: string; id: string } {
 function isSingleOwnerViolation(error: unknown) {
   return error instanceof Error && /exactly one owner/.test(error.message)
 }
+
+/**
+ * 3-T2：成员关系变更与 owner-transfer 统一「先取空间行锁」。
+ * 与归档/开跑使用的是同一行锁（`workspaces`），不引入第二把锁；
+ * 目的是消除与转交之间的反向锁对导致的 PostgreSQL 40P01 死锁。
+ */
+/**
+ * 3-T2：取空间行锁（并在需要时于锁内复核空间活跃）。
+ *
+ * ① 统一「workspaces → workspace_members」锁序，消除与 owner-transfer 的反向锁对
+ * （此前并发转交 + 移除成员实测 39/40 次 40P01 → HTTP 500）。
+ * ② 除治理例外外，把「空间是否可写」的判断移进锁内：归档事务若先拿到锁并提交，
+ * 这里会读到 archived 并拒绝，而不是让并发的成员变更穿过（验证代理 D4）。
+ */
+async function lockWorkspaceRow(
+  transaction: DatabaseTransaction,
+  workspaceId: string,
+  allowArchived = false,
+) {
+  const [workspace] = await transaction<{ status: string }[]>`
+    select status from workspaces
+     where tenant_id = ${tenantId} and id = ${workspaceId}
+     for update
+  `
+  if (!workspace) throw authorizationDenied('工作空间不存在或不可访问')
+  if (!allowArchived && workspace.status !== 'active') {
+    throw authorizationDenied('工作空间已归档，仅支持有权限的只读查看与下载')
+  }
+}
+

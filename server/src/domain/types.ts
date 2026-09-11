@@ -178,6 +178,10 @@ export interface Workspace {
   name: string
   description: string
   type: 'personal' | 'team'
+  /** 团队归档态（3-T2）；个人空间恒为 active（AC-23）。 */
+  status: 'active' | 'archived'
+  /** 最近一次归档时间（ISO 8601），未归档为 null。 */
+  archivedAt: string | null
   memberCount: number
   sessionCount: number
   artifactCount: number

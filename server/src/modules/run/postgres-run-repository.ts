@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
-import type { DatabaseClient } from '../../infrastructure/postgres/database.ts'
+import type { DatabaseClient, DatabaseTransaction } from '../../infrastructure/postgres/database.ts'
+import { authorizationDenied } from '../authorization/authorization-errors.ts'
 import type { AppendSystemEventInput, RestartRecoveryResult, RunRepository, WorkspaceActiveRun } from './run-repository.ts'
 import { assertAttemptTransition, assertRunTransition, isTerminalState } from './run-state-machine.ts'
 import type {
@@ -93,6 +94,11 @@ export class PostgresRunRepository implements RunRepository {
   async createRun(input: CreateRunInput): Promise<RunRecord> {
     const runId = `run-${randomUUID()}`
     return this.database.begin(async (transaction) => {
+      // 3-T2 lock order: workspaces -> sessions -> runs. Taking the workspace
+      // row lock before the session row is what serializes "start a new run"
+      // with archive (which locks the same row first). Any other order would
+      // let the two interleave and a queued run could survive an archive.
+      await lockActiveWorkspaceForSession(transaction, input.tenantId, input.sessionId, input.requestedBy)
       const [session] = await transaction<{ id: string }[]>`
         select id from sessions
          where tenant_id = ${input.tenantId} and id = ${input.sessionId}
@@ -149,6 +155,10 @@ export class PostgresRunRepository implements RunRepository {
 
   async createAttempt(input: CreateAttemptInput): Promise<RunAttemptRecord> {
     return this.database.begin(async (transaction) => {
+      // 3-T2: same workspace lock as createRun. Retry/续写 resurrects a
+      // failed/cancelled run into a new queued attempt, so it is a real
+      // "start a run" path and must not slip past an archive.
+      await lockActiveWorkspaceForRun(transaction, input.tenantId, input.runId)
       const [run] = await transaction<{ status: RunState }[]>`
         select r.status from runs r
         join sessions s on s.tenant_id = r.tenant_id and s.id = r.session_id
@@ -231,8 +241,25 @@ export class PostgresRunRepository implements RunRepository {
     })
   }
 
+  async workspaceStatusForAttempt(tenantIdValue: string, attemptId: string): Promise<'active' | 'archived' | null> {
+    const [row] = await this.database<{ status: 'active' | 'archived' }[]>`
+      select w.status
+        from run_attempts a
+        join runs r on r.tenant_id = a.tenant_id and r.id = a.run_id
+        join sessions s on s.tenant_id = r.tenant_id and s.id = r.session_id
+        join workspaces w on w.tenant_id = s.tenant_id and w.id = s.workspace_id
+       where a.tenant_id = ${tenantIdValue} and a.id = ${attemptId}
+    `
+    return row?.status ?? null
+  }
+
   async claimAttempt(tenantId: string, attemptId: string, runtimeId: string): Promise<boolean> {
     return this.database.begin(async (transaction) => {
+      // 3-T2: a queued run must never be claimed (queued -> running) inside an
+      // archived workspace. The workspace row lock is taken first, matching
+      // createRun/createAttempt, so archive and claim serialize.
+      const claimedWorkspace = await lockActiveWorkspaceForAttempt(transaction, tenantId, attemptId)
+      if (!claimedWorkspace) return false
       const [runtime] = await transaction<{ capacity: number; schedulingStatus: string }[]>`
         select capacity, scheduling_status as "schedulingStatus"
           from runtimes where tenant_id = ${tenantId} and id = ${runtimeId} for update
@@ -580,6 +607,83 @@ export class PostgresRunRepository implements RunRepository {
     `
     return rows.map(row => ({ ...mapRun(row), agentVersionId: row.agentVersionId }))
   }
+}
+
+/**
+ * Batch 3 / 3-T2 archive-vs-run serialization.
+ *
+ * Every path that can make a run active (start a new run, create a retry
+ * attempt, claim a queued run) takes the workspace row lock FIRST, before any
+ * session / run_attempt / run row. Archive takes the exact same lock as its
+ * first statement, so the global order is:
+ *
+ *     workspaces -> sessions | run_attempts | runs | runtimes
+ *
+ * This is the same workspace lock the member-management paths already use, so
+ * there is no second lock and no reversed pair to deadlock on.
+ *
+ * A missing workspace row is intentionally not an error here: the surrounding
+ * query keeps its own not-found behavior, and the pre-0013/standalone shapes
+ * (if any survive) stay untouched. Only an explicit non-active status is
+ * refused, as a typed 403 matching the execution-track denial for archived
+ * workspaces.
+ */
+function assertWorkspaceActive(workspace: { status: string } | undefined): void {
+  if (workspace && workspace.status !== 'active') {
+    throw authorizationDenied('工作空间已归档，不能创建或继续执行任务')
+  }
+}
+
+async function lockActiveWorkspaceForSession(
+  transaction: DatabaseTransaction,
+  tenantIdValue: string,
+  sessionId: string,
+  requestedBy: string,
+): Promise<void> {
+  const [workspace] = await transaction<{ status: string }[]>`
+    select w.status
+      from sessions s
+      join workspaces w on w.tenant_id = s.tenant_id and w.id = s.workspace_id
+     where s.tenant_id = ${tenantIdValue} and s.id = ${sessionId}
+       and s.created_by = ${requestedBy}
+     for update of w
+  `
+  assertWorkspaceActive(workspace)
+}
+
+async function lockActiveWorkspaceForRun(
+  transaction: DatabaseTransaction,
+  tenantIdValue: string,
+  runId: string,
+): Promise<void> {
+  const [workspace] = await transaction<{ status: string }[]>`
+    select w.status
+      from runs r
+      join sessions s on s.tenant_id = r.tenant_id and s.id = r.session_id
+      join workspaces w on w.tenant_id = s.tenant_id and w.id = s.workspace_id
+     where r.tenant_id = ${tenantIdValue} and r.id = ${runId}
+     for update of w
+  `
+  assertWorkspaceActive(workspace)
+}
+
+/** Returns false when the attempt belongs to an archived workspace. */
+async function lockActiveWorkspaceForAttempt(
+  transaction: DatabaseTransaction,
+  tenantIdValue: string,
+  attemptId: string,
+): Promise<boolean> {
+  const [workspace] = await transaction<{ status: string }[]>`
+    select w.status
+      from run_attempts a
+      join runs r on r.tenant_id = a.tenant_id and r.id = a.run_id
+      join sessions s on s.tenant_id = r.tenant_id and s.id = r.session_id
+      join workspaces w on w.tenant_id = s.tenant_id and w.id = s.workspace_id
+     where a.tenant_id = ${tenantIdValue} and a.id = ${attemptId}
+     for update of w
+  `
+  if (!workspace) return true
+  return workspace.status === 'active'
 }
 
 function mapRun(row: RunRow): RunRecord {

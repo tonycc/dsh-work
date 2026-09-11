@@ -63,7 +63,25 @@
           "200": {
             "$ref": "#/components/responses/Ok"
           }
-        }
+        },
+        "description": "返回当前员工的个人工作空间与已加入的团队工作空间，并带团队归档状态。status 过滤：all（默认，设计 §2.1/§6「默认全部；个人空间恒显」）、active（个人空间恒为 active，团队空间仅返回活动状态）、archived（3-T3 归档筛选：只返回调用者仍是现任成员的已归档团队空间，个人空间不出现，非成员与不存在空间不可枚举）。owner 为 workspace_members.member_role='owner' 的当前负责人（转交后随之变化），created_by 仅作异常兜底。",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "archived",
+                "all"
+              ],
+              "default": "all"
+            },
+            "description": "active=仅活动；archived=仅已归档；all=全部（默认，设计 §2.1「默认全部；个人空间恒显」）"
+          }
+        ]
       }
     },
     "/workspaces/{workspaceId}/files": {
@@ -1074,6 +1092,55 @@
             "$ref": "#/components/responses/Error"
           },
           "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/workspaces/{workspaceId}/archive": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/WorkspaceId"
+        }
+      ],
+      "post": {
+        "operationId": "archiveTeamWorkspace",
+        "summary": "归档团队空间（仅负责人）",
+        "description": "仅空间负责人可归档。归档是「只读保留」：写入 archived_at 并置 status=archived，此后现任成员仍可按读取轨查看会话、文件、成果与历史运行，写路径（新对话、续写、重试、上传、成员与设置变更）一律拒绝；归档空间仍允许紧急撤销访问与负责人转交。空间存在排队/运行中/取消中的 Run 时拒绝归档并提示等待或取消（不自动中断在途任务），返回 409 state_conflict。个人空间不可归档（422）。每次归档写入审计事实。并发：归档与开跑/领取排队任务通过 workspace 行锁串行化。",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/workspaces/{workspaceId}/restore": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/WorkspaceId"
+        }
+      ],
+      "post": {
+        "operationId": "restoreTeamWorkspace",
+        "summary": "恢复已归档团队空间（仅负责人）",
+        "description": "仅空间负责人可恢复。清空当前归档时间（archived_at 置空）并置 status=active，恢复后写入口按当前权限重新出现。恢复不重新添加已移除成员、不扩大授权，也不改变成员角色。个人空间不可恢复（422）。每次恢复写入审计事实。",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "403": {
             "$ref": "#/components/responses/Error"
           },
           "422": {

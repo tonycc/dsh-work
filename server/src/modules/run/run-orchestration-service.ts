@@ -434,11 +434,38 @@ export class RunOrchestrationService {
       while (this.pendingExecutions.length > 0) {
         const next = this.pendingExecutions[0]
         if (!next) break
-        const claimed = await this.runs.claimAttempt(tenantId, next.manifest.attempt_id, runtimeId)
+        // 3-T2 加固：历史/外部数据的 `manifest` 列可能是 `{}`（没有 attempt_id）。
+        // 直接把 undefined 绑进 SQL 会抛 UNDEFINED_VALUE，并经 `void this.pumpScheduler()`
+        // 变成未处理的 rejection（验证代理 D1：进程级致命）。这里回退到 run 的权威
+        // 指针，两者都没有就跳过并告警，绝不把 undefined 传给仓储。
+        const attemptId = next.manifest.attempt_id ?? next.run.currentAttemptId
+        if (!attemptId) {
+          console.error('scheduler skipped a pending execution without an attempt id', next.run.id)
+          this.pendingExecutions.shift()
+          continue
+        }
+        const claimed = await this.runs.claimAttempt(tenantId, attemptId, runtimeId)
         if (!claimed) {
-          const attempt = await this.runs.getAttempt(tenantId, next.manifest.attempt_id)
+          const attempt = await this.runs.getAttempt(tenantId, attemptId)
           if (attempt && attempt.status !== 'queued') {
             this.pendingExecutions.shift()
+            continue
+          }
+          if (!attempt) {
+            // attempt 行已不存在（被清理/历史数据）：无法收敛，移除以免空转。
+            this.pendingExecutions.shift()
+            continue
+          }
+          // 3-T2：空间在排队后被归档（历史/迁移数据或外部写入）时，claimAttempt 会
+          // 一直返回 false；若无条件重排，调度器会每 500ms 空转且永不收敛（评审实测
+          // 2.6s 内重试 6 次、run 永远 queued）。这里收敛为终态并落说明事件。
+          if (await this.isWorkspaceArchivedForAttempt(attemptId)) {
+            this.pendingExecutions.shift()
+            await this.failRunForRevokedAuthorization(
+              next.run,
+              next.manifest,
+              '工作空间已归档，任务未执行',
+            )
             continue
           }
           this.schedulePump()
@@ -546,6 +573,16 @@ export class RunOrchestrationService {
       safeMetadata: { error_code: 'AUTHORIZATION_REVOKED', reason },
       traceId: `trace-${run.id}`,
     })
+  }
+
+  /**
+   * 3-T2：排队期间空间被归档时用于收敛，避免调度器无限重排。
+   * 空间取自 attempt→run→session 的关联，而不是 manifest：历史/夹具里的
+   * `manifest` 列可能是 `{}`（没有 workspace_id），那样判断会静默失效。
+   */
+  private async isWorkspaceArchivedForAttempt(attemptId: string): Promise<boolean> {
+    const status = await this.runs.workspaceStatusForAttempt(tenantId, attemptId)
+    return status === 'archived'
   }
 
   private schedulePump() {

@@ -114,13 +114,17 @@ export function registerWorkspaceMemberRoutes(
  * 3-T1: execution by default. `allowArchived` is the explicit governance
  * exception for emergency revocation and owner transfer on an archived
  * workspace, and is passed only by those two routes.
+ *
+ * 3-T2: `teamOnlyMessage` lets the archive/restore routes keep the same guard
+ * while naming their own team-only boundary (personal workspaces stay 422, the
+ * AC-23 convention for team-only endpoints).
  */
 export async function requireTeamActor(
   authorization: PostgresAuthorizationService,
   identity: RequestIdentity,
   workspaceId: string,
   allowedRoles: TeamMemberRole[],
-  options: { allowArchived?: boolean } = {},
+  options: { allowArchived?: boolean; teamOnlyMessage?: string } = {},
 ) {
   const allowArchived = options.allowArchived === true
   const access = await authorization.authorizeWorkbench({
@@ -129,7 +133,9 @@ export async function requireTeamActor(
     ...sessionAuthorizationContext(identity),
     allowArchived,
   })
-  if (access.workspaceType !== 'team') throw new Error('仅支持团队工作空间进行成员管理')
+  if (access.workspaceType !== 'team') {
+    throw new Error(options.teamOnlyMessage ?? '仅支持团队工作空间进行成员管理')
+  }
   try {
     await authorization.requireTeamRole(workspaceId, identity.userId, allowedRoles, {
       purpose: allowArchived ? 'read' : 'execution',

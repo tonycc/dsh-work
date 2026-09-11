@@ -78,13 +78,35 @@ export class PostgresContentService {
     this.workspaces = workspaces
   }
 
-  async listWorkspaces(actorUserId: string): Promise<Workspace[]> {
+  /**
+   * Workspace list for one actor (batch 3 / 3-T2).
+   *
+   * `status` filters the workspace lifecycle: `all` (the default, matching the
+   * confirmed design decision 设计 §2.1/§6「默认全部；个人空间恒显」), `active`,
+   * or `archived` (3-T3 归档筛选 — only workspaces the caller may still access,
+   * i.e. teams where the caller is still a current member; personal spaces are
+   * always active, so they appear under all/active but never under archived).
+   *
+   * `owner` is the CURRENT owner (`workspace_members.member_role = 'owner'`)
+   * rather than the creator, which is a known 1A gap fixed here so a transfer
+   * is reflected and 3-T3 can render ownership correctly. `created_by` is kept
+   * only as a defensive fallback for anomalous rows.
+   */
+  async listWorkspaces(
+    actorUserId: string,
+    options: { status?: 'active' | 'archived' | 'all' } = {},
+  ): Promise<Workspace[]> {
     await this.workspaces.ensurePersonalWorkspace(actorUserId)
+    // 与 HTTP 层默认保持一致（all）。服务层若仍默认 active，后续新增调用者漏传
+    // 就会静默只看活动空间，归档空间不可发现。
+    const status = options.status ?? 'all'
     const rows = await this.database<{
       id: string
       name: string
       description: string
       type: WorkspaceType
+      status: 'active' | 'archived'
+      archivedAt: Date | null
       owner: string
       memberCount: number
       sessionCount: number
@@ -92,17 +114,32 @@ export class PostgresContentService {
       updatedAt: Date
     }[]>`
       select w.id, w.name, w.description, w.workspace_type as type,
-             creator.display_name as owner,
+             w.status, w.archived_at as "archivedAt",
+             coalesce(owner.display_name, creator.display_name) as owner,
              count(distinct wm.user_id)::integer as "memberCount",
              count(distinct s.id)::integer as "sessionCount",
              count(distinct a.id)::integer as "artifactCount",
              greatest(w.created_at, coalesce(max(s.last_active_at), w.created_at)) as "updatedAt"
         from workspaces w
         join users creator on creator.tenant_id = w.tenant_id and creator.id = w.created_by
+        left join lateral (
+          select ou.display_name
+            from workspace_members om
+            join users ou on ou.tenant_id = om.tenant_id and ou.id = om.user_id
+           where om.tenant_id = w.tenant_id and om.workspace_id = w.id
+             and om.member_role = 'owner'
+           order by om.joined_at asc, om.user_id asc
+           limit 1
+        ) owner on true
         left join workspace_members wm on wm.tenant_id = w.tenant_id and wm.workspace_id = w.id
         left join sessions s on s.tenant_id = w.tenant_id and s.workspace_id = w.id
         left join artifacts a on a.tenant_id = w.tenant_id and a.workspace_id = w.id
-       where w.tenant_id = ${tenantId} and w.status = 'active'
+       where w.tenant_id = ${tenantId}
+         and ${status === 'all'
+           ? this.database.unsafe(`w.status in ('active', 'archived')`)
+           : status === 'archived'
+             ? this.database.unsafe(`w.status = 'archived'`)
+             : this.database.unsafe(`w.status = 'active'`)}
          and (
            (w.workspace_type = 'personal' and w.created_by = ${actorUserId})
            or (
@@ -114,7 +151,7 @@ export class PostgresContentService {
              )
            )
          )
-       group by w.id, creator.display_name
+       group by w.id, creator.display_name, owner.display_name
        order by "updatedAt" desc
     `
     return Promise.all(rows.map(async (row) => {
@@ -139,6 +176,8 @@ export class PostgresContentService {
         name: row.name,
         description: row.description,
         type: row.type,
+        status: row.status,
+        archivedAt: row.archivedAt ? row.archivedAt.toISOString() : null,
         memberCount: row.memberCount,
         sessionCount: row.sessionCount,
         artifactCount: row.artifactCount,
@@ -169,7 +208,8 @@ export class PostgresContentService {
         values (${tenantId}, ${id}, ${actorUserId}, 'owner', ${actorUserId})
       `
     })
-    return (await this.listWorkspaces(actorUserId)).find((workspace) => workspace.id === id)
+    // 新空间恒为 active，这里显式限定以免受列表默认值变化影响。
+    return (await this.listWorkspaces(actorUserId, { status: 'active' })).find((workspace) => workspace.id === id)
   }
 
   async listArtifacts(actorUserId: string): Promise<Artifact[]> {

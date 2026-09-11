@@ -2,14 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import type { PostgresContentService } from '../../modules/workbench/application/postgres-content-service.ts'
 import type { PostgresAuthorizationService } from '../../modules/authorization/postgres-authorization-service.ts'
-import {
-  envelope,
-  httpResult,
-  readJsonBody,
-  requireRequestIdentity,
-  sessionAuthorizationContext,
-  type Router,
-} from '../router.ts'
+import { envelope, httpResult, readJsonBody, requireRequestIdentity, routeValidationFailed, sessionAuthorizationContext, type Router } from '../router.ts'
 
 const basePath = '/api/workbench/v1'
 
@@ -18,6 +11,21 @@ function parseFilePageLimit(raw: string | null) {
   const limit = Number(raw)
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('limit 必须为 1 到 100 之间的整数')
   return limit
+}
+
+/**
+ * Workspace lifecycle filter (3-T2). Defaults to `all` per the confirmed design
+ * decision (设计 §2.1/§6「默认全部；个人空间恒显」): with a default of `active`
+ * an archived workspace would be undiscoverable in the UI, which would defeat
+ * 3-T2. `active`/`archived` power the 3-T3 筛选. Anything else is an explicit
+ * 422 rather than a silently ignored parameter.
+ */
+function parseWorkspaceStatus(raw: string | null): 'active' | 'archived' | 'all' {
+  // 默认 all：设计 §2.1 与 §6 已确认决策「默认全部；个人空间恒显」，且归档空间必须
+  // 在默认视图里可发现，否则 3-T2 做完也无法从 UI 进入归档详情。
+  if (raw === null || raw === '') return 'all'
+  if (raw === 'active' || raw === 'archived' || raw === 'all') return raw
+  throw routeValidationFailed('status 必须为 active、archived 或 all')
 }
 
 export function registerContentRoutes(
@@ -29,7 +37,8 @@ export function registerContentRoutes(
     const identity = requireRequestIdentity(context, 'workbench')
     const userId = identity.userId
     await authorization?.authorizeWorkbench({ userId, ...sessionAuthorizationContext(identity) })
-    return envelope('workbench', await content.listWorkspaces(userId), 'postgres')
+    const status = parseWorkspaceStatus(context.url.searchParams.get('status'))
+    return envelope('workbench', await content.listWorkspaces(userId, { status }), 'postgres')
   })
 
   router.post(`${basePath}/workspaces`, async (request, context) => {

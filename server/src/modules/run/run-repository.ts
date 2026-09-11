@@ -34,6 +34,13 @@ export interface RunRepository {
   getAttempt(tenantId: string, attemptId: string): Promise<RunAttemptRecord | null>
   createAttempt(input: CreateAttemptInput): Promise<RunAttemptRecord>
   claimAttempt(tenantId: string, attemptId: string, runtimeId: string): Promise<boolean>
+  /**
+   * 3-T2: workspace status behind an attempt (attempt → run → session → workspace).
+   * Returns null when the chain is missing. Used by the scheduler to converge a
+   * queued attempt whose workspace was archived while it waited, instead of
+   * rescheduling it forever.
+   */
+  workspaceStatusForAttempt(tenantId: string, attemptId: string): Promise<'active' | 'archived' | null>
   transitionRun(tenantId: string, runId: string, to: RunState): Promise<RunRecord>
   transitionAttempt(
     tenantId: string,

@@ -123,8 +123,9 @@ export interface Workspace {
   members: string[]
   files: WorkspaceFile[]
   /**
-   * 团队空间归档状态（design §2.5 归档态）。服务端当前 `/workspaces` 契约
-   * 尚未返回该字段，前端只在收到 `archived` 时渲染归档态。
+   * 团队空间归档状态（design §2.1/§2.5 归档态）。3-T2 起服务端 `/workspaces`
+   * 恒返回该字段；保留可选是因为既有测试夹具尚未全部补齐，前端只在收到
+   * `archived` 时渲染归档只读态。`archivedAt` 由 3-T3 需要时再引入。
    */
   status?: 'active' | 'archived'
 }

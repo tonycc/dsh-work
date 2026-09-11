@@ -40,12 +40,27 @@
 - **验收**：AC-14（归档语义部分）、AC-09（失权仍然拒绝）、AC-23（个人空间不变）。
 - **风险**：读路径放宽后若写路径漏改一处，会出现「归档空间仍能执行」。必须逐个调用点列出用途并加回归测试。
 
-### 3-T2 归档与恢复 API + 运行中并发保护 ⬜ 未开始
+### 3-T2 归档与恢复 API + 运行中并发保护 ✅ 已完成（2026-09-11）
 - **接口**：新增空间状态变更（归档／恢复）；`GET /workspaces` 补 `status` 与 `archivedAt`，`owner` 改为**当前负责人**（`workspace_members.member_role='owner'`），不再用创建者。
 - **规则**：仅负责人可归档／恢复；有排队或活动运行时拒绝归档并提示先等待或取消（不自动中断在途任务）；恢复清空当前归档时间、不恢复已移除成员、不扩大授权；归档／恢复写审计事件。
 - **并发**：归档与「新对话／领取排队任务」必须串行化（空间行锁已在成员变更路径使用，沿用同一锁序），避免归档与开跑互相穿透。
-- **列表**：`GET /workspaces` 支持活动／归档筛选，默认活动；归档筛选只返回调用者仍有权访问的空间。
+- **列表**：`GET /workspaces` 支持活动／归档筛选（`status=active|archived|all`），**默认 `all`**（对齐设计 §2.1 与 §6 已确认决策「默认全部；个人空间恒显」——若默认 active，归档空间在 UI 里不可发现）。归档筛选只返回调用者仍有权访问的空间。
 - **验收**：AC-14、AC-02 不受影响（转交不变）、AC-27（迁移不回归）。
+
+**交付记录（2026-09-11）**：
+- **接口**：`POST /workspaces/:workspaceId/archive`、`POST /workspaces/:workspaceId/restore`（`workspace-lifecycle-routes.ts`）；`GET /workspaces?status=active|archived|all`（**默认 `all`**，对齐设计 §2.1/§6「默认全部；个人空间恒显」；`archived` 供 3-T3 归档筛选）。服务层默认同步为 `all`，`createWorkspace` 显式按 `active` 查回新空间。
+- **实现位置**：`postgres-workspace-lifecycle-service.ts`（负责人校验、状态变更、审计、运行中拦截）、`workspace-state-conflict-error.ts`（类型化 409，避免按文案分类）、`router.ts`（类型化 409 映射）、`postgres-content-service.ts`（列表 `status`/`archivedAt`/当前负责人/筛选）、`postgres-run-repository.ts`（开跑／重试／领取的空间行锁兜底）。
+- **锁序（唯一空间锁）**：`workspaces` 行锁 → `sessions` / `run_attempts` / `runs` / `runtimes`。归档事务首语句 `select ... from workspaces for update`；`createRun` / `createAttempt` / `claimAttempt` 的首语句同样先锁 `workspaces` 行（与成员变更、授权来源清扫同一把锁），因此归档与开跑/领取串行：归档先提交则开跑/领取被拒（typed 403 / `claimAttempt=false`），开跑先提交则归档因存在活动 Run 被拒（409）。无第二把空间锁。
+- **锁序修正（质量评审 F2，既有死锁）**：原先 `owner-transfer` 先锁 `workspaces`，而 `addMember`/`changeMemberRole`/`removeMember`/`exitWorkspace` 先改 `workspace_members`、最后才 `update workspaces`（`bumpTeamAuthRevision`），形成**反向锁对**；并发转交 + 移除成员实测 40 次里 39 次 `40P01 deadlock detected`，并被 HTTP 分类成 **500**。现四个成员变更入口统一经 `runMembershipMutation` **先取空间行锁**，锁序全局一致。新增回归用例（8 轮并发转交 + 移除，断言无 deadlock 且至少一方成功）并反证：去掉该锁即变红。
+- **排队期间归档的收敛（质量评审 F3）**：归档空间里遗留的 queued attempt（历史/迁移/外部写入，API 路径不可达）原先会让调度器每 500ms 无限重排（实测 2.6s 内 6 次、永不收敛）。现 `claimAttempt` 失败且 attempt 仍 queued 时，用 `RunRepository.workspaceStatusForAttempt`（attempt→run→session→workspace 关联）判断归档，收敛为终态并落 `run.failed` 说明事件。已加判别性用例并反证。
+- **`{}` manifest 加固（验证代理 D1；初版此处声明有误）**：初版交付记录写「不读 manifest——夹具/历史的 `manifest` 列可能是 `{}`」，该表述**只对了一半**：判断归档确实不读 manifest，但调度器**取 attempt id 仍读 `manifest.attempt_id`**；遇到 `{}` 会把 `undefined` 绑进 SQL → `UNDEFINED_VALUE`，并经 `void this.pumpScheduler()` 变成未处理 rejection（进程级致命，run/attempt 永远 queued）。现回退到 run 的权威指针 `currentAttemptId`，两者都没有则跳过并告警，绝不把 `undefined` 传给仓储。
+- **成员变更的锁内状态复核（验证代理 D4，既有 TOCTOU）**：成员新增/改角色/退出的空间状态原先只在**事务外**检查；归档若在其等待行锁期间提交，变更仍会成功（强制时序实测 8/8 穿透）。现状态复核随行锁移入事务内；`removeMember`（紧急撤权）与 `transferWorkspaceOwner` 作为治理例外显式传 `allowArchived`，归档空间仍可执行。已加判别性用例并反证。
+- **归档拒绝文案与状态**：`该空间还有 N 个排队或运行中的任务，不能归档；请等待任务完成或先取消任务` → 类型化 `WorkspaceStateConflictError`（409 `state_conflict`）。个人空间归档/恢复 → 422（AC-23 团队专用接口惯例）。非负责人/非成员 → `authorizationDenied(...)` → 403。
+- **恢复语义**：仅清 `archived_at` 并置 `status='active'`，不触碰 `workspace_members`；已移除成员保持移除，授权不扩大。归档空间仍可执行紧急撤权（`DELETE /members/:userId`）与负责人转交（3-T1 治理例外，未改动）。
+- **测试**：新增 `server/src/http/team-workspace-lifecycle-api.integration.test.ts`（**18 个用例**，`createThrowawayDatabase()`），登记为 `test:m5:lifecycle:integration`（`server/package.json`、根 `package.json`、`.github/workflows/ci.yml`）。
+- **反证声明的更正（规格评审 P1 / 质量评审 F1）**：初版曾声称「去掉 `createRun`/`createAttempt`/`claimAttempt` 的空间行锁…对应用例均变红」——**该声明不成立**：两轮评审各自实测「削掉三处 `for update of w`、保留归档状态判断」后套件仍 14/14 全绿，说明原有用例只证明「状态判断存在」，不证明「行锁存在」，即一个带 TOCTOU 的错误实现能通过 CI。现补两条**能区分有锁/无锁**的用例：① 外部事务持有空间行锁时开跑不得推进（无锁则会立即完成）；② 转交 + 移除成员并发无死锁。两条均反证过（削弱实现即变红）。运行中拦截、当前负责人解析的反证仍然有效。
+- **契约**：`docs/contracts/openapi-workbench.json` 补 `status` 筛选参数与两个新端点（含 409 说明）。
+- **未做/超出本任务**：`PATCH /workspaces/:id`（名称/说明保存）仍缺，属 3-T3 依赖的 1A 遗留；前端归档体验为 3-T3；无新增迁移（复用 `0001` 的 `status`/`archived_at` 与 `audit_events`）。
 
 ### 3-T3 前端归档体验 ⬜ 未开始
 - 空间列表：`全部／活动／已归档` 紧凑筛选（口径见 3-T2），归档卡片显示「已归档」状态标记；计数文案随筛选变化。
