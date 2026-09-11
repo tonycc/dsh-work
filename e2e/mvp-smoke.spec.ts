@@ -25,7 +25,7 @@ test('employee can open the workbench and enter a team workspace', async ({ page
 
   await page.getByText('供应链经营分析', { exact: true }).first().click()
   await expect(page).toHaveURL(/\/workspaces\/ws-supply/)
-  await expect(page.getByRole('tab', { name: /对话/ })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('tab', { name: /^对话$/ })).toHaveAttribute('aria-selected', 'true')
   await expect(page.getByRole('tab', { name: /共享文件/ })).toBeVisible()
   await expect(page.getByRole('tab', { name: /成果/ })).toBeVisible()
 })
