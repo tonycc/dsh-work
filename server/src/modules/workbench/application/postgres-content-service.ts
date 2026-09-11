@@ -4,7 +4,8 @@ import { extname, join, resolve } from 'node:path'
 
 import type { Artifact, Workspace } from '../../../domain/types.ts'
 import type { DatabaseClient } from '../../../infrastructure/postgres/database.ts'
-import { authorizationDenied } from '../../authorization/authorization-errors.ts'
+import type { PostgresAuthorizationService } from '../../authorization/postgres-authorization-service.ts'
+import { authorizationDenied, canReadWorkspaceObject } from '../../authorization/authorization-errors.ts'
 import type { FileMount } from '../../runtime/runtime-types.ts'
 import { BaselineFileSafetyScanner, type FileSafetyScannerPort } from './file-safety-scanner.ts'
 import { extractDocument } from './document-extractor.ts'
@@ -21,6 +22,7 @@ interface FileRow {
   sizeBytes: string | number
   createdAt: Date
   uploadedBy: string
+  workspaceId: string
 }
 
 export interface WorkspaceFileSummary {
@@ -58,17 +60,20 @@ export interface PreparedRuntimeFile {
 export class PostgresContentService {
   private readonly database: DatabaseClient
   private readonly storageRoot: string
+  private readonly authorization: PostgresAuthorizationService
   private readonly scanner: FileSafetyScannerPort
   private readonly workspaces: PostgresWorkspaceService
 
   constructor(
     database: DatabaseClient,
     storageRoot: string,
+    authorization: PostgresAuthorizationService,
     scanner: FileSafetyScannerPort = new BaselineFileSafetyScanner(),
     workspaces = new PostgresWorkspaceService(database),
   ) {
     this.database = database
     this.storageRoot = resolve(storageRoot)
+    this.authorization = authorization
     this.scanner = scanner
     this.workspaces = workspaces
   }
@@ -119,7 +124,7 @@ export class PostgresContentService {
         where wm.tenant_id = ${tenantId} and wm.workspace_id = ${row.id}
         order by wm.joined_at asc
       `
-      const files = await this.database<FileRow[]>`
+      const files = await this.database<Omit<FileRow, 'workspaceId'>[]>`
         select f.id, f.storage_key as "storageKey", f.original_name as "originalName",
                f.mime_type as "mimeType", f.size_bytes as "sizeBytes", f.created_at as "createdAt",
                u.display_name as "uploadedBy"
@@ -177,18 +182,40 @@ export class PostgresContentService {
       createdAt: Date
       runId: string
       workspaceId: string
+      workspaceType: string | null
     }[]>`
       select a.id, a.name, a.artifact_type as "artifactType", av.version_no as version,
              f.size_bytes as "sizeBytes", av.created_at as "createdAt",
-             av.source_run_id as "runId", a.workspace_id as "workspaceId"
+             av.source_run_id as "runId", a.workspace_id as "workspaceId",
+             w.workspace_type as "workspaceType"
         from artifacts a
         join artifact_versions av on av.tenant_id = a.tenant_id and av.artifact_id = a.id
         join file_objects f on f.tenant_id = av.tenant_id and f.id = av.file_object_id
         join sessions s on s.tenant_id = a.tenant_id and s.id = a.session_id
+        left join workspaces w on w.tenant_id = a.tenant_id and w.id = a.workspace_id
        where a.tenant_id = ${tenantId} and s.created_by = ${actorUserId}
        order by av.created_at desc
     `
-    return rows.map((row) => ({
+    // 团队成果与团队运行同一收权口径：成果列表同样要复核当前团队读权限，
+    // 被移出/退出的成员不能继续看到自己此前在团队空间发布的成果（AC-09）。
+    // 个人空间成果直接返回，保持原路径（AC-23）——不在这里再查空间类型，避免
+    // 每行一次往返（评审实测 200 行 = 200 次多余查询）；团队成果按空间去重后
+    // 只复核一次，既消掉 N+1 也消掉并发冷启动的缓存击穿。
+    const teamWorkspaceIds = [...new Set(
+      rows.filter(row => row.workspaceType === 'team').map(row => row.workspaceId),
+    )]
+    const readable = new Map<string, boolean>()
+    await Promise.all(teamWorkspaceIds.map(async (workspaceId) => {
+      readable.set(workspaceId, await canReadWorkspaceObject(this.authorization, workspaceId, actorUserId))
+    }))
+    const visible = rows.map(row => {
+      if (row.workspaceType === 'personal') return row
+      // 只有明确的团队空间且在 readable 中被判为可读才保留；类型为 null（空间行缺失）
+      // 同样 fail-closed，不因「非团队」而放行（P-B 口径）。
+      if (row.workspaceType !== 'team') return null
+      return readable.get(row.workspaceId) === true ? row : null
+    })
+    return visible.filter((row): row is (typeof rows)[number] => row !== null).map((row) => ({
       id: row.id,
       name: row.name,
       type: row.artifactType,
@@ -349,8 +376,19 @@ export class PostgresContentService {
            and target.created_by = ${input.userId} and target.status = 'active'
            and (
              f.session_id = target.id
+             -- 本人其它会话的附件：作者身份由 target.created_by 与下方 f.session_id 的
+             -- 归属共同约束，挂进自己的 Run 不越过任何读取边界（保持既有行为）。
+             or f.session_id in (
+               select id from sessions own
+                where own.tenant_id = ${tenantId} and own.created_by = ${input.userId}
+             )
+             -- 空间共享文件（session_id 为空）。刻意限定 session_id is null：挂在**他人**
+             -- 私有会话下的附件属于「他人私有对话」，空间成员身份不得成为读取依据
+             -- （方案 §5/AC-10）——否则可把他人私有附件挂进自己的 Run，交给 DSH 读取，
+             -- 绕过 readFile 的同一条限制。
              or (
-               f.workspace_id = target.workspace_id
+               f.session_id is null
+               and f.workspace_id = target.workspace_id
                and exists (
                  select 1 from workspaces w
                   where w.tenant_id = f.tenant_id and w.id = f.workspace_id and w.status = 'active'
@@ -473,44 +511,63 @@ export class PostgresContentService {
     const [row] = await this.database<FileRow[]>`
       select f.id, f.storage_key as "storageKey", f.original_name as "originalName",
              f.mime_type as "mimeType", f.size_bytes as "sizeBytes", f.created_at as "createdAt",
+             f.workspace_id as "workspaceId",
              u.display_name as "uploadedBy"
         from file_objects f
         join users u on u.tenant_id = f.tenant_id and u.id = f.uploaded_by
        where f.tenant_id = ${tenantId} and f.id = ${fileId} and f.scan_status = 'clean'
          and f.removed_at is null
          and (
+           -- 本人会话的附件（含个人空间与团队空间），作者可读。
            f.session_id in (select id from sessions where tenant_id = ${tenantId} and created_by = ${actorUserId})
-           or f.workspace_id in (
-             select w.id from workspaces w
-              where w.tenant_id = ${tenantId} and w.status = 'active'
-                and (
-                  (w.workspace_type = 'personal' and w.created_by = ${actorUserId})
-                  or (
-                    w.workspace_type = 'team'
-                    and exists (
-                      select 1 from workspace_members wm
-                       where wm.tenant_id = w.tenant_id and wm.workspace_id = w.id
-                         and wm.user_id = ${actorUserId}
+           -- 空间共享文件（session_id 为空）。刻意限定 session_id is null：挂在他人
+           -- 私有会话下的附件属于「他人私有对话」，空间成员身份不得成为读取依据
+           -- （方案 §5「查看他人私有对话与未发布成果：不允许」，AC-10）。
+           or (
+             f.session_id is null
+             and f.workspace_id in (
+               select w.id from workspaces w
+                where w.tenant_id = ${tenantId} and w.status = 'active'
+                  and (
+                    (w.workspace_type = 'personal' and w.created_by = ${actorUserId})
+                    or (
+                      w.workspace_type = 'team'
+                      and exists (
+                        select 1 from workspace_members wm
+                         where wm.tenant_id = w.tenant_id and wm.workspace_id = w.id
+                           and wm.user_id = ${actorUserId}
+                      )
                     )
                   )
-                )
+             )
            )
          )
     `
     if (!row) throw new Error('文件不存在或不可访问')
+    // 会话作者分支不校验团队身份：被移出/退出的成员仍能命中本人旧会话文件，
+    // 必须再按对象所属空间复核当前团队读权限（1B-T4 / AC-09）。拒绝统一走类型化
+    // 授权错误，并保持与「不存在」相同文案，避免用 fileId 枚举团队对象。
+    if (!(await canReadWorkspaceObject(this.authorization, row.workspaceId, actorUserId))) {
+      throw authorizationDenied('文件不存在或不可访问')
+    }
     return { name: row.originalName, mimeType: row.mimeType, bytes: await readFile(this.resolveStorage(row.storageKey)) }
   }
 
   async artifactFileId(artifactId: string, version: number | undefined, actorUserId: string) {
-    const [row] = await this.database<{ fileId: string }[]>`
-      select av.file_object_id as "fileId" from artifact_versions av
-      join artifacts a on a.tenant_id = av.tenant_id and a.id = av.artifact_id
-      join sessions s on s.tenant_id = a.tenant_id and s.id = a.session_id
-      where av.tenant_id = ${tenantId} and av.artifact_id = ${artifactId} and s.created_by = ${actorUserId}
-        and (${version ?? null}::integer is null or av.version_no = ${version ?? null})
-      order by av.version_no desc limit 1
+    const [row] = await this.database<{ fileId: string; workspaceId: string }[]>`
+      select av.file_object_id as "fileId", a.workspace_id as "workspaceId"
+        from artifact_versions av
+        join artifacts a on a.tenant_id = av.tenant_id and a.id = av.artifact_id
+        join sessions s on s.tenant_id = a.tenant_id and s.id = a.session_id
+       where av.tenant_id = ${tenantId} and av.artifact_id = ${artifactId} and s.created_by = ${actorUserId}
+         and (${version ?? null}::integer is null or av.version_no = ${version ?? null})
+       order by av.version_no desc limit 1
     `
     if (!row) throw new Error('Artifact 不存在或不可访问')
+    // 成果读取与团队运行同一收权口径：作者身份不足以越过当前团队读权限（AC-09）。
+    if (!(await canReadWorkspaceObject(this.authorization, row.workspaceId, actorUserId))) {
+      throw authorizationDenied('Artifact 不存在或不可访问')
+    }
     return row.fileId
   }
 

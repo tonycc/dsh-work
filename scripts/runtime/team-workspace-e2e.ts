@@ -76,9 +76,9 @@ try {
   })
 
   const conversations = new PostgresConversationRepository(database)
-  const content = new PostgresContentService(database, resolve(dataRoot, 'storage'))
-  const runs = new PostgresRunRepository(database)
   const authorization = new PostgresAuthorizationService(database)
+  const content = new PostgresContentService(database, resolve(dataRoot, 'storage'), authorization)
+  const runs = new PostgresRunRepository(database)
   const agents = new PostgresAgentService(database)
   // operations 必须接线：否则 approval.resolved 触发的工具审计被静默跳过（?），
   // 而这个审计正是「工具返回数据来源」的可追溯落点（T2 关注点）。

@@ -4,6 +4,7 @@ import type { RunOrchestrationService } from '../../modules/run/run-orchestratio
 import type { RunRepository } from '../../modules/run/run-repository.ts'
 import type { PostgresAgentService } from '../../modules/agent/postgres-agent-service.ts'
 import type { PostgresAuthorizationService } from '../../modules/authorization/postgres-authorization-service.ts'
+import { canReadWorkspaceObject } from '../../modules/authorization/authorization-errors.ts'
 import type { PostgresOperationsService } from '../../modules/admin/application/postgres-operations-service.ts'
 import type { PostgresSkillService } from '../../modules/skill/postgres-skill-service.ts'
 import {
@@ -212,23 +213,27 @@ export function registerConversationRoutes(
     // 空间的用户仍是该 run 的 requested_by（getTask 只按 requested_by 判定），若用
     // 成员相关的 resolveWorkspaceType，他会解析出 null 并**降级到无拦截的个人路径**，
     // 建连与逐批检查全部失效。这里是 fail-closed：非成员一律 403，不降级。
-    const workspaceType = task.workspaceId && authorization
-      ? await authorization.workspaceTypeOf(task.workspaceId)
-      : null
-    if (workspaceType === 'team' && task.workspaceId && authorization) {
-      // 非成员一律 fail-closed 拒绝（403），不降级为无拦截的个人路径。显式包装为
-      // 权限错误，避免依赖错误消息文本分类。
-      try {
-        await authorization.authorizeTeamReadAccess(task.workspaceId, userId)
-      } catch (error) {
-        throw routePermissionDenied(error instanceof Error ? error.message : '当前用户不能读取该团队空间运行')
+    if (task.workspaceId && authorization) {
+      const workspaceType = await authorization.workspaceTypeOf(task.workspaceId)
+      if (workspaceType === 'team') {
+        // 团队空间：建连与逐批写出都走同一门禁；非成员、已归档或已删除空间一律
+        // fail-closed 403，不降级为无拦截的个人路径。显式包装为权限错误，避免
+        // 依赖错误消息文本分类。
+        if (!(await canReadWorkspaceObject(authorization, task.workspaceId, userId))) {
+          throw routePermissionDenied('当前用户不能读取该团队空间运行')
+        }
+        await streamRunEvents(response, request.headers['last-event-id'], runId, runs, 250, 15_000, {
+          workspaceId: task.workspaceId,
+          userId,
+          authorization,
+        })
+        return
       }
-      await streamRunEvents(response, request.headers['last-event-id'], runId, runs, 250, 15_000, {
-        workspaceId: task.workspaceId,
-        userId,
-        authorization,
-      })
-      return
+      // 空间已归档或不存在（类型解析为 null）：与详情、列表、文件、成果同一口径
+      // fail-closed，不能当作「非团队」放行（1B-T4 / §6.5-3）。
+      if (workspaceType === null) {
+        throw routePermissionDenied('该工作空间不存在或已归档')
+      }
     }
     await streamRunEvents(response, request.headers['last-event-id'], runId, runs)
   })
@@ -247,20 +252,17 @@ function parseSessionPageLimit(raw: string | null) {
   return limit
 }
 
+/**
+ * 团队运行/结果的读取门禁。口径与文件、成果读取共用
+ * `canReadWorkspaceObject`（1B-T4 / §6.5-3「团队文件下载与结果读取采用相同
+ * 授权边界」），避免两处各自实现后在归档、个人空间等边界上漂移。
+ */
 async function authorizeTeamTaskRead(
   authorization: PostgresAuthorizationService,
   task: { workspaceId: string },
   userId: string,
 ): Promise<boolean> {
-  if (!task.workspaceId) return true
-  const workspaceType = await authorization.workspaceTypeOf(task.workspaceId)
-  if (workspaceType !== 'team') return true
-  try {
-    await authorization.authorizeTeamReadAccess(task.workspaceId, userId)
-    return true
-  } catch {
-    return false
-  }
+  return canReadWorkspaceObject(authorization, task.workspaceId, userId)
 }
 
 /**
@@ -298,6 +300,7 @@ export interface TeamStreamAccess {
   workspaceId: string
   userId: string
   authorization: {
+    workspaceTypeOf(workspaceId: string | null | undefined): Promise<'personal' | 'team' | null>
     authorizeTeamReadAccess(workspaceId: string, userId: string, ttlMs?: number): Promise<void>
   }
   /** Cache TTL override; defaults to the authorization service's TTL (≤ 10s). */
@@ -377,15 +380,19 @@ export async function streamRunEvents(
 /**
  * Returns false (stream must terminate) when the viewer lost read access.
  * Any unexpected error also terminates the stream — fail closed.
+ *
+ * 走 `canReadWorkspaceObject` 而不是直接 `authorizeTeamReadAccess`：后者的修订号
+ * 缓存命中时直接放行，而**归档只改 status、不提升 team_auth_revision**，于是已建立
+ * 的流会在缓存 TTL 内继续交付（评审实测 700ms 内仍交付新事件）。这里每批重新解析
+ * 空间类型（该查询带 status='active'），因此归档立即生效，不依赖 TTL。
  */
 async function hasStreamAccess(teamAccess: TeamStreamAccess) {
   try {
-    await teamAccess.authorization.authorizeTeamReadAccess(
+    return await canReadWorkspaceObject(
+      teamAccess.authorization,
       teamAccess.workspaceId,
       teamAccess.userId,
-      teamAccess.ttlMs,
     )
-    return true
   } catch {
     return false
   }

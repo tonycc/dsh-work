@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, test } from 'node:test'
 
+import { PostgresAuthorizationService } from '../../modules/authorization/postgres-authorization-service.ts'
 import { ModelGovernanceService } from '../../modules/model/model-governance-service.ts'
 import { PostgresModelGovernanceRepository } from '../../modules/model/postgres-model-governance-repository.ts'
 import { RunOrchestrationService } from '../../modules/run/run-orchestration-service.ts'
@@ -38,7 +39,7 @@ before(async () => {
   throwaway = await createThrowawayDatabase({ namePrefix: 'dsh_work_m4_file_test', maxConnections: 5 })
   database = throwaway.client
   storageRoot = await mkdtemp(join(tmpdir(), 'dsh-work-m4-file-'))
-  content = new PostgresContentService(database, storageRoot)
+  content = new PostgresContentService(database, storageRoot, new PostgresAuthorizationService(database))
   conversations = new PostgresConversationRepository(database)
   runtime = new CapturingFileRuntime()
   orchestration = new RunOrchestrationService(

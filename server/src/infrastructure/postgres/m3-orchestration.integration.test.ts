@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { after, before, test } from 'node:test'
 
 import { PostgresOperationsService } from '../../modules/admin/application/postgres-operations-service.ts'
+import { PostgresAuthorizationService } from '../../modules/authorization/postgres-authorization-service.ts'
 import { ModelGovernanceService } from '../../modules/model/model-governance-service.ts'
 import { PostgresModelGovernanceRepository } from '../../modules/model/postgres-model-governance-repository.ts'
 import { RunOrchestrationService } from '../../modules/run/run-orchestration-service.ts'
@@ -39,7 +40,7 @@ before(async () => {
   runtime = new DeterministicRuntime()
   runs = new PostgresRunRepository(database)
   conversations = new PostgresConversationRepository(database)
-  content = new PostgresContentService(database, `/tmp/dsh-work-m3-test-${randomUUID()}`)
+  content = new PostgresContentService(database, `/tmp/dsh-work-m3-test-${randomUUID()}`, new PostgresAuthorizationService(database))
   operations = new PostgresOperationsService(database)
   orchestration = new RunOrchestrationService(
     runs,

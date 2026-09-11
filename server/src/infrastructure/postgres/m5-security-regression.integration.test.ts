@@ -26,8 +26,8 @@ before(async () => {
   throwaway = await createThrowawayDatabase({ namePrefix: 'dsh_work_m5_security_test', maxConnections: 5 })
   database = throwaway.client
   storageRoot = await mkdtemp(join(tmpdir(), 'dsh-work-m5-security-'))
-  content = new PostgresContentService(database, storageRoot)
   authorization = new PostgresAuthorizationService(database)
+  content = new PostgresContentService(database, storageRoot, authorization)
   operations = new PostgresOperationsService(database, undefined, authorization)
 })
 

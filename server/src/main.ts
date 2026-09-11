@@ -110,9 +110,9 @@ async function start() {
       permissionDecision: async () => 'allow_once',
     })
     const conversations = new PostgresConversationRepository(database)
-    const content = new PostgresContentService(database, resolve(dataRoot, 'storage'))
-    const runs = new PostgresRunRepository(database)
     const authorization = new PostgresAuthorizationService(database)
+    const content = new PostgresContentService(database, resolve(dataRoot, 'storage'), authorization)
+    const runs = new PostgresRunRepository(database)
     const workspaceMembers = new PostgresWorkspaceMemberService(database, authorization)
     const operations = new PostgresOperationsService(
       database,

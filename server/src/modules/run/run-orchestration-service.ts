@@ -500,8 +500,16 @@ export class RunOrchestrationService {
     manifest: RuntimeManifest,
   ): Promise<{ denied: false } | { denied: true; reason: string }> {
     if (!this.authorization) return { denied: false }
+    // 独立运行（无 workspace）沿用既有路径，不做团队复核（AC-23）；必须在类型解析
+    // 之前判断，否则 workspaceTypeOf(null|undefined|'standalone') 都返回 null 而被
+    // 误判为「空间已归档」。
+    if (!manifest.workspace_id) return { denied: false }
     const workspaceType = await this.authorization.workspaceTypeOf(manifest.workspace_id)
-    if (workspaceType !== 'team') return { denied: false }
+    // 个人/独立运行的既有路径不复核（AC-23）；但类型为 null 说明空间已归档或不存在，
+    // 不能当作「非团队」跳过复核，否则归档后排队中的团队运行仍会进入 Runtime
+    // （1B-T4 / §6.5-3，与读取侧同一 fail-closed 口径）。
+    if (workspaceType === null) return { denied: true, reason: '工作空间不存在或已归档' }
+    if (workspaceType === 'personal') return { denied: false }
     try {
       await this.authorization.authorizeTeamRunExecution({
         userId: manifest.user_context.user_id,
