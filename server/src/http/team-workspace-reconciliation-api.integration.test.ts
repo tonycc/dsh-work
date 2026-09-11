@@ -9,8 +9,8 @@ import { PostgresAuthorizationService } from '../modules/authorization/postgres-
 import { PostgresOperationsService } from '../modules/admin/application/postgres-operations-service.ts'
 import { PostgresGrantReconciliationService } from '../modules/admin/application/postgres-grant-reconciliation-service.ts'
 import { PostgresWorkspaceAgentMemberService } from '../modules/workbench/application/postgres-workspace-agent-member-service.ts'
-import { createDatabase, type DatabaseClient } from '../infrastructure/postgres/database.ts'
-import { runMigrations } from '../infrastructure/postgres/migration-runner.ts'
+import type { DatabaseClient } from '../infrastructure/postgres/database.ts'
+import { createThrowawayDatabase, type ThrowawayDatabase } from '../infrastructure/postgres/test-database.ts'
 import { Router } from './router.ts'
 import { registerAgentRoutes } from './admin/agent-routes.ts'
 import { registerOperationsRoutes } from './admin/operations-routes.ts'
@@ -22,13 +22,9 @@ if (!databaseUrl) throw new Error('DSH_WORK_TEST_DATABASE_URL 未配置')
 const tenantId = 'tenant-dsh-work'
 const adminUserId = 'U00008'
 const suffix = randomUUID().replaceAll('-', '')
-const testDatabaseName = `dsh_work_t1a_reconcile_${suffix}`
-const adminUrl = new URL(databaseUrl)
-adminUrl.pathname = '/postgres'
 
-let adminDatabase: DatabaseClient
 let database: DatabaseClient
-let testDatabaseUrl = ''
+let throwaway: ThrowawayDatabase
 let server: Server
 let baseUrl = ''
 let reconciliation: PostgresGrantReconciliationService
@@ -39,13 +35,9 @@ interface AgentMemberRow {
 }
 
 before(async () => {
-  adminDatabase = createDatabase({ url: adminUrl.toString(), maxConnections: 3 })
-  await adminDatabase.unsafe(`create database "${testDatabaseName}"`)
-  const testUrl = new URL(databaseUrl)
-  testUrl.pathname = `/${testDatabaseName}`
-  testDatabaseUrl = testUrl.toString()
-  database = createDatabase({ url: testDatabaseUrl, maxConnections: 8 })
-  await runMigrations(database)
+  // 一次性库：避免共享 dev 库的历史数据累积影响断言。
+  throwaway = await createThrowawayDatabase({ namePrefix: 'dsh_work_reconciliation_api_test', maxConnections: 8 })
+  database = throwaway.client
 
   const authorization = new PostgresAuthorizationService(database)
   const operations = new PostgresOperationsService(database)
@@ -69,11 +61,7 @@ before(async () => {
 
 after(async () => {
   if (server?.listening) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
-  if (database) await database.end()
-  if (adminDatabase) {
-    await adminDatabase.unsafe(`drop database "${testDatabaseName}" with (force)`)
-    await adminDatabase.end()
-  }
+  await throwaway.dispose()
 })
 
 // ---------------------------------------------------------------------------

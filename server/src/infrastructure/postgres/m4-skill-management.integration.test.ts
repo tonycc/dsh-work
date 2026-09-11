@@ -4,26 +4,28 @@ import { after, before, test } from 'node:test'
 import { PostgresAgentService } from '../../modules/agent/postgres-agent-service.ts'
 import { PostgresSkillService } from '../../modules/skill/postgres-skill-service.ts'
 import { PostgresToolConnectorService } from '../../modules/tool/postgres-tool-connector-service.ts'
-import { createDatabase, type DatabaseClient } from './database.ts'
-import { runMigrations } from './migration-runner.ts'
+import type { DatabaseClient } from './database.ts'
+import { createThrowawayDatabase, type ThrowawayDatabase } from './test-database.ts'
 
 const databaseUrl = process.env.DSH_WORK_TEST_DATABASE_URL
 if (!databaseUrl) throw new Error('DSH_WORK_TEST_DATABASE_URL 未配置')
 
 let database: DatabaseClient
+let throwaway: ThrowawayDatabase
 let skills: PostgresSkillService
 let agents: PostgresAgentService
 
 before(async () => {
-  database = createDatabase({ url: databaseUrl, maxConnections: 3 })
-  await runMigrations(database)
+  // 一次性库：避免共享 dev 库的历史数据累积影响断言。
+  throwaway = await createThrowawayDatabase({ namePrefix: 'dsh_work_m4_skill_test', maxConnections: 3 })
+  database = throwaway.client
   const tools = new PostgresToolConnectorService(database)
   skills = new PostgresSkillService(database, undefined, tools)
   agents = new PostgresAgentService(database, undefined, skills, tools)
 })
 
 after(async () => {
-  await database.end()
+  await throwaway.dispose()
 })
 
 test('Skill lifecycle auto-generates identity, gates publishing, versions and preserves Agent snapshots', async () => {

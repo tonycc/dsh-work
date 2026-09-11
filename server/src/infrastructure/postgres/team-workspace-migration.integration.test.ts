@@ -2,20 +2,16 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { after, before, test } from 'node:test'
 
-import { createDatabase, type DatabaseClient } from './database.ts'
 import { runMigrations } from './migration-runner.ts'
+import type { DatabaseClient } from './database.ts'
+import { createThrowawayDatabase, type ThrowawayDatabase } from './test-database.ts'
 
 const databaseUrl = process.env.DSH_WORK_TEST_DATABASE_URL
 if (!databaseUrl) throw new Error('DSH_WORK_TEST_DATABASE_URL 未配置')
 
 let database: DatabaseClient
-let adminDatabase: DatabaseClient
+let throwaway: ThrowawayDatabase
 const suffix = randomUUID()
-// 迁移与回填计数必须跑在一次性库上：共享 dev 库的历史数据会污染 grants/sources
-// 计数，也会让「全新安装」断言失真（交接文档已记录该陷阱）。
-const testDatabaseName = `dsh_work_t1a_migration_${suffix.replaceAll('-', '')}`
-const adminUrl = new URL(databaseUrl)
-adminUrl.pathname = '/postgres'
 const agentId = `agent-1a-${suffix}`
 const teamWorkspaceId = `ws-1a-team-${suffix}`
 const secondUserId = `user-1a-second-${suffix}`
@@ -23,20 +19,14 @@ const personalUserId = `user-1a-personal-${suffix}`
 const personalWorkspaceId = `ws-personal-${personalUserId}`
 
 before(async () => {
-  adminDatabase = createDatabase({ url: adminUrl.toString(), maxConnections: 2 })
-  await adminDatabase.unsafe(`create database "${testDatabaseName}"`)
-  const testUrl = new URL(databaseUrl)
-  testUrl.pathname = `/${testDatabaseName}`
-  database = createDatabase({ url: testUrl.toString(), maxConnections: 4 })
-  await runMigrations(database)
+  // 迁移与回填计数必须跑在一次性库上：共享 dev 库的历史数据会污染 grants/sources
+  // 计数，也会让「全新安装」断言失真。
+  throwaway = await createThrowawayDatabase({ namePrefix: 'dsh_work_t1a_migration_test', maxConnections: 4 })
+  database = throwaway.client
 })
 
 after(async () => {
-  if (database) await database.end()
-  if (adminDatabase) {
-    await adminDatabase.unsafe(`drop database "${testDatabaseName}" with (force)`)
-    await adminDatabase.end()
-  }
+  await throwaway.dispose()
 })
 
 test('0022 applies once and installs the three authorization tables', async () => {

@@ -5,17 +5,13 @@ import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { after, before, test } from 'node:test'
 
-import { createDatabase, type DatabaseClient } from './database.ts'
+import type { DatabaseClient } from './database.ts'
 import { runMigrations } from './migration-runner.ts'
+import { createThrowawayDatabase, type ThrowawayDatabase } from './test-database.ts'
 import { inspectPersonalWorkspaceBaseline } from './team-workspace-upgrade-baseline.ts'
-
-const databaseUrl = process.env.DSH_WORK_TEST_DATABASE_URL
-if (!databaseUrl) throw new Error('DSH_WORK_TEST_DATABASE_URL 未配置')
 
 const tenantId = 'tenant-dsh-work'
 const suffix = randomUUID().replaceAll('-', '')
-const upgradeDatabaseName = `dsh_work_t1a_upgrade_${suffix}`
-const preflightDatabaseName = `dsh_work_t1a_preflight_${suffix}`
 const migrationsDirectory = resolve(import.meta.dirname, '../../../migrations')
 const upgradeTeamWorkspaceId = `ws-t7-upgrade-${suffix}`
 const personalSessionId = `session-t7-personal-${suffix}`
@@ -23,11 +19,8 @@ const personalFileId = `file-t7-personal-${suffix}`
 const personalArtifactId = `artifact-t7-personal-${suffix}`
 const personalWorkspaceId = 'ws-personal-U00001'
 
-const adminUrl = new URL(databaseUrl)
-adminUrl.pathname = '/postgres'
-
-let adminDatabase: DatabaseClient
 let database: DatabaseClient
+let throwaway: ThrowawayDatabase
 let baselineMigrationsDirectory = ''
 let preUpgradeSnapshot: Snapshot
 
@@ -42,17 +35,19 @@ interface Snapshot {
 }
 
 before(async () => {
-  adminDatabase = createDatabase({ url: adminUrl.toString(), maxConnections: 3 })
   // 迁移链 0001~0021 的副本目录：用于构造「已有数据、0022 尚未应用」的升级场景。
   baselineMigrationsDirectory = await mkdtemp(resolve(tmpdir(), 'dsh-work-migrations-'))
   for (const file of (await readdir(migrationsDirectory)).sort()) {
     if (file < '0022') await copyFile(resolve(migrationsDirectory, file), resolve(baselineMigrationsDirectory, file))
   }
 
-  await adminDatabase.unsafe(`create database "${upgradeDatabaseName}"`)
-  const testUrl = new URL(databaseUrl)
-  testUrl.pathname = `/${upgradeDatabaseName}`
-  database = createDatabase({ url: testUrl.toString(), maxConnections: 4 })
+  // 一次性升级库：只应用 0001~0021 基线，随后由用例驱动 0022 升级/回滚。
+  throwaway = await createThrowawayDatabase({
+    namePrefix: 'dsh_work_t1a_upgrade_test',
+    maxConnections: 4,
+    migrate: false,
+  })
+  database = throwaway.client
   await runMigrations(database, baselineMigrationsDirectory)
   await seedPreUpgradeData()
   // 升级前 0022 尚未应用：只读取 0022 之前就存在的表。
@@ -60,13 +55,8 @@ before(async () => {
 })
 
 after(async () => {
-  if (database) await database.end()
+  await throwaway.dispose()
   if (baselineMigrationsDirectory) await rm(baselineMigrationsDirectory, { recursive: true, force: true })
-  if (adminDatabase) {
-    await adminDatabase.unsafe(`drop database if exists "${upgradeDatabaseName}" with (force)`)
-    await adminDatabase.unsafe(`drop database if exists "${preflightDatabaseName}" with (force)`)
-    await adminDatabase.end()
-  }
 })
 
 test('已有数据升级：0022 回填 legacy 来源并保持个人空间业务记录不变（AC-17/AC-27）', async () => {
@@ -177,10 +167,12 @@ test('回滚兼容：删除 0022 对象后旧结构与个人数据完整，重�
 })
 
 test('0013 个人空间基线缺失时停止 0022 升级，修复后重试成功（AC-27）', async () => {
-  const preflightUrl = new URL(databaseUrl)
-  preflightUrl.pathname = `/${preflightDatabaseName}`
-  await adminDatabase.unsafe(`create database "${preflightDatabaseName}"`)
-  const preflightDatabase = createDatabase({ url: preflightUrl.toString(), maxConnections: 2 })
+  const preflightThrowaway = await createThrowawayDatabase({
+    namePrefix: 'dsh_work_t1a_preflight_test',
+    maxConnections: 2,
+    migrate: false,
+  })
+  const preflightDatabase = preflightThrowaway.client
   try {
     await runMigrations(preflightDatabase, baselineMigrationsDirectory)
     // 破坏基线：删除唯一索引并放开空间非空约束。
@@ -216,7 +208,7 @@ test('0013 个人空间基线缺失时停止 0022 升级，修复后重试成功
     assert.equal(baseline.uniqueIndexPresent, true)
     assert.deepEqual(baseline.missingNotNullColumns, [])
   } finally {
-    await preflightDatabase.end()
+    await preflightThrowaway.dispose()
   }
 })
 

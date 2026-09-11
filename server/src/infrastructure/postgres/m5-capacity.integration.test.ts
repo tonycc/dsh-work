@@ -18,11 +18,10 @@ import type {
   RuntimeManifest,
 } from '../../modules/runtime/runtime-types.ts'
 import { PostgresConversationRepository } from '../../modules/workbench/application/postgres-conversation-repository.ts'
-import { createDatabase, type DatabaseClient } from './database.ts'
-import { runMigrations } from './migration-runner.ts'
+import type { DatabaseClient } from './database.ts'
+import { createThrowawayDatabase, type ThrowawayDatabase } from './test-database.ts'
 
-const databaseUrl = process.env.DSH_WORK_TEST_DATABASE_URL
-if (!databaseUrl) throw new Error('DSH_WORK_TEST_DATABASE_URL 未配置')
+let throwaway: ThrowawayDatabase
 
 interface CapacityResult {
   scenario: string
@@ -47,15 +46,16 @@ let models: ModelGovernanceService
 const runtimeRoots: string[] = []
 
 before(async () => {
-  database = createDatabase({ url: databaseUrl, maxConnections: 16 })
-  await runMigrations(database)
+  // 一次性库：避免共享 dev 库的历史数据影响容量基线。
+  throwaway = await createThrowawayDatabase({ namePrefix: 'dsh_work_m5_capacity_test', maxConnections: 16 })
+  database = throwaway.client
   runs = new PostgresRunRepository(database)
   conversations = new PostgresConversationRepository(database)
   models = new ModelGovernanceService(new PostgresModelGovernanceRepository(database))
 })
 
 after(async () => {
-  await database.end()
+  await throwaway.dispose()
   await Promise.all(runtimeRoots.map(root => rm(root, { recursive: true, force: true })))
 })
 

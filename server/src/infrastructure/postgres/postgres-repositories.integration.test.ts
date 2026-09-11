@@ -2,17 +2,16 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { after, before, test } from 'node:test'
 
-import { createDatabase, type DatabaseClient } from './database.ts'
+import type { DatabaseClient } from './database.ts'
+import { createThrowawayDatabase, type ThrowawayDatabase } from './test-database.ts'
 import { runMigrations } from './migration-runner.ts'
 import { PostgresModelGovernanceRepository } from '../../modules/model/postgres-model-governance-repository.ts'
 import { ModelGovernanceService } from '../../modules/model/model-governance-service.ts'
 import { PostgresRunRepository } from '../../modules/run/postgres-run-repository.ts'
 import type { JsonObject } from '../../modules/run/run-types.ts'
 
-const databaseUrl = process.env.DSH_WORK_TEST_DATABASE_URL
-if (!databaseUrl) throw new Error('DSH_WORK_TEST_DATABASE_URL 未配置')
-
 let database: DatabaseClient
+let throwaway: ThrowawayDatabase
 let runs: PostgresRunRepository
 const suffix = randomUUID()
 const agentId = `agent-m2-${suffix}`
@@ -20,14 +19,15 @@ const agentVersionId = `agent-version-m2-${suffix}`
 const sessionId = `session-m2-${suffix}`
 
 before(async () => {
-  database = createDatabase({ url: databaseUrl, maxConnections: 4 })
-  await runMigrations(database)
+  // 一次性库：共享 dev 库的历史累积会让 run/事件断言互相干扰。
+  throwaway = await createThrowawayDatabase({ namePrefix: 'dsh_work_m2_repositories_test', maxConnections: 4 })
+  database = throwaway.client
   runs = new PostgresRunRepository(database)
   await seedRunDependencies(database)
 })
 
 after(async () => {
-  await database.end()
+  await throwaway.dispose()
 })
 
 test('migrations are idempotent and install the complete M2 table set', async () => {

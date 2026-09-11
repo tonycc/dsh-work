@@ -21,13 +21,14 @@ import type {
 import { PostgresSkillService } from '../../modules/skill/postgres-skill-service.ts'
 import { PostgresToolConnectorService } from '../../modules/tool/postgres-tool-connector-service.ts'
 import { PostgresConversationRepository } from '../../modules/workbench/application/postgres-conversation-repository.ts'
-import { createDatabase, type DatabaseClient } from './database.ts'
-import { runMigrations } from './migration-runner.ts'
+import type { DatabaseClient } from './database.ts'
+import { createThrowawayDatabase, type ThrowawayDatabase } from './test-database.ts'
 
 const databaseUrl = process.env.DSH_WORK_TEST_DATABASE_URL
 if (!databaseUrl) throw new Error('DSH_WORK_TEST_DATABASE_URL 未配置')
 
 let database: DatabaseClient
+let throwaway: ThrowawayDatabase
 let runtime: OperationalRuntime
 let operations: PostgresOperationsService
 let conversations: PostgresConversationRepository
@@ -35,8 +36,9 @@ let runs: PostgresRunRepository
 let orchestration: RunOrchestrationService
 
 before(async () => {
-  database = createDatabase({ url: databaseUrl, maxConnections: 6 })
-  await runMigrations(database)
+  // 一次性库：避免共享 dev 库的历史数据累积影响断言。
+  throwaway = await createThrowawayDatabase({ namePrefix: 'dsh_work_m4_runtime_test', maxConnections: 6 })
+  database = throwaway.client
   runtime = new OperationalRuntime()
   const authorization = new PostgresAuthorizationService(database)
   operations = new PostgresOperationsService(database, runtime, authorization)
@@ -78,7 +80,7 @@ after(async () => {
     }
   } finally {
     if (orchestration) await orchestration.close()
-    if (database) await database.end()
+    if (throwaway) await throwaway.dispose()
   }
 })
 

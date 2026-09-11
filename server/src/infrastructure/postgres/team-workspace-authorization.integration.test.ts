@@ -6,7 +6,7 @@ import { PostgresAgentService } from '../../modules/agent/postgres-agent-service
 import { PostgresAuthorizationService } from '../../modules/authorization/postgres-authorization-service.ts'
 import { PostgresWorkspaceGrantSourceService } from '../../modules/authorization/postgres-workspace-grant-source-service.ts'
 import { createDatabase, type DatabaseClient } from './database.ts'
-import { runMigrations } from './migration-runner.ts'
+import { createThrowawayDatabase, type ThrowawayDatabase } from './test-database.ts'
 
 const databaseUrl = process.env.DSH_WORK_TEST_DATABASE_URL
 if (!databaseUrl) throw new Error('DSH_WORK_TEST_DATABASE_URL 未配置')
@@ -15,37 +15,25 @@ const tenantId = 'tenant-dsh-work'
 const suffix = randomUUID()
 
 let database: DatabaseClient
-let adminDatabase: DatabaseClient
+let throwaway: ThrowawayDatabase
 let authorization: PostgresAuthorizationService
 let grantSources: PostgresWorkspaceGrantSourceService
 let agents: PostgresAgentService
-// 一次性测试库：共享 dev 库的历史数据会让「候选列表」「种子 grants」等全量断言
-// 失真（交接文档已记录该陷阱）。
-const testDatabaseName = `dsh_work_t1a_auth_${suffix.replaceAll('-', '')}`
-const adminUrl = new URL(databaseUrl)
-adminUrl.pathname = '/postgres'
 /** 套件自身的测试库 URL；并发用例的第二个会话必须连同一个库。 */
 let testDatabaseUrl = ''
 
 before(async () => {
-  adminDatabase = createDatabase({ url: adminUrl.toString(), maxConnections: 2 })
-  await adminDatabase.unsafe(`create database "${testDatabaseName}"`)
-  const testUrl = new URL(databaseUrl)
-  testUrl.pathname = `/${testDatabaseName}`
-  testDatabaseUrl = testUrl.toString()
-  database = createDatabase({ url: testDatabaseUrl, maxConnections: 4 })
-  await runMigrations(database)
+  // 一次性库：共享 dev 库的历史数据会让「候选列表」「种子 grants」等全量断言失真。
+  throwaway = await createThrowawayDatabase({ namePrefix: 'dsh_work_t1a_auth_test', maxConnections: 4 })
+  database = throwaway.client
+  testDatabaseUrl = throwaway.url
   authorization = new PostgresAuthorizationService(database)
   grantSources = new PostgresWorkspaceGrantSourceService()
   agents = new PostgresAgentService(database)
 })
 
 after(async () => {
-  if (database) await database.end()
-  if (adminDatabase) {
-    await adminDatabase.unsafe(`drop database "${testDatabaseName}" with (force)`)
-    await adminDatabase.end()
-  }
+  await throwaway.dispose()
 })
 
 // ---------------------------------------------------------------------------

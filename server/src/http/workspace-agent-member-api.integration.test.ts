@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict'
-import { randomUUID } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
 import { after, before, test } from 'node:test'
 
@@ -18,8 +17,8 @@ import type {
 } from '../modules/runtime/runtime-types.ts'
 import { PostgresConversationRepository } from '../modules/workbench/application/postgres-conversation-repository.ts'
 import { PostgresWorkspaceAgentMemberService } from '../modules/workbench/application/postgres-workspace-agent-member-service.ts'
-import { createDatabase, type DatabaseClient, type DatabaseTransaction } from '../infrastructure/postgres/database.ts'
-import { runMigrations } from '../infrastructure/postgres/migration-runner.ts'
+import type { DatabaseClient, DatabaseTransaction } from '../infrastructure/postgres/database.ts'
+import { createThrowawayDatabase, type ThrowawayDatabase } from '../infrastructure/postgres/test-database.ts'
 import { Router } from './router.ts'
 import { registerWorkspaceAgentMemberRoutes } from './workbench/workspace-agent-member-routes.ts'
 import { registerConversationRoutes } from './workbench/conversation-routes.ts'
@@ -28,12 +27,9 @@ const databaseUrl = process.env.DSH_WORK_TEST_DATABASE_URL
 if (!databaseUrl) throw new Error('DSH_WORK_TEST_DATABASE_URL 未配置')
 
 const tenantId = 'tenant-dsh-work'
-const testDatabaseName = `dsh_work_agent_member_api_test_${randomUUID().replaceAll('-', '')}`
-const adminUrl = new URL(databaseUrl)
-adminUrl.pathname = '/postgres'
 
-let adminDatabase: DatabaseClient
 let database: DatabaseClient
+let throwaway: ThrowawayDatabase
 let server: Server
 let baseUrl = ''
 let authorization: PostgresAuthorizationService
@@ -69,12 +65,9 @@ interface RevocationEventRow {
 }
 
 before(async () => {
-  adminDatabase = createDatabase({ url: adminUrl.toString(), maxConnections: 3 })
-  await adminDatabase.unsafe(`create database "${testDatabaseName}"`)
-  const testUrl = new URL(databaseUrl)
-  testUrl.pathname = `/${testDatabaseName}`
-  database = createDatabase({ url: testUrl.toString(), maxConnections: 8 })
-  await runMigrations(database)
+  // 一次性库：避免共享 dev 库的历史数据累积影响断言。
+  throwaway = await createThrowawayDatabase({ namePrefix: 'dsh_work_agent_member_api_test', maxConnections: 8 })
+  database = throwaway.client
 
   authorization = new PostgresAuthorizationService(database)
   agents = new PostgresAgentService(database)
@@ -106,11 +99,7 @@ before(async () => {
 
 after(async () => {
   if (server?.listening) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
-  if (database) await database.end()
-  if (adminDatabase) {
-    await adminDatabase.unsafe(`drop database "${testDatabaseName}" with (force)`)
-    await adminDatabase.end()
-  }
+  await throwaway.dispose()
 })
 
 // ---------------------------------------------------------------------------

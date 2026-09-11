@@ -4,25 +4,27 @@ import { after, before, test } from 'node:test'
 
 import { PostgresRunRepository } from '../../modules/run/postgres-run-repository.ts'
 import { PostgresConversationRepository } from '../../modules/workbench/application/postgres-conversation-repository.ts'
-import { createDatabase, type DatabaseClient } from './database.ts'
-import { runMigrations } from './migration-runner.ts'
+import type { DatabaseClient } from './database.ts'
+import { createThrowawayDatabase, type ThrowawayDatabase } from './test-database.ts'
 
 const databaseUrl = process.env.DSH_WORK_TEST_DATABASE_URL
 if (!databaseUrl) throw new Error('DSH_WORK_TEST_DATABASE_URL 未配置')
 
 let database: DatabaseClient
+let throwaway: ThrowawayDatabase
 let conversations: PostgresConversationRepository
 let runs: PostgresRunRepository
 
 before(async () => {
-  database = createDatabase({ url: databaseUrl, maxConnections: 4 })
-  await runMigrations(database)
+  // 一次性库：避免共享 dev 库的历史数据累积影响断言。
+  throwaway = await createThrowawayDatabase({ namePrefix: 'dsh_work_m4_notification_test', maxConnections: 4 })
+  database = throwaway.client
   conversations = new PostgresConversationRepository(database)
   runs = new PostgresRunRepository(database)
 })
 
 after(async () => {
-  if (database) await database.end()
+  await throwaway.dispose()
 })
 
 test('failed Attempts expose persisted error codes as object, reason and next step', async () => {

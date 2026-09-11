@@ -24,8 +24,8 @@ import { PostgresWorkspaceAgentMemberService } from '../../modules/workbench/app
 import { PostgresWorkspaceMemberService } from '../../modules/workbench/application/postgres-workspace-member-service.ts'
 import { streamRunEvents, registerConversationRoutes } from '../../http/workbench/conversation-routes.ts'
 import { Router } from '../../http/router.ts'
-import { createDatabase, type DatabaseClient } from './database.ts'
-import { runMigrations } from './migration-runner.ts'
+import type { DatabaseClient } from './database.ts'
+import { createThrowawayDatabase, type ThrowawayDatabase } from './test-database.ts'
 import { createServer, type Server } from 'node:http'
 
 const databaseUrl = process.env.DSH_WORK_TEST_DATABASE_URL
@@ -33,12 +33,9 @@ if (!databaseUrl) throw new Error('DSH_WORK_TEST_DATABASE_URL 未配置')
 
 const tenantId = 'tenant-dsh-work'
 const runtimeId = 'runtime-local-01'
-const testDatabaseName = `dsh_work_revocation_test_${randomUUID().replaceAll('-', '')}`
-const adminUrl = new URL(databaseUrl)
-adminUrl.pathname = '/postgres'
 
-let adminDatabase: DatabaseClient
 let database: DatabaseClient
+let throwaway: ThrowawayDatabase
 let runtime: FakeRuntime
 let authorization: PostgresAuthorizationService
 let conversations: PostgresConversationRepository
@@ -51,12 +48,9 @@ let server: Server
 let baseUrl = ''
 
 before(async () => {
-  adminDatabase = createDatabase({ url: adminUrl.toString(), maxConnections: 3 })
-  await adminDatabase.unsafe(`create database "${testDatabaseName}"`)
-  const testUrl = new URL(databaseUrl)
-  testUrl.pathname = `/${testDatabaseName}`
-  database = createDatabase({ url: testUrl.toString(), maxConnections: 10 })
-  await runMigrations(database)
+  // 一次性库：避免共享 dev 库的历史数据累积影响断言。
+  throwaway = await createThrowawayDatabase({ namePrefix: 'dsh_work_revocation_api_test', maxConnections: 10 })
+  database = throwaway.client
   // 本套件用共享的 runtime-local-01 跑真实调度（startRun / recoverAfterServiceRestart）。
   // claimAttempt 按 runtime 全局统计 status='running' 的 attempt 占用容量，而多个用例
   // 会直接落库 running 的 run/attempt 作为夹具，会跨用例耗尽默认容量 2，导致后续用例
@@ -114,11 +108,7 @@ before(async () => {
 after(async () => {
   if (server?.listening) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
   if (orchestration) await orchestration.close()
-  if (database) await database.end()
-  if (adminDatabase) {
-    await adminDatabase.unsafe(`drop database "${testDatabaseName}" with (force)`)
-    await adminDatabase.end()
-  }
+  await throwaway.dispose()
 })
 
 // ---------------------------------------------------------------------------

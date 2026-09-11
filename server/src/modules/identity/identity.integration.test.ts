@@ -3,20 +3,14 @@ import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import { after, before, test } from 'node:test'
 
-import { createDatabase, type DatabaseClient } from '../../infrastructure/postgres/database.ts'
-import { runMigrations } from '../../infrastructure/postgres/migration-runner.ts'
+import type { DatabaseClient } from '../../infrastructure/postgres/database.ts'
+import { createThrowawayDatabase, type ThrowawayDatabase } from '../../infrastructure/postgres/test-database.ts'
 import { PostgresAuthorizationService } from '../authorization/postgres-authorization-service.ts'
 import { IdentityAdministrationService } from './administration-service.ts'
 import { IdentityDirectorySyncService } from './directory-sync-service.ts'
 import { SecretBox, hashOpaque, randomOpaque } from './secure-values.ts'
 import { IdentitySessionRepository } from './session-repository.ts'
 import type { OidcIdentityConfiguration } from './types.ts'
-
-const databaseUrl = process.env.DSH_WORK_TEST_DATABASE_URL
-  ?? (process.env.DSH_WORK_INTEGRATION_USE_MAIN_DATABASE === 'true'
-    ? process.env.DSH_WORK_DATABASE_URL
-    : undefined)
-if (!databaseUrl) throw new Error('DSH_WORK_TEST_DATABASE_URL 未配置')
 
 const suffix = randomUUID()
 const subject = `ai-hub-integration-${suffix}`
@@ -28,12 +22,14 @@ let directoryPlatformUserId = ''
 let backupAdminUserId = ''
 let legacyUserId = ''
 let database: DatabaseClient
+let throwaway: ThrowawayDatabase
 let repository: IdentitySessionRepository
 let administration: IdentityAdministrationService
 
 before(async () => {
-  database = createDatabase({ url: databaseUrl, maxConnections: 4 })
-  await runMigrations(database)
+  // 一次性库：避免共享 dev 库的历史数据影响目录同步与授权断言。
+  throwaway = await createThrowawayDatabase({ namePrefix: 'dsh_work_identity_test', maxConnections: 4 })
+  database = throwaway.client
   repository = new IdentitySessionRepository(database)
   administration = new IdentityAdministrationService(database)
 })
@@ -51,7 +47,7 @@ after(async () => {
   }
   await database`delete from audit_events where object_id = ${applicationId} or actor_id = 'service:dsh-work-directory-test'`
   await database`delete from identity_directory_sync_state where application_id = ${applicationId}`
-  await database.end()
+  await throwaway.dispose()
 })
 
 async function cleanupUser(userId: string) {

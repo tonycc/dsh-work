@@ -10,11 +10,10 @@ import { PostgresAuthorizationService } from '../../modules/authorization/postgr
 import { PostgresRunRepository } from '../../modules/run/postgres-run-repository.ts'
 import { PostgresContentService } from '../../modules/workbench/application/postgres-content-service.ts'
 import { PostgresConversationRepository } from '../../modules/workbench/application/postgres-conversation-repository.ts'
-import { createDatabase, type DatabaseClient } from './database.ts'
-import { runMigrations } from './migration-runner.ts'
+import type { DatabaseClient } from './database.ts'
+import { createThrowawayDatabase, type ThrowawayDatabase } from './test-database.ts'
 
-const databaseUrl = process.env.DSH_WORK_TEST_DATABASE_URL
-if (!databaseUrl) throw new Error('DSH_WORK_TEST_DATABASE_URL 未配置')
+let throwaway: ThrowawayDatabase
 
 let database: DatabaseClient
 let storageRoot = ''
@@ -23,8 +22,9 @@ let authorization: PostgresAuthorizationService
 let operations: PostgresOperationsService
 
 before(async () => {
-  database = createDatabase({ url: databaseUrl, maxConnections: 5 })
-  await runMigrations(database)
+  // 一次性库：避免共享 dev 库的历史数据干扰断言。
+  throwaway = await createThrowawayDatabase({ namePrefix: 'dsh_work_m5_security_test', maxConnections: 5 })
+  database = throwaway.client
   storageRoot = await mkdtemp(join(tmpdir(), 'dsh-work-m5-security-'))
   content = new PostgresContentService(database, storageRoot)
   authorization = new PostgresAuthorizationService(database)
@@ -32,7 +32,7 @@ before(async () => {
 })
 
 after(async () => {
-  if (database) await database.end()
+  await throwaway.dispose()
   if (storageRoot) await rm(storageRoot, { recursive: true, force: true })
 })
 

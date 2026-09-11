@@ -16,11 +16,10 @@ import type {
   RuntimeManifest,
 } from '../../modules/runtime/runtime-types.ts'
 import { PostgresConversationRepository } from '../../modules/workbench/application/postgres-conversation-repository.ts'
-import { createDatabase, type DatabaseClient } from './database.ts'
-import { runMigrations } from './migration-runner.ts'
+import type { DatabaseClient } from './database.ts'
+import { createThrowawayDatabase, type ThrowawayDatabase } from './test-database.ts'
 
-const databaseUrl = process.env.DSH_WORK_TEST_DATABASE_URL
-if (!databaseUrl) throw new Error('DSH_WORK_TEST_DATABASE_URL 未配置')
+let throwaway: ThrowawayDatabase
 
 let database: DatabaseClient
 let runs: PostgresRunRepository
@@ -28,15 +27,16 @@ let conversations: PostgresConversationRepository
 let models: ModelGovernanceService
 
 before(async () => {
-  database = createDatabase({ url: databaseUrl, maxConnections: 6 })
-  await runMigrations(database)
+  // 一次性库：避免共享 dev 库的历史数据干扰断言。
+  throwaway = await createThrowawayDatabase({ namePrefix: 'dsh_work_m5_faults_test', maxConnections: 6 })
+  database = throwaway.client
   runs = new PostgresRunRepository(database)
   conversations = new PostgresConversationRepository(database)
   models = new ModelGovernanceService(new PostgresModelGovernanceRepository(database))
 })
 
 after(async () => {
-  await database.end()
+  await throwaway.dispose()
 })
 
 test('service restart fails orphaned active Attempts, resumes queued work and preserves the event cursor', async () => {
