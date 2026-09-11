@@ -24,6 +24,10 @@
 | **1A-T5 收权链路** | ✅ **实现完成、两级评审已修**：`f45686b` + `8a95574`/`94d1ddd` + 评审修复；`pnpm test:m5:revocation:integration` **21/21 且连续多次稳定**，`test:m5:revocation`（分类器单测）接入 `ci:check` | `f45686b`、`8a95574`、`94d1ddd`、`b20a675`、`912497c`、`279e540`、`97b7c5e` |
 | **1A-T6 前端成员管理** | ✅ **实现完成、规格评审已修**：`a2a83ed`..`f16fb8c` 六个提交 + 对接修复 `462bfbb`/`dddc794`；`pnpm test:m5:frontend` **workbench 85 / admin 18 全绿** | `a2a83ed`、`2558908`、`db2e016`、`5f9cb67`、`1f2c226`、`f16fb8c`、`462bfbb`、`dddc794` |
 | **1A-T7 对账清单与迁移验证** | ✅ **实现完成、规格符合性 + 质量评审已修**：6 个提交 + 锁序/基线修复；reconciliation 8/8、upgrade 4/4、migration 10/10 | `09800d0`、`73578d6`、`27507bb`、`1fab46a`、`272fd10`、`2a09842`、`769fad9`、`a85b703` |
+| 1A 合并与 CI 接入 | ✅ `main` 已含 1A 并推送；6 个团队集成套件接入 CI 门禁，`M6 quality gate` 通过 | `bf9d58c`、`7d49c74`、`55da0d7` |
+| 测试基础设施 | ✅ 全部 **21 个**集成套件改为一次性库（`test-database.ts` 的 `createThrowawayDatabase()`），消除共享库污染 | `c97db7b`（未推送） |
+| **1B 团队资料与本人对话** | 🚧 **启动**：TW-03 本人历史列表、TW-05、团队 Session 分页、来源限制采集、文件／SSE 收权、可见统计性能基线 | — |
+| 2A / 2B / 3 / TW-09 | ⬜ 未开始 | — |
 
 **T6/T7 评审结论与关键技术结论（2026-09-10）：**
 
@@ -113,7 +117,28 @@ WIP 首次运行是 **16 个用例 8 失败**，修复分两类：
 - 迁移集成验证：全新安装/升级/重跑/回滚（AC-17/AC-27 口径）。
 - 遗留观察：0013 触发器对 personal→team 移动不校验旧空间（评审已记录，可在此任务一并修或记录决策）。
 
-## 6. 工程约定
+## 6. 1B 团队资料与本人对话（进行中）
+
+**范围（方案 §7 批次 1B）**：TW-03 本人历史列表、TW-05 共享文件、团队 Session 分页、来源限制采集、文件／SSE 收权、可见统计性能基线。**依赖 1A 的授权与撤权机制（已交付）**。
+
+**退出条件（方案 §7）**：A 上传不可变文件，B 引用完成真实 DSH 对话并能继续；AC-09 收权通过，输入与结果可追溯来源限制，个人空间回归不变。
+
+**实现要点（设计 §2.2 / §2.3 + 方案 §6.2 / §6.3 / §6.6）**：
+- 员工端对话页签「新对话／历史对话」segmented 切换，写入 `?view=history`，历史视图替换 Starter：标题搜索 + 游标分页（「加载更多」／「已加载全部」）、行含状态点/标题/发起人/最近活动/最新运行状态、整行进入 `/conversations/:runId`（服务端解析到 Session，兼容 Run ID 链接）。**「我的对话／团队共享」与发起人筛选属 2A，首版不渲染空入口。**
+- 团队 Session 分页服务端接口：按 Session 去重、稳定排序（最近活动倒序）、按授权结果汇总分页与计数；新增必要索引与摘要投影（方案 §6.3「Session 查询」）。
+- 共享文件页签：名称搜索、状态映射（上传中/处理中/可引用/失败+原因）、操作区「引用到对话 + 下载 + 更多（移除）」、权限（只读成员不渲染上传与移除；成员仅对自己上传的显示移除）。**「上传新版本」属 TW-07（P1），本批不渲染。**
+- **来源限制采集**（方案 §6.3）：为团队输入文件、知识或工具返回数据记录可追溯来源标识与访问限制并随结果保存；缺失限制标记为「不可判定」。这是 2A 派生/撤回的前置。
+- 文件与 SSE 收权按 1A 已有机制扩展：文件下载、结果读取与已建立订阅在失权后拒绝（AC-09 口径）。
+- 可见统计性能基线（方案 §6.6）：多成员、多会话、单会话 >50 Run 的数据基线，记录查询计划、延迟分位数、数据量与并发。
+
+**承接 1A 的硬约束**：
+- **个人空间零改动（AC-23）** 仍是红线：团队分页/来源限制/收权只在团队分支生效，个人空间接口与页面行为保持现状。
+- 新增集成套件必须用 `createThrowawayDatabase()`（见 §7），不要直连共享库。
+- 新增/修改 API 必须同步 OpenAPI 契约并跑 `pnpm verify`；新增授权拒绝统一抛 `authorizationDenied(...)`（勿再依赖文案分类）。
+
+**1A 遗留中与本批相关的项**：`GET /workspaces` 的 `owner` 仍是创建者显示名且缺 `status`（历史列表「发起人/负责人」展示口径、归档筛选依赖它）；员工名册无 `department`；Agent「不可用」第三态与原因。
+
+## 7. 工程约定
 
 - **测试数据库**：本机 docker 容器 `dsh-work-postgres-local`，端口 15433，`postgres://dsh_work:change-me@127.0.0.1:15433/postgres`。`DSH_WORK_TEST_DATABASE_URL` 只需指向该实例的 `postgres` 维护库；**全部 21 个集成套件**（`server/src/**/*integration.test.ts`）统一通过 `server/src/infrastructure/postgres/test-database.ts` 的 `createThrowawayDatabase()` 各自创建、迁移、销毁一次性库，因此不再有共享库历史污染问题——此前「**不要**对共享 dev 库 `dsh_work` 跑 T2 套件（历史污染导致误失败）」的警告已随该迁移失效。**新增集成套件请直接用该 helper，不要再直连共享库。**
 - **验证命令**：`pnpm verify`（文档/契约静态检查，改 OpenAPI 后必跑）、`pnpm lint`（含 architecture 与 UI 校验）、`pnpm --filter @dsh-work/server typecheck`。测试脚本已并入 server/package.json 与根 package.json（`test:m4:team-auth:integration`、`test:m5:workspace:integration`、`test:m5:members:integration`、`test:m5:agent-members:integration` 等）。
@@ -121,10 +146,10 @@ WIP 首次运行是 **16 个用例 8 失败**，修复分两类：
 - **工作流**：subagent-driven-development——实现子代理（TDD，先红后绿）→ 规格符合性评审（独立验证、重跑测试）→ 代码质量评审（对抗性验证，前序任务靠它抓到 6 个并发类缺陷）→ 修复 → 复审。评审不可跳过；本批次每个任务的修复轮都来自评审发现。
 - **个人空间零改动**是贯穿所有任务的验收红线（AC-23）。
 
-## 7. 1A 退出条件（完成 T5/T6/T7 后核对）
+## 8. 1A 退出条件（已达成）
 
-- 两名员工和一个 Agent 可协作；
-- 多 Agent 共享授权不误删（AC-26）；
-- Agent 或员工收权能阻止新增、排队和后续交付（AC-09 口径，T5 交付）。
+- 两名员工和一个 Agent 可协作 ✅：员工成员 API（T3）+ Agent 成员 API（T4）+ 名册接口 + 员工端成员管理与 Agent 发起入口（T6）。
+- 多 Agent 共享授权不误删（AC-26）✅：`workspace_grant_sources` 多来源、撤销单来源不误删（`workspace-agent-member-api` 用例）、legacy 对账后保留共享工具授权（T7）。
+- Agent 或员工收权能阻止新增、排队和后续交付（AC-09）✅：撤权清扫 + 执行前复核 + 系统取消 + SSE 逐批拦截 + REST 详情/列表/取消读取拦截（T5 及其评审修复）。
 
-完成后按批次退出条件更新 `team-workspace-plan.md` 第 10 节交付状态，再进入 1B 规划。
+以上三条由 `pnpm verify` 的 `team-workspace-1a` 检查组锁定证据锚点（契约路径、迁移、关键用例），任一处被删或改名即失败。`team-workspace-plan.md` 第 10 节已同步交付状态；下一批为 1B（见 §6）。
