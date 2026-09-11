@@ -256,7 +256,8 @@ export class PostgresContentService {
     `
 
     const hasMore = rows.length > limit
-    const items = rows.slice(0, limit).map(row => ({
+    const page = rows.slice(0, limit)
+    const items = page.map(row => ({
       id: row.id,
       name: row.originalName,
       type: extname(row.originalName).slice(1).toUpperCase() || 'FILE',
@@ -269,10 +270,13 @@ export class PostgresContentService {
       removable: canManageAll || row.uploadedById === input.actorUserId,
       canDownload: row.scanStatus === 'clean',
     }))
-    const last = items[items.length - 1]
+    // 游标必须用原始时间戳：uploadedAt 是展示格式，喂回 timestamptz 会解析失败。
+    const lastRow = page[page.length - 1]
     return {
       items,
-      nextCursor: hasMore && last ? encodeFileCursor(last.uploadedAt, last.id) : null,
+      nextCursor: hasMore && lastRow
+        ? encodeFileCursor(lastRow.createdAt.toISOString(), lastRow.id)
+        : null,
     }
   }
 
