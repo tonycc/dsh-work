@@ -18,7 +18,7 @@ import type {
 } from '../modules/runtime/runtime-types.ts'
 import { PostgresConversationRepository } from '../modules/workbench/application/postgres-conversation-repository.ts'
 import { PostgresWorkspaceAgentMemberService } from '../modules/workbench/application/postgres-workspace-agent-member-service.ts'
-import { createDatabase, type DatabaseClient } from '../infrastructure/postgres/database.ts'
+import { createDatabase, type DatabaseClient, type DatabaseTransaction } from '../infrastructure/postgres/database.ts'
 import { runMigrations } from '../infrastructure/postgres/migration-runner.ts'
 import { Router } from './router.ts'
 import { registerWorkspaceAgentMemberRoutes } from './workbench/workspace-agent-member-routes.ts'
@@ -623,6 +623,113 @@ test('停用→启用→停用只产生一行 agent_disabled 事件（去重由�
   assert.equal(disabledEvents.length, 1, '重复停用只应产生一行事件')
   assert.equal(disabledEvents[0]?.userId, wamId)
   assert.deepEqual(disabledEvents[0]?.payload, { agentMemberId: wamId, agentId: agent.id })
+})
+
+// ---------------------------------------------------------------------------
+// 事务内角色复核（TOCTOU）
+// ---------------------------------------------------------------------------
+
+test('加入 Agent 时若负责人转交发生在前置检查与加锁之间，旧负责人写入被拒绝', async () => {
+  const workspaceId = 'ws-1a-ag-lock-role'
+  const oldOwnerId = 'user-1a-ag-lock-role-old'
+  const newOwnerId = 'user-1a-ag-lock-role-new'
+  await createDirectoryUser(oldOwnerId, '转交前负责人')
+  await createDirectoryUser(newOwnerId, '转交后负责人')
+  await createTeamWorkspace(workspaceId, [
+    { userId: oldOwnerId, role: 'owner' },
+    { userId: newOwnerId, role: 'admin' },
+  ])
+  await createTool({ id: 'tool-1a-lockrole' })
+  await createSkill({ id: 'skill-1a-lockrole', toolRefs: ['tool-1a-lockrole@1.0.0'] })
+  const agent = await createPublishedAgent({
+    id: 'agent-1a-lockrole',
+    name: 'TOCTOU Agent',
+    skillRefs: ['skill-1a-lockrole@1.0.0'],
+    toolRefs: ['tool-1a-lockrole@1.0.0'],
+  })
+
+  // 旧负责人的前置角色检查已通过；在其事务拿到空间锁之后、事务内角色复核之前
+  // 提交负责人转交。旧负责人不得再写入成员与授权（P1-4）。
+  //
+  // 事务内的探针调用顺序固定（与 addAgentMember 一致）：
+  //   1) lockWorkspaceRow（select ... for update）
+  //   2) 事务内 requireActorRole（select member_role ...）
+  // 在第 2 次探针调用前提交转交，即可精确制造「加锁后、复核前」的窗口。
+  const originalBegin = database.begin.bind(database)
+  let transferred = false
+  let probeCalls = 0
+  const racingDatabase = new Proxy(database, {
+    get(target, property, receiver) {
+      if (property !== 'begin') {
+        const value = Reflect.get(target, property, receiver) as unknown
+        return typeof value === 'function' ? value.bind(target) : value
+      }
+      return async (callback: (transaction: DatabaseTransaction) => Promise<unknown>) => originalBegin(async (transaction) => {
+        const probe = ((strings: TemplateStringsArray, ...values: unknown[]) => {
+          probeCalls += 1
+          if (!transferred && probeCalls === 2) {
+            transferred = true
+            return transaction.unsafe(
+              `update workspace_members set member_role = 'admin'
+                where tenant_id = '${tenantId}' and workspace_id = '${workspaceId}' and user_id = '${oldOwnerId}'`,
+            ).then(() => transaction.unsafe(
+              `update workspace_members set member_role = 'owner'
+                where tenant_id = '${tenantId}' and workspace_id = '${workspaceId}' and user_id = '${newOwnerId}'`,
+            )).then(() => transaction(strings, ...values))
+          }
+          return transaction(strings, ...values)
+        }) as unknown as DatabaseTransaction
+        probe.unsafe = transaction.unsafe.bind(transaction)
+        return callback(probe)
+      })
+    },
+  }) as DatabaseClient
+
+  const racingService = new PostgresWorkspaceAgentMemberService(racingDatabase, authorization, agents)
+  await assert.rejects(
+    racingService.addAgentMember(workspaceId, agent.id, oldOwnerId, ['role-employee']),
+    /当前用户角色没有权限执行此操作|当前用户不是该空间的成员/,
+    '拿到空间锁后必须复核当前角色',
+  )
+  assert.equal(transferred, true, '转交应当在事务内角色复核前提交')
+  const members = await database<{ id: string }[]>`
+    select id from workspace_agent_members
+     where tenant_id = ${tenantId} and workspace_id = ${workspaceId}
+  `
+  assert.equal(members.length, 0, '旧负责人不得写入成员关系')
+})
+
+test('加入 Agent 时复核角色可见范围：提交负责人不可见的 Agent 被拒绝', async () => {
+  const workspaceId = 'ws-1a-ag-role-scope'
+  const ownerId = 'user-1a-ag-role-scope-owner'
+  await createDirectoryUser(ownerId, '可见范围负责人')
+  await createTeamWorkspace(workspaceId, [{ userId: ownerId, role: 'owner' }])
+  await createTool({ id: 'tool-1a-role-scope' })
+  await createSkill({ id: 'skill-1a-role-scope', toolRefs: ['tool-1a-role-scope@1.0.0'] })
+  // 该 Agent 只对平台管理员角色可见，而负责人的会话角色是 role-employee。
+  const hidden = await createPublishedAgent({
+    id: 'agent-1a-role-scope',
+    name: '不可见 Agent',
+    roleIds: ['role-platform-admin'],
+    skillRefs: ['skill-1a-role-scope@1.0.0'],
+    toolRefs: ['tool-1a-role-scope@1.0.0'],
+  })
+
+  await assert.rejects(
+    agentMembers.addAgentMember(workspaceId, hidden.id, ownerId, ['role-employee']),
+    /当前用户角色不可使用所选 Agent/,
+    '候选列表只负责展示，写入前必须按添加人角色复核可见范围',
+  )
+  const members = await database<{ id: string }[]>`
+    select id from workspace_agent_members
+     where tenant_id = ${tenantId} and workspace_id = ${workspaceId}
+  `
+  assert.equal(members.length, 0, '越权提交不得写入成员关系与授权来源')
+  const sources = await database<{ count: number }[]>`
+    select count(*)::integer as count from workspace_grant_sources
+     where tenant_id = ${tenantId} and workspace_id = ${workspaceId}
+  `
+  assert.equal(sources[0]?.count, 0, '越权提交不得写入授权来源')
 })
 
 // ---------------------------------------------------------------------------

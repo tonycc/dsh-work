@@ -55,7 +55,12 @@ export function registerWorkspaceAgentMemberRoutes(
     await requireTeamActor(authorization, identity, workspaceId, ['owner'])
     const body = await readJsonBody<{ agentId?: unknown }>(request)
     const agentId = requireNonEmptyString(body.agentId, 'agentId')
-    const member = await agentMembers.addAgentMember(workspaceId, agentId, identity.userId)
+    const member = await agentMembers.addAgentMember(
+      workspaceId,
+      agentId,
+      identity.userId,
+      sessionAuthorizationContext(identity).roleIds,
+    )
     return httpResult(201, envelope('workbench', member, 'postgres'))
   })
 

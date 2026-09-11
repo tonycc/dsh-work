@@ -164,6 +164,22 @@ export class PostgresAuthorizationService {
     `
     if (!member) throw new Error('当前用户已不是该团队空间成员')
     if (member.role === 'viewer') throw new Error('当前用户角色为只读，不能继续执行任务')
+
+    // Agent 关联状态必须与能力授权分开校验：对账把 legacy 来源改写为 manual 后，
+    // 停用 Agent 成员不会删除该 grant，仅靠 requireWorkspaceCapabilities 会放行已
+    // 停用/移出的关联，导致既有会话继续续写或重试。仅当该空间存在锁定此版本的
+    // Agent 成员时校验其可用状态；不存在关联（升级前仅靠精确版本授权、或种子空间）
+    // 时保持原有授权语义，不误拦历史会话。
+    const [agentMember] = await this.database<{ status: string }[]>`
+      select status from workspace_agent_members
+       where tenant_id = ${tenantId} and workspace_id = ${input.workspaceId}
+         and agent_version_id = ${input.agentVersionId}
+       order by case when status = 'available' then 0 else 1 end, created_at asc
+       limit 1
+    `
+    if (agentMember && agentMember.status !== 'available') {
+      throw new Error('Agent 成员已停用或已移出该团队空间，不能继续执行任务')
+    }
     return decision
   }
 
@@ -223,6 +239,20 @@ export class PostgresAuthorizationService {
       }
     }
     this.teamReadAccessCache.set(key, entry)
+  }
+
+  /**
+   * Re-checks the agent version's role visibility at write time (1A-T4): the
+   * candidate picker filters by visible_role_ids, but a caller can submit an
+   * agent id directly, so the add path must not rely on the picker for
+   * authorization. Mirrors the authorizeRuntime check.
+   */
+  async assertAgentVersionVisibleToRoles(agentVersionId: string, roleIds: string[], label = '所选 Agent') {
+    const agent = await this.requireAgentVersion(agentVersionId)
+    if (!intersects(roleIds, agent.visibleRoleIds)) {
+      throw new Error(`当前用户角色不可使用${label}`)
+    }
+    return agent
   }
 
   /**

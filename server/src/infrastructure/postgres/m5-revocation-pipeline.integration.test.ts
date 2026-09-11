@@ -781,6 +781,67 @@ test('SSE HTTP 路由：成员被移出团队空间后事件流终止', async ()
   assert.equal(collector.text().includes('HTTP 流撤权后内容'), false, '撤权后的内容不得交付')
 })
 
+test('SSE HTTP 路由：被移出的成员重连不得降级为无拦截路径', async () => {
+  const ws = uniqueWorkspace('sse-http-reconnect')
+  const ownerId = `${ws}-owner`
+  const userId = `${ws}-user`
+  const versionId = `${ws}-version`
+  await seedUser(ownerId, 'SSE 重连负责人')
+  await seedUser(userId, 'SSE 重连成员')
+  await createTeamWorkspace(ws, [{ userId: ownerId, role: 'owner' }, { userId: userId, role: 'member' }])
+  await seedAgent(ws, versionId)
+  await grantAgentVersion(ws, versionId)
+  const sessionId = `${ws}-session`
+  await createSession(sessionId, ws, userId, versionId)
+  const runId = `${ws}-run`
+  await createRunWithAttempt({ id: runId, sessionId, requestedBy: userId, status: 'running', agentVersionId: versionId, workspaceId: ws })
+  await appendRunEvent(runId, `${runId}-attempt`, 1, 'assistant.delta', '重连撤权前内容')
+
+  // 被移出后重连：run.requested_by 仍是本人（getTask 只按 requested_by 判定），
+  // 建连必须 fail-closed 拒绝，绝不能退化为无逐批拦截的个人路径而交付内容。
+  await members.removeMember(ws, userId, ownerId)
+
+  const response = await fetch(`${baseUrl}/api/workbench/v1/runs/${runId}/events`, {
+    headers: { 'x-test-user-id': userId },
+  })
+  assert.equal(response.status, 403, '被移出成员重连团队运行 SSE 必须被拒绝')
+  const body = await response.text()
+  assert.equal(body.includes('重连撤权前内容'), false, '拒绝响应不得包含任何事件内容')
+})
+
+test('REST 读取：被移出的成员不得读取团队运行详情，列表也不返回该运行', async () => {
+  const ws = uniqueWorkspace('rest-team-read')
+  const ownerId = `${ws}-owner`
+  const userId = `${ws}-user`
+  const versionId = `${ws}-version`
+  await seedUser(ownerId, 'REST 读取负责人')
+  await seedUser(userId, 'REST 读取成员')
+  await createTeamWorkspace(ws, [{ userId: ownerId, role: 'owner' }, { userId, role: 'member' }])
+  await seedAgent(ws, versionId)
+  await grantAgentVersion(ws, versionId)
+  const sessionId = `${ws}-session`
+  await createSession(sessionId, ws, userId, versionId)
+  const runId = `${ws}-run`
+  await createRunWithAttempt({ id: runId, sessionId, requestedBy: userId, status: 'running', agentVersionId: versionId, workspaceId: ws })
+
+  const readRun = () => fetch(`${baseUrl}/api/workbench/v1/runs/${runId}`, { headers: { 'x-test-user-id': userId } })
+  const readTasks = () => fetch(`${baseUrl}/api/workbench/v1/tasks`, { headers: { 'x-test-user-id': userId } })
+  const taskIds = async () => {
+    const body = await readTasks().then(response => response.json()) as { data: Array<{ id: string }> }
+    return body.data.map(task => task.id)
+  }
+
+  // 撤权前：详情可读、列表包含该运行。
+  assert.equal((await readRun()).status, 200)
+  assert.ok((await taskIds()).includes(runId), '撤权前列表应包含该运行')
+
+  await members.removeMember(ws, userId, ownerId)
+
+  // 撤权后：详情 404、列表不再返回该运行（与 SSE 同一收权口径）。
+  assert.equal((await readRun()).status, 404, '被移出成员不得读取团队运行详情')
+  assert.equal((await taskIds()).includes(runId), false, '被移出成员的运行列表不得包含该团队运行')
+})
+
 // ---------------------------------------------------------------------------
 // 5.5 事件重试上限与死信
 // ---------------------------------------------------------------------------
@@ -918,6 +979,68 @@ test('执行前复核通过后、调用 Runtime 前被系统取消的运行不�
 // ---------------------------------------------------------------------------
 // 5.4 复核故障不得误取消（AC-26）
 // ---------------------------------------------------------------------------
+
+test('执行鉴权：Agent 成员停用后即使仍有 manual 授权来源也拒绝执行', async () => {
+  const ws = uniqueWorkspace('agent-availability')
+  const ownerId = `${ws}-owner`
+  const userId = `${ws}-user`
+  const versionId = `${ws}-version`
+  await seedUser(ownerId, '可用性负责人')
+  await seedUser(userId, '可用性成员')
+  await createTeamWorkspace(ws, [{ userId: ownerId, role: 'owner' }, { userId, role: 'member' }])
+  await seedAgent(ws, versionId)
+  await grantAgentVersion(ws, versionId)
+  const memberId = `${ws}-wam`
+  await addAgentMemberRow(ws, memberId, `${ws}-agent`, versionId)
+  // 对账把 legacy 来源改写为 manual 后，停用 Agent 成员不会删除该能力授权；
+  // 仅靠 requireWorkspaceCapabilities 会放行已停用的关联。
+  await database`
+    insert into workspace_grant_sources (
+      id, tenant_id, workspace_id, capability_type, capability_version_id,
+      source_type, source_ref_id, status, created_by
+    ) values (
+      ${`wgs-${ws}-manual`}, ${tenantId}, ${ws}, 'agent', ${versionId},
+      'manual', null, 'active', 'U00008'
+    )
+  `
+
+  // 停用前：可执行。
+  await authorization.authorizeTeamRunExecution({ userId, workspaceId: ws, agentVersionId: versionId })
+
+  await database`
+    update workspace_agent_members set status = 'disabled'
+     where tenant_id = ${tenantId} and workspace_id = ${ws} and id = ${memberId}
+  `
+  await assert.rejects(
+    authorization.authorizeTeamRunExecution({ userId, workspaceId: ws, agentVersionId: versionId }),
+    /Agent 成员已停用或已移出/,
+    'Agent 关联状态必须与能力授权分开校验',
+  )
+
+  // 移出后同样拒绝。
+  await database`
+    update workspace_agent_members set status = 'removed'
+     where tenant_id = ${tenantId} and workspace_id = ${ws} and id = ${memberId}
+  `
+  await assert.rejects(
+    authorization.authorizeTeamRunExecution({ userId, workspaceId: ws, agentVersionId: versionId }),
+    /Agent 成员已停用或已移出/,
+  )
+})
+
+test('执行鉴权：无 Agent 成员关联的固定版本授权（升级前基线）不被误拦', async () => {
+  const ws = uniqueWorkspace('agent-legacy-grant')
+  const ownerId = `${ws}-owner`
+  const userId = `${ws}-user`
+  const versionId = `${ws}-version`
+  await seedUser(ownerId, '基线负责人')
+  await seedUser(userId, '基线成员')
+  await createTeamWorkspace(ws, [{ userId: ownerId, role: 'owner' }, { userId, role: 'member' }])
+  await seedAgent(ws, versionId)
+  await grantAgentVersion(ws, versionId)
+
+  await authorization.authorizeTeamRunExecution({ userId, workspaceId: ws, agentVersionId: versionId })
+})
 
 test('收权清扫：复核抛出基础设施故障时不得取消运行', async () => {
   const ws = uniqueWorkspace('sweep-infra')

@@ -162,16 +162,23 @@ export class PostgresWorkspaceAgentMemberService {
     workspaceId: string,
     agentId: string,
     actorUserId: string,
+    actorRoleIds: string[] = [],
   ): Promise<AgentMemberRecord> {
     await this.assertTeamWorkspace(workspaceId)
     await this.requireActorRole(workspaceId, actorUserId, ['owner'])
     const active = await this.requireActivePublishedVersion(agentId, true)
     const { agent, skillVersions } = await this.authorization.assertAgentDependencyClosure(active.versionId)
+    // P2-1：候选列表按 visible_role_ids 过滤只是展示；直接提交 ID 也必须按添加人
+    // 当前有效角色复核允许范围，不能依赖候选查询承担鉴权。
+    await this.authorization.assertAgentVersionVisibleToRoles(active.versionId, actorRoleIds, '所选 Agent')
     const toolVersions = await this.authorization.resolveToolVersions(agent.toolReferences)
 
     let memberId = ''
     await this.database.begin(async transaction => {
       await lockWorkspaceRow(transaction, workspaceId)
+      // P1-4：角色前置检查在事务外，拿到空间锁后必须复核当前角色——
+      // 负责人转交若发生在前置检查与加锁之间，旧负责人不得再改成员与授权。
+      await this.requireActorRole(workspaceId, actorUserId, ['owner'], transaction)
       const [existing] = await transaction<MemberStateRow[]>`
         select id, agent_id as "agentId", agent_version_id as "agentVersionId", status
           from workspace_agent_members
@@ -238,6 +245,9 @@ export class PostgresWorkspaceAgentMemberService {
 
     await this.database.begin(async transaction => {
       await lockWorkspaceRow(transaction, workspaceId)
+      // P1-4：角色前置检查在事务外，拿到空间锁后必须复核当前角色——
+      // 负责人转交若发生在前置检查与加锁之间，旧负责人不得再改成员与授权。
+      await this.requireActorRole(workspaceId, actorUserId, ['owner'], transaction)
       // 方案 6.3 门禁：对账完成前，涉及 legacy 歧义来源的破坏性调整必须被拒绝。
       await this.grantSources.assertNoUnresolvedLegacySources(transaction, workspaceId, '移除 Agent 成员')
       const [locked] = await transaction<MemberStateRow[]>`
@@ -306,6 +316,9 @@ export class PostgresWorkspaceAgentMemberService {
 
     await this.database.begin(async transaction => {
       await lockWorkspaceRow(transaction, workspaceId)
+      // P1-4：角色前置检查在事务外，拿到空间锁后必须复核当前角色——
+      // 负责人转交若发生在前置检查与加锁之间，旧负责人不得再改成员与授权。
+      await this.requireActorRole(workspaceId, actorUserId, ['owner'], transaction)
       // 同移除：停用也会撤销该成员的 agent_member 来源，必须先排除歧义 legacy 来源。
       await this.grantSources.assertNoUnresolvedLegacySources(transaction, workspaceId, '停用 Agent 成员')
       const [locked] = await transaction<MemberStateRow[]>`
@@ -352,6 +365,9 @@ export class PostgresWorkspaceAgentMemberService {
 
     await this.database.begin(async transaction => {
       await lockWorkspaceRow(transaction, workspaceId)
+      // P1-4：角色前置检查在事务外，拿到空间锁后必须复核当前角色——
+      // 负责人转交若发生在前置检查与加锁之间，旧负责人不得再改成员与授权。
+      await this.requireActorRole(workspaceId, actorUserId, ['owner'], transaction)
       const [locked] = await transaction<MemberStateRow[]>`
         select id, agent_id as "agentId", agent_version_id as "agentVersionId", status
           from workspace_agent_members
@@ -399,6 +415,9 @@ export class PostgresWorkspaceAgentMemberService {
 
     await this.database.begin(async transaction => {
       await lockWorkspaceRow(transaction, workspaceId)
+      // P1-4：角色前置检查在事务外，拿到空间锁后必须复核当前角色——
+      // 负责人转交若发生在前置检查与加锁之间，旧负责人不得再改成员与授权。
+      await this.requireActorRole(workspaceId, actorUserId, ['owner'], transaction)
       const [locked] = await transaction<MemberStateRow[]>`
         select id, agent_id as "agentId", agent_version_id as "agentVersionId", status
           from workspace_agent_members
@@ -464,8 +483,12 @@ export class PostgresWorkspaceAgentMemberService {
     return { agentId, versionId: versionRow.id, version: versionRow.version }
   }
 
-  private async memberRoleOf(workspaceId: string, userId: string) {
-    const [member] = await this.database<{ role: 'owner' | 'admin' | 'member' | 'viewer' }[]>`
+  private async memberRoleOf(
+    workspaceId: string,
+    userId: string,
+    executor: DatabaseClient | DatabaseTransaction = this.database,
+  ) {
+    const [member] = await executor<{ role: 'owner' | 'admin' | 'member' | 'viewer' }[]>`
       select member_role as role from workspace_members
        where tenant_id = ${tenantId}
          and workspace_id = ${workspaceId}
@@ -477,14 +500,17 @@ export class PostgresWorkspaceAgentMemberService {
   /**
    * Service-level re-verification of the actor's current role. Route guards
    * run before this read, so a demotion racing in between (TOCTOU) must be
-   * caught here.
+   * caught here. Pass the transaction to re-check while holding the workspace
+   * lock: a负责人转交 committed between the pre-check and the lock would
+   * otherwise let the previous owner still mutate members and grants.
    */
   private async requireActorRole(
     workspaceId: string,
     actorUserId: string,
     allowedRoles: Array<'owner' | 'admin' | 'member' | 'viewer'>,
+    executor: DatabaseClient | DatabaseTransaction = this.database,
   ) {
-    const role = await this.memberRoleOf(workspaceId, actorUserId)
+    const role = await this.memberRoleOf(workspaceId, actorUserId, executor)
     if (!role) throw new Error('当前用户不是该空间的成员')
     if (!allowedRoles.includes(role)) throw new Error('当前用户角色没有权限执行此操作')
     return role
