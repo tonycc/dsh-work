@@ -41,7 +41,8 @@
     "test:m5:revocation": "node --experimental-strip-types --test src/modules/run/run-revocation-sweep.test.ts",
     "test:m5:reconciliation:integration": "node --experimental-strip-types --test src/http/team-workspace-reconciliation-api.integration.test.ts",
     "test:m5:workspace:upgrade:integration": "node --experimental-strip-types --test src/infrastructure/postgres/team-workspace-upgrade.integration.test.ts",
-    "test:m5:sessions:integration": "node --experimental-strip-types --test src/http/team-workspace-sessions-api.integration.test.ts"
+    "test:m5:sessions:integration": "node --experimental-strip-types --test src/http/team-workspace-sessions-api.integration.test.ts",
+    "test:m5:shared-files:integration": "node --experimental-strip-types --test src/http/team-workspace-shared-files-api.integration.test.ts"
   },
   "devDependencies": {
     "@types/node": "^24.7.2",

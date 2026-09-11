@@ -72,6 +72,52 @@
           "$ref": "#/components/parameters/WorkspaceId"
         }
       ],
+      "get": {
+        "operationId": "listWorkspaceFiles",
+        "summary": "查询团队空间共享文件（所有成员）",
+        "description": "按名称搜索、keyset 分页返回空间内可引用的共享文件；已逻辑移除的文件不再出现。响应含服务端判定的 removable（负责人/管理员可移除任何文件，成员仅自己上传的）与 canDownload。个人空间被拒绝。",
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "名称关键词"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
       "post": {
         "operationId": "uploadWorkspaceFile",
         "summary": "上传工作空间共享文件",
@@ -935,6 +981,40 @@
             }
           }
         ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/workspaces/{workspaceId}/files/{fileId}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/WorkspaceId"
+        },
+        {
+          "name": "fileId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "delete": {
+        "operationId": "removeWorkspaceFile",
+        "summary": "逻辑移除团队空间共享文件（负责人/管理员/上传人）",
+        "description": "逻辑移除：文件对象、解析结果与历史 Run 引用保留，但不再出现在可引用列表且旧 ID 下载被拒绝。只读成员不可移除。",
         "responses": {
           "200": {
             "$ref": "#/components/responses/Ok"
