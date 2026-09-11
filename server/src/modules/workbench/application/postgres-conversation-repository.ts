@@ -4,6 +4,7 @@ import type { ChatMessage, RunStep, TaskRun } from '../../../domain/types.ts'
 import type { DatabaseClient } from '../../../infrastructure/postgres/database.ts'
 import type { RunState } from '../../run/run-types.ts'
 import { PostgresWorkspaceService } from './postgres-workspace-service.ts'
+import { authorizationDenied } from '../../authorization/authorization-errors.ts'
 
 const tenantId = 'tenant-dsh-work'
 
@@ -152,13 +153,16 @@ export class PostgresConversationRepository {
 
   async archiveSession(sessionId: string, userId: string) {
     return this.database.begin(async (transaction) => {
-      const [session] = await transaction<{ id: string; title: string }[]>`
-        select id, title from sessions
+      const [session] = await transaction<{ id: string; title: string; workspaceId: string }[]>`
+        select id, title, workspace_id as "workspaceId" from sessions
          where tenant_id = ${tenantId} and id = ${sessionId} and created_by = ${userId}
            and status = 'active'
          for update
       `
       if (!session) throw new Error(`Session 不存在或不可访问：${sessionId}`)
+      // 删除会话属执行轨（3-T1 决策）：归档是只读保留，删除会销毁要保留的历史内容，
+      // 因此归档空间拒绝（活跃团队 + 当前成员，个人空间不受影响）。
+      await this.requireWritableWorkspace(session.workspaceId)
 
       const [activeRun] = await transaction<{ id: string }[]>`
         select id from runs
@@ -281,6 +285,25 @@ export class PostgresConversationRepository {
       items,
       nextCursor: hasMore && last ? encodeSessionCursor(last.lastActiveAt, last.sessionId) : null,
     }
+  }
+
+  /**
+   * Execution-track guard for writes reached through a session row (3-T1): team
+   * workspaces must still be active; personal workspaces keep the existing path.
+   */
+  private async requireWritableWorkspace(workspaceId: string) {
+    const [workspace] = await this.database<{ type: 'personal' | 'team' }[]>`
+      select workspace_type as type from workspaces
+       where tenant_id = ${tenantId} and id = ${workspaceId} and status = 'active'
+    `
+    if (workspace) return
+    // 空间不存在或已归档：区分成因只用于拒绝文案，不改变拒绝结果。
+    const [anyStatus] = await this.database<{ type: 'personal' | 'team'; status: string }[]>`
+      select workspace_type as type, status from workspaces
+       where tenant_id = ${tenantId} and id = ${workspaceId}
+    `
+    if (anyStatus?.type === 'personal') return
+    throw authorizationDenied('工作空间已归档，仅支持有权限的只读查看与下载')
   }
 
   async listTasks(userId: string): Promise<TaskRun[]> {

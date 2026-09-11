@@ -74,6 +74,8 @@ export function registerContentRoutes(
     return httpResult(201, envelope('workbench', file, 'postgres'))
   })
 
+  // 共享文件列表属读取轨（3-T1）：路由闸门必须跟服务层同轨，否则归档空间会在路由层
+  // 被 403、读轨代码不可达（符合性评审 P1-1）。
   router.get(`${basePath}/workspaces/:workspaceId/files`, async (_request, context) => {
     const identity = requireRequestIdentity(context, 'workbench')
     const userId = identity.userId
@@ -82,6 +84,7 @@ export function registerContentRoutes(
       userId,
       workspaceId,
       ...sessionAuthorizationContext(identity),
+      allowArchived: true,
     })
     const limit = parseFilePageLimit(context.url.searchParams.get('limit'))
     const query = (context.url.searchParams.get('query') ?? '').trim()

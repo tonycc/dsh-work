@@ -42,10 +42,12 @@ export function registerWorkspaceAgentMemberRoutes(
     ), 'postgres')
   })
 
+  // Agent 成员名册属读取轨（3-T1）：与成员名册同理，归档详情仍需展示；
+  // Agent 候选与加入/停用/升级/移出保持执行轨。
   router.get(`${basePath}/workspaces/:workspaceId/agent-members`, async (_request, context) => {
     const identity = requireRequestIdentity(context, 'workbench')
     const workspaceId = context.params['workspaceId'] ?? ''
-    await requireTeamActor(authorization, identity, workspaceId, ['owner', 'admin', 'member', 'viewer'])
+    await requireTeamActor(authorization, identity, workspaceId, ['owner', 'admin', 'member', 'viewer'], { allowArchived: true })
     return envelope('workbench', await agentMembers.listAgentMembers(workspaceId, identity.userId), 'postgres')
   })
 

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import type { DatabaseClient, DatabaseTransaction } from '../../../infrastructure/postgres/database.ts'
 import type { PostgresAuthorizationService } from '../../authorization/postgres-authorization-service.ts'
 import { bumpTeamAuthRevision } from '../../authorization/postgres-workspace-grant-source-service.ts'
+import { authorizationDenied } from '../../authorization/authorization-errors.ts'
 
 const tenantId = 'tenant-dsh-work'
 
@@ -123,9 +124,10 @@ export class PostgresWorkspaceMemberService {
    * non-member is denied rather than shown the roster.
    */
   async listMembers(workspaceId: string, actorUserId: string): Promise<MemberDirectory> {
-    await this.assertTeamWorkspace(workspaceId)
+    // 名册属读取轨（3-T1）：归档空间详情仍需展示成员身份（写操作各自保持执行轨）。
+    await this.assertTeamWorkspace(workspaceId, { allowArchived: true })
     const currentUserRole = await this.memberRoleOf(workspaceId, actorUserId)
-    if (!currentUserRole) throw new Error('当前用户不是该空间的成员')
+    if (!currentUserRole) throw authorizationDenied('当前用户不是该空间的成员')
 
     const rows = await this.database<{
       userId: string
@@ -241,13 +243,16 @@ export class PostgresWorkspaceMemberService {
    * Re-asserts the actor holds owner/admin at service level so a demotion
    * racing the route guard cannot slip in; a concurrent owner transfer is
    * translated into a friendly conflict error by runMembershipMutation.
+   *
+   * 3-T1 governance exception: access revocation must still work on an
+   * archived workspace, so this path explicitly allows archival.
    */
   async removeMember(
     workspaceId: string,
     targetUserId: string,
     actorUserId: string,
   ): Promise<{ userId: string; removed: true }> {
-    await this.assertTeamWorkspace(workspaceId)
+    await this.assertTeamWorkspace(workspaceId, { allowArchived: true })
     const actorRole = await this.requireActorRole(workspaceId, actorUserId, ['owner', 'admin'])
     const targetRole = await this.memberRoleOf(workspaceId, targetUserId)
     if (!targetRole) throw new Error('目标成员不存在于该空间')
@@ -317,13 +322,17 @@ export class PostgresWorkspaceMemberService {
    * the deferred single-owner trigger validates the swap at commit and a
    * concurrent loser's trigger failure is translated to a friendly conflict
    * error by runMembershipMutation.
+   *
+   * 3-T1 governance exception: owner transfer must still work on an archived
+   * workspace (a sole owner cannot be removed, so this is the only way to
+   * change the responsible person after archiving). Explicitly allow archival.
    */
   async transferWorkspaceOwner(
     workspaceId: string,
     toUserId: string,
     actorUserId: string,
   ): Promise<{ workspaceId: string; previousOwnerId: string; newOwnerId: string }> {
-    await this.assertTeamWorkspace(workspaceId)
+    await this.assertTeamWorkspace(workspaceId, { allowArchived: true })
     const previousOwnerId = await this.authorization.resolveWorkspaceOwner(workspaceId)
     if (previousOwnerId !== actorUserId) throw new Error('没有权限转交负责人')
     if (toUserId === previousOwnerId) throw new Error('转交目标不能是当前负责人')
@@ -372,12 +381,27 @@ export class PostgresWorkspaceMemberService {
   // Shared checks
   // -------------------------------------------------------------------------
 
-  private async assertTeamWorkspace(workspaceId: string) {
+  /**
+   * Team-only + status boundary for member operations.
+   *
+   * 3-T1: the default is the EXECUTION track (active-only), so archiving stops
+   * adding members, changing roles and exiting. `allowArchived: true` is the
+   * explicit governance exception required by batch 3 — emergency access
+   * revocation (`removeMember`) and owner transfer must still work on an
+   * archived workspace. It is passed per call site, never as a default.
+   */
+  private async assertTeamWorkspace(workspaceId: string, options: { allowArchived?: boolean } = {}) {
+    const allowArchived = options.allowArchived === true
     const [workspace] = await this.database<{ type: 'personal' | 'team' }[]>`
       select workspace_type as type from workspaces
-       where tenant_id = ${tenantId} and id = ${workspaceId} and status = 'active'
+       where tenant_id = ${tenantId} and id = ${workspaceId}
+         and ${allowArchived
+           ? this.database.unsafe(`status in ('active', 'archived')`)
+           : this.database.unsafe(`status = 'active'`)}
     `
-    if (!workspace) throw new Error('工作空间不存在或已归档')
+    // 用「不可访问」而非「不存在」：归档前该空间对调用者可能是可见的，若按「不存在」
+    // 映射成 404，会让非成员用状态码区分「归档」与「不存在/无权」，形成存在性泄露。
+    if (!workspace) throw authorizationDenied('工作空间不存在或不可访问')
     if (workspace.type !== 'team') throw new Error('仅支持团队工作空间进行成员管理')
   }
 
@@ -426,7 +450,7 @@ export class PostgresWorkspaceMemberService {
     allowedRoles: MemberRole[],
   ): Promise<MemberRole> {
     const role = await this.memberRoleOf(workspaceId, actorUserId)
-    if (!role) throw new Error('当前用户不是该空间的成员')
+    if (!role) throw authorizationDenied('当前用户不是该空间的成员')
     if (!allowedRoles.includes(role)) throw new Error('当前用户角色没有权限执行此操作')
     return role
   }

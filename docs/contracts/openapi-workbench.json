@@ -75,7 +75,7 @@
       "get": {
         "operationId": "listWorkspaceFiles",
         "summary": "查询团队空间共享文件（所有成员）",
-        "description": "按名称搜索、keyset 分页返回空间内可引用的共享文件；已逻辑移除的文件不再出现。响应含服务端判定的 removable（负责人/管理员可移除任何文件，成员仅自己上传的）与 canDownload。个人空间被拒绝。",
+        "description": "按名称搜索、keyset 分页返回空间内可引用的共享文件；已逻辑移除的文件不再出现。响应含服务端判定的 removable（负责人/管理员可移除任何文件，成员仅自己上传的）与 canDownload。个人空间被拒绝。读取轨（3-T1 归档=只读保留）：空间归档后现任成员仍可列出与下载，此时 removable 一律为 false（移除属执行轨，归档空间拒绝）；上传与移除仍要求活跃空间。非成员与不存在空间不可枚举。",
         "parameters": [
           {
             "name": "query",
@@ -220,7 +220,7 @@
       "get": {
         "operationId": "listWorkspaceMembers",
         "summary": "查询团队空间的员工成员列表（所有成员）",
-        "description": "任何当前成员都可读取成员名册；响应额外返回调用者自己的角色 currentUserRole，供员工端按服务端判定渲染允许动作（负责人转交后创建者不再是负责人）。个人工作空间不支持，非成员被拒绝。",
+        "description": "任何当前成员都可读取成员名册；响应额外返回调用者自己的角色 currentUserRole，供员工端按服务端判定渲染允许动作（负责人转交后创建者不再是负责人）。个人工作空间不支持，非成员被拒绝。 读取轨（3-T1 归档=只读保留）：归档空间的现任成员仍可读取名册，便于归档详情展示成员身份；非成员与不存在空间拒绝。",
         "responses": {
           "200": {
             "$ref": "#/components/responses/Ok"
@@ -328,7 +328,7 @@
       "delete": {
         "operationId": "removeWorkspaceMember",
         "summary": "移除团队成员（仅负责人/管理员）",
-        "description": "保留其共享贡献与作者归属；管理员不能移除管理员或负责人，唯一负责人必须先行转交。个人工作空间不支持。",
+        "description": "保留其共享贡献与作者归属；管理员不能移除管理员或负责人，唯一负责人必须先行转交。个人工作空间不支持。 治理例外（3-T1）：紧急撤权在归档空间仍必须可用（归档不得阻止收权）；其余成员管理操作在归档空间拒绝。",
         "responses": {
           "200": {
             "$ref": "#/components/responses/Ok"
@@ -418,7 +418,7 @@
       "get": {
         "operationId": "listWorkspaceAgentMembers",
         "summary": "查询团队空间的 Agent 成员列表（所有成员）",
-        "description": "仅返回未移除的 Agent 成员，包含固定版本、加入人与当前操作人允许的动作；负责人看到管理动作，成员在可用状态看到「开始对话」。Agent 成员不套用员工角色语义。个人工作空间不支持。",
+        "description": "仅返回未移除的 Agent 成员，包含固定版本、加入人与当前操作人允许的动作；负责人看到管理动作，成员在可用状态看到「开始对话」。Agent 成员不套用员工角色语义。个人工作空间不支持。 读取轨（3-T1）：归档空间的现任成员仍可读取 Agent 名册；Agent 候选与加入/停用/升级/移出保持执行轨，在归档空间拒绝。",
         "responses": {
           "200": {
             "$ref": "#/components/responses/Ok"
@@ -575,7 +575,7 @@
       "post": {
         "operationId": "transferWorkspaceOwner",
         "summary": "转交团队空间负责人（仅负责人）",
-        "description": "事务内锁定空间并互换新旧负责人角色，任何时刻恰好一名负责人；内容创建者字段保持不变。并发转交只允许一次成功。",
+        "description": "事务内锁定空间并互换新旧负责人角色，任何时刻恰好一名负责人；内容创建者字段保持不变。并发转交只允许一次成功。 治理例外（3-T1）：归档空间仍允许负责人转交（归档不得阻止负责人治理）。",
         "requestBody": {
           "required": true,
           "content": {
@@ -791,6 +791,7 @@
       ],
       "get": {
         "operationId": "getRun",
+        "description": "团队空间历史运行读取走读取轨（3-T1）：空间归档后现任成员仍可读取历史运行；非成员与不存在的空间一律按不可枚举的“不可访问”处理。",
         "summary": "获取 Run 当前状态",
         "responses": {
           "200": {
@@ -817,6 +818,7 @@
       ],
       "get": {
         "operationId": "streamRunEvents",
+        "description": "团队空间事件流按读取轨交付（3-T1）：空间归档后现任成员仍可建流并接收历史事件；逐批写出前复核当前成员资格，撤权后立即停止交付。执行轨（排队领取与执行前复核）不因读取轨放宽而放行归档空间。",
         "summary": "通过 SSE 订阅可安全展示的 Run 事件",
         "responses": {
           "200": {
@@ -998,7 +1000,7 @@
       "get": {
         "operationId": "listWorkspaceSessions",
         "summary": "分页查询团队空间中本人发起的历史会话",
-        "description": "按最近活动倒序返回 Session 摘要（稳定 Session 身份、标题、发起人、最近活动时间、Run 计数与最新 Run 指针），不含对话正文。范围固定为调用者本人发起的会话（服务端按 created_by 强制过滤，不接受范围参数）；keyset 游标分页 + 标题关键词过滤；不返回其他成员的标题、摘要或数量。任何当前成员可读本人范围，非成员与个人空间被拒绝。",
+        "description": "按最近活动倒序返回 Session 摘要（稳定 Session 身份、标题、发起人、最近活动时间、Run 计数与最新 Run 指针），不含对话正文。范围固定为调用者本人发起的会话（服务端按 created_by 强制过滤，不接受范围参数）；keyset 游标分页 + 标题关键词过滤；不返回其他成员的标题、摘要或数量。任何当前成员可读本人范围，非成员与个人空间被拒绝。3-T1 读取轨：空间归档后现任成员仍可读取本人范围的历史会话；非成员与不存在空间按不可枚举文案拒绝。",
         "parameters": [
           {
             "name": "query",

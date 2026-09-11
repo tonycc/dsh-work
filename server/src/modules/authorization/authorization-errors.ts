@@ -56,31 +56,53 @@ export function isAuthorizationDenial(error: unknown): boolean {
 
 /**
  * Read-access check for a team-workspace object, shared by every 1A/1B read
- * surface (runs, tasks, files, artifacts). Kept in one place because the null
- * case is a security decision, not a detail: a null workspace type means the
- * workspace is missing or archived, which must fail CLOSED. Duplicating this
- * branch is how file/artifact reads and run reads drift apart.
+ * surface (runs, tasks, files, artifacts). Kept in one place because the
+ * existence branch is a security decision, not a detail: a missing workspace
+ * must fail CLOSED. Duplicating this branch is how file/artifact reads and run
+ * reads drift apart.
+ *
+ * 3-T1 dual track (归档 = 只读保留): the READ track resolves the workspace type
+ * with `readableWorkspaceTypeOf` so an ARCHIVED team workspace is still
+ * visible, then requires CURRENT membership through `authorizeTeamReadAccess`
+ * (which is called here with an explicit `allowArchived: true`; the method's
+ * OWN default stays active-only, so a caller that forgets to decide fails closed).
+ * A removed member, a nonexistent
+ * workspace or an unknown status still denies. Execution stays untouched:
+ * `workspaceTypeOf`, `requireTeamRole` and `requireWorkspaceMembership` keep
+ * their active-only default and are the only resolvers that write/run paths
+ * may use.
  *
  * Personal workspaces keep the caller's existing path (AC-23). Only an
  * explicit authorization denial is translated to `false`; infrastructure
  * failures propagate so they cannot masquerade as a permission decision.
  */
 export interface TeamReadAccessChecker {
-  workspaceTypeOf(workspaceId: string | null | undefined): Promise<'personal' | 'team' | null>
-  authorizeTeamReadAccess(workspaceId: string, userId: string): Promise<void>
+  /** Status-agnostic: resolves 'team' for an archived workspace as well. */
+  readableWorkspaceTypeOf(workspaceId: string | null | undefined): Promise<'personal' | 'team' | null>
+  /** Read gate: the caller opts in explicitly, so archived is accepted. */
+  authorizeTeamReadAccess(
+    workspaceId: string,
+    userId: string,
+    options: { allowArchived: boolean; ttlMs?: number },
+  ): Promise<void>
 }
 
 export async function canReadWorkspaceObject(
   authorization: TeamReadAccessChecker,
   workspaceId: string | null | undefined,
   userId: string,
+  /**
+   * 授权缓存 TTL 覆盖。SSE 逐批门禁需要它来控制「多久重新完整复核一次」；
+   * 不传时用授权服务的默认值（≤10s）。漏传会让调用点传入的 TTL 被静默忽略。
+   */
+  options: { ttlMs?: number } = {},
 ): Promise<boolean> {
   if (!workspaceId) return true
-  const workspaceType = await authorization.workspaceTypeOf(workspaceId)
+  const workspaceType = await authorization.readableWorkspaceTypeOf(workspaceId)
   if (workspaceType === 'personal') return true
   if (workspaceType === null) return false
   try {
-    await authorization.authorizeTeamReadAccess(workspaceId, userId)
+    await authorization.authorizeTeamReadAccess(workspaceId, userId, { allowArchived: true, ttlMs: options.ttlMs })
     return true
   } catch (error) {
     if (isAuthorizationDenial(error)) return false

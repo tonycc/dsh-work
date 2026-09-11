@@ -29,7 +29,7 @@
 | 测试基础设施 | ✅ 全部 **24 个**集成套件改为一次性库（`test-database.ts` 的 `createThrowawayDatabase()`），消除共享库污染 | `c97db7b` |
 | **1B 团队资料与本人对话** | 🚧 **进行中**：T1、T3 已交付；T2 已取消；剩余 T4（结果读取收权）、T5（可见统计性能基线）。范围＝TW-03 本人历史列表、TW-05、团队 Session 分页、文件／SSE 收权、可见统计性能基线 | `dfeb1f1`、`c196c82` 等 |
 | 2A / 2B | ❌ **已放弃** | 产品确认取消，不再交付 |
-| 3 持续使用完善 | 🚧 **启动**（TW-06 优先，归档语义已定：只读保留） | 任务拆分见 `team-workspace-batch-3-tasks.md` |
+| 3 持续使用完善 | 🚧 **进行中**（TW-06 优先；3-T1 归档读/执行双轨已交付，见 §6.4） | 任务拆分见 `team-workspace-batch-3-tasks.md` |
 | TW-09 | ⬜ 未开始 | — |
 
 **T6/T7 评审结论与关键技术结论（2026-09-10）：**
@@ -191,6 +191,21 @@ WIP 首次运行是 **16 个用例 8 失败**，修复分两类：
 **1A 遗留中与本批相关的项**：`GET /workspaces` 的 `owner` 仍是创建者显示名且缺 `status`（历史列表「发起人/负责人」展示口径、归档筛选依赖它）；员工名册无 `department`；Agent「不可用」第三态与原因。
 
 **1B 已落地的两个小修（记录备查）**：`scripts/runtime/team-workspace-e2e.ts` 曾把 `operations` 传成 `undefined`（`?.` 静默跳过）导致工具审计为空，现已接真实 `PostgresOperationsService`；`pnpm probe:*` 曾因未加载 `.env` 报 `DSH runtime version mismatch`，已加 `--env-file-if-exists=.env`（`c196c82`）。
+
+### 6.4 3-T1 交付记录（2026-09-11，归档读/执行双轨）
+
+**交付**：`status='active'` 这一个判断拆成两条显式口径，实现位置集中在 `postgres-authorization-service.ts`、`authorization-errors.ts`、`postgres-workspace-service.ts`、`postgres-content-service.ts`、`postgres-workspace-member-service.ts` 与两个 workbench 路由文件。
+
+- **执行轨（默认，保持原语义）**：`workspaceTypeOf`、`requireTeamRole`（默认 `purpose: 'execution'`）、`requireWorkspaceMembership`（默认 `allowArchived=false`）、`resolveAccessibleWorkspace` 仍只认 active；新对话、续写、重试、上传、成员/Agent 变更、退出在归档空间一律拒绝。执行前复核与排队领取继续走这条轨。
+- **读取轨（新增，逐调用点显式opt-in）**：`readableWorkspaceTypeOf`（active+archived）、`requireTeamRole(..., { purpose: 'read' })`、`authorizeTeamReadAccess(..., { allowArchived: true })`、`resolveReadableWorkspace`。共享读门禁 `canReadWorkspaceObject` 改用前者：归档 + 现任成员可读文件/成果/历史运行/会话列表与 SSE；被移出成员、非成员与不存在空间仍按不可枚举「不可访问」拒绝。
+- **治理例外（显式列出）**：归档空间仍可执行**撤销访问**（`DELETE /members/:userId`）与**负责人转交**（`POST /owner-transfer`），成员服务的 `assertTeamWorkspace` 新增 `allowArchived` 按调用点传入；新增成员、角色调整、主动退出、候选人查询仍拒绝。
+- **缓存键与状态轨**：`authorizeTeamReadAccess` 的缓存键追加状态轨后缀（`archived`/`active`），且**修订号查询本身按轨过滤 status**——否则归档前预热的 active 缓存会在归档后继续放行默认（执行）轨，使「省略参数即保持执行语义」失效。`ttlMs` 改为 `options.ttlMs`，由共享读门禁从 `TeamStreamAccess.ttlMs` 透传（SSE 逐批复核间隔）。
+- **测试**：`team-workspace-authorization` 17/17、`team-workspace-sessions-api` 6/6、`team-workspace-shared-files-api` 15/15、`workspace-member-api` 36/36、`m5-revocation-pipeline` 29/29。旧断言「归档对 owner 也一律拒绝」按新语义改写为「执行轨仍拒绝 + 读取轨对现任成员放行」；1B-T4 的三条「归档 fail-closed」回归断言（已建立 SSE、SSE 建连、REST 详情/列表）同样改写为读取轨放行，收权（移出成员）仍会立即终止流。个人空间在团队会话接口的状态码由 422 改为 403（统一为「非团队资源」口径，功能未变）。
+- **名册轨道（已定）**：`GET /members` 与 `GET /agent-members` 属**读取轨**（归档详情右栏需展示成员与 Agent 身份）；`GET /member-candidates` 与 `GET /agent-candidates` 保持**执行轨**（归档不允许新增成员，不暴露候选）。为此两个服务的 `listMembers`/`listAgentMembers` 也传 `assertTeamWorkspace(..., { allowArchived: true })`。
+- **会话删除（已定）**：`DELETE /sessions/:sessionId` 属执行轨，归档空间拒绝（删除会销毁只读保留的历史内容）；`POST /runs/:runId/cancel` 仍允许（在途收敛，且 3-T2 才会做「运行中禁止归档」）。
+- **修复轮验证（2026-09-11）**：独立验证确认 8 项修复功能全部成立、无功能/安全回归（真实 HTTP 探针逐项复核了状态码与文案）。同时抓出**两个回归断言不具鉴别力**并已修：① 归档 `removable` 的断言原先用「普通成员看他人上传的文件」，即使归档判断被删也照样通过——改用**本有权移除的视角**（负责人）断言；② 缓存状态轨的修复**完全没有测试守护**（把修订号查询改回状态无关，团队授权套件仍 17/17 全绿，但探针能复现归档后被预热缓存放行）——已补「先预热读取轨 → 归档 → 默认执行轨必须拒绝」的判别性用例，并反证（削弱实现即变红）。另修三处文档/分类问题：AC-23 的个人空间例外原先写成「团队专用接口统一 403」，实际只有团队会话分页改了（其余仍 422）；OpenAPI `/files` 描述重复了同一句；身份校验拒绝在 `identity/session-repository.ts` 仍有一处纯 Error（映射 404），已类型化为 403。
+- **符合性评审修复（2026-09-11）**：① `GET /workspaces/:id/files` 路由闸门原在执行轨，归档现任成员被 403、服务层读轨不可达——已改为同轨，并补 HTTP 级用例（服务层直调测试曾给假绿）；② `POST /sessions/:sessionId/files` 不校验 workspace 状态，归档空间上传返回 201——已补 `requireActiveWorkspace`；③ 团队会话接口对「不存在空间」返回 422、存在空间 403，可枚举——已统一为同一 typed 拒绝，并把不变量（活跃/归档/不存在三者同状态码）固化进测试；④ 身份校验与空间访问拒绝改为 `authorizationDenied(...)`，消除「含『不存在』被归 404」的错分。
+- **契约**：`docs/contracts/openapi-workbench.json` 为运行详情、SSE、团队会话列表、共享文件列表补充 3-T1 读取轨说明；`pnpm verify` 通过。
 
 ## 7. 工程约定
 

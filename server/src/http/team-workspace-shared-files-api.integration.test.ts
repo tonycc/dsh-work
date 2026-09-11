@@ -19,6 +19,7 @@ const tenantId = 'tenant-dsh-work'
 
 let database: DatabaseClient
 let throwaway: ThrowawayDatabase
+let authorization: PostgresAuthorizationService
 let content: PostgresContentService
 let workspaceMembers: PostgresWorkspaceMemberService
 let server: ReturnType<typeof createServer>
@@ -30,7 +31,7 @@ before(async () => {
   database = throwaway.client
   // 本套件只验证列表/移除/下载门禁，不需要真实解析：给一个临时存储根即可。
   storageRoot = await mkdtemp(join(tmpdir(), 'dsh-work-shared-files-'))
-  const authorization = new PostgresAuthorizationService(database)
+  authorization = new PostgresAuthorizationService(database)
   content = new PostgresContentService(database, storageRoot, authorization)
   workspaceMembers = new PostgresWorkspaceMemberService(database, authorization)
   const router = new Router({ authenticateApi: testApiAuthenticator })
@@ -405,6 +406,65 @@ test('Run 输入挂载不得读取他人私有会话附件，但可挂载空间�
   assert.equal(mounted.length, 1, '空间共享文件对现任成员保持可挂载')
 })
 
+test('归档空间：共享文件列表仍可读，但会话附件上传与共享文件上传仍被拒绝', async () => {
+  const workspaceId = 'ws-archived-file-write'
+  const ownerId = `${workspaceId}-owner`
+  const memberId = `${workspaceId}-member`
+  await seedUser(ownerId, '归档文件负责人')
+  await seedUser(memberId, '归档文件成员')
+  await seedTeamWorkspace(workspaceId, [{ userId: ownerId, role: 'owner' }, { userId: memberId, role: 'member' }])
+  const sessionId = await seedSession(workspaceId, memberId)
+  const sharedFileId = `${workspaceId}-shared`
+  await seedFile({ id: sharedFileId, workspaceId, name: '归档共享.txt', uploadedBy: ownerId })
+
+  await database`
+    update workspaces set status = 'archived' where tenant_id = ${tenantId} and id = ${workspaceId}
+  `
+
+  // 读取轨（P1-1）：路由闸门此前仍在执行轨，归档现任成员在路由层被 403，
+  // 服务层读轨代码不可达；服务层直调测试给了假绿。这里必须走真实 HTTP。
+  const list = await fetch(`${baseUrl}/api/workbench/v1/workspaces/${workspaceId}/files`, {
+    headers: { 'x-test-user-id': memberId },
+  })
+  assert.equal(list.status, 200, '归档空间的共享文件列表对现任成员必须可读')
+  const listed = await list.json() as { data: { items: Array<{ id: string }> } }
+  const sharedRow = listed.data.items.find(item => item.id === sharedFileId)
+  assert.ok(sharedRow, '归档空间应能列出共享文件')
+  // 可移除属执行轨：归档空间必须回报 removable=false，否则前端渲染必然失败的入口。
+  // 断言必须用**本来有权移除的视角**（上传人/负责人）才具鉴别力：若用普通成员看他人上传的
+  // 文件，removable 因「非上传人」就已是 false，即使归档判断被删掉也照样通过（验证代理 D2）。
+  const asOwnerList = await fetch(`${baseUrl}/api/workbench/v1/workspaces/${workspaceId}/files`, {
+    headers: { 'x-test-user-id': ownerId },
+  })
+  assert.equal(asOwnerList.status, 200)
+  const ownerRow = (await asOwnerList.json() as { data: { items: Array<{ id: string; removable?: boolean }> } })
+    .data.items.find(item => item.id === sharedFileId)
+  assert.equal(ownerRow?.removable, false, '归档空间即使对负责人也必须 removable=false（否则断言不具鉴别力）')
+
+  // 执行轨（P1-2）：上传属写操作，归档空间必须拒绝——此前会话附件上传返回 201。
+  const upload = await fetch(`${baseUrl}/api/workbench/v1/sessions/${sessionId}/files`, {
+    method: 'POST',
+    headers: {
+      'x-test-user-id': memberId,
+      'x-file-name': encodeURIComponent('归档后仍可上传.txt'),
+      'content-type': 'text/plain',
+    },
+    body: 'archived upload attempt',
+  })
+  assert.equal(upload.status, 403, '归档空间不得上传会话附件')
+
+  const sharedUpload = await fetch(`${baseUrl}/api/workbench/v1/workspaces/${workspaceId}/files`, {
+    method: 'POST',
+    headers: {
+      'x-test-user-id': memberId,
+      'x-file-name': encodeURIComponent('归档后共享上传.txt'),
+      'content-type': 'text/plain',
+    },
+    body: 'archived shared upload attempt',
+  })
+  assert.equal(sharedUpload.status, 403, '归档空间不得上传共享文件')
+})
+
 test('个人空间作者的文件与成果下载保持现状（AC-23）', async () => {
   const userId = 'user-personal-read'
   await seedUser(userId, '个人空间作者')
@@ -465,12 +525,14 @@ test('下载接口在失权后返回 403，且与不存在同口径不泄露对�
   assert.match(await artifactResponse.text(), /Artifact 不存在或不可访问/)
 })
 
-test('归档团队空间后文件、成果与运行读取一律 fail-closed，不因授权缓存命中而放行', async () => {
+test('归档团队空间：现任成员仍可读文件/成果/列表，非成员仍拒绝（3-T1 读取轨）', async () => {
   const workspaceId = 'ws-archived-read'
   const ownerId = `${workspaceId}-owner`
   const memberId = `${workspaceId}-member`
+  const outsiderId = `${workspaceId}-outsider`
   await seedUser(ownerId, '归档负责人')
   await seedUser(memberId, '归档成员')
+  await seedUser(outsiderId, '归档外部人')
   await seedTeamWorkspace(workspaceId, [
     { userId: ownerId, role: 'owner' },
     { userId: memberId, role: 'member' },
@@ -480,28 +542,143 @@ test('归档团队空间后文件、成果与运行读取一律 fail-closed，�
   await seedStoredFile({
     id: fileId, workspaceId, sessionId, uploadedBy: memberId, name: '归档前文件.txt', content: '归档前正文',
   })
+  const sharedFileId = `${workspaceId}-shared-file`
+  await seedFile({ id: sharedFileId, workspaceId, name: '归档共享.txt', uploadedBy: ownerId })
+  await storeSharedFileBytes(sharedFileId, '共享正文')
   const runId = await seedRun(sessionId, memberId)
   const artifactId = `${workspaceId}-artifact`
   await seedArtifact({ artifactId, workspaceId, sessionId, createdBy: memberId, fileId, runId })
 
   // 归档前先读一次，把授权缓存预热到「已授予」——归档不提升 team_auth_revision，
-  // 因此缓存命中的旧实现会继续放行（评审实测的 TTL 依赖缺陷）。
+  // 因此读取轨不得依赖缓存 TTL 才能放行。
   assert.equal((await content.readFile(fileId, memberId)).bytes.toString('utf8'), '归档前正文')
   assert.equal(await content.artifactFileId(artifactId, 1, memberId), fileId)
 
+  await archiveWorkspace(workspaceId)
+
+  // 归档=只读保留：现任成员（这里覆盖负责人与普通成员）仍可读文件与成果。
+  // 共享文件（session_id 为空）对空间现任成员可读；他人私有会话附件仍不可读
+  // （与「他人私有对话不得读取」一致，归档不放宽）。
+  assert.equal((await content.readFile(sharedFileId, ownerId)).bytes.toString('utf8'), '共享正文')
+  assert.equal((await content.readFile(fileId, memberId)).bytes.toString('utf8'), '归档前正文')
+  assert.equal(await content.artifactFileId(artifactId, undefined, memberId), fileId)
+  const artifacts = await content.listArtifacts(memberId)
+  assert.deepEqual(artifacts.map(artifact => artifact.id), [artifactId], '归档空间成果仍出现在列表')
+  const files = await content.listWorkspaceFiles({ workspaceId, actorUserId: memberId })
+  assert.deepEqual(files.items.map(item => item.id), [sharedFileId], '归档空间共享文件列表仍可读')
+
+  // HTTP 下载同样走读取轨。
+  const fileResponse = await fetch(`${baseUrl}/api/workbench/v1/files/${fileId}/download`, {
+    headers: { 'x-test-user-id': memberId },
+  })
+  assert.equal(fileResponse.status, 200)
+  assert.equal(await fileResponse.text(), '归档前正文')
+
+  const artifactResponse = await fetch(`${baseUrl}/api/workbench/v1/artifacts/${artifactId}/download`, {
+    headers: { 'x-test-user-id': memberId },
+  })
+  assert.equal(artifactResponse.status, 200)
+
+  // 非成员仍拒绝，且不可枚举（与「不存在」同文案）。
+  await assert.rejects(
+    content.readFile(fileId, outsiderId),
+    /文件不存在或不可访问/,
+  )
+  await assert.rejects(
+    content.artifactFileId(artifactId, undefined, outsiderId),
+    /Artifact 不存在或不可访问/,
+  )
+  assert.deepEqual(await content.listArtifacts(outsiderId), [], '非成员看不到归档空间成果')
+  await assert.rejects(
+    content.listWorkspaceFiles({ workspaceId, actorUserId: outsiderId }),
+    /工作空间不存在、已归档或当前用户无权访问/,
+  )
+})
+
+test('归档团队空间：被移出的成员读取文件/成果仍拒绝（AC-09 不因归档放宽）', async () => {
+  const workspaceId = 'ws-archived-read-revoked'
+  const ownerId = `${workspaceId}-owner`
+  const memberId = `${workspaceId}-member`
+  await seedUser(ownerId, '归档收权负责人')
+  await seedUser(memberId, '归档收权成员')
+  await seedTeamWorkspace(workspaceId, [
+    { userId: ownerId, role: 'owner' },
+    { userId: memberId, role: 'member' },
+  ])
+  const sessionId = await seedSession(workspaceId, memberId)
+  const fileId = `${workspaceId}-session-file`
+  await seedStoredFile({
+    id: fileId, workspaceId, sessionId, uploadedBy: memberId, name: '归档收权.txt', content: '归档收权正文',
+  })
+  const runId = await seedRun(sessionId, memberId)
+  const artifactId = `${workspaceId}-artifact`
+  await seedArtifact({ artifactId, workspaceId, sessionId, createdBy: memberId, fileId, runId })
+
+  await archiveWorkspace(workspaceId)
   await database`
-    update workspaces set status = 'archived' where tenant_id = ${tenantId} and id = ${workspaceId}
+    delete from workspace_members
+     where tenant_id = ${tenantId} and workspace_id = ${workspaceId} and user_id = ${memberId}
   `
 
   await assert.rejects(content.readFile(fileId, memberId), /文件不存在或不可访问/)
   await assert.rejects(content.artifactFileId(artifactId, undefined, memberId), /Artifact 不存在或不可访问/)
-  assert.deepEqual(await content.listArtifacts(memberId), [], '归档空间成果不再出现在列表')
+  assert.deepEqual(await content.listArtifacts(memberId), [], '被移出成员不得再从成果列表读回归档空间成果')
+  await assert.rejects(
+    content.listWorkspaceFiles({ workspaceId, actorUserId: memberId }),
+    /工作空间不存在、已归档或当前用户无权访问/,
+  )
+})
 
-  // 与团队运行读取同一口径：归档空间的结果读取不得 fail-open。
-  const response = await fetch(`${baseUrl}/api/workbench/v1/artifacts/${artifactId}/download`, {
-    headers: { 'x-test-user-id': memberId },
+test('归档团队空间：上传与移除文件仍走执行轨被拒绝（3-T1 执行轨）', async () => {
+  const workspaceId = 'ws-archived-write'
+  const ownerId = `${workspaceId}-owner`
+  await seedUser(ownerId, '归档写入负责人')
+  await seedTeamWorkspace(workspaceId, [{ userId: ownerId, role: 'owner' }])
+  const fileId = `${workspaceId}-file`
+  await seedFile({ id: fileId, workspaceId, name: '待移除.txt', uploadedBy: ownerId })
+  await archiveWorkspace(workspaceId)
+
+  await assert.rejects(
+    content.storeWorkspaceFile(workspaceId, '上传.txt', 'text/plain', Buffer.from('上传正文'), ownerId),
+    /工作空间不存在、已归档或当前用户无权访问/,
+  )
+  await assert.rejects(
+    content.removeWorkspaceFile(workspaceId, fileId, ownerId),
+    /工作空间不存在、已归档或当前用户无权访问/,
+  )
+  // HTTP 上传端点同样拒绝，确认路由层没有绕过服务层的执行轨判定。
+  const upload = await fetch(`${baseUrl}/api/workbench/v1/workspaces/${workspaceId}/files`, {
+    method: 'POST',
+    headers: { 'x-test-user-id': ownerId, 'x-file-name': encodeURIComponent('上传.txt'), 'content-type': 'text/plain' },
+    body: '上传正文',
   })
-  assert.equal(response.status, 403)
+  assert.equal(upload.status, 403, '归档空间不得通过 HTTP 上传文件')
+})
+
+test('个人空间读取与授权路径完全不受 3-T1 双轨影响（AC-23）', async () => {
+  const personalUserId = 'user-archived-personal'
+  const personalWorkspaceId = `ws-personal-${personalUserId}`
+  await seedUser(personalUserId, '个人空间用户')
+  const sessionId = await seedSession(personalWorkspaceId, personalUserId)
+  const fileId = `${personalWorkspaceId}-file`
+  await seedStoredFile({
+    id: fileId, workspaceId: personalWorkspaceId, sessionId, uploadedBy: personalUserId, name: '个人文件.txt', content: '个人正文',
+  })
+  const runId = await seedRun(sessionId, personalUserId)
+  const artifactId = `${personalWorkspaceId}-artifact`
+  await seedArtifact({ artifactId, workspaceId: personalWorkspaceId, sessionId, createdBy: personalUserId, fileId, runId })
+
+  // 个人空间保持现状：文件/成果可读可下载，共享文件列表接口仍拒绝（仅团队）。
+  assert.equal((await content.readFile(fileId, personalUserId)).bytes.toString('utf8'), '个人正文')
+  assert.equal(await content.artifactFileId(artifactId, undefined, personalUserId), fileId)
+  assert.deepEqual((await content.listArtifacts(personalUserId)).map(artifact => artifact.id), [artifactId])
+  await assert.rejects(
+    content.listWorkspaceFiles({ workspaceId: personalWorkspaceId, actorUserId: personalUserId }),
+    /仅支持团队工作空间/,
+  )
+  // 被 3-T1 接入读取轨的解析器不得把个人空间当团队空间（存在性由类型检查收口）。
+  const readableType = await authorization.readableWorkspaceTypeOf?.(personalWorkspaceId)
+  assert.equal(readableType, 'personal')
 })
 
 // ---------------------------------------------------------------------------
@@ -533,6 +710,14 @@ function testApiAuthenticator(request: import('node:http').IncomingMessage): Pro
     authorizationVersion: 1,
     identityProvider: 'ai-hub-oidc',
   })
+}
+
+/** 3-T2 的归档 API 尚未实现；测试按既有约定直接用 SQL 落归档态。 */
+async function archiveWorkspace(workspaceId: string) {
+  await database`
+    update workspaces set status = 'archived', archived_at = now()
+     where tenant_id = ${tenantId} and id = ${workspaceId}
+  `
 }
 
 async function seedUser(id: string, displayName: string) {

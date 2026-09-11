@@ -4,7 +4,7 @@ import type { RunOrchestrationService } from '../../modules/run/run-orchestratio
 import type { RunRepository } from '../../modules/run/run-repository.ts'
 import type { PostgresAgentService } from '../../modules/agent/postgres-agent-service.ts'
 import type { PostgresAuthorizationService } from '../../modules/authorization/postgres-authorization-service.ts'
-import { canReadWorkspaceObject } from '../../modules/authorization/authorization-errors.ts'
+import { authorizationDenied, canReadWorkspaceObject } from '../../modules/authorization/authorization-errors.ts'
 import type { PostgresOperationsService } from '../../modules/admin/application/postgres-operations-service.ts'
 import type { PostgresSkillService } from '../../modules/skill/postgres-skill-service.ts'
 import {
@@ -49,14 +49,25 @@ export function registerConversationRoutes(
 
   // 团队历史会话分页（1B-T1）：返回 Session 摘要（不含正文），任何当前成员可读；
   // 非成员与个人空间一律拒绝，与收权口径一致（AC-23）。
+  // 3-T1 读取轨：历史会话属于「只读保留」，归档后现任成员仍可读取，因此这里用
+  // 状态无关的 readableWorkspaceTypeOf + purpose:'read'（默认的执行轨仍只认 active）。
   router.get(`${basePath}/workspaces/:workspaceId/sessions`, async (_request, context) => {
     const identity = requireRequestIdentity(context, 'workbench')
     const userId = identity.userId
     const workspaceId = context.params['workspaceId'] ?? ''
     await authorization?.authorizeWorkbench({ userId, ...sessionAuthorizationContext(identity) })
-    const workspaceType = await authorization?.workspaceTypeOf(workspaceId)
-    if (workspaceType !== 'team') throw new Error('仅支持团队工作空间查询历史会话')
-    await authorization?.requireTeamRole(workspaceId, userId, ['owner', 'admin', 'member', 'viewer'])
+    // 读取轨（3-T1）。空间不存在/非团队时的拒绝必须与「非成员」同状态码，否则可用
+    // 状态码区分空间是否存在（符合性评审 P1-3：此前抛「仅支持…」被归为 422）。
+    const workspaceType = await authorization?.readableWorkspaceTypeOf(workspaceId)
+    if (workspaceType !== 'team') {
+      throw authorizationDenied('工作空间不存在、已归档或当前用户不是成员')
+    }
+    await authorization?.requireTeamRole(
+      workspaceId,
+      userId,
+      ['owner', 'admin', 'member', 'viewer'],
+      { purpose: 'read' },
+    )
     const limit = parseSessionPageLimit(context.url.searchParams.get('limit'))
     const query = (context.url.searchParams.get('query') ?? '').trim()
     const cursor = context.url.searchParams.get('cursor') ?? undefined
@@ -209,16 +220,20 @@ export function registerConversationRoutes(
     const task = await conversations.getTask(runId, userId)
     if (!task) return httpResult(404, { error: { code: 'run_not_found', message: 'Run 不存在或不可访问' } })
     // 团队空间运行启用逐批写出拦截（1A-T5）；个人/独立空间保持原路径（AC-23）。
-    // 空间类型必须用不依赖调用者当前成员身份的 workspaceTypeOf 判定：被移出团队
-    // 空间的用户仍是该 run 的 requested_by（getTask 只按 requested_by 判定），若用
-    // 成员相关的 resolveWorkspaceType，他会解析出 null 并**降级到无拦截的个人路径**，
-    // 建连与逐批检查全部失效。这里是 fail-closed：非成员一律 403，不降级。
+    // 空间类型必须用不依赖调用者当前成员身份的解析器判定：被移出团队空间的用户仍是
+    // 该 run 的 requested_by（getTask 只按 requested_by 判定），若用成员相关的
+    // resolveWorkspaceType，他会解析出 null 并**降级到无拦截的个人路径**，建连与逐批
+    // 检查全部失效。这里是 fail-closed：非成员一律 403，不降级。
+    //
+    // 3-T1：读轨用状态无关的 readableWorkspaceTypeOf，归档空间仍解析为 team 并走
+    // `canReadWorkspaceObject`（现任成员可读，被移出成员拒绝）；执行轨（排队领取与
+    // 执行前复核）仍用只认 active 的 workspaceTypeOf，见 run-orchestration-service。
     if (task.workspaceId && authorization) {
-      const workspaceType = await authorization.workspaceTypeOf(task.workspaceId)
+      const workspaceType = await authorization.readableWorkspaceTypeOf(task.workspaceId)
       if (workspaceType === 'team') {
-        // 团队空间：建连与逐批写出都走同一门禁；非成员、已归档或已删除空间一律
-        // fail-closed 403，不降级为无拦截的个人路径。显式包装为权限错误，避免
-        // 依赖错误消息文本分类。
+        // 团队空间：建连与逐批写出都走同一读取门禁；非成员与已删除空间一律
+        // fail-closed 403，不降级为无拦截的个人路径。归档空间的现任成员按
+        // 「归档=只读保留」继续读取。显式包装为权限错误，避免依赖错误消息文本分类。
         if (!(await canReadWorkspaceObject(authorization, task.workspaceId, userId))) {
           throw routePermissionDenied('当前用户不能读取该团队空间运行')
         }
@@ -229,7 +244,7 @@ export function registerConversationRoutes(
         })
         return
       }
-      // 空间已归档或不存在（类型解析为 null）：与详情、列表、文件、成果同一口径
+      // 空间不存在（类型解析为 null）：与详情、列表、文件、成果同一口径
       // fail-closed，不能当作「非团队」放行（1B-T4 / §6.5-3）。
       if (workspaceType === null) {
         throw routePermissionDenied('该工作空间不存在或已归档')
@@ -300,8 +315,8 @@ export interface TeamStreamAccess {
   workspaceId: string
   userId: string
   authorization: {
-    workspaceTypeOf(workspaceId: string | null | undefined): Promise<'personal' | 'team' | null>
-    authorizeTeamReadAccess(workspaceId: string, userId: string, ttlMs?: number): Promise<void>
+    readableWorkspaceTypeOf(workspaceId: string | null | undefined): Promise<'personal' | 'team' | null>
+    authorizeTeamReadAccess(workspaceId: string, userId: string, options: { allowArchived: boolean }): Promise<void>
   }
   /** Cache TTL override; defaults to the authorization service's TTL (≤ 10s). */
   ttlMs?: number
@@ -381,10 +396,9 @@ export async function streamRunEvents(
  * Returns false (stream must terminate) when the viewer lost read access.
  * Any unexpected error also terminates the stream — fail closed.
  *
- * 走 `canReadWorkspaceObject` 而不是直接 `authorizeTeamReadAccess`：后者的修订号
- * 缓存命中时直接放行，而**归档只改 status、不提升 team_auth_revision**，于是已建立
- * 的流会在缓存 TTL 内继续交付（评审实测 700ms 内仍交付新事件）。这里每批重新解析
- * 空间类型（该查询带 status='active'），因此归档立即生效，不依赖 TTL。
+ * 走 `canReadWorkspaceObject`（读取轨）：读门禁按状态无关的空间类型解析，因此
+ * **归档空间对现任成员仍交付**；收权（成员变更会提升 team_auth_revision）立即终止流。
+ * `ttlMs` 由调用点透传，控制逐批完整复核的间隔。
  */
 async function hasStreamAccess(teamAccess: TeamStreamAccess) {
   try {
@@ -392,6 +406,7 @@ async function hasStreamAccess(teamAccess: TeamStreamAccess) {
       teamAccess.authorization,
       teamAccess.workspaceId,
       teamAccess.userId,
+      { ttlMs: teamAccess.ttlMs },
     )
   } catch {
     return false

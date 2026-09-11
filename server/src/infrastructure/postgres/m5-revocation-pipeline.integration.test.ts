@@ -771,7 +771,7 @@ test('SSE HTTP 路由：成员被移出团队空间后事件流终止', async ()
   assert.equal(collector.text().includes('HTTP 流撤权后内容'), false, '撤权后的内容不得交付')
 })
 
-test('SSE 已建立流：归档后不得再依赖授权缓存 TTL 继续交付', async () => {
+test('SSE 已建立流：归档后仍按读取轨交付（3-T1 归档=只读保留）', async () => {
   const ws = uniqueWorkspace('sse-archived-live')
   const ownerId = `${ws}-owner`
   const userId = `${ws}-user`
@@ -787,31 +787,34 @@ test('SSE 已建立流：归档后不得再依赖授权缓存 TTL 继续交付',
   await createRunWithAttempt({ id: runId, sessionId, requestedBy: userId, status: 'running', agentVersionId: versionId, workspaceId: ws })
   const firstEvent = await appendRunEvent(runId, `${runId}-attempt`, 1, 'assistant.delta', '归档前在流内容')
 
-  // 建流并预热逐批授权缓存（旧实现命中缓存即放行）。
-  const response = await fetch(`${baseUrl}/api/workbench/v1/runs/${runId}/events`, {
-    headers: { 'x-test-user-id': userId },
+  // 建流并预热逐批授权缓存。
+  const response = new MemorySseResponse()
+  const stream = streamRunEvents(response, undefined, runId, runs, 20, 60_000, {
+    workspaceId: ws,
+    userId,
+    authorization,
+    ttlMs: 60_000,
   })
-  assert.equal(response.status, 200)
-  const reader = response.body?.getReader()
-  if (!reader) throw new Error('SSE 响应没有 body')
-  const collector = collectStream(reader)
-  await waitFor(() => collector.text().includes(firstEvent), '建流后交付首批内容')
+  await waitFor(() => response.body.includes(firstEvent), '建流后交付首批内容')
 
-  // 归档只改 status、不提升 team_auth_revision：旧实现会在缓存 TTL（默认 10s）内继续
-  // 交付。逐批门禁现每批重新解析空间类型，因此归档必须立即终止已建立的流。
-  await database`
-    update workspaces set status = 'archived' where tenant_id = ${tenantId} and id = ${ws}
-  `
-  await appendRunEvent(runId, `${runId}-attempt`, 2, 'assistant.delta', '归档后在流内容')
+  // 3-T1 归档语义：归档只改 status、不提升 team_auth_revision。读取轨下当前成员
+  // 仍可读，因此已建立的流必须继续交付；执行轨（排队领取与执行前复核）另行拒绝。
+  await archiveWorkspace(ws)
+  const archivedEvent = await appendRunEvent(runId, `${runId}-attempt`, 2, 'assistant.delta', '归档后在流内容')
 
+  await waitFor(() => response.body.includes(archivedEvent), '归档后成员仍按读取轨收到内容')
+  // 收权仍然立即终止：移除成员会推进修订号，逐批门禁的新鲜复核拒绝（3-T1 不放宽收权）。
+  await members.removeMember(ws, userId, ownerId)
+  const deniedEvent = await appendRunEvent(runId, `${runId}-attempt`, 3, 'assistant.delta', '归档后收权内容')
   await Promise.race([
-    collector.done(),
-    new Promise((_resolve, reject) => setTimeout(() => reject(new Error('归档后已建立的 SSE 流未终止')), 5_000)),
+    stream,
+    new Promise((_resolve, reject) => setTimeout(() => reject(new Error('归档空间收权后 SSE 流未终止')), 5_000)),
   ])
-  assert.equal(collector.text().includes('归档后在流内容'), false, '归档后不得再交付内容')
+  assert.equal(response.ended, true)
+  assert.equal(response.body.includes(deniedEvent), false, '归档空间收权后的批次不得交付')
 })
 
-test('SSE HTTP 路由：归档团队空间不得降级为无拦截路径', async () => {
+test('SSE HTTP 路由：归档团队空间的现任成员可建流读回历史事件（3-T1 读取轨）', async () => {
   const ws = uniqueWorkspace('sse-http-archived')
   const ownerId = `${ws}-owner`
   const userId = `${ws}-user`
@@ -834,18 +837,24 @@ test('SSE HTTP 路由：归档团队空间不得降级为无拦截路径', async
   assert.equal(before.status, 200)
   await before.body?.cancel()
 
-  await database`
-    update workspaces set status = 'archived' where tenant_id = ${tenantId} and id = ${ws}
-  `
+  await archiveWorkspace(ws)
 
-  // 归档后：workspaceTypeOf 返回 null，旧实现因 `workspaceType === 'team'` 不成立而
-  // 跳过门禁、按无拦截路径建流并交付正文（评审实测 status=200 且 bodyDelivered）。
-  // 现与详情/列表/文件/成果同一口径 fail-closed。
+  // 归档后：读取轨只要求「现任成员」，因此仍可建流并收到历史事件；执行轨的
+  // 排队领取与执行前复核另行拒绝归档空间（见执行轨用例）。
   const archived = await fetch(`${baseUrl}/api/workbench/v1/runs/${runId}/events`, {
     headers: { 'x-test-user-id': userId },
   })
-  assert.equal(archived.status, 403, '归档空间的 SSE 不得建流')
-  assert.equal((await archived.text()).includes('归档前 SSE 正文'), false, '归档后不得交付正文')
+  assert.equal(archived.status, 200, '归档空间的现任成员仍可建立读取流')
+  // 事件正文可能被拆到后续分块，因此累积读取直到内容到达，然后主动取消，
+  // 避免测试进程持有已建立的长连接。
+  const reader = archived.body?.getReader()
+  if (!reader) throw new Error('SSE 响应没有 body')
+  const collector = collectStream(reader)
+  try {
+    await waitFor(() => collector.text().includes('归档前 SSE 正文'), '归档后仍可读回历史事件正文')
+  } finally {
+    await reader.cancel().catch(() => undefined)
+  }
 })
 
 test('SSE HTTP 路由：被移出的成员重连不得降级为无拦截路径', async () => {
@@ -919,7 +928,7 @@ test('REST 读取：被移出的成员不得读取团队运行详情，列表也
   assert.equal(cancelBody.includes('团队运行正文'), false, '取消响应不得包含正文')
 })
 
-test('REST 读取：团队空间归档后一律 fail-closed，且不依赖授权缓存 TTL', async () => {
+test('REST 读取：归档后现任成员仍可读详情与列表，被移出成员仍拒绝（3-T1 双轨）', async () => {
   const ws = uniqueWorkspace('rest-archived-read')
   const ownerId = `${ws}-owner`
   const userId = `${ws}-user`
@@ -933,7 +942,9 @@ test('REST 读取：团队空间归档后一律 fail-closed，且不依赖授权
   await createSession(sessionId, ws, userId, versionId)
   const runId = `${ws}-run`
   await createRunWithAttempt({ id: runId, sessionId, requestedBy: userId, status: 'running', agentVersionId: versionId, workspaceId: ws })
-  await appendRunEvent(runId, `${runId}-attempt`, 1, 'assistant.completed', '归档前团队运行正文')
+  // 详情返回的是 steps（assistant.delta/completed 会被 mapSteps 过滤），因此用
+  // run.started 的 display_message 作为「确实读回了正文」的锚点。
+  await appendRunEvent(runId, `${runId}-attempt`, 1, 'run.started', '归档前团队运行正文')
 
   const readRun = () => fetch(`${baseUrl}/api/workbench/v1/runs/${runId}`, { headers: { 'x-test-user-id': userId } })
   const readTasks = () => fetch(`${baseUrl}/api/workbench/v1/tasks`, { headers: { 'x-test-user-id': userId } })
@@ -943,19 +954,66 @@ test('REST 读取：团队空间归档后一律 fail-closed，且不依赖授权
   }
 
   // 归档前先读一次，把授权缓存预热到「已授予」：归档不提升 team_auth_revision，
-  // 旧实现（workspaceTypeOf 返回 null 时当作「非团队即放行」）会在缓存命中期间
-  // 继续交出正文（评审实测）。归档必须与团队收权同一口径 fail-closed。
+  // 读取轨必须不依赖缓存 TTL 也放行。
   assert.equal((await readRun()).status, 200)
   assert.ok((await taskIds()).includes(runId), '归档前列表应包含该运行')
 
-  await database`
-    update workspaces set status = 'archived' where tenant_id = ${tenantId} and id = ${ws}
-  `
+  await archiveWorkspace(ws)
 
+  // 归档=只读保留：现任成员仍可读详情与列表正文。
   const archivedRun = await readRun()
-  assert.equal(archivedRun.status, 404, '归档空间的运行详情不得 fail-open')
-  assert.equal((await archivedRun.text()).includes('归档前团队运行正文'), false, '归档后不得交付正文')
-  assert.equal((await taskIds()).includes(runId), false, '归档空间的运行不得出现在列表')
+  assert.equal(archivedRun.status, 200, '归档空间的现任成员仍可读取运行详情')
+  const archivedBody = await archivedRun.text()
+  assert.equal(archivedBody.includes('归档前团队运行正文'), true, '归档后仍可读回正文')
+  assert.ok((await taskIds()).includes(runId), '归档空间的运行仍应出现在现任成员列表')
+
+  // 收权不因归档放宽：被移出成员仍 404，且不得借列表读回。
+  await members.removeMember(ws, userId, ownerId)
+  assert.equal((await readRun()).status, 404, '被移出成员不得读取归档空间的运行详情')
+  assert.equal((await taskIds()).includes(runId), false, '被移出成员的运行列表不得包含该归档空间运行')
+})
+
+test('执行轨：归档团队空间拒绝执行前复核', async () => {
+  const ws = uniqueWorkspace('exec-archived')
+  const ownerId = `${ws}-owner`
+  const userId = `${ws}-user`
+  const versionId = `${ws}-version`
+  await seedUser(ownerId, '归档执行负责人')
+  await seedUser(userId, '归档执行成员')
+  await createTeamWorkspace(ws, [{ userId: ownerId, role: 'owner' }, { userId, role: 'member' }])
+  await seedAgent(ws, versionId)
+  await grantAgentVersion(ws, versionId)
+  const sessionId = `${ws}-session`
+  await createSession(sessionId, ws, userId, versionId)
+
+  // 归档前：执行前复核通过。
+  await authorization.authorizeTeamRunExecution({ userId, workspaceId: ws, agentVersionId: versionId })
+  await archiveWorkspace(ws)
+  // 归档后：执行轨必须拒绝（workspaceTypeOf 仍只认 active），不允许排队任务进入 Runtime。
+  await assert.rejects(
+    authorization.authorizeTeamRunExecution({ userId, workspaceId: ws, agentVersionId: versionId }),
+    /不存在|已归档/,
+  )
+
+  // 服务层同样拒绝：在既有活动会话上续写必须失败，且不得创建 Run。
+  const runsBefore = await database<{ count: number }[]>`
+    select count(*)::integer as count from runs
+     where tenant_id = ${tenantId} and session_id = ${sessionId}
+  `
+  await assert.rejects(
+    orchestration.startRun({
+      userId,
+      sessionId,
+      prompt: '归档后继续执行',
+      idempotencyKey: `${runIdPrefix(ws)}-archived-continue`,
+    }),
+    /不存在、已归档|已归档或当前用户不是成员/,
+  )
+  const runsAfter = await database<{ count: number }[]>`
+    select count(*)::integer as count from runs
+     where tenant_id = ${tenantId} and session_id = ${sessionId}
+  `
+  assert.equal(runsAfter[0]?.count, runsBefore[0]?.count, '归档空间的续写不得创建 Run')
 })
 
 // ---------------------------------------------------------------------------
@@ -1457,6 +1515,14 @@ async function insertRevocationEvent(workspaceId: string, userId: string, kind: 
 async function bumpRevision(workspaceId: string) {
   await database`
     update workspaces set team_auth_revision = team_auth_revision + 1
+     where tenant_id = ${tenantId} and id = ${workspaceId}
+  `
+}
+
+/** 3-T2 的归档 API 尚未实现；测试按既有约定直接用 SQL 落归档态。 */
+async function archiveWorkspace(workspaceId: string) {
+  await database`
+    update workspaces set status = 'archived', archived_at = now()
      where tenant_id = ${tenantId} and id = ${workspaceId}
   `
 }

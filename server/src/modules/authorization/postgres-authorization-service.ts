@@ -42,6 +42,33 @@ export interface SessionAuthorizationContext {
 
 export type TeamMemberRole = 'owner' | 'admin' | 'member' | 'viewer'
 
+/**
+ * Track selector for team-workspace authorization (batch 3 / 3-T1).
+ *
+ * `execution` (the default everywhere) keeps the pre-batch-3 semantics: the
+ * team workspace must be `status = 'active'`, so an archived workspace denies
+ * every write, run and SSE execution gate.
+ *
+ * `read` is the NEW read track (归档 = 只读保留): sessions, files, artifacts
+ * and historical runs stay readable by CURRENT members of an archived
+ * workspace. It is deliberately opt-in per call site — a caller that forgets
+ * to pass it keeps failing closed instead of silently widening a write path.
+ */
+export type TeamAccessPurpose = 'execution' | 'read'
+
+export interface TeamRoleOptions {
+  purpose?: TeamAccessPurpose
+}
+
+export interface TeamReadAccessOptions {
+  /**
+   * When true the read track also accepts an archived workspace. Only the
+   * shared read gate (`canReadWorkspaceObject`) and the SSE per-batch check
+   * may set it; execution callers must never do so.
+   */
+  allowArchived?: boolean
+}
+
 /** Stream-access cache stays well under these bounds; both are safety caps. */
 const STREAM_ACCESS_CACHE_SWEEP_THRESHOLD = 512
 const STREAM_ACCESS_CACHE_MAX_ENTRIES = 4_096
@@ -70,6 +97,12 @@ export class PostgresAuthorizationService {
     workspaceId?: string | null
     roleIds?: string[]
     dataScopes?: string[]
+    /**
+     * Read-track only (3-T1): when true, team membership is accepted on an
+     * archived workspace. Defaults to false so every execution path and every
+     * caller that does not explicitly opt in keeps the active-only semantics.
+     */
+    allowArchived?: boolean
   }) {
     const workspaceId = normalizeWorkspaceId(input.workspaceId)
     try {
@@ -78,7 +111,7 @@ export class PostgresAuthorizationService {
         throw new Error('当前用户没有员工工作台使用权限')
       }
       const workspaceType = workspaceId
-        ? await this.requireWorkspaceMembership(input.userId, workspaceId)
+        ? await this.requireWorkspaceMembership(input.userId, workspaceId, input.allowArchived === true)
         : null
       const dataScopes = await this.resolveDataScopes(identity, workspaceId, input.dataScopes)
       return { ...identity, workspaceId, workspaceType, dataScopes }
@@ -191,16 +224,42 @@ export class PostgresAuthorizationService {
 
   /**
    * Read-only workspace type lookup that does NOT depend on the caller's
-   * current membership (unlike resolveWorkspaceType): the execution-time
-   * re-check must decide "is this a team workspace" even after the requesting
-   * user has already been removed.
+   * current membership (unlike resolveWorkspaceType) and is deliberately
+   * ACTIVE-ONLY: `null` means "missing, archived, or otherwise not executable".
+   *
+   * Its callers are execution gates (execution-time re-check), so the
+   * active-only predicate is load-bearing: batch 3 / 3-T1 kept it that way and
+   * added `readableWorkspaceTypeOf` for read gates. Do NOT use this on a read
+   * path — an archived workspace would resolve to null and read as absent.
    */
   async workspaceTypeOf(workspaceId: string | null | undefined): Promise<'personal' | 'team' | null> {
+    return this.resolveWorkspaceTypeByStatus(workspaceId, 'active')
+  }
+
+  /**
+   * Status-agnostic workspace type lookup for the READ track (batch 3 / 3-T1):
+   * resolves the type whether the workspace is active or archived, so a read
+   * gate can distinguish "archived" from "does not exist".
+   *
+   * Still status-filtered in the general sense — only the two known statuses
+   * resolve; anything else (or a missing row) yields null, which read callers
+   * must treat as a denial with the non-enumerable "not found" wording.
+   */
+  async readableWorkspaceTypeOf(workspaceId: string | null | undefined): Promise<'personal' | 'team' | null> {
+    return this.resolveWorkspaceTypeByStatus(workspaceId, ['active', 'archived'])
+  }
+
+  private async resolveWorkspaceTypeByStatus(
+    workspaceId: string | null | undefined,
+    status: 'active' | Array<'active' | 'archived'>,
+  ): Promise<'personal' | 'team' | null> {
     const id = normalizeWorkspaceId(workspaceId)
     if (!id) return null
+    const statuses = Array.isArray(status) ? status : [status]
     const [row] = await this.database<{ type: 'personal' | 'team' }[]>`
       select w.workspace_type as type from workspaces w
-       where w.tenant_id = ${tenantId} and w.id = ${id} and w.status = 'active'
+       where w.tenant_id = ${tenantId} and w.id = ${id}
+         and w.status in ${this.database(statuses)}
     `
     return row?.type ?? null
   }
@@ -211,19 +270,40 @@ export class PostgresAuthorizationService {
    * authorization on a cache miss, a revision change (immediate invalidation)
    * or TTL expiry. Throws when the viewer no longer has read access so the
    * stream can terminate before delivering the batch.
+   *
+   * 3-T1: this is the READ track, and the only caller is the shared read gate
+   * (`canReadWorkspaceObject`), which passes `allowArchived: true` explicitly;
+   * the default here stays active-only so a caller that forgets to decide keeps
+   * the execution semantics and fails closed on an archived workspace.
    */
-  async authorizeTeamReadAccess(workspaceId: string, userId: string, ttlMs = this.streamAccessTtlMs) {
+  async authorizeTeamReadAccess(
+    workspaceId: string,
+    userId: string,
+    options: TeamReadAccessOptions & { ttlMs?: number } = {},
+  ) {
+    const allowArchived = options.allowArchived === true
+    // 修订号查询必须带状态轨：否则归档前预热的缓存条目会在归档后继续放行默认
+    // （执行）轨调用，使「省略参数即保持执行语义」的默认安全声明失效
+    // （符合性评审 P2-1，实测 defaultAfterArchive=resolved）。
     const [row] = await this.database<{ revision: number }[]>`
       select team_auth_revision as revision from workspaces
        where tenant_id = ${tenantId} and id = ${workspaceId}
+         and ${allowArchived
+           ? this.database.unsafe(`status in ('active', 'archived')`)
+           : this.database.unsafe(`status = 'active'`)}
     `
     if (!row) throw new Error('工作空间不存在或已归档')
-    // Key includes tenant so a future multi-tenant deployment cannot mix entries.
-    const key = `${tenantId}:${workspaceId}:${userId}`
+    // Key includes tenant and the status track so a future multi-tenant
+    // deployment cannot mix entries and, more importantly, an active-only
+    // (execution) probe can never be satisfied by a cached archived-read
+    // grant of the same viewer.
+    const key = `${tenantId}:${workspaceId}:${userId}:${allowArchived ? 'archived' : 'active'}`
     const cached = this.teamReadAccessCache.get(key)
-    if (cached && cached.revision === row.revision && Date.now() - cached.checkedAt < ttlMs) return
-    await this.authorizeWorkbench({ userId, workspaceId })
-    this.setStreamAccessCache(key, { revision: row.revision, checkedAt: Date.now() }, ttlMs)
+    if (cached && cached.revision === row.revision && Date.now() - cached.checkedAt < (options.ttlMs ?? this.streamAccessTtlMs)) {
+      return
+    }
+    await this.authorizeWorkbench({ userId, workspaceId, allowArchived })
+    this.setStreamAccessCache(key, { revision: row.revision, checkedAt: Date.now() }, options.ttlMs ?? this.streamAccessTtlMs)
   }
 
   /**
@@ -356,24 +436,36 @@ export class PostgresAuthorizationService {
    * identity check) to satisfy the 员工有效身份 requirement — this method
    * does not verify the user exists or is an active employee. Personal
    * workspaces are intentionally a no-op (team role checks do not apply).
+   *
+   * 3-T1 dual track. The default (`purpose` omitted or `'execution'`) keeps
+   * the pre-batch-3 semantics: an archived workspace is rejected even for the
+   * owner, so a write path that does not state its purpose stays fail-closed.
+   * `{ purpose: 'read' }` is the explicit read track and additionally accepts
+   * an archived workspace for CURRENT members; removed members and unknown
+   * workspaces still get the same non-enumerable "不是成员" wording.
    */
   async requireTeamRole(
     workspaceId: string,
     userId: string,
     allowedRoles: TeamMemberRole[],
+    options: TeamRoleOptions = {},
   ) {
+    const allowArchived = options.purpose === 'read'
     const [workspace] = await this.database<{ type: 'personal' | 'team' }[]>`
       select w.workspace_type as type from workspaces w
-       where w.tenant_id = ${tenantId} and w.id = ${workspaceId} and w.status = 'active'
+       where w.tenant_id = ${tenantId} and w.id = ${workspaceId}
+         and ${allowArchived
+           ? this.database.unsafe(`w.status in ('active', 'archived')`)
+           : this.database.unsafe(`w.status = 'active'`)}
     `
-    if (!workspace) throw new Error('工作空间不存在、已归档或当前用户不是成员')
+    if (!workspace) throw authorizationDenied('工作空间不存在、已归档或当前用户不是成员')
     if (workspace.type === 'personal') return
     const [member] = await this.database<{ role: TeamMemberRole }[]>`
       select wm.member_role as role from workspace_members wm
        where wm.tenant_id = ${tenantId} and wm.workspace_id = ${workspaceId}
          and wm.user_id = ${userId}
     `
-    if (!member) throw new Error('工作空间不存在、已归档或当前用户不是成员')
+    if (!member) throw authorizationDenied('工作空间不存在、已归档或当前用户不是成员')
     if (!allowedRoles.includes(member.role)) {
       throw new Error(`当前用户角色无权执行此操作（允许角色：${allowedRoles.join('、')}）`)
     }
@@ -398,7 +490,7 @@ export class PostgresAuthorizationService {
          where u.tenant_id = ${tenantId} and u.id = ${userId} and u.status = 'active'
            and exists (select 1 from tenants t where t.id = u.tenant_id and t.status = 'active')
       `
-      if (!user) throw new Error('当前用户不存在、已停用或所属企业不可用')
+      if (!user) throw authorizationDenied('当前用户不存在、已停用或所属企业不可用')
       const requestedRoleIds = unique(sessionRoleIds)
       if (requestedRoleIds.length === 0) return { id: user.id, roleIds: [], permissions: [] }
       const rows = await this.database<{ id: string; permissions: string[] }[]>`
@@ -434,14 +526,25 @@ export class PostgresAuthorizationService {
          and exists (select 1 from tenants t where t.id = u.tenant_id and t.status = 'active')
        group by u.id
     `
-    if (!row) throw new Error('当前用户不存在、已停用或所属企业不可用')
+    if (!row) throw authorizationDenied('当前用户不存在、已停用或所属企业不可用')
     return row
   }
 
-  private async requireWorkspaceMembership(userId: string, workspaceId: string) {
+  /**
+   * Membership predicate for `authorizeWorkbench`. `allowArchived` is the
+   * explicit read-track opt-in (3-T1): the default is active-only, so every
+   * execution caller and every route that does not decide its purpose keeps
+   * rejecting an archived team workspace. Personal ownership and team
+   * membership themselves are status-agnostic; only the requested workspace
+   * status set changes.
+   */
+  private async requireWorkspaceMembership(userId: string, workspaceId: string, allowArchived = false) {
     const [row] = await this.database<{ id: string; type: 'personal' | 'team' }[]>`
       select w.id, w.workspace_type as type from workspaces w
-       where w.tenant_id = ${tenantId} and w.id = ${workspaceId} and w.status = 'active'
+       where w.tenant_id = ${tenantId} and w.id = ${workspaceId}
+         and ${allowArchived
+           ? this.database.unsafe(`w.status in ('active', 'archived')`)
+           : this.database.unsafe(`w.status = 'active'`)}
          and (
            (w.workspace_type = 'personal' and w.created_by = ${userId})
            or (
@@ -454,7 +557,7 @@ export class PostgresAuthorizationService {
            )
          )
     `
-    if (!row) throw new Error('工作空间不存在、已归档或当前用户不是成员')
+    if (!row) throw authorizationDenied('工作空间不存在、已归档或当前用户不是成员')
     return row.type
   }
 

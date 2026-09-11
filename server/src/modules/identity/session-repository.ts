@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import type { UserProfile, UserRole } from '../../domain/types.ts'
 import type { DatabaseClient, DatabaseTransaction } from '../../infrastructure/postgres/database.ts'
 import type { ApiAudience } from './types.ts'
+import { authorizationDenied } from '../authorization/authorization-errors.ts'
 
 const tenantId = 'tenant-dsh-work'
 
@@ -413,7 +414,7 @@ export class IdentitySessionRepository {
          and u.business_user
        group by u.id
     `
-    if (!user) throw new Error('当前用户不存在、已停用或所属企业不可用')
+    if (!user) throw authorizationDenied('当前用户不存在、已停用或所属企业不可用')
     const role = primaryRole(user.roleCodes, user.permissions)
     return {
       profile: {

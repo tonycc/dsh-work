@@ -4,6 +4,7 @@ import { after, before, test } from 'node:test'
 
 import { PostgresAgentService } from '../../modules/agent/postgres-agent-service.ts'
 import { PostgresAuthorizationService } from '../../modules/authorization/postgres-authorization-service.ts'
+import { canReadWorkspaceObject } from '../../modules/authorization/authorization-errors.ts'
 import { PostgresWorkspaceGrantSourceService } from '../../modules/authorization/postgres-workspace-grant-source-service.ts'
 import { createDatabase, type DatabaseClient } from './database.ts'
 import { createThrowawayDatabase, type ThrowawayDatabase } from './test-database.ts'
@@ -107,20 +108,180 @@ test('requireTeamRole is a no-op for personal workspaces', async () => {
   await authorization.requireTeamRole(personalWorkspaceId, 'U00008', ['owner'])
 })
 
-test('requireTeamRole rejects archived team workspaces with the membership wording', async () => {
+test('requireTeamRole keeps rejecting archived team workspaces for the execution track', async () => {
   const workspaceId = `ws-t2-archived-${suffix}`
   const ownerId = `user-t2-archived-owner-${suffix}`
   await createUser(ownerId, 'T2 归档空间负责人')
   await createTeamWorkspace(workspaceId, [{ userId: ownerId, role: 'owner' }])
-  await database`
-    update workspaces set status = 'archived', archived_at = now()
-     where tenant_id = ${tenantId} and id = ${workspaceId}
-  `
-  // Even the owner is rejected: the status predicate excludes archived rows.
+  await archiveWorkspace(workspaceId)
+  // Execution track (the default): even the owner is rejected, because the
+  // status predicate excludes archived rows. 3-T1 kept this default and made
+  // the read track opt-in instead, so an execution caller that forgets to
+  // decide stays fail-closed.
   await assert.rejects(
     authorization.requireTeamRole(workspaceId, ownerId, ['owner']),
     /不是成员/,
   )
+})
+
+test('requireTeamRole allows archived team workspaces only with the explicit read purpose', async () => {
+  const workspaceId = `ws-t2-archived-read-${suffix}`
+  const ownerId = `user-t2-archived-read-owner-${suffix}`
+  const memberId = `user-t2-archived-read-member-${suffix}`
+  const viewerId = `user-t2-archived-read-viewer-${suffix}`
+  const outsiderId = `user-t2-archived-read-outsider-${suffix}`
+  await createUser(ownerId, 'T2 归档读取负责人')
+  await createUser(memberId, 'T2 归档读取成员')
+  await createUser(viewerId, 'T2 归档读取只读')
+  await createUser(outsiderId, 'T2 归档读取非成员')
+  await createTeamWorkspace(workspaceId, [
+    { userId: ownerId, role: 'owner' },
+    { userId: memberId, role: 'member' },
+    { userId: viewerId, role: 'viewer' },
+  ])
+  await archiveWorkspace(workspaceId)
+
+  // Read purpose: every CURRENT member passes, including the read-only role
+  // and the owner (归档=只读保留).
+  for (const userId of [ownerId, memberId, viewerId]) {
+    await authorization.requireTeamRole(workspaceId, userId, ['owner', 'admin', 'member', 'viewer'], {
+      purpose: 'read',
+    })
+  }
+
+  // Role sets still apply on the read track: a member is not an owner.
+  await assert.rejects(
+    authorization.requireTeamRole(workspaceId, memberId, ['owner'], { purpose: 'read' }),
+    /无权执行/,
+  )
+
+  // Non-members are denied with the same non-enumerable wording as "missing".
+  await assert.rejects(
+    authorization.requireTeamRole(workspaceId, outsiderId, ['owner', 'admin', 'member', 'viewer'], {
+      purpose: 'read',
+    }),
+    /不是成员/,
+  )
+  // An unknown workspace is denied on the read track too.
+  await assert.rejects(
+    authorization.requireTeamRole(`ws-t2-archived-read-missing-${suffix}`, ownerId, ['owner'], {
+      purpose: 'read',
+    }),
+    /不是成员/,
+  )
+})
+
+test('归档后默认（执行）轨不得被归档前预热的授权缓存放行（3-T1 缓存状态轨）', async () => {
+  const suffix = randomUUID().slice(0, 8)
+  const ws = `ws-t1-cache-warm-${suffix}`
+  const ownerId = `${ws}-owner`
+  await createUser(ownerId, '缓存状态轨负责人')
+  await createTeamWorkspace(ws, [{ userId: ownerId, role: 'owner' }])
+
+  // 归档前在**同一实例**上把读取轨授权预热（读取轨允许归档，且授权与状态无关）。
+  await authorization.authorizeTeamReadAccess(ws, ownerId, { allowArchived: true, ttlMs: 60_000 })
+
+  await database`
+    update workspaces set status = 'archived' where tenant_id = ${tenantId} and id = ${ws}
+  `
+
+  // 默认（执行）轨：缓存键虽含状态轨，但若修订号查询不过滤 status，预热条目仍会放行。
+  // 必须拒绝——这正是验证代理 D3 指出「旧断言不具鉴别力」的地方。
+  await assert.rejects(
+    authorization.authorizeTeamReadAccess(ws, ownerId),
+    /不存在或已归档/,
+    '归档后默认执行轨不得被归档前的预热缓存放行',
+  )
+  // 读取轨仍应放行（归档 = 只读保留）。
+  await authorization.authorizeTeamReadAccess(ws, ownerId, { allowArchived: true })
+})
+
+test('readableWorkspaceTypeOf resolves archived workspaces while workspaceTypeOf stays active-only', async () => {
+  const workspaceId = `ws-t2-type-${suffix}`
+  const ownerId = `user-t2-type-owner-${suffix}`
+  await createUser(ownerId, 'T2 类型负责人')
+  await createTeamWorkspace(workspaceId, [{ userId: ownerId, role: 'owner' }])
+  assert.equal(await authorization.workspaceTypeOf(workspaceId), 'team')
+  assert.equal(await authorization.readableWorkspaceTypeOf(workspaceId), 'team')
+
+  await archiveWorkspace(workspaceId)
+  // Execution-track resolver keeps treating archived as absent (fail-closed).
+  assert.equal(await authorization.workspaceTypeOf(workspaceId), null)
+  // Status-agnostic read-track resolver still recognises the team workspace.
+  assert.equal(await authorization.readableWorkspaceTypeOf(workspaceId), 'team')
+  assert.equal(await authorization.readableWorkspaceTypeOf(`ws-t2-type-missing-${suffix}`), null)
+  assert.equal(await authorization.readableWorkspaceTypeOf(null), null)
+})
+
+test('authorizeTeamReadAccess allows archived workspaces only for current members', async () => {
+  const workspaceId = `ws-t2-read-access-${suffix}`
+  const ownerId = `user-t2-read-access-owner-${suffix}`
+  const memberId = `user-t2-read-access-member-${suffix}`
+  const outsiderId = `user-t2-read-access-outsider-${suffix}`
+  await createUser(ownerId, 'T2 读门禁负责人')
+  await createUser(memberId, 'T2 读门禁成员')
+  await createUser(outsiderId, 'T2 读门禁非成员')
+  await createTeamWorkspace(workspaceId, [
+    { userId: ownerId, role: 'owner' },
+    { userId: memberId, role: 'member' },
+  ])
+  await archiveWorkspace(workspaceId)
+
+  // Archived read access is opt-in and allows current members.
+  await authorization.authorizeTeamReadAccess(workspaceId, ownerId, { allowArchived: true })
+  await authorization.authorizeTeamReadAccess(workspaceId, memberId, { allowArchived: true })
+
+  // The default (no option) stays active-only so a write path cannot follow.
+  await assert.rejects(
+    authorization.authorizeTeamReadAccess(workspaceId, ownerId),
+    /不存在/,
+  )
+  // Non-members and unknown workspaces deny with the same non-enumerable
+  // wording as "missing" (either the workspace row is absent or membership is).
+  await assert.rejects(
+    authorization.authorizeTeamReadAccess(workspaceId, outsiderId, { allowArchived: true }),
+    /不存在|不是成员/,
+  )
+  await assert.rejects(
+    authorization.authorizeTeamReadAccess(`ws-t2-read-access-missing-${suffix}`, ownerId, { allowArchived: true }),
+    /不存在|不是成员/,
+  )
+})
+
+// ---------------------------------------------------------------------------
+// 1b. canReadWorkspaceObject (shared read gate, 3-T1 dual track)
+// ---------------------------------------------------------------------------
+
+test('canReadWorkspaceObject is archive-permissive for current members and still fails closed otherwise', async () => {
+  const workspaceId = `ws-t2-read-gate-${suffix}`
+  const ownerId = `user-t2-read-gate-owner-${suffix}`
+  const memberId = `user-t2-read-gate-member-${suffix}`
+  const removedId = `user-t2-read-gate-removed-${suffix}`
+  await createUser(ownerId, 'T2 读门禁负责人')
+  await createUser(memberId, 'T2 读门禁现任成员')
+  await createUser(removedId, 'T2 读门禁被移出成员')
+  await createTeamWorkspace(workspaceId, [
+    { userId: ownerId, role: 'owner' },
+    { userId: memberId, role: 'member' },
+    { userId: removedId, role: 'member' },
+  ])
+  await database`
+    delete from workspace_members
+     where tenant_id = ${tenantId} and workspace_id = ${workspaceId} and user_id = ${removedId}
+  `
+  assert.equal(await canReadWorkspaceObject(authorization, workspaceId, memberId), true)
+
+  await archiveWorkspace(workspaceId)
+  // 归档=只读保留：archived + current member (incl. owner) may read.
+  assert.equal(await canReadWorkspaceObject(authorization, workspaceId, ownerId), true)
+  assert.equal(await canReadWorkspaceObject(authorization, workspaceId, memberId), true)
+  // Removed members and unknown workspaces still fail closed.
+  assert.equal(await canReadWorkspaceObject(authorization, workspaceId, removedId), false)
+  assert.equal(await canReadWorkspaceObject(authorization, `ws-t2-read-gate-missing-${suffix}`, ownerId), false)
+  // Personal workspaces keep the existing open path (AC-23), and a null
+  // workspace is not a team object.
+  assert.equal(await canReadWorkspaceObject(authorization, 'ws-personal-U00001', 'U00001'), true)
+  assert.equal(await canReadWorkspaceObject(authorization, null, ownerId), true)
 })
 
 // ---------------------------------------------------------------------------
@@ -479,6 +640,13 @@ async function createUser(id: string, displayName: string) {
     insert into users (id, tenant_id, external_subject, display_name, status)
     values (${id}, ${tenantId}, ${`bootstrap:${id}`}, ${displayName}, 'active')
   `
+  // 读门禁用例要过 authorizeWorkbench 的 workbench:use 检查，因此本人测试用户
+  // 需要员工角色（该文件其余用例只查 requireTeamRole，不依赖平台权限）。
+  await database`
+    insert into user_roles (tenant_id, user_id, role_id, source_key)
+    values (${tenantId}, ${id}, 'role-employee', 'local')
+    on conflict do nothing
+  `
 }
 
 async function createTeamWorkspace(workspaceId: string, members: Array<{ userId: string; role: string }>) {
@@ -492,6 +660,14 @@ async function createTeamWorkspace(workspaceId: string, members: Array<{ userId:
       values (${tenantId}, ${workspaceId}, ${member.userId}, ${member.role}, 'U00001')
     `
   }
+}
+
+/** 3-T2 的归档 API 尚未实现；测试按既有约定直接用 SQL 落归档态。 */
+async function archiveWorkspace(workspaceId: string) {
+  await database`
+    update workspaces set status = 'archived', archived_at = now()
+     where tenant_id = ${tenantId} and id = ${workspaceId}
+  `
 }
 
 async function insertOwnersBypassingTrigger(workspaceId: string, ownerIds: string[]) {

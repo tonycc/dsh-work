@@ -196,11 +196,13 @@ export class PostgresContentService {
        where a.tenant_id = ${tenantId} and s.created_by = ${actorUserId}
        order by av.created_at desc
     `
-    // 团队成果与团队运行同一收权口径：成果列表同样要复核当前团队读权限，
+    // 团队成果与团队运行同一读取口径：成果列表同样要复核当前团队读权限，
     // 被移出/退出的成员不能继续看到自己此前在团队空间发布的成果（AC-09）。
-    // 个人空间成果直接返回，保持原路径（AC-23）——不在这里再查空间类型，避免
-    // 每行一次往返（评审实测 200 行 = 200 次多余查询）；团队成果按空间去重后
-    // 只复核一次，既消掉 N+1 也消掉并发冷启动的缓存击穿。
+    // 3-T1 读取轨：`canReadWorkspaceObject` 对归档空间的现任成员放行（只读保留），
+    // 对非成员与不存在空间仍然 fail-closed。个人空间成果直接返回，保持原路径
+    // （AC-23）——不在这里再查空间类型，避免每行一次往返（评审实测 200 行 = 200
+    // 次多余查询）；团队成果按空间去重后只复核一次，既消掉 N+1 也消掉并发冷启动
+    // 的缓存击穿。
     const teamWorkspaceIds = [...new Set(
       rows.filter(row => row.workspaceType === 'team').map(row => row.workspaceId),
     )]
@@ -245,7 +247,14 @@ export class PostgresContentService {
     cursor?: string
     limit?: number
   }): Promise<WorkspaceFilePage> {
-    const access = await this.workspaces.resolveAccessibleWorkspace(input.workspaceId, input.actorUserId)
+    // 3-T1 读取轨：列表属于「只读保留」，归档空间的现任成员仍可读取；上传/移除
+    // 仍走 resolveAccessibleWorkspace（执行轨，归档一律拒绝）。
+    const access = await this.workspaces.resolveReadableWorkspace(input.workspaceId, input.actorUserId)
+    // 读取轨允许归档；但「可移除」是执行轨能力，归档空间一律 false。
+    const [workspaceState] = await this.database<{ status: string }[]>`
+      select status from workspaces where tenant_id = ${tenantId} and id = ${input.workspaceId}
+    `
+    const writable = workspaceState?.status === 'active'
     if (access.type === 'personal') throw new Error('仅支持团队工作空间查询共享文件')
     const role = await this.workspaceMemberRole(input.workspaceId, input.actorUserId)
     const canManageAll = role === 'owner' || role === 'admin'
@@ -293,8 +302,9 @@ export class PostgresContentService {
       uploadedAt: formatDateTime(row.createdAt),
       scanStatus: row.scanStatus,
       // 权限在服务端判定：负责人/管理员可移除任何文件，成员只能移除自己上传的；
-      // 只读成员不能移除（仍可引用与下载）。
-      removable: canManageAll || row.uploadedById === input.actorUserId,
+      // 只读成员不能移除（仍可引用与下载）。归档空间属执行轨（3-T1）：移除会被拒，
+      // 因此不得回报 removable，否则前端会渲染必然失败的入口（质量评审 P2）。
+      removable: writable && (canManageAll || row.uploadedById === input.actorUserId),
       canDownload: row.scanStatus === 'clean',
     }))
     // 游标必须用原始时间戳：uploadedAt 是展示格式，喂回 timestamptz 会解析失败。
@@ -345,12 +355,28 @@ export class PostgresContentService {
     return member.role
   }
 
-  async storeSessionFile(sessionId: string, name: string, mimeType: string, bytes: Buffer, actorUserId: string) {    const [session] = await this.database<{ id: string; workspaceId: string }[]>`
+  async storeSessionFile(sessionId: string, name: string, mimeType: string, bytes: Buffer, actorUserId: string) {
+    const [session] = await this.database<{ id: string; workspaceId: string }[]>`
       select id, workspace_id as "workspaceId" from sessions
        where tenant_id = ${tenantId} and id = ${sessionId} and created_by = ${actorUserId} and status = 'active'
     `
     if (!session) throw new Error('Session 不存在或不可访问')
+    // 上传属执行轨（3-T1）：归档不改 session.status，必须单独校验所属空间仍活跃，
+    // 否则归档空间仍可上传会话附件（符合性评审 P1-2，实测返回 201）。
+    await this.requireActiveWorkspace(session.workspaceId, actorUserId)
     return this.storeInputFile({ workspaceId: session.workspaceId, sessionId, name, mimeType, bytes, actorUserId })
+  }
+
+  /**
+   * Execution-track guard for writes that reach a workspace only through a session
+   * or file row: personal spaces are the caller's own, team spaces must be active.
+   */
+  private async requireActiveWorkspace(workspaceId: string, actorUserId: string) {
+    const access = await this.workspaces.resolveAccessibleWorkspace(workspaceId, actorUserId)
+    if (access.type === 'personal' && access.id !== `ws-personal-${actorUserId}`) {
+      throw authorizationDenied('工作空间不存在或不可访问')
+    }
+    return access
   }
 
   async prepareRuntimeFiles(input: {
@@ -527,7 +553,11 @@ export class PostgresContentService {
              f.session_id is null
              and f.workspace_id in (
                select w.id from workspaces w
-                where w.tenant_id = ${tenantId} and w.status = 'active'
+                -- 3-T1 读取轨：候选空间包含归档，最终是否放行由下方 canReadWorkspaceObject
+                -- 按「现任成员」统一判定（归档空间对现任成员只读保留，对非成员与不存在
+                -- 空间仍然 fail-closed）。这里若不含 archived，共享文件即使对现任成员
+                -- 也会在候选阶段被误判为「不存在」。
+                where w.tenant_id = ${tenantId} and w.status in ('active', 'archived')
                   and (
                     (w.workspace_type = 'personal' and w.created_by = ${actorUserId})
                     or (
@@ -545,8 +575,9 @@ export class PostgresContentService {
     `
     if (!row) throw new Error('文件不存在或不可访问')
     // 会话作者分支不校验团队身份：被移出/退出的成员仍能命中本人旧会话文件，
-    // 必须再按对象所属空间复核当前团队读权限（1B-T4 / AC-09）。拒绝统一走类型化
-    // 授权错误，并保持与「不存在」相同文案，避免用 fileId 枚举团队对象。
+    // 必须再按对象所属空间复核当前团队读权限（1B-T4 / AC-09）。3-T1 起该门禁走
+    // 读取轨：归档空间的现任成员可读，被移出成员与非成员一律拒绝。拒绝统一走
+    // 类型化授权错误，并保持与「不存在」相同文案，避免用 fileId 枚举团队对象。
     if (!(await canReadWorkspaceObject(this.authorization, row.workspaceId, actorUserId))) {
       throw authorizationDenied('文件不存在或不可访问')
     }

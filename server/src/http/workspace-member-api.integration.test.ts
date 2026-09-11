@@ -1044,6 +1044,140 @@ test('所有成员管理端点都拒绝个人工作空间', async () => {
   }
 })
 
+test('归档空间：访问撤销与负责人转交仍可执行，成员新增/角色调整/退出仍拒绝（3-T1 治理例外）', async () => {
+  const workspaceId = 'ws-3t1-governance'
+  const ownerId = 'user-3t1-gov-owner'
+  const adminId = 'user-3t1-gov-admin'
+  const memberId = 'user-3t1-gov-member'
+  const successorId = 'user-3t1-gov-successor'
+  const removedId = 'user-3t1-gov-removed'
+  await createDirectoryUser(ownerId, '归档治理负责人')
+  await createDirectoryUser(adminId, '归档治理管理员')
+  await createDirectoryUser(memberId, '归档治理成员')
+  await createDirectoryUser(successorId, '归档治理继任者')
+  await createDirectoryUser(removedId, '归档治理被移除者')
+  await createTeamWorkspace(workspaceId, [
+    { userId: ownerId, role: 'owner' },
+    { userId: adminId, role: 'admin' },
+    { userId: memberId, role: 'member' },
+    { userId: removedId, role: 'member' },
+    { userId: successorId, role: 'member' },
+  ])
+  await archive(workspaceId)
+
+  const beforeRevocationRevision = await revision(workspaceId)
+
+  // 治理例外：负责人/管理员仍可撤销访问（移出成员），并写入收权事件。
+  const removal = await api('DELETE', `/api/workbench/v1/workspaces/${workspaceId}/members/${removedId}`, { as: ownerId })
+  assert.equal(removal.status, 200, '归档空间必须仍能撤销成员访问')
+  assert.equal((await memberRoles(workspaceId)).some(member => member.userId === removedId), false)
+  assert.deepEqual(
+    (await revocationEvents(workspaceId)).map(event => [event.userId, event.kind]),
+    [[removedId, 'member_removed']],
+  )
+  assert.equal(await revision(workspaceId), beforeRevocationRevision + 1, '收权必须提升团队授权修订号')
+
+  // 执行轨仍拒绝：新增成员、角色调整、主动退出在归档空间一律拒绝。
+  // 归档态由 authorizeWorkbench 的成员/状态门禁先行拒绝（403），
+  // 不进入服务层的「仅支持团队空间」校验（422）。
+  const addAttempt = await api('POST', `/api/workbench/v1/workspaces/${workspaceId}/members`, {
+    as: ownerId,
+    body: { userId: memberId, role: 'viewer' },
+  })
+  assert.equal(addAttempt.status, 403, '归档空间不得新增成员')
+
+  const roleAttempt = await api('PATCH', `/api/workbench/v1/workspaces/${workspaceId}/members/${memberId}`, {
+    as: ownerId,
+    body: { role: 'admin' },
+  })
+  assert.equal(roleAttempt.status, 403, '归档空间不得调整成员角色')
+
+  const exitAttempt = await api('POST', `/api/workbench/v1/workspaces/${workspaceId}/exit`, { as: memberId })
+  assert.equal(exitAttempt.status, 403, '归档空间不得主动退出')
+
+  const candidateAttempt = await api('GET', `/api/workbench/v1/workspaces/${workspaceId}/member-candidates`, { as: ownerId })
+  assert.equal(candidateAttempt.status, 403, '归档空间不得查询成员候选人')
+
+  // 治理例外：负责人转交仍可执行，且恰好保留一名负责人。
+  const transfer = await api('POST', `/api/workbench/v1/workspaces/${workspaceId}/owner-transfer`, {
+    as: ownerId,
+    body: { toUserId: successorId },
+  })
+  assert.equal(transfer.status, 200, '归档空间必须仍能转交负责人')
+  const rolesAfterTransfer = await memberRoles(workspaceId)
+  assert.deepEqual(
+    rolesAfterTransfer.filter(member => member.role === 'owner').map(member => member.userId),
+    [successorId],
+  )
+  assert.equal(rolesAfterTransfer.find(member => member.userId === ownerId)?.role, 'member')
+
+  // 个人空间行为完全不变（AC-23）。
+  const personal = await api('DELETE', '/api/workbench/v1/workspaces/ws-personal-U00001/members/U00008', { as: 'U00001' })
+  assert.equal(personal.status, 422)
+  assert.match(errorMessage(personal), /仅支持团队工作空间/)
+})
+
+test('归档空间的成员与 Agent 名册属读取轨，候选与写操作仍拒绝', async () => {
+  const workspaceId = 'ws-archived-roster'
+  const ownerId = `${workspaceId}-owner`
+  const memberId = `${workspaceId}-member`
+  await createDirectoryUser(ownerId, '归档名册负责人')
+  await createDirectoryUser(memberId, '归档名册成员')
+  await createTeamWorkspace(workspaceId, [{ userId: ownerId, role: 'owner' }, { userId: memberId, role: 'member' }])
+  await database`
+    update workspaces set status = 'archived' where tenant_id = ${tenantId} and id = ${workspaceId}
+  `
+
+  // 读取轨：归档后现任成员仍可读名册（详情页右栏依赖）。
+  for (const userId of [ownerId, memberId]) {
+    const members = await fetch(`${baseUrl}/api/workbench/v1/workspaces/${workspaceId}/members`, {
+      headers: { 'x-test-user-id': userId },
+    })
+    assert.equal(members.status, 200, `${userId} 应可读取归档空间成员名册`)
+  }
+
+  // 执行轨：候选人列表与写操作在归档空间仍拒绝。
+  const candidates = await fetch(`${baseUrl}/api/workbench/v1/workspaces/${workspaceId}/member-candidates`, {
+    headers: { 'x-test-user-id': ownerId },
+  })
+  assert.equal(candidates.status, 403, '归档空间不应暴露成员候选')
+
+  // 包装器 `requireTeamActor` 的默认必须是执行轨（质量评审指出该默认此前只有代码阅读、
+  // 没有判别性测试）：候选人接口不传 allowArchived，归档空间必须被拒（此套件只注册成员路由，
+  // Agent 候选端点由 workspace-agent-member-api 套件覆盖）。
+  const candidateDenied = await fetch(`${baseUrl}/api/workbench/v1/workspaces/${workspaceId}/member-candidates`, {
+    headers: { 'x-test-user-id': ownerId },
+  })
+  assert.equal(candidateDenied.status, 403, 'requireTeamActor 默认（执行轨）必须拒绝归档空间的候选人接口')
+
+  const addMember = await fetch(`${baseUrl}/api/workbench/v1/workspaces/${workspaceId}/members`, {
+    method: 'POST',
+    headers: { 'x-test-user-id': ownerId, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId: `${workspaceId}-new`, role: 'member' }),
+  })
+  assert.equal(addMember.status, 403, '归档空间不允许新增成员')
+
+  // 非成员在归档空间同样不得读名册（不可枚举）；且状态码必须与活跃空间一致，
+  // 否则可以用状态码区分「已归档」与「不存在/无权」。
+  const outsiderId = `${workspaceId}-outsider`
+  await createDirectoryUser(outsiderId, '归档名册外部人')
+  const outsider = await fetch(`${baseUrl}/api/workbench/v1/workspaces/${workspaceId}/members`, {
+    headers: { 'x-test-user-id': outsiderId },
+  })
+  assert.equal(outsider.status, 403, '非成员不得读取归档空间名册')
+
+  const activeWorkspaceId = `${workspaceId}-active`
+  await createTeamWorkspace(activeWorkspaceId, [{ userId: ownerId, role: 'owner' }])
+  const outsiderOnActive = await fetch(`${baseUrl}/api/workbench/v1/workspaces/${activeWorkspaceId}/members`, {
+    headers: { 'x-test-user-id': outsiderId },
+  })
+  const outsiderOnMissing = await fetch(`${baseUrl}/api/workbench/v1/workspaces/${workspaceId}-missing/members`, {
+    headers: { 'x-test-user-id': outsiderId },
+  })
+  assert.equal(outsiderOnActive.status, outsider.status, '归档与活跃空间对非成员必须同状态码，不得泄露存在性')
+  assert.equal(outsiderOnMissing.status, outsider.status, '不存在空间与归档空间对非成员必须同状态码')
+})
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -1108,6 +1242,14 @@ async function createDirectoryUser(
       on conflict do nothing
     `
   }
+}
+
+/** 3-T2 的归档 API 尚未实现；测试按既有约定直接用 SQL 落归档态。 */
+async function archive(workspaceId: string) {
+  await database`
+    update workspaces set status = 'archived', archived_at = now()
+     where tenant_id = ${tenantId} and id = ${workspaceId}
+  `
 }
 
 async function createTeamWorkspace(workspaceId: string, members: MemberRow[]) {

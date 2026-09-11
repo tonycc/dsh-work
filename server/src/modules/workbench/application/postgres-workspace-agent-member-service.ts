@@ -6,6 +6,7 @@ import type {
   WorkspaceAgentCandidate,
 } from '../../agent/postgres-agent-service.ts'
 import type { PostgresAuthorizationService } from '../../authorization/postgres-authorization-service.ts'
+import { authorizationDenied } from '../../authorization/authorization-errors.ts'
 import { PostgresWorkspaceGrantSourceService } from '../../authorization/postgres-workspace-grant-source-service.ts'
 
 const tenantId = 'tenant-dsh-work'
@@ -114,9 +115,10 @@ export class PostgresWorkspaceAgentMemberService {
    * apply to agents (TW-02).
    */
   async listAgentMembers(workspaceId: string, actorUserId: string): Promise<AgentMemberRecord[]> {
-    await this.assertTeamWorkspace(workspaceId)
+    // Agent 名册属读取轨（3-T1）：归档空间详情仍需展示 Agent 成员；加入/停用/升级/移出保持执行轨。
+    await this.assertTeamWorkspace(workspaceId, { allowArchived: true })
     const actorRole = await this.memberRoleOf(workspaceId, actorUserId)
-    if (!actorRole) throw new Error('当前用户不是该空间的成员')
+    if (!actorRole) throw authorizationDenied('当前用户不是该空间的成员')
     const rows = await this.database<{
       id: string
       agentId: string
@@ -445,12 +447,17 @@ export class PostgresWorkspaceAgentMemberService {
   // Shared checks
   // -------------------------------------------------------------------------
 
-  private async assertTeamWorkspace(workspaceId: string) {
+  private async assertTeamWorkspace(workspaceId: string, options: { allowArchived?: boolean } = {}) {
+    const allowArchived = options.allowArchived === true
     const [workspace] = await this.database<{ type: 'personal' | 'team' }[]>`
       select workspace_type as type from workspaces
-       where tenant_id = ${tenantId} and id = ${workspaceId} and status = 'active'
+       where tenant_id = ${tenantId} and id = ${workspaceId}
+         and ${allowArchived
+           ? this.database.unsafe(`status in ('active', 'archived')`)
+           : this.database.unsafe(`status = 'active'`)}
     `
-    if (!workspace) throw new Error('工作空间不存在或已归档')
+    // 与成员服务同口径：用「不可访问」避免用状态码区分归档与不存在。
+    if (!workspace) throw authorizationDenied('工作空间不存在或不可访问')
     if (workspace.type !== 'team') throw new Error('仅支持团队工作空间进行成员管理')
   }
 
@@ -511,7 +518,7 @@ export class PostgresWorkspaceAgentMemberService {
     executor: DatabaseClient | DatabaseTransaction = this.database,
   ) {
     const role = await this.memberRoleOf(workspaceId, actorUserId, executor)
-    if (!role) throw new Error('当前用户不是该空间的成员')
+    if (!role) throw authorizationDenied('当前用户不是该空间的成员')
     if (!allowedRoles.includes(role)) throw new Error('当前用户角色没有权限执行此操作')
     return role
   }
@@ -532,7 +539,7 @@ export class PostgresWorkspaceAgentMemberService {
     actorUserId: string,
   ): Promise<AgentMemberRecord> {
     const actorRole = await this.memberRoleOf(workspaceId, actorUserId)
-    if (!actorRole) throw new Error('当前用户不是该空间的成员')
+    if (!actorRole) throw authorizationDenied('当前用户不是该空间的成员')
     const [row] = await this.database<{
       id: string
       agentId: string
