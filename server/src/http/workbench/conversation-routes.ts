@@ -59,10 +59,9 @@ export function registerConversationRoutes(
     const limit = parseSessionPageLimit(context.url.searchParams.get('limit'))
     const query = (context.url.searchParams.get('query') ?? '').trim()
     const cursor = context.url.searchParams.get('cursor') ?? undefined
-    const scope = parseSessionScope(context.url.searchParams.get('scope'))
     return envelope(
       'workbench',
-      await conversations.listWorkspaceSessions({ workspaceId, actorUserId: userId, scope, query, cursor, limit }),
+      await conversations.listWorkspaceSessions({ workspaceId, actorUserId: userId, query, cursor, limit }),
       'postgres',
     )
   })
@@ -241,13 +240,6 @@ export function registerConversationRoutes(
  * mistaken for a personal-space reader, and returns false instead of throwing so
  * callers can 404/omit. Personal and standalone runs are unaffected (AC-23).
  */
-/** 默认本人范围（TW-03 本人历史列表）；team 供 2A 的「团队共享」筛选使用。 */
-function parseSessionScope(raw: string | null): 'mine' | 'team' {
-  if (raw === null || raw === '' || raw === 'mine') return 'mine'
-  if (raw === 'team') return 'team'
-  throw routeValidationFailed('scope 只能是 mine 或 team')
-}
-
 function parseSessionPageLimit(raw: string | null) {
   if (raw === null || raw === '') return undefined
   const limit = Number(raw)

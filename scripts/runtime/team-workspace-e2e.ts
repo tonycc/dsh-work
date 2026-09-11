@@ -183,7 +183,7 @@ try {
       toolEventMetadataKeys: toolMetadataKeys,
       approvalEvents: approvalEvents.map(event => ({ type: event.eventType, metadata: event.safeMetadata })),
       toolAuditRows,
-      note: '用于判断 T2「来源限制采集」可从真实事件/审计中取到哪些字段',
+      note: '实测记录：真实 DSH 事件与工具审计里能取到哪些来源字段。原 T2「来源限制采集」已随 2A／2B 放弃，此处仅作事实留存。',
     },
   }, null, 2))
 } finally {

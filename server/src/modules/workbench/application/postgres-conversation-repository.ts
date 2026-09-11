@@ -218,8 +218,6 @@ export class PostgresConversationRepository {
    */
   async listWorkspaceSessions(input: {
     workspaceId: string
-    /** 本人范围（1B 的 TW-03）还是空间全部会话；默认本人。 */
-    scope?: 'mine' | 'team'
     actorUserId: string
     query?: string
     cursor?: string
@@ -259,7 +257,7 @@ export class PostgresConversationRepository {
        where s.tenant_id = ${tenantId}
          and s.workspace_id = ${input.workspaceId}
          and s.status = 'active'
-         and ${input.scope === 'team' ? this.database`true` : this.database`s.created_by = ${input.actorUserId}`}
+         and s.created_by = ${input.actorUserId}
          and ${pattern === null ? this.database`true` : this.database`s.title ilike ${pattern} escape '\\'`}
          and ${cursor === null
            ? this.database`true`

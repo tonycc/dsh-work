@@ -149,7 +149,7 @@ describe('WorkspaceDetailView 团队分支与个人空间红线', () => {
     expect(router.replace).toHaveBeenCalledWith({ query: { view: 'history' } })
     expect(wrapper.find('[data-testid="workspace-session-history"]').exists()).toBe(true)
     // 1B 历史视图默认按本人范围拉取。
-    expect(workbenchApi.listWorkspaceSessions).toHaveBeenCalledWith('ws-team', { scope: 'mine', limit: 20 })
+    expect(workbenchApi.listWorkspaceSessions).toHaveBeenCalledWith('ws-team', { limit: 20 })
   })
 
   it('restores the history view from a ?view=history deep link after the workspace resolves', async () => {
@@ -157,10 +157,10 @@ describe('WorkspaceDetailView 团队分支与个人空间红线', () => {
     const { wrapper } = await mountView(workspace())
 
     expect(wrapper.find('[data-testid="workspace-session-history"]').exists()).toBe(true)
-    expect(workbenchApi.listWorkspaceSessions).toHaveBeenCalledWith('ws-team', { scope: 'mine', limit: 20 })
+    expect(workbenchApi.listWorkspaceSessions).toHaveBeenCalledWith('ws-team', { limit: 20 })
   })
 
-  it('probes the team scope once for an empty personal history and guides the startable member back', async () => {
+  it('guides a startable member from an empty personal history back to the new conversation', async () => {
     route.query = { view: 'history' }
     vi.mocked(workbenchApi.listWorkspaceAgentMembers).mockResolvedValue([{
       id: 'wam-1',
@@ -173,44 +173,19 @@ describe('WorkspaceDetailView 团队分支与个人空间红线', () => {
       createdAt: '2026-09-09T10:00:00.000Z',
       allowedActions: ['start_conversation', 'disable', 'upgrade', 'remove'],
     }])
-    vi.mocked(workbenchApi.listWorkspaceSessions).mockImplementation(async (_workspaceId, input) =>
-      input?.scope === 'team'
-        ? { items: [{
-            sessionId: 's-other',
-            title: '别人的会话',
-            creatorId: 'u-other',
-            creatorName: '林岚',
-            lastActiveAt: '2026-09-10T08:00:00.000Z',
-            runCount: 1,
-            latestRun: null,
-          }], nextCursor: null }
-        : { items: [], nextCursor: null })
+    vi.mocked(workbenchApi.listWorkspaceSessions).mockResolvedValue({ items: [], nextCursor: null })
     const { wrapper } = await mountView(workspace())
     await flushPromises()
 
-    // 空间有会话但本人没有：显示「本人尚无对话」而不是「空间尚无对话」。
+    // 本人尚无会话：显示「本人尚无对话」。
     expect(wrapper.find('[data-testid="session-history-empty-own"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="session-history-empty-workspace"]').exists()).toBe(false)
-    expect(workbenchApi.listWorkspaceSessions).toHaveBeenCalledWith('ws-team', { scope: 'team', limit: 1 })
-    expect(vi.mocked(workbenchApi.listWorkspaceSessions).mock.calls
-      .filter(([, input]) => input?.scope === 'team')).toHaveLength(1)
+    expect(workbenchApi.listWorkspaceSessions).toHaveBeenCalledWith('ws-team', { limit: 20 })
 
     // 可发起成员存在：引导回新对话并清掉 ?view=history。
     const back = wrapper.find('[data-testid="session-history-empty-own"] button')
     expect(back.text()).toBe('返回新对话')
     await back.trigger('click')
     await flushPromises()
-    expect(router.replace).toHaveBeenCalledWith({ query: {} })
-    expect(wrapper.find('[data-testid="workspace-session-history"]').exists()).toBe(false)
-  })
-
-  it('returns from the history empty state to the new conversation and clears ?view', async () => {
-    route.query = { view: 'history' }
-    const { wrapper } = await mountView(workspace())
-
-    await wrapper.find('[data-testid="session-history-empty-workspace"] button').trigger('click')
-    await flushPromises()
-
     expect(router.replace).toHaveBeenCalledWith({ query: {} })
     expect(wrapper.find('[data-testid="workspace-session-history"]').exists()).toBe(false)
   })
