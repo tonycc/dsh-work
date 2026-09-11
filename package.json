@@ -40,7 +40,7 @@
     "test:e2e": "playwright test",
     "check:secrets": "node scripts/check-secrets.mjs",
     "verify": "node scripts/verify.mjs",
-    "probe": "node --experimental-strip-types scripts/runtime/probe.ts",
+    "probe": "node --env-file-if-exists=.env --experimental-strip-types scripts/runtime/probe.ts",
     "probe:handshake": "pnpm probe -- handshake",
     "probe:model": "pnpm probe -- model",
     "probe:tool": "pnpm probe -- tool",
