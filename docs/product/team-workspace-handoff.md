@@ -26,7 +26,7 @@
 | **1A-T6 前端成员管理** | ✅ **实现完成、规格评审已修**：`a2a83ed`..`f16fb8c` 六个提交 + 对接修复 `462bfbb`/`dddc794`；`pnpm test:m5:frontend` **workbench 85 / admin 18 全绿** | `a2a83ed`、`2558908`、`db2e016`、`5f9cb67`、`1f2c226`、`f16fb8c`、`462bfbb`、`dddc794` |
 | **1A-T7 对账清单与迁移验证** | ✅ **实现完成、规格符合性 + 质量评审已修**：6 个提交 + 锁序/基线修复；reconciliation 8/8、upgrade 4/4、migration 10/10 | `09800d0`、`73578d6`、`27507bb`、`1fab46a`、`272fd10`、`2a09842`、`769fad9`、`a85b703` |
 | 1A 合并与 CI 接入 | ✅ `main` 已含 1A 并推送；6 个团队集成套件接入 CI 门禁，`M6 quality gate` 通过 | `bf9d58c`、`7d49c74`、`55da0d7` |
-| 测试基础设施 | ✅ 全部 **21 个**集成套件改为一次性库（`test-database.ts` 的 `createThrowawayDatabase()`），消除共享库污染 | `c97db7b` |
+| 测试基础设施 | ✅ 全部 **24 个**集成套件改为一次性库（`test-database.ts` 的 `createThrowawayDatabase()`），消除共享库污染 | `c97db7b` |
 | **1B 团队资料与本人对话** | 🚧 **进行中**：T1、T3 已交付；T2 已取消；剩余 T4（结果读取收权）、T5（可见统计性能基线）。范围＝TW-03 本人历史列表、TW-05、团队 Session 分页、文件／SSE 收权、可见统计性能基线 | `dfeb1f1`、`c196c82` 等 |
 | 2A / 2B | ❌ **已放弃** | 产品确认取消，不再交付 |
 | 3 / TW-09 | ⬜ 未开始 | — |
@@ -134,9 +134,34 @@ WIP 首次运行是 **16 个用例 8 失败**，修复分两类：
 
 **范围（方案 §7 批次 1B，已收敛）**：TW-03 本人历史列表、TW-05 共享文件、团队 Session 分页、文件／SSE 收权、可见统计性能基线。**依赖 1A 的授权与撤权机制（已交付）**。
 
-**任务状态**：T1（本人历史列表）与 T3（共享文件）已交付并接入 CI（`test:m5:sessions:integration`、`test:m5:shared-files:integration`）；**T2 已取消**；剩余 **T4**（结果读取收权补齐——文件侧已随 T3 落地，仅剩结果读取一致化）与 **T5**（可见统计性能基线，收缩为成员／会话／文件）。
+**任务状态**：T1（本人历史列表）、T3（共享文件）、**T4（文件与结果读取收权）已交付**；**T2 已取消**；剩余 **T5**（可见统计性能基线，收缩为成员／会话／文件）。
 
 **退出条件（方案 §7，已收敛）**：A 上传不可变文件，B 引用完成真实 DSH 对话并能继续；AC-09 收权通过，个人空间回归不变。
+
+### 6.2 T4 交付记录与遗留（2026-09-11）
+
+**实测缺口**（推翻了原任务描述里的「文件侧已随 T3 落地」）：`readFile` 的「会话作者」SQL 分支不校验团队身份，`artifactFileId`／`listArtifacts` 只按 `sessions.created_by` 授权 —— 被移出或主动退出的成员仍能下载本人团队会话文件与团队成果。
+
+**修复**：抽出共享门禁 `canReadWorkspaceObject`（`server/src/modules/authorization/authorization-errors.ts`），文件、成果、运行/结果、SSE 建连共用同一口径；新增拒绝改抛 `authorizationDenied(...)`（不再依赖路由中文文案分类）。
+
+**评审共发现并已修六处（第一轮 3 + 复审 3）**：
+1. 归档空间 fail-closed（旧口径 null 即放行，实测归档后仍交出 Run 正文）。**新连接**不依赖授权缓存 TTL；
+    **已建立的 SSE 流**原先仍受逐批门禁的 10s 缓存 TTL 限制（归档不提升 `team_auth_revision`），
+    `hasStreamAccess` 已改用 `canReadWorkspaceObject`（每批重新解析空间类型），归档立即终止在流。
+2. `readFile` 工作区分支补 `session_id is null`，他人私有会话附件不再对空间成员开放（AC-10）；
+3. `listArtifacts` 改为按空间去重后复核一次，消掉逐行门禁的 N+1（评审实测 200 条：改前个人 201 次、团队冷启动 ~1001 次；改后个人 1 次、团队冷 7 次／热 3 次）；
+4. **Run 输入挂载**（`prepareRuntimeFiles`）：此前成员 B 可把成员 A 的私有会话附件挂进自己的 Run 交给 DSH 读取，绕过 `readFile` 的同一条限制（复审 P1）。现只允许「本会话附件 + 本人其它会话附件 + 空间共享文件（`session_id is null`）」，**本人跨会话挂载的既有行为保持不变**（复审指出的 AC-23 收窄已修回）；
+5. **SSE `GET /runs/:runId/events`** 归档后不再降级为无拦截路径（旧代码仅在 `workspaceType === 'team'` 时加门禁，归档返回 null 即跳过，实测 200 且交付正文）；
+6. 执行前复核 `recheckExecutionAuthorization` 对 null 类型改为拒绝，归档后排队中的团队运行不再进入 Runtime；无 workspace 的独立运行在类型解析之前显式放行，保持 AC-23 语义。
+7. `GET /artifacts` 列表对「空间行缺失」（left join 为 null）也 fail-closed，不因「非团队」而放行。
+
+测试：`test:m5:shared-files:integration` 11/11、`test:m5:revocation:integration` 28/28；全部 **24** 个集成套件（169 用例）与 `pnpm verify`／`lint`／`typecheck`／`build` 通过。
+
+**已知未覆盖（记录，不阻断）**：`recheckExecutionAuthorization` 的 null/standalone 分支无针对性集成用例（评审以 stub 分支探针 + 真实库端到端验证过，当前因 `sessions.workspace_id` 非空而不可达）；`prepareRuntimeFiles` 的「本会话附件」分支未额外校验空间活跃/成员（端到端由 `authorizeRuntime` 与执行前复核兜住，纵深防御留待后续）；Run 输入挂载的失败仍是普通 Error（文案映射 403），未改为类型化拒绝。
+
+**本地 e2e 环境限制（非缺陷）**：`pnpm test:e2e` 在本机失败，原因是 Playwright 访问 `127.0.0.1:4174` 而 OIDC 允许来源只有 `http://localhost:4174`（`AI_HUB_WORKBENCH_PORTAL_URL`），登录跳转被 421 拒绝；在干净 HEAD 检出上同样复现，改用允许来源即可通过。CI 不受影响。
+
+**遗留（TW-06／批次 3 必须定夺）**：归档团队空间现在对文件、成果、运行读取**一律拒绝**，连现任 owner 也不能只读下载；而设计/AC-14 的意图是归档后「保留有权限的只读查看与下载」。归档入口尚未实现（无 API 写入 `status='archived'`），故不影响当前行为，但 TW-06 落地前必须先统一归档语义，否则文件侧与运行侧会各按一套说法实现。
 
 **实现要点（设计 §2.2 / §2.3 + 方案 §6.2 / §6.3 / §6.6）**：
 - 员工端对话页签「新对话／历史对话」segmented 切换，写入 `?view=history`，历史视图替换 Starter：标题搜索 + 游标分页（「加载更多」／「已加载全部」）、行含状态点/标题/发起人/最近活动/最新运行状态、整行进入 `/conversations/:runId`（服务端解析到 Session，兼容 Run ID 链接）。**历史列表固定为本人范围，服务端强制过滤，前端不传范围参数（`scope` 已移除）。**
@@ -156,7 +181,7 @@ WIP 首次运行是 **16 个用例 8 失败**，修复分两类：
 
 ## 7. 工程约定
 
-- **测试数据库**：本机 docker 容器 `dsh-work-postgres-local`，端口 15433，`postgres://dsh_work:change-me@127.0.0.1:15433/postgres`。`DSH_WORK_TEST_DATABASE_URL` 必须显式传入（`.env` 只配了 `DSH_WORK_DATABASE_URL`，未配它时集成套件会以「DSH_WORK_TEST_DATABASE_URL 未配置」直接失败）：`DSH_WORK_TEST_DATABASE_URL='postgres://dsh_work:change-me@127.0.0.1:15433/postgres'`，只需指向该实例的 `postgres` 维护库；**全部 21 个集成套件**（`server/src/**/*integration.test.ts`）统一通过 `server/src/infrastructure/postgres/test-database.ts` 的 `createThrowawayDatabase()` 各自创建、迁移、销毁一次性库，因此不再有共享库历史污染问题——此前「**不要**对共享 dev 库 `dsh_work` 跑 T2 套件（历史污染导致误失败）」的警告已随该迁移失效。**新增集成套件请直接用该 helper，不要再直连共享库。**
+- **测试数据库**：本机 docker 容器 `dsh-work-postgres-local`，端口 15433，`postgres://dsh_work:change-me@127.0.0.1:15433/postgres`。`DSH_WORK_TEST_DATABASE_URL` 必须显式传入（`.env` 只配了 `DSH_WORK_DATABASE_URL`，未配它时集成套件会以「DSH_WORK_TEST_DATABASE_URL 未配置」直接失败）：`DSH_WORK_TEST_DATABASE_URL='postgres://dsh_work:change-me@127.0.0.1:15433/postgres'`，只需指向该实例的 `postgres` 维护库；**全部 24 个集成套件**（`server/src/**/*integration.test.ts`，含 `modules/identity/identity.integration.test.ts`）统一通过 `server/src/infrastructure/postgres/test-database.ts` 的 `createThrowawayDatabase()` 各自创建、迁移、销毁一次性库，因此不再有共享库历史污染问题——此前「**不要**对共享 dev 库 `dsh_work` 跑 T2 套件（历史污染导致误失败）」的警告已随该迁移失效。**新增集成套件请直接用该 helper，不要再直连共享库。**
 - **验证命令**：`pnpm verify`（文档/契约静态检查，改 OpenAPI 后必跑）、`pnpm lint`（含 architecture 与 UI 校验）、`pnpm --filter @dsh-work/server typecheck`。测试脚本已并入 server/package.json 与根 package.json（`test:m4:team-auth:integration`、`test:m5:workspace:integration`、`test:m5:members:integration`、`test:m5:agent-members:integration` 等）。
 - **提交规范**：conventional commits，中文或英文 message 均可，`feat(server):`/`fix(server):`/`docs:` 前缀；每任务一个 feat + 若干 fix。
 - **工作流**：subagent-driven-development——实现子代理（TDD，先红后绿）→ 规格符合性评审（独立验证、重跑测试）→ 代码质量评审（对抗性验证，前序任务靠它抓到 6 个并发类缺陷）→ 修复 → 复审。评审不可跳过；本批次每个任务的修复轮都来自评审发现。
