@@ -8,6 +8,11 @@ export interface DatabaseConfiguration {
   maxConnections?: number
   idleTimeoutSeconds?: number
   connectTimeoutSeconds?: number
+  /**
+   * 查询级观测钩子（诊断与性能基线用）。每个语句执行前触发一次，参数为连接号与 SQL。
+   * 典型用途：统计语句数、定位 N+1；不要在钩子里执行查询。
+   */
+  debug?: (connection: number, query: string) => void
 }
 
 export function createDatabase(configuration: DatabaseConfiguration): DatabaseClient {
@@ -17,6 +22,7 @@ export function createDatabase(configuration: DatabaseConfiguration): DatabaseCl
     connect_timeout: configuration.connectTimeoutSeconds ?? 10,
     prepare: false,
     onnotice: () => undefined,
+    ...(configuration.debug ? { debug: configuration.debug } : {}),
   })
 }
 
