@@ -1,16 +1,17 @@
 # 团队工作空间实施交接文档
 
-**交接时间：** 2026-09-10  
-**分支：** `feat/team-workspace`（基于 main @ 404f885，共 13 个提交，未推送远端）  
-**目的：** 供接手的其他 agent/会话从此状态继续批次 1A 剩余工作。本文是当前进度的事实快照；产品语义以三份产品文档为准。
+**交接时间：** 2026-09-11  
+**分支：** `main`（1A 已合并推送至 `ffed4f4`；`feat/team-workspace` 已删除）  
+**目的：** 供接手的其他 agent/会话从此状态继续批次 1B 工作。本文是当前进度的事实快照；产品语义以 `team-workspace-plan.md` 为准（该方案已于 2026-09-11 按产品决定收敛范围，见 §6.1）。
 
 ## 1. 文档地图（必读顺序）
 
 | 文档 | 角色 |
 | --- | --- |
 | `docs/product/team-workspace-plan.md` | 唯一方案入口：范围、TW-01~09 产品规则、权限矩阵、批次与退出条件、验收矩阵 AC-01~29 |
-| `docs/product/team-workspace-design.md` | 批次 0 UI 增量设计（已确认 5 项决策，第 6 节） |
+| `docs/product/team-workspace-design.md` | 批次 0 UI 增量设计（第 6 节已确认决策；2A／2B 章节已删除） |
 | `docs/product/team-workspace-batch-1a-convergence.md` | 1A 四项技术收敛草案 + 已确认决策（授权来源模型、负责人约束、收权机制、Agent 允许范围） |
+| `docs/product/team-workspace-batch-1b-tasks.md` | 1B 五任务拆分与现状核查；T2 已随范围收敛标记取消 |
 
 ## 2. 进度快照
 
@@ -25,9 +26,10 @@
 | **1A-T6 前端成员管理** | ✅ **实现完成、规格评审已修**：`a2a83ed`..`f16fb8c` 六个提交 + 对接修复 `462bfbb`/`dddc794`；`pnpm test:m5:frontend` **workbench 85 / admin 18 全绿** | `a2a83ed`、`2558908`、`db2e016`、`5f9cb67`、`1f2c226`、`f16fb8c`、`462bfbb`、`dddc794` |
 | **1A-T7 对账清单与迁移验证** | ✅ **实现完成、规格符合性 + 质量评审已修**：6 个提交 + 锁序/基线修复；reconciliation 8/8、upgrade 4/4、migration 10/10 | `09800d0`、`73578d6`、`27507bb`、`1fab46a`、`272fd10`、`2a09842`、`769fad9`、`a85b703` |
 | 1A 合并与 CI 接入 | ✅ `main` 已含 1A 并推送；6 个团队集成套件接入 CI 门禁，`M6 quality gate` 通过 | `bf9d58c`、`7d49c74`、`55da0d7` |
-| 测试基础设施 | ✅ 全部 **21 个**集成套件改为一次性库（`test-database.ts` 的 `createThrowawayDatabase()`），消除共享库污染 | `c97db7b`（未推送） |
-| **1B 团队资料与本人对话** | 🚧 **启动**：TW-03 本人历史列表、TW-05、团队 Session 分页、来源限制采集、文件／SSE 收权、可见统计性能基线 | — |
-| 2A / 2B / 3 / TW-09 | ⬜ 未开始 | — |
+| 测试基础设施 | ✅ 全部 **21 个**集成套件改为一次性库（`test-database.ts` 的 `createThrowawayDatabase()`），消除共享库污染 | `c97db7b` |
+| **1B 团队资料与本人对话** | 🚧 **进行中**：T1、T3 已交付；T2 已取消；剩余 T4（结果读取收权）、T5（可见统计性能基线）。范围＝TW-03 本人历史列表、TW-05、团队 Session 分页、文件／SSE 收权、可见统计性能基线 | `dfeb1f1`、`c196c82` 等 |
+| 2A / 2B | ❌ **已放弃** | 产品确认取消，不再交付 |
+| 3 / TW-09 | ⬜ 未开始 | — |
 
 **T6/T7 评审结论与关键技术结论（2026-09-10）：**
 
@@ -119,28 +121,42 @@ WIP 首次运行是 **16 个用例 8 失败**，修复分两类：
 
 ## 6. 1B 团队资料与本人对话（进行中）
 
-**范围（方案 §7 批次 1B）**：TW-03 本人历史列表、TW-05 共享文件、团队 Session 分页、来源限制采集、文件／SSE 收权、可见统计性能基线。**依赖 1A 的授权与撤权机制（已交付）**。
+### 6.1 范围决策（2026-09-11，产品确认）
 
-**退出条件（方案 §7）**：A 上传不可变文件，B 引用完成真实 DSH 对话并能继续；AC-09 收权通过，输入与结果可追溯来源限制，个人空间回归不变。
+**放弃 2A（共享与派生基础）与 2B（团队成果沉淀）。** 连带影响：
+
+- 不再交付：对话分享快照、同团队派生、来源撤回传播与依赖失效、团队成果发布／撤回／下架。
+- **`scope` 参数整体移除**：`GET /workspaces/:workspaceId/sessions` 固定按 `sessions.created_by = actorUserId` 过滤本人会话，前端不再传递范围参数，也不渲染「我的对话／团队共享」筛选；空态由三种收敛为两种（本人空态 + 筛选无结果）。
+- **批次 1B 的 T2「来源限制采集」取消**：它此前只是 2A／2B 的前置，不再有意义。
+- **代价（必须如实记录）**：来源失权后，已生成并交付的答案仍对其作者可读可导出；平台不再记录「某次运行读过哪些文件／知识／工具返回」。真实 DSH 实测已确认 B 的会话可读入 A 上传的文件内容，而平台当前无专门来源记录。若将来需要追溯来源，必须重新立项，且**无法补记已发生运行的来源事实**。
+
+方案侧已同步：`team-workspace-plan.md` §7 删除 2A／2B 批次行、§9.1 新增「内容分享、派生与成果发布｜已放弃」、删除 AC-11／AC-12／AC-24、§6.2／§6.3／§6.5／§6.6 收敛；`team-workspace-design.md` 删除 §2.4／§2.8；1B 任务文档将 T2 标记取消。
+
+**范围（方案 §7 批次 1B，已收敛）**：TW-03 本人历史列表、TW-05 共享文件、团队 Session 分页、文件／SSE 收权、可见统计性能基线。**依赖 1A 的授权与撤权机制（已交付）**。
+
+**任务状态**：T1（本人历史列表）与 T3（共享文件）已交付并接入 CI（`test:m5:sessions:integration`、`test:m5:shared-files:integration`）；**T2 已取消**；剩余 **T4**（结果读取收权补齐——文件侧已随 T3 落地，仅剩结果读取一致化）与 **T5**（可见统计性能基线，收缩为成员／会话／文件）。
+
+**退出条件（方案 §7，已收敛）**：A 上传不可变文件，B 引用完成真实 DSH 对话并能继续；AC-09 收权通过，个人空间回归不变。
 
 **实现要点（设计 §2.2 / §2.3 + 方案 §6.2 / §6.3 / §6.6）**：
-- 员工端对话页签「新对话／历史对话」segmented 切换，写入 `?view=history`，历史视图替换 Starter：标题搜索 + 游标分页（「加载更多」／「已加载全部」）、行含状态点/标题/发起人/最近活动/最新运行状态、整行进入 `/conversations/:runId`（服务端解析到 Session，兼容 Run ID 链接）。**「我的对话／团队共享」与发起人筛选属 2A，首版不渲染空入口。**
-- 团队 Session 分页服务端接口：按 Session 去重、稳定排序（最近活动倒序）、按授权结果汇总分页与计数；新增必要索引与摘要投影（方案 §6.3「Session 查询」）。
+- 员工端对话页签「新对话／历史对话」segmented 切换，写入 `?view=history`，历史视图替换 Starter：标题搜索 + 游标分页（「加载更多」／「已加载全部」）、行含状态点/标题/发起人/最近活动/最新运行状态、整行进入 `/conversations/:runId`（服务端解析到 Session，兼容 Run ID 链接）。**历史列表固定为本人范围，服务端强制过滤，前端不传范围参数（`scope` 已移除）。**
+- 团队 Session 分页服务端接口：按 Session 去重、稳定排序（最近活动倒序，keyset 游标 `(last_active_at, id)`）、按授权结果汇总分页与计数；新增必要索引与摘要投影（方案 §6.3「Session 查询」）。公共分页游标必须用原始 ISO 时间，不要用展示格式（曾因此导致第二页恒空，`dfeb1f1`）。
 - 共享文件页签：名称搜索、状态映射（上传中/处理中/可引用/失败+原因）、操作区「引用到对话 + 下载 + 更多（移除）」、权限（只读成员不渲染上传与移除；成员仅对自己上传的显示移除）。**「上传新版本」属 TW-07（P1），本批不渲染。**
-- **来源限制采集**（方案 §6.3）：为团队输入文件、知识或工具返回数据记录可追溯来源标识与访问限制并随结果保存；缺失限制标记为「不可判定」。这是 2A 派生/撤回的前置。
 - 文件与 SSE 收权按 1A 已有机制扩展：文件下载、结果读取与已建立订阅在失权后拒绝（AC-09 口径）。
-- 可见统计性能基线（方案 §6.6）：多成员、多会话、单会话 >50 Run 的数据基线，记录查询计划、延迟分位数、数据量与并发。
+- 可见统计性能基线（方案 §6.6）：多成员、多会话、单会话 >50 Run、共享文件与成员数据的基线，记录查询计划、延迟分位数、数据量与并发。
 
 **承接 1A 的硬约束**：
-- **个人空间零改动（AC-23）** 仍是红线：团队分页/来源限制/收权只在团队分支生效，个人空间接口与页面行为保持现状。
+- **个人空间零改动（AC-23）** 仍是红线：团队分页/收权只在团队分支生效，个人空间接口与页面行为保持现状；`scope` 移除后仍不得改变个人空间查询入口。
 - 新增集成套件必须用 `createThrowawayDatabase()`（见 §7），不要直连共享库。
 - 新增/修改 API 必须同步 OpenAPI 契约并跑 `pnpm verify`；新增授权拒绝统一抛 `authorizationDenied(...)`（勿再依赖文案分类）。
 
 **1A 遗留中与本批相关的项**：`GET /workspaces` 的 `owner` 仍是创建者显示名且缺 `status`（历史列表「发起人/负责人」展示口径、归档筛选依赖它）；员工名册无 `department`；Agent「不可用」第三态与原因。
 
+**1B 已落地的两个小修（记录备查）**：`scripts/runtime/team-workspace-e2e.ts` 曾把 `operations` 传成 `undefined`（`?.` 静默跳过）导致工具审计为空，现已接真实 `PostgresOperationsService`；`pnpm probe:*` 曾因未加载 `.env` 报 `DSH runtime version mismatch`，已加 `--env-file-if-exists=.env`（`c196c82`）。
+
 ## 7. 工程约定
 
-- **测试数据库**：本机 docker 容器 `dsh-work-postgres-local`，端口 15433，`postgres://dsh_work:change-me@127.0.0.1:15433/postgres`。`DSH_WORK_TEST_DATABASE_URL` 只需指向该实例的 `postgres` 维护库；**全部 21 个集成套件**（`server/src/**/*integration.test.ts`）统一通过 `server/src/infrastructure/postgres/test-database.ts` 的 `createThrowawayDatabase()` 各自创建、迁移、销毁一次性库，因此不再有共享库历史污染问题——此前「**不要**对共享 dev 库 `dsh_work` 跑 T2 套件（历史污染导致误失败）」的警告已随该迁移失效。**新增集成套件请直接用该 helper，不要再直连共享库。**
+- **测试数据库**：本机 docker 容器 `dsh-work-postgres-local`，端口 15433，`postgres://dsh_work:change-me@127.0.0.1:15433/postgres`。`DSH_WORK_TEST_DATABASE_URL` 必须显式传入（`.env` 只配了 `DSH_WORK_DATABASE_URL`，未配它时集成套件会以「DSH_WORK_TEST_DATABASE_URL 未配置」直接失败）：`DSH_WORK_TEST_DATABASE_URL='postgres://dsh_work:change-me@127.0.0.1:15433/postgres'`，只需指向该实例的 `postgres` 维护库；**全部 21 个集成套件**（`server/src/**/*integration.test.ts`）统一通过 `server/src/infrastructure/postgres/test-database.ts` 的 `createThrowawayDatabase()` 各自创建、迁移、销毁一次性库，因此不再有共享库历史污染问题——此前「**不要**对共享 dev 库 `dsh_work` 跑 T2 套件（历史污染导致误失败）」的警告已随该迁移失效。**新增集成套件请直接用该 helper，不要再直连共享库。**
 - **验证命令**：`pnpm verify`（文档/契约静态检查，改 OpenAPI 后必跑）、`pnpm lint`（含 architecture 与 UI 校验）、`pnpm --filter @dsh-work/server typecheck`。测试脚本已并入 server/package.json 与根 package.json（`test:m4:team-auth:integration`、`test:m5:workspace:integration`、`test:m5:members:integration`、`test:m5:agent-members:integration` 等）。
 - **提交规范**：conventional commits，中文或英文 message 均可，`feat(server):`/`fix(server):`/`docs:` 前缀；每任务一个 feat + 若干 fix。
 - **工作流**：subagent-driven-development——实现子代理（TDD，先红后绿）→ 规格符合性评审（独立验证、重跑测试）→ 代码质量评审（对抗性验证，前序任务靠它抓到 6 个并发类缺陷）→ 修复 → 复审。评审不可跳过；本批次每个任务的修复轮都来自评审发现。
