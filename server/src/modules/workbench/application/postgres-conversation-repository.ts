@@ -35,6 +35,22 @@ interface TaskRow {
   selectedSkillVersion: string | null
 }
 
+/** One Session summary row for the team history list (no message bodies). */
+export interface WorkspaceSessionSummary {
+  sessionId: string
+  title: string
+  creatorId: string
+  creatorName: string
+  lastActiveAt: string
+  runCount: number
+  latestRun: { id: string; status: RunState } | null
+}
+
+export interface WorkspaceSessionPage {
+  items: WorkspaceSessionSummary[]
+  nextCursor: string | null
+}
+
 interface MessageRow {
   id: string
   role: 'user' | 'assistant'
@@ -188,6 +204,81 @@ export class PostgresConversationRepository {
     `
     if (!row) throw new Error(`Run 没有关联的用户消息：${runId}`)
     return row.content
+  }
+
+  /**
+   * Team Session pagination (1B-T1): one row per Session ordered by most recent
+   * activity, with the latest Run pointer and Run count. Session identity is the
+   * stable list key (方案 §6.2 新增团队历史会话入口使用稳定 Session 身份), and the
+   * summary never carries message bodies.
+   *
+   * Keyset pagination on (last_active_at, id) instead of OFFSET so a parallel run
+   * cannot shift a page. Workspace scoping plus the sessions_by_workspace index
+   * keep the query bounded; the caller is authorized separately.
+   */
+  async listWorkspaceSessions(input: {
+    workspaceId: string
+    query?: string
+    cursor?: string
+    limit?: number
+  }): Promise<WorkspaceSessionPage> {
+    const limit = Math.min(Math.max(input.limit ?? 20, 1), 100)
+    const cursor = input.cursor ? decodeSessionCursor(input.cursor) : null
+    const pattern = input.query?.trim()
+      ? `%${input.query.trim().replaceAll(/[\\%_]/g, match => `\\${match}`)}%`
+      : null
+
+    const rows = await this.database<{
+      sessionId: string
+      title: string
+      creatorId: string
+      creatorName: string
+      lastActiveAt: Date
+      runCount: number
+      latestRunId: string | null
+      latestRunStatus: RunState | null
+    }[]>`
+      select s.id as "sessionId", s.title,
+             s.created_by as "creatorId", u.display_name as "creatorName",
+             s.last_active_at as "lastActiveAt",
+             (select count(*)::integer from runs r
+               where r.tenant_id = s.tenant_id and r.session_id = s.id) as "runCount",
+             latest.id as "latestRunId", latest.status as "latestRunStatus"
+        from sessions s
+        join users u on u.tenant_id = s.tenant_id and u.id = s.created_by
+        left join lateral (
+          select r.id, r.status
+            from runs r
+           where r.tenant_id = s.tenant_id and r.session_id = s.id
+           order by r.created_at desc, r.id desc
+           limit 1
+        ) latest on true
+       where s.tenant_id = ${tenantId}
+         and s.workspace_id = ${input.workspaceId}
+         and s.status = 'active'
+         and ${pattern === null ? this.database`true` : this.database`s.title ilike ${pattern} escape '\\'`}
+         and ${cursor === null
+           ? this.database`true`
+           : this.database`(s.last_active_at, s.id) < (${cursor.lastActiveAt}::timestamptz, ${cursor.id})`}
+       order by s.last_active_at desc, s.id desc
+       limit ${limit + 1}
+    `
+
+    const hasMore = rows.length > limit
+    const items = rows.slice(0, limit).map(row => ({
+      sessionId: row.sessionId,
+      title: row.title,
+      creatorId: row.creatorId,
+      creatorName: row.creatorName,
+      lastActiveAt: row.lastActiveAt.toISOString(),
+      runCount: Number(row.runCount),
+      latestRun: row.latestRunId ? { id: row.latestRunId, status: row.latestRunStatus as RunState } : null,
+    }))
+    const last = items[items.length - 1]
+    return {
+      items,
+      nextCursor: hasMore && last ? encodeSessionCursor(last.lastActiveAt, last.sessionId) : null,
+    }
   }
 
   async listTasks(userId: string): Promise<TaskRun[]> {
@@ -480,4 +571,19 @@ function formatSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+/** Cursor for the (last_active_at, id) keyset; base64url keeps it URL-safe. */
+function encodeSessionCursor(lastActiveAt: string, id: string) {
+  return Buffer.from(JSON.stringify({ at: lastActiveAt, id })).toString('base64url')
+}
+
+function decodeSessionCursor(cursor: string): { lastActiveAt: string; id: string } {
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { at?: unknown; id?: unknown }
+    if (typeof parsed.at !== 'string' || typeof parsed.id !== 'string') throw new Error('shape')
+    return { lastActiveAt: parsed.at, id: parsed.id }
+  } catch {
+    throw new Error('无效的分页游标')
+  }
 }

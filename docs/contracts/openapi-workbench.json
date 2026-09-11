@@ -893,6 +893,63 @@
           }
         }
       }
+    },
+    "/workspaces/{workspaceId}/sessions": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/WorkspaceId"
+        }
+      ],
+      "get": {
+        "operationId": "listWorkspaceSessions",
+        "summary": "分页查询团队空间的历史会话（所有成员）",
+        "description": "按最近活动倒序返回 Session 摘要（稳定 Session 身份、标题、发起人、最近活动时间、Run 计数与最新 Run 指针），不含对话正文。keyset 游标分页 + 标题关键词过滤；任何当前成员可读，非成员与个人空间被拒绝。",
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "标题关键词"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "上一页返回的 nextCursor"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {

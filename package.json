@@ -57,7 +57,8 @@
     "test:m5:reconciliation:integration": "pnpm --filter @dsh-work/server test:m5:reconciliation:integration",
     "test:m5:workspace:upgrade:integration": "pnpm --filter @dsh-work/server test:m5:workspace:upgrade:integration",
     "test:m5:revocation:integration": "pnpm --filter @dsh-work/server test:m5:revocation:integration",
-    "test:m5:revocation": "pnpm --filter @dsh-work/server test:m5:revocation"
+    "test:m5:revocation": "pnpm --filter @dsh-work/server test:m5:revocation",
+    "test:m5:sessions:integration": "pnpm --filter @dsh-work/server test:m5:sessions:integration"
   },
   "devDependencies": {
     "@eslint/js": "^9.37.0",

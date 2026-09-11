@@ -45,6 +45,26 @@ export function registerConversationRoutes(
     return envelope('workbench', visible, 'postgres')
   })
 
+  // 团队历史会话分页（1B-T1）：返回 Session 摘要（不含正文），任何当前成员可读；
+  // 非成员与个人空间一律拒绝，与收权口径一致（AC-23）。
+  router.get(`${basePath}/workspaces/:workspaceId/sessions`, async (_request, context) => {
+    const identity = requireRequestIdentity(context, 'workbench')
+    const userId = identity.userId
+    const workspaceId = context.params['workspaceId'] ?? ''
+    await authorization?.authorizeWorkbench({ userId, ...sessionAuthorizationContext(identity) })
+    const workspaceType = await authorization?.workspaceTypeOf(workspaceId)
+    if (workspaceType !== 'team') throw new Error('仅支持团队工作空间查询历史会话')
+    await authorization?.requireTeamRole(workspaceId, userId, ['owner', 'admin', 'member', 'viewer'])
+    const limit = parseSessionPageLimit(context.url.searchParams.get('limit'))
+    const query = (context.url.searchParams.get('query') ?? '').trim()
+    const cursor = context.url.searchParams.get('cursor') ?? undefined
+    return envelope(
+      'workbench',
+      await conversations.listWorkspaceSessions({ workspaceId, query, cursor, limit }),
+      'postgres',
+    )
+  })
+
   router.post(`${basePath}/sessions`, async (request, context) => {
     const identity = requireRequestIdentity(context, 'workbench')
     const userId = identity.userId
@@ -219,6 +239,13 @@ export function registerConversationRoutes(
  * mistaken for a personal-space reader, and returns false instead of throwing so
  * callers can 404/omit. Personal and standalone runs are unaffected (AC-23).
  */
+function parseSessionPageLimit(raw: string | null) {
+  if (raw === null || raw === '') return undefined
+  const limit = Number(raw)
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('limit 必须为 1 到 100 之间的整数')
+  return limit
+}
+
 async function authorizeTeamTaskRead(
   authorization: PostgresAuthorizationService,
   task: { workspaceId: string },
