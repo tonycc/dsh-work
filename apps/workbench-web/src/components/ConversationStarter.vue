@@ -80,6 +80,14 @@ const selectedSkillId = ref('')
 const personalWorkspace = computed(() =>
   contentStore.workspaces.find(workspace => workspace.type === 'personal'),
 )
+/**
+ * 全局新对话的空间选择器（3-T3 design §2.7/§3）：归档团队空间属执行轨，
+ * 不允许在这里被选中发起新对话——服务端会拒绝，列出来只会让用户走进死路。
+ * 当前所在空间（workspaceLocked）不经过该列表，归档态由详情页自行隐藏入口。
+ */
+const selectableWorkspaces = computed(() =>
+  contentStore.workspaces.filter(workspace => workspace.type === 'personal' || workspace.status !== 'archived'),
+)
 const selectedWorkspace = computed(() => {
   if (props.workspaceLocked) {
     return contentStore.workspaces.find(workspace => workspace.id === props.workspaceId)
@@ -261,7 +269,7 @@ defineExpose({ useWorkspaceFile })
           :initial-prompt="presetPrompt"
           :initial-workspace-id="composerWorkspaceId"
           :initial-workspace-name="composerWorkspaceName"
-          :workspaces="contentStore.workspaces"
+          :workspaces="selectableWorkspaces"
           :workspace-locked="workspaceLocked"
           :selected-skill-name="selectedSkill?.name"
           :blocked-reason="blockedReason"

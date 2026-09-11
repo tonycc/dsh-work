@@ -3,8 +3,8 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { ElSelect } from 'element-plus'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { workbenchApi } from '@/api/client'
-import type { WorkspaceMember } from '@/types/domain'
+import { WorkbenchApiError, workbenchApi } from '@/api/client'
+import type { Workspace, WorkspaceMember } from '@/types/domain'
 import WorkspaceSettingsDialog from './WorkspaceSettingsDialog.vue'
 
 const members: WorkspaceMember[] = [
@@ -13,6 +13,25 @@ const members: WorkspaceMember[] = [
   { userId: 'u-admin', displayName: '周航', role: 'admin', joinedAt: '2026-09-02T00:00:00.000Z' },
   { userId: 'u-member', displayName: '陈默', role: 'member', joinedAt: '2026-09-03T00:00:00.000Z' },
 ]
+
+function workspace(overrides: Partial<Workspace> = {}): Workspace {
+  return {
+    id: 'ws-team',
+    name: '供应链协作空间',
+    description: '团队共享的协作空间。',
+    type: 'team',
+    memberCount: 4,
+    sessionCount: 0,
+    artifactCount: 0,
+    updatedAt: '2026-09-10T00:00:00.000Z',
+    owner: '林岚',
+    members: ['林岚', '周航', '陈默'],
+    files: [],
+    status: 'active',
+    archivedAt: null,
+    ...overrides,
+  }
+}
 
 function mountDialog(props: Record<string, unknown> = {}) {
   return mount(WorkspaceSettingsDialog, {
@@ -57,7 +76,9 @@ describe('WorkspaceSettingsDialog', () => {
     expect(panel.find('[data-testid="settings-exit"]').exists()).toBe(true)
   })
 
-  it('emits the edited name and a null description when the owner clears it (plan 3.3)', async () => {
+  it('saves the edited name and a null description through PATCH /workspaces/:id', async () => {
+    const updated = workspace()
+    const update = vi.spyOn(workbenchApi, 'updateWorkspace').mockResolvedValue(updated)
     const wrapper = mountDialog()
     await flushPromises()
     const panel = panelOf(wrapper)
@@ -65,8 +86,23 @@ describe('WorkspaceSettingsDialog', () => {
     await panel.find('[data-testid="settings-name"]').setValue('供应链协作空间')
     await panel.find('[data-testid="settings-description"]').setValue('')
     await panel.find('[data-testid="settings-save"]').trigger('click')
+    await flushPromises()
 
-    expect(wrapper.emitted('save')?.at(-1)).toEqual([{ name: '供应链协作空间', description: null }])
+    expect(update).toHaveBeenCalledWith('ws-team', { name: '供应链协作空间', description: null })
+    expect(wrapper.emitted('saved')?.at(-1)).toEqual([updated])
+  })
+
+  it('blocks a name shorter than 2 characters before calling the server', async () => {
+    const update = vi.spyOn(workbenchApi, 'updateWorkspace')
+    const wrapper = mountDialog()
+    await flushPromises()
+    const panel = panelOf(wrapper)
+
+    await panel.find('[data-testid="settings-name"]').setValue('供')
+    await panel.find('[data-testid="settings-save"]').trigger('click')
+    await flushPromises()
+
+    expect(update).not.toHaveBeenCalled()
   })
 
   it('keeps settings read-only for admins and members, showing only their exit action', async () => {
@@ -142,10 +178,89 @@ describe('WorkspaceSettingsDialog', () => {
     expect(wrapper.emitted('exited')).toBeTruthy()
   })
 
-  it('offers no archive action in batch 1A', async () => {
+  it('archives the workspace only for the owner and only after a second confirmation', async () => {
+    const archive = vi.spyOn(workbenchApi, 'archiveWorkspace').mockResolvedValue({
+      id: 'ws-team',
+      status: 'archived',
+      archivedAt: '2026-09-11T00:00:00.000Z',
+    })
+    const wrapper = mountDialog()
+    await flushPromises()
+    const panel = panelOf(wrapper)
+
+    expect(panel.find('[data-testid="settings-archive"]').exists()).toBe(true)
+    expect(panel.find('[data-testid="settings-restore"]').exists()).toBe(false)
+
+    await panel.find('[data-testid="settings-archive-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(ElMessageBox.confirm).toHaveBeenCalled()
+    expect(archive).toHaveBeenCalledWith('ws-team')
+    expect(wrapper.emitted('archive-changed')).toBeTruthy()
+  })
+
+  it('does not archive when the second confirmation is cancelled', async () => {
+    vi.mocked(ElMessageBox.confirm).mockRejectedValue(new Error('cancel'))
+    const archive = vi.spyOn(workbenchApi, 'archiveWorkspace')
     const wrapper = mountDialog()
     await flushPromises()
 
-    expect(wrapper.text()).not.toContain('归档空间')
+    await panelOf(wrapper).find('[data-testid="settings-archive-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(archive).not.toHaveBeenCalled()
+    expect(wrapper.emitted('archive-changed')).toBeFalsy()
+  })
+
+  it('surfaces the wait-or-cancel hint when archive conflicts with queued or running runs (409)', async () => {
+    vi.spyOn(workbenchApi, 'archiveWorkspace').mockRejectedValue(new WorkbenchApiError({
+      code: 'state_conflict',
+      message: '该空间还有 2 个排队或运行中的任务，不能归档；请等待任务完成或先取消任务',
+    }, 409, '归档空间失败'))
+    const wrapper = mountDialog()
+    await flushPromises()
+    const panel = panelOf(wrapper)
+
+    await panel.find('[data-testid="settings-archive-confirm"]').trigger('click')
+    await flushPromises()
+
+    const hint = panel.find('[data-testid="settings-archive-conflict"]')
+    expect(hint.exists()).toBe(true)
+    expect(hint.text()).toContain('2 个排队或运行中')
+    expect(hint.text()).toContain('请等待')
+    expect(hint.text()).toContain('先取消')
+    expect(wrapper.emitted('archive-changed')).toBeFalsy()
+  })
+
+  it('shows no archive or restore entry to a non-owner member', async () => {
+    const wrapper = mountDialog({ currentUserRole: 'member' })
+    await flushPromises()
+    const panel = panelOf(wrapper)
+
+    expect(panel.find('[data-testid="settings-archive"]').exists()).toBe(false)
+    expect(panel.find('[data-testid="settings-restore"]').exists()).toBe(false)
+  })
+
+  it('offers the archived-state restore entry and restores after confirmation', async () => {
+    const restore = vi.spyOn(workbenchApi, 'restoreWorkspace').mockResolvedValue({
+      id: 'ws-team',
+      status: 'active',
+      archivedAt: null,
+    })
+    const wrapper = mountDialog({ workspaceStatus: 'archived' })
+    await flushPromises()
+    const panel = panelOf(wrapper)
+
+    expect(panel.find('[data-testid="settings-archive"]').exists()).toBe(false)
+    expect(panel.find('[data-testid="settings-restore"]').exists()).toBe(true)
+    // 归档空间属执行轨：名称/说明不可保存。
+    expect(panel.find('[data-testid="settings-save"]').exists()).toBe(false)
+
+    await panel.find('[data-testid="settings-restore-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(ElMessageBox.confirm).toHaveBeenCalled()
+    expect(restore).toHaveBeenCalledWith('ws-team')
+    expect(wrapper.emitted('archive-changed')).toBeTruthy()
   })
 })

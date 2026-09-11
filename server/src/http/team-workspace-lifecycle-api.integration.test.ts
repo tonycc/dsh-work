@@ -297,6 +297,103 @@ test('归档空间仍允许移除成员（紧急收权）', async () => {
 // GET /workspaces：status / archivedAt / 当前负责人 / 筛选
 // ---------------------------------------------------------------------------
 
+test('并发互斥：归档先提交时，正在等待锁的空间设置改写不得穿透（锁内状态复核）', async () => {
+  // 与成员变更同理（验证代理 D4）：设置写入声称靠空间行锁防 TOCTOU，必须有判别性用例。
+  const ws = uniqueWorkspace('race-archive-settings')
+  const ownerId = `${ws}-owner`
+  await seedUser(ownerId, '设置锁负责人')
+  await createTeamWorkspace(ws, [{ userId: ownerId, role: 'owner' }])
+
+  let releaseLock: () => void = () => undefined
+  let lockHeld: () => void = () => undefined
+  const held = new Promise<void>(resolve => { lockHeld = resolve })
+  const release = new Promise<void>(resolve => { releaseLock = resolve })
+  const holder = database.begin(async transaction => {
+    await transaction`
+      select id from workspaces
+       where tenant_id = ${tenantId} and id = ${ws}
+       for update
+    `
+    lockHeld()
+    await release
+  })
+  await held
+
+  const patchPromise = content.updateWorkspace(ws, { description: '归档后不应写入' }, ownerId)
+  const archivePromise = lifecycle.archiveWorkspace(ws, ownerId)
+  await new Promise(resolve => setTimeout(resolve, 250))
+  releaseLock()
+  await holder
+
+  const archived = await archivePromise
+  assert.equal(archived.status, 'archived')
+  const patchError = await patchPromise.then(() => null, (error: unknown) => (
+    error instanceof Error ? error.message : String(error)
+  ))
+  assert.ok(patchError !== null, '归档提交后等待锁的设置改写必须被拒绝')
+  assert.match(patchError!, /已归档|不可访问/)
+
+  const [row] = await database<{ description: string }[]>`
+    select description from workspaces where tenant_id = ${tenantId} and id = ${ws}
+  `
+  assert.notEqual(row?.description, '归档后不应写入', '归档空间不得被改写说明')
+})
+
+test('空间设置：仅负责人可改名称/说明，说明可显式清空，归档空间拒绝', async () => {
+  const ws = uniqueWorkspace('settings-patch')
+  const ownerId = `${ws}-owner`
+  const memberId = `${ws}-member`
+  await seedUser(ownerId, '设置负责人')
+  await seedUser(memberId, '设置成员')
+  await createTeamWorkspace(ws, [{ userId: ownerId, role: 'owner' }, { userId: memberId, role: 'member' }])
+
+  const renamed = await api('PATCH', `/api/workbench/v1/workspaces/${ws}`, {
+    as: ownerId,
+    body: { name: '新名称', description: '新说明' },
+  })
+  assert.equal(renamed.status, 200, `PATCH 失败：${JSON.stringify(renamed.body)}`)
+  assert.equal((renamed.body.data as { name: string; description: string }).name, '新名称')
+  assert.equal((renamed.body.data as { description: string }).description, '新说明')
+
+  // 清空说明必须显式传 null（方案 3.3），而不是被当作「未提供」。
+  const cleared = await api('PATCH', `/api/workbench/v1/workspaces/${ws}`, {
+    as: ownerId,
+    body: { description: null },
+  })
+  assert.equal(cleared.status, 200)
+  assert.equal((cleared.body.data as { description: string }).description, '')
+
+  // 非负责人被拒；名称长度校验为 422。
+  const asMember = await api('PATCH', `/api/workbench/v1/workspaces/${ws}`, {
+    as: memberId,
+    body: { name: '成员改名' },
+  })
+  assert.equal(asMember.status, 403, '仅负责人可修改空间设置')
+  const tooShort = await api('PATCH', `/api/workbench/v1/workspaces/${ws}`, {
+    as: ownerId,
+    body: { name: 'a' },
+  })
+  assert.equal(tooShort.status, 422, '名称长度不符必须是 422 而不是 500')
+
+  // 空请求体与超长名称同样必须是 422（契约声明 200/403/422）；此前裸 Error
+  // 会被文案分类成 500（符合性评审 F2）。
+  const empty = await api('PATCH', `/api/workbench/v1/workspaces/${ws}`, { as: ownerId, body: {} })
+  assert.equal(empty.status, 422, '空请求体必须是 422')
+  const tooLong = await api('PATCH', `/api/workbench/v1/workspaces/${ws}`, {
+    as: ownerId,
+    body: { name: 'x'.repeat(61) },
+  })
+  assert.equal(tooLong.status, 422, '名称超过 60 字符必须是 422')
+
+  // 归档后设置不可改（执行轨）。
+  await archiveViaSql(ws)
+  const afterArchive = await api('PATCH', `/api/workbench/v1/workspaces/${ws}`, {
+    as: ownerId,
+    body: { name: '归档后改名' },
+  })
+  assert.equal(afterArchive.status, 403, '归档空间不得修改设置')
+})
+
 test('GET /workspaces 返回 status、archivedAt 且 owner 为转交后的当前负责人', async () => {
   const ws = uniqueWorkspace('list-owner')
   const ownerId = `${ws}-owner`

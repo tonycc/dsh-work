@@ -1148,6 +1148,55 @@
           }
         }
       }
+    },
+    "/workspaces/{workspaceId}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/WorkspaceId"
+        }
+      ],
+      "patch": {
+        "operationId": "updateWorkspace",
+        "summary": "更新团队空间名称与说明（仅负责人）",
+        "description": "仅团队空间，且仅当前负责人可调用。名称 2–60 字符；说明传 `null` 显式清空（与创建时的空值归一化一致）。归档空间属执行轨，拒绝修改；个人空间不支持。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 60
+                  },
+                  "description": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "传 `null` 显式清空"
+                  }
+                },
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {

@@ -3,9 +3,9 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { extname, join, resolve } from 'node:path'
 
 import type { Artifact, Workspace } from '../../../domain/types.ts'
-import type { DatabaseClient } from '../../../infrastructure/postgres/database.ts'
+import type { DatabaseClient, DatabaseTransaction } from '../../../infrastructure/postgres/database.ts'
 import type { PostgresAuthorizationService } from '../../authorization/postgres-authorization-service.ts'
-import { authorizationDenied, canReadWorkspaceObject } from '../../authorization/authorization-errors.ts'
+import { authorizationDenied, canReadWorkspaceObject, requestInvalid } from '../../authorization/authorization-errors.ts'
 import type { FileMount } from '../../runtime/runtime-types.ts'
 import { BaselineFileSafetyScanner, type FileSafetyScannerPort } from './file-safety-scanner.ts'
 import { extractDocument } from './document-extractor.ts'
@@ -194,6 +194,53 @@ export class PostgresContentService {
         })),
       }
     }))
+  }
+
+  /**
+   * 3-T3 依赖：更新团队空间名称/说明。仅负责人；名称 2–60 字符；说明用 `null`
+   * 显式清空（方案 3.3：清空必须显式传 null，不用 undefined 表示清空）。
+   * 个人空间不提供该入口（沿用团队专用接口惯例）。
+   */
+  async updateWorkspace(
+    workspaceId: string,
+    input: { name?: string; description?: string | null },
+    actorUserId: string,
+  ) {
+    const access = await this.workspaces.resolveReadableWorkspace(workspaceId, actorUserId)
+    if (access.type === 'personal') throw requestInvalid('仅支持修改团队工作空间')
+
+    const name = input.name?.trim()
+    if (name !== undefined && (name.length < 2 || name.length > 60)) {
+      throw requestInvalid('工作空间名称必须为 2 到 60 个字符')
+    }
+    const rawDescription = input.description
+    const description = rawDescription === undefined
+      ? undefined
+      : (rawDescription === null ? '' : rawDescription.trim())
+    // 契约声明 200/403/422：空请求体属请求校验失败，必须显式 422，
+    // 否则裸 Error 会被文案分类成 500（符合性评审 F2）。
+    if (name === undefined && rawDescription === undefined) {
+      throw requestInvalid('没有需要更新的字段')
+    }
+
+    await this.runWorkspaceWriteMutation(workspaceId, actorUserId, async (transaction) => {
+      if (description !== undefined) {
+        await transaction`
+          update workspaces set description = ${description}
+           where tenant_id = ${tenantId} and id = ${workspaceId}
+        `
+      }
+      if (name !== undefined) {
+        await transaction`
+          update workspaces set name = ${name}
+           where tenant_id = ${tenantId} and id = ${workspaceId}
+        `
+      }
+    })
+    const [updated] = (await this.listWorkspaces(actorUserId, { status: 'all' }))
+      .filter(workspace => workspace.id === workspaceId)
+    if (!updated) throw new Error('工作空间不存在或不可访问')
+    return updated
   }
 
   async createWorkspace(input: { name: string; description: string }, actorUserId: string) {
@@ -640,6 +687,36 @@ export class PostgresContentService {
       throw authorizationDenied('Artifact 不存在或不可访问')
     }
     return row.fileId
+  }
+
+  /**
+   * 团队空间设置写入：先取空间行锁（与归档/成员变更同一把锁、同一锁序），
+   * 再在锁内复核「空间活跃」与「调用者是负责人」。归档在等待锁期间提交时，
+   * 这里必须拒绝，避免设置改写穿透只读态。
+   */
+  private async runWorkspaceWriteMutation(
+    workspaceId: string,
+    actorUserId: string,
+    action: (transaction: DatabaseTransaction) => Promise<void>,
+  ) {
+    await this.database.begin(async (transaction) => {
+      const [workspace] = await transaction<{ status: string }[]>`
+        select status from workspaces
+         where tenant_id = ${tenantId} and id = ${workspaceId}
+         for update
+      `
+      if (!workspace) throw authorizationDenied('工作空间不存在或不可访问')
+      if (workspace.status !== 'active') {
+        throw authorizationDenied('工作空间已归档，仅支持有权限的只读查看与下载')
+      }
+      const [owner] = await transaction<{ role: string }[]>`
+        select member_role as role from workspace_members
+         where tenant_id = ${tenantId} and workspace_id = ${workspaceId}
+           and user_id = ${actorUserId} and member_role = 'owner'
+      `
+      if (!owner) throw authorizationDenied('仅空间负责人可以修改空间设置')
+      await action(transaction)
+    })
   }
 
   private async requireWorkspaceAccess(workspaceId: string, actorUserId: string) {

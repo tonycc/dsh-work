@@ -11,10 +11,13 @@ import type {
   Workspace,
   WorkspaceAgentMember,
   WorkspaceFile,
+  WorkspaceLifecycleResult,
   WorkspaceMember,
   WorkspaceMemberDirectory,
   WorkspaceSessionPage,
   WorkspaceSessionQuery,
+  WorkspaceStatusFilter,
+  WorkspaceUpdateInput,
 } from '../types/domain'
 
 interface ApiEnvelope<T> {
@@ -122,11 +125,35 @@ export const workbenchApi = {
   cancelRun: (runId: string) => request<TaskRun>(`/runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST' }),
   retryRun: (runId: string) => request<TaskRun>(`/runs/${encodeURIComponent(runId)}/retry`, { method: 'POST' }),
   runEventsUrl: (runId: string) => `${baseUrl}/runs/${encodeURIComponent(runId)}/events`,
-  getWorkspaces: () => request<Workspace[]>('/workspaces'),
+  /**
+   * 空间列表（3-T2/3-T3）。`status` 由服务端按可见范围过滤：`all`（默认，与不带
+   * 参数等价）返回个人空间与全部有权团队空间；`archived` 只返回仍是现任成员的
+   * 已归档团队空间，个人空间不出现（design §2.1，AC-23）。
+   */
+  getWorkspaces: (status: WorkspaceStatusFilter = 'all') => request<Workspace[]>(
+    status === 'all' ? '/workspaces' : `/workspaces?status=${status}`,
+    { method: 'GET' },
+  ),
   createWorkspace: (input: { name: string; description: string }) => request<Workspace>('/workspaces', {
     method: 'POST',
     body: JSON.stringify(input),
   }),
+  /** 团队空间名称/说明保存（仅负责人；说明传 `null` 显式清空）。 */
+  updateWorkspace: (workspaceId: string, input: WorkspaceUpdateInput) =>
+    request<Workspace>(`/workspaces/${encodeURIComponent(workspaceId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    }),
+  /** 归档团队空间（仅负责人）；有排队/运行中 Run 时服务端返回 409 state_conflict。 */
+  archiveWorkspace: (workspaceId: string) =>
+    request<WorkspaceLifecycleResult>(`/workspaces/${encodeURIComponent(workspaceId)}/archive`, {
+      method: 'POST',
+    }),
+  /** 恢复已归档团队空间（仅负责人）。 */
+  restoreWorkspace: (workspaceId: string) =>
+    request<WorkspaceLifecycleResult>(`/workspaces/${encodeURIComponent(workspaceId)}/restore`, {
+      method: 'POST',
+    }),
   uploadWorkspaceFile: async (workspaceId: string, file: File) => request<Workspace['files'][number]>(
     `/workspaces/${encodeURIComponent(workspaceId)}/files`,
     {

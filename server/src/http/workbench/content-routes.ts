@@ -53,6 +53,35 @@ export function registerContentRoutes(
     }, userId), 'postgres'))
   })
 
+  // 3-T3 依赖：团队空间名称/说明保存（1A 遗留的 PATCH）。仅负责人；清空说明显式传 null。
+  router.patch(`${basePath}/workspaces/:workspaceId`, async (request, context) => {
+    const identity = requireRequestIdentity(context, 'workbench')
+    const body = await readJsonBody<{ name?: unknown; description?: unknown } | null>(request)
+    // JSON `null` 能通过 JSON.parse，但不是对象：直接读 body.name 会抛 TypeError 并被
+    // 分类成 500。契约的 requestBody 是 object，这里显式 422（质量评审 F8）。
+    if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+      throw routeValidationFailed('请求体必须是 JSON 对象')
+    }
+    if (body.name !== undefined && typeof body.name !== 'string') {
+      throw routeValidationFailed('name 必须是字符串')
+    }
+    if (body.description !== undefined && body.description !== null && typeof body.description !== 'string') {
+      throw routeValidationFailed('description 必须是字符串或 null')
+    }
+    return envelope(
+      'workbench',
+      await content.updateWorkspace(
+        context.params['workspaceId'] ?? '',
+        {
+          ...(body.name === undefined ? {} : { name: body.name }),
+          ...(body.description === undefined ? {} : { description: body.description as string | null }),
+        },
+        identity.userId,
+      ),
+      'postgres',
+    )
+  })
+
   router.get(`${basePath}/artifacts`, async (_request, context) => {
     const identity = requireRequestIdentity(context, 'workbench')
     const userId = identity.userId

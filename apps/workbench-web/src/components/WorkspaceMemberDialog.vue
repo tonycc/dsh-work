@@ -30,6 +30,12 @@ const props = withDefaults(
     loadAgentMembers?: boolean
     /** 员工成员列表不可用时的说明（例如后端尚未提供列表接口）。 */
     membersWarning?: string
+    /**
+     * 空间是否已归档。归档属执行轨（3-T1/3-T2）：成员与 Agent 的**所有写入口**
+     * 必须隐藏——服务端会 403，渲染出来只是让用户走进死路（design §2.7/§3）。
+     * 例外：移除成员（紧急收权）与转交负责人仍可用，服务端显式 allowArchived。
+     */
+    archived?: boolean
   }>(),
   {
     workspaceName: '',
@@ -38,6 +44,7 @@ const props = withDefaults(
     agentMembers: () => [],
     loadAgentMembers: true,
     membersWarning: '',
+    archived: false,
   },
 )
 
@@ -81,7 +88,17 @@ const addingEmployee = ref('')
 const agentMemberList = ref<WorkspaceAgentMember[]>(props.agentMembers)
 
 const isOwner = computed(() => props.currentUserRole === 'owner')
-const canManageEmployees = computed(() => isOwner.value || props.currentUserRole === 'admin')
+/**
+ * 归档空间只保留治理动作：可移除成员、可转交负责人，其余写入口一律不渲染。
+ * `canManageEmployees` 继续表示「有成员管理权限」，最终是否渲染写入口再与归档相与。
+ */
+const canManageEmployees = computed(() =>
+  !props.archived && (isOwner.value || props.currentUserRole === 'admin'),
+)
+/**
+ * 归档空间仍可移除成员（紧急收权）：`canRemove` 只依赖操作人角色与成员行，
+ * 不受 `archived` 影响，因此移除按钮在归档态保持可见——这是刻意保留的治理例外。
+ */
 const ownerCount = computed(() => props.members.filter(member => member.role === 'owner').length)
 
 /**
@@ -402,14 +419,6 @@ defineExpose({ ensureEmployeeCandidates })
                   :disabled="!editableRoles(member).includes(role)"
                 />
               </el-select>
-              <el-button
-                v-if="canRemove(member) && !isLastOwner(member)"
-                data-testid="member-remove"
-                plain
-                @click="removeMember(member)"
-              >
-                移除
-              </el-button>
             </template>
 
             <span
@@ -419,6 +428,19 @@ defineExpose({ ensureEmployeeCandidates })
             >
               {{ roleLabels[member.role] }}
             </span>
+
+            <!--
+              移除成员不在 canManageEmployees 之内：归档空间的紧急撤权是刻意保留的
+              治理例外（3-T1/3-T2 服务端显式 allowArchived），只由权限矩阵 canRemove 决定。
+            -->
+            <el-button
+              v-if="canRemove(member) && !isLastOwner(member)"
+              data-testid="member-remove"
+              plain
+              @click="removeMember(member)"
+            >
+              移除
+            </el-button>
           </article>
         </div>
 
@@ -495,7 +517,7 @@ defineExpose({ ensureEmployeeCandidates })
             </el-tooltip>
             <div class="member-dialog__actions">
               <el-button
-                v-if="member.allowedActions.includes('start_conversation')"
+                v-if="!archived && member.allowedActions.includes('start_conversation')"
                 data-testid="agent-start-conversation"
                 plain
                 @click="startConversation(member)"
@@ -503,7 +525,7 @@ defineExpose({ ensureEmployeeCandidates })
                 开始对话
               </el-button>
               <el-button
-                v-if="member.allowedActions.includes('disable')"
+                v-if="!archived && member.allowedActions.includes('disable')"
                 data-testid="agent-action-disable"
                 plain
                 @click="runAgentAction(member, 'disable')"
@@ -511,7 +533,7 @@ defineExpose({ ensureEmployeeCandidates })
                 停用
               </el-button>
               <el-button
-                v-if="member.allowedActions.includes('enable')"
+                v-if="!archived && member.allowedActions.includes('enable')"
                 data-testid="agent-action-enable"
                 plain
                 @click="runAgentAction(member, 'enable')"
@@ -519,7 +541,7 @@ defineExpose({ ensureEmployeeCandidates })
                 重新启用
               </el-button>
               <el-button
-                v-if="member.allowedActions.includes('upgrade')"
+                v-if="!archived && member.allowedActions.includes('upgrade')"
                 data-testid="agent-action-upgrade"
                 plain
                 @click="runAgentAction(member, 'upgrade')"
@@ -527,7 +549,7 @@ defineExpose({ ensureEmployeeCandidates })
                 升级
               </el-button>
               <el-button
-                v-if="member.allowedActions.includes('remove')"
+                v-if="!archived && member.allowedActions.includes('remove')"
                 data-testid="agent-action-remove"
                 plain
                 @click="runAgentAction(member, 'remove')"
@@ -546,7 +568,7 @@ defineExpose({ ensureEmployeeCandidates })
 
         <p v-if="loadAgentError" class="member-dialog__warning">{{ loadAgentError }}</p>
 
-        <div v-if="isOwner" class="member-dialog__add">
+        <div v-if="isOwner && !archived" class="member-dialog__add">
           <el-button data-testid="member-add-agent" :icon="Plus" :loading="loadingAgents" @click="openAgentSearch">
             添加 Agent
           </el-button>

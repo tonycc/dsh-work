@@ -16,6 +16,7 @@ import {
 } from '@element-plus/icons-vue'
 
 import { RunTimeline, StatusTag } from '@dsh-work/ui-core'
+import { useContentStore } from '@/stores/content'
 import { useTaskStore } from '@/stores/tasks'
 import type { Artifact, TaskSource } from '@/types/domain'
 import { TaskComposer } from '@dsh-work/workbench-components'
@@ -24,15 +25,25 @@ import { downloadArtifactFile, notifyActionFailure } from '@/utils/feedback'
 const route = useRoute()
 const router = useRouter()
 const taskStore = useTaskStore()
+const contentStore = useContentStore()
 
 const detailsOpen = ref(false)
 const conversationScroll = ref<HTMLElement>()
 const showJumpToLatest = ref(false)
 
 const task = computed(() => taskStore.getTask(String(route.params.id)))
+/**
+ * 归档只读态（design §2.7 / 3-T1 执行轨）：运行所属团队空间归档后，续写（发送消息）
+ * 与重试入口隐藏；内容、来源与成果下载保持可读。个人空间不会命中（AC-23）。
+ */
+const workspaceArchived = computed(() => {
+  const workspace = contentStore.workspaces.find(item => item.id === task.value?.workspaceId)
+  return workspace?.type === 'team' && workspace.status === 'archived'
+})
 const canStop = computed(() => task.value && ['queued', 'running', 'awaiting_approval'].includes(task.value.status))
 const canRetry = computed(() => task.value && ['failed', 'cancelled'].includes(task.value.status)
   && (task.value.error?.retryable ?? true))
+const canFollowUp = computed(() => !workspaceArchived.value)
 const currentStep = computed(() =>
   task.value?.steps.find((step) => ['running', 'awaiting_approval'].includes(step.status)),
 )
@@ -85,7 +96,7 @@ async function stopCurrentRun() {
 }
 
 async function retryRun() {
-  if (!task.value) return
+  if (!task.value || workspaceArchived.value) return
   try {
     await taskStore.retryTask(task.value.id)
     ElMessage.success('已创建新的运行尝试')
@@ -117,7 +128,7 @@ function download(item: Artifact) {
 }
 
 async function submitFollowUp(payload: { prompt: string; files: File[]; workspaceId: string }) {
-  if (!task.value) return
+  if (!task.value || workspaceArchived.value) return
   try {
     const nextTask = await taskStore.sendMessage(task.value.id, payload.prompt, payload.files)
     if (nextTask) await router.replace(`/conversations/${nextTask.id}`)
@@ -186,7 +197,7 @@ watch(
             @click="stopCurrentRun"
           />
           <el-button
-            v-if="canRetry"
+            v-if="canRetry && !workspaceArchived"
             text
             :icon="RefreshRight"
             aria-label="重新执行本轮"
@@ -315,7 +326,13 @@ watch(
               <p><strong>下一步：</strong>{{ task.error.suggestion }}</p>
               <code>{{ task.error.code }}</code>
             </div>
-            <el-button v-if="task.error.retryable" type="primary" plain :icon="RefreshRight" @click="retryRun">
+            <el-button
+              v-if="task.error.retryable && !workspaceArchived"
+              type="primary"
+              plain
+              :icon="RefreshRight"
+              @click="retryRun"
+            >
               重新执行本轮
             </el-button>
           </section>
@@ -335,7 +352,10 @@ watch(
           <el-icon><ArrowDown /></el-icon>
         </button>
         <div class="conversation-composer-dock__inner">
-          <TaskComposer compact @submit="submitFollowUp" />
+          <TaskComposer v-if="canFollowUp" compact @submit="submitFollowUp" />
+          <p v-else data-testid="conversation-archived-notice" class="conversation-archived-notice">
+            该空间已归档，仅保留有权限的只读查看与下载；无法续写或重试。
+          </p>
           <p>AI 生成内容可能存在误差，重要业务结论请结合来源与企业制度确认。</p>
         </div>
       </div>
@@ -836,6 +856,17 @@ watch(
   color: #aaada9;
   font-size: var(--dsh-font-size-micro);
   text-align: center;
+}
+
+/* 归档只读态：以提示替代续写输入，避免提交后才被服务端拒绝（design §2.7）。 */
+.conversation-composer-dock__inner > p.conversation-archived-notice {
+  margin-top: 0;
+  padding: 12px 16px;
+  border: 1px solid #f0d9b5;
+  border-radius: 12px;
+  color: #8a5a1e;
+  background: #fdf6ec;
+  font-size: var(--dsh-font-size-caption);
 }
 
 .conversation-composer-dock :deep(.composer__surface) {

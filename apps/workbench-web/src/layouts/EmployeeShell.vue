@@ -23,6 +23,7 @@ import { roleLabels, useAuthStore } from '@/stores/auth'
 import { useContentStore } from '@/stores/content'
 import { useTaskStore } from '@/stores/tasks'
 import type { TaskRun } from '@/types/domain'
+import { isTaskInArchivedWorkspace } from '@/utils/archived-workspaces'
 import { notifyActionFailure } from '@/utils/feedback'
 
 const route = useRoute()
@@ -92,6 +93,10 @@ function exportConversation(task: TaskRun) {
 
 async function deleteConversation(task: TaskRun) {
   if (deletingSessionId.value) return
+  if (isTaskInArchivedWorkspace(task, contentStore.workspaces)) {
+    ElMessage.warning('该对话所在工作空间已归档，仅保留只读查看与下载')
+    return
+  }
   if (['queued', 'running', 'awaiting_approval'].includes(task.status)) {
     ElMessage.warning('请先停止当前运行，再删除对话')
     return
@@ -221,7 +226,12 @@ onMounted(() => {
                   <el-icon><Download /></el-icon>
                   导出对话记录
                 </el-dropdown-item>
-                <el-dropdown-item class="recent-conversation-delete-item" divided command="delete">
+                <el-dropdown-item
+                  v-if="!isTaskInArchivedWorkspace(task, contentStore.workspaces)"
+                  class="recent-conversation-delete-item"
+                  divided
+                  command="delete"
+                >
                   <el-icon><DeleteIcon /></el-icon>
                   删除对话
                 </el-dropdown-item>

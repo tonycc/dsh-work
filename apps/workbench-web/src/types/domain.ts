@@ -124,10 +124,30 @@ export interface Workspace {
   files: WorkspaceFile[]
   /**
    * 团队空间归档状态（design §2.1/§2.5 归档态）。3-T2 起服务端 `/workspaces`
-   * 恒返回该字段；保留可选是因为既有测试夹具尚未全部补齐，前端只在收到
-   * `archived` 时渲染归档只读态。`archivedAt` 由 3-T3 需要时再引入。
+   * 恒返回该字段（个人空间恒为 `active`），前端据此渲染归档只读态；不再可选，
+   * 缺省即视为契约破损而不是活动空间。
    */
-  status?: 'active' | 'archived'
+  status: WorkspaceStatus
+  /** 归档时间；活动空间为 `null`。 */
+  archivedAt: string | null
+}
+
+export type WorkspaceStatus = 'active' | 'archived'
+
+/** `GET /workspaces?status=` 的筛选口径（design §2.1 / §6：默认全部，个人空间恒显）。 */
+export type WorkspaceStatusFilter = 'active' | 'archived' | 'all'
+
+/** 归档/恢复接口返回的最小状态（`POST /workspaces/:id/archive|restore`）。 */
+export interface WorkspaceLifecycleResult {
+  id: string
+  status: WorkspaceStatus
+  archivedAt: string | null
+}
+
+/** `PATCH /workspaces/:id` 的入参；`description: null` 显式清空说明（方案 3.3）。 */
+export interface WorkspaceUpdateInput {
+  name?: string
+  description?: string | null
 }
 
 /** 团队空间员工角色：负责人、管理员、成员、只读成员。 */

@@ -12,7 +12,7 @@ interface WorkspaceInfo {
   memberCount: number
   owner: string
   members: string[]
-  /** 服务端返回的团队归档状态；契约补齐前缺省视为未归档。 */
+  /** 服务端返回的团队归档状态（3-T2 起 `/workspaces` 恒返回）。 */
   status?: 'active' | 'archived'
 }
 

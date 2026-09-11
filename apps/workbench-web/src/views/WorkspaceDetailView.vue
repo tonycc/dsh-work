@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   ArrowRight,
   ChatDotRound,
@@ -15,7 +15,14 @@ import { ArtifactCard } from '@dsh-work/ui-core'
 import { useAuthStore } from '@/stores/auth'
 import { useContentStore } from '@/stores/content'
 import { workbenchApi } from '@/api/client'
-import type { Artifact, TeamMemberRole, WorkspaceAgentMember, WorkspaceFile, WorkspaceMember } from '@/types/domain'
+import type {
+  Artifact,
+  TeamMemberRole,
+  Workspace,
+  WorkspaceAgentMember,
+  WorkspaceFile,
+  WorkspaceMember,
+} from '@/types/domain'
 import ConversationStarter from '@/components/ConversationStarter.vue'
 import WorkspaceMemberDialog from '@/components/WorkspaceMemberDialog.vue'
 import WorkspaceSessionHistory from '@/components/WorkspaceSessionHistory.vue'
@@ -82,10 +89,17 @@ const workspace = computed(() =>
 const isPersonal = computed(() => workspace.value?.type === 'personal')
 const isTeam = computed(() => workspace.value?.type === 'team')
 /**
- * 团队分支只在服务端返回归档状态时进入只读态；`/workspaces` 契约补齐前，
- * 缺省视为活动空间（不会影响个人空间）。
+ * 归档只读态：仅团队空间在服务端 `status === 'archived'` 时进入（个人空间恒为
+ * active，即使夹具强行带上归档状态也不渲染归档提示，AC-23）。
  */
 const isArchived = computed(() => isTeam.value && workspace.value?.status === 'archived')
+/**
+ * 归档执行轨（design §2.7）：归档隐藏新对话、上传等写入口，但历史、文件与成果
+ * 内容保持可读。新对话入口只在活动空间渲染；归档时对话页签固定展示历史。
+ */
+const showConversationStarter = computed(() => !isArchived.value)
+const showConversationViewSwitch = computed(() => isTeam.value && !isArchived.value)
+const showSessionHistory = computed(() => isTeam.value && (conversationView.value === 'history' || isArchived.value))
 /**
  * 当前操作人的团队角色。优先采用 `GET /workspaces/:id/members` 返回的
  * `currentUserRole`（负责人转交后创建者不再是负责人，按姓名推断会失效）；
@@ -108,6 +122,8 @@ const currentUserRole = computed<TeamMemberRole | null>(() => {
 const workspaceArtifacts = computed(() =>
   contentStore.artifacts.filter((artifact) => artifact.workspaceId === workspaceId.value),
 )
+/** 负责人判定来自服务端角色，不在前端按创建者猜测（负责人-only 动作的唯一依据）。 */
+const isOwner = computed(() => currentUserRole.value === 'owner')
 const workspaceTabs = computed(() => [
   {
     id: 'conversation' as const,
@@ -263,11 +279,44 @@ function refreshTeamMembers() {
 }
 
 /**
- * 空间设置保存：1A 无名称/说明更新接口（见 T6 报告缺口），此处只给出明确
- * 反馈，不伪造成功，也不改动个人空间路径。
+ * 恢复空间（design §2.7，负责人-only）：恢复不重新添加已移除成员、不扩大授权，
+ * 仅把空间置回 active，写入口随后按当前权限重新出现。确认前置，失败沿用
+ * 结构化反馈（design §3 错误映射）。
  */
-function saveWorkspaceSettings() {
-  ElMessage.warning('名称与说明的保存接口尚未开放，本次修改未提交。')
+async function restoreWorkspace() {
+  const current = workspace.value
+  if (!current || !isOwner.value) return
+  try {
+    await ElMessageBox.confirm(
+      `恢复后写入口按当前权限重新出现；不会重新添加已移除成员，也不扩大授权。“${current.name}”将恢复为活动空间。`,
+      '恢复空间？',
+      { confirmButtonText: '恢复空间', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  try {
+    await workbenchApi.restoreWorkspace(current.id)
+    await contentStore.refresh()
+    ElMessage.success('已恢复该空间')
+  } catch (error) {
+    notifyActionFailure('恢复空间', `工作空间“${current.name}”`, error, '稍后重试；若仍失败，请联系管理员。')
+  }
+}
+
+/**
+ * 空间设置保存（3-T3 依赖的 `PATCH /workspaces/:id`）：把服务端返回的空间摘要
+ * 同步进列表，避免重新拉取整页。名称/说明的写入由设置弹窗直接调用接口。
+ */
+function onWorkspaceSettingsSaved(updated: Workspace) {
+  const index = contentStore.workspaces.findIndex((item) => item.id === updated.id)
+  if (index >= 0) contentStore.workspaces.splice(index, 1, updated)
+  else contentStore.workspaces.push(updated)
+}
+
+/** 归档/恢复后刷新服务端状态（含 archivedAt 与当前负责人）。 */
+function onWorkspaceStatusChanged() {
+  void contentStore.refresh()
 }
 
 onMounted(() => {
@@ -362,6 +411,29 @@ watch(workspace, (value) => {
         </div>
       </header>
 
+      <el-alert
+        v-if="isArchived"
+        data-testid="workspace-archived-alert"
+        class="workspace-context-page__archive"
+        type="warning"
+        :closable="false"
+        show-icon
+      >
+        <template #title>
+          <span class="workspace-context-page__archive-text">该空间已归档，仅保留有权限的只读查看与下载</span>
+          <el-button
+            v-if="isOwner"
+            data-testid="workspace-restore"
+            type="primary"
+            plain
+            size="small"
+            @click="restoreWorkspace"
+          >
+            恢复空间
+          </el-button>
+        </template>
+      </el-alert>
+
       <div class="workspace-context-page__content">
         <section
           v-show="activeTab === 'conversation'"
@@ -371,7 +443,7 @@ watch(workspace, (value) => {
           aria-labelledby="workspace-tab-conversation"
         >
           <div
-            v-if="isTeam"
+            v-if="showConversationViewSwitch"
             class="panel workspace-conversation-pane__viewbar"
             data-testid="conversation-view-switch"
             role="tablist"
@@ -393,6 +465,7 @@ watch(workspace, (value) => {
 
           <div class="workspace-conversation-pane__body">
             <ConversationStarter
+              v-if="showConversationStarter"
               v-show="conversationView === 'new'"
               ref="starterRef"
               embedded
@@ -406,10 +479,11 @@ watch(workspace, (value) => {
             />
 
             <WorkspaceSessionHistory
-              v-if="isTeam && conversationView === 'history'"
+              v-if="showSessionHistory"
               :workspace-id="workspace.id"
               :workspace-name="workspace.name"
-              :can-start-conversation="startableAgentMemberIds.length > 0"
+              :can-start-conversation="!isArchived && startableAgentMemberIds.length > 0"
+              :archived="isArchived"
               @start-new="setConversationView('new')"
             />
           </div>
@@ -428,7 +502,16 @@ watch(workspace, (value) => {
               <h1>{{ isPersonal ? '文件' : '共享文件' }}</h1>
               <p>{{ isPersonal ? '管理仅你可访问的资料，并将指定文件直接引用到新对话。' : '查看团队在当前工作空间共享的资料，并将指定文件直接引用到新对话。' }}</p>
             </div>
-            <el-button type="primary" :icon="Plus" :loading="uploading" @click="uploadFile">上传文件</el-button>
+            <el-button
+              v-if="!isArchived"
+              data-testid="workspace-upload"
+              type="primary"
+              :icon="Plus"
+              :loading="uploading"
+              @click="uploadFile"
+            >
+              上传文件
+            </el-button>
             <input ref="uploadInput" class="visually-hidden" type="file" accept=".pdf,.docx,.xlsx,.csv,.txt,.md" @change="onUploadSelected" />
           </header>
 
@@ -440,12 +523,20 @@ watch(workspace, (value) => {
                 <span>{{ file.size }} · {{ file.uploadedBy }}上传 · {{ file.uploadedAt }}</span>
               </div>
               <span class="workspace-file-row__type">{{ file.type }}</span>
-              <el-button plain @click="useWorkspaceFile(file)">引用到对话</el-button>
+              <el-button v-if="!isArchived" plain @click="useWorkspaceFile(file)">引用到对话</el-button>
             </article>
           </div>
 
           <el-empty v-else :description="isPersonal ? '我的空间暂无文件' : '当前工作空间暂无共享文件'">
-            <el-button type="primary" :icon="Plus" @click="uploadFile">上传第一个文件</el-button>
+            <el-button
+              v-if="!isArchived"
+              data-testid="workspace-upload-empty"
+              type="primary"
+              :icon="Plus"
+              @click="uploadFile"
+            >
+              上传第一个文件
+            </el-button>
           </el-empty>
         </section>
 
@@ -519,6 +610,7 @@ watch(workspace, (value) => {
         :members="workspaceMembers"
         :agent-members="agentMembers"
         :load-agent-members="false"
+        :archived="isArchived"
         @refresh="refreshTeamMembers"
         @start-conversation="startAgentConversation"
       />
@@ -528,10 +620,11 @@ watch(workspace, (value) => {
         :workspace-id="workspace.id"
         :workspace-name="workspace.name"
         :workspace-description="workspace.description"
+        :workspace-status="workspace.status"
         :current-user-role="currentUserRole"
         :members="workspaceMembers"
-        save-warning="名称与说明的保存接口尚未就绪，本次修改不会提交到服务端。"
-        @save="saveWorkspaceSettings"
+        @saved="onWorkspaceSettingsSaved"
+        @archive-changed="onWorkspaceStatusChanged"
         @transferred="refreshTeamMembers"
         @exited="router.push('/workspaces')"
       />
@@ -710,6 +803,25 @@ watch(workspace, (value) => {
   flex: 1;
   overflow: hidden;
   background: #fff;
+}
+
+/* 归档只读提示条（design §2.7）：页头下、内容之上，负责人可在条内恢复空间。 */
+.workspace-context-page__archive {
+  flex: 0 0 auto;
+  margin: 10px 20px 0;
+  border-radius: 10px;
+}
+
+.workspace-context-page__archive :deep(.el-alert__title) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--dsh-font-size-caption);
+}
+
+.workspace-context-page__archive-text {
+  min-width: 0;
 }
 
 .workspace-conversation-pane {

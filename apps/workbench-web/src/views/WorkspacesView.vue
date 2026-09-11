@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ArrowRight, Plus, Search, User, UserFilled } from '@element-plus/icons-vue'
 
 import { StatusTag } from '@dsh-work/ui-core'
+import { workbenchApi } from '@/api/client'
 import { useContentStore } from '@/stores/content'
-import type { Workspace } from '@/types/domain'
+import type { Workspace, WorkspaceStatusFilter } from '@/types/domain'
 
 const contentStore = useContentStore()
+const route = useRoute()
 const router = useRouter()
 const query = ref('')
 const createDialogOpen = ref(false)
@@ -16,16 +18,144 @@ const newWorkspaceName = ref('')
 const newWorkspaceDescription = ref('')
 const creating = ref(false)
 
+/**
+ * 归档筛选（design §2.1 / §6）：全部 / 活动 / 已归档，默认全部；状态写入路由
+ * `?status=`（沿用对话页签 `?view=history` 的写法），刷新与深链可恢复。
+ */
+const statusOptions: Array<{ id: WorkspaceStatusFilter; label: string }> = [
+  { id: 'all', label: '全部' },
+  { id: 'active', label: '活动' },
+  { id: 'archived', label: '已归档' },
+]
+function parseStatusFilter(raw: unknown): WorkspaceStatusFilter {
+  return raw === 'active' || raw === 'archived' ? raw : 'all'
+}
+const statusFilter = ref<WorkspaceStatusFilter>('all')
+/**
+ * 非「全部」筛选的结果单独存放，避免用筛选结果覆盖全局 `contentStore.workspaces`
+ * ——那会改变其它页面（个人空间默认空间、详情回退）的可见范围（AC-23）。
+ * 「全部」直接复用全局列表（服务端默认 all），个人空间恒显。
+ */
+const filteredWorkspacesPage = ref<Workspace[]>([])
+const loadingFiltered = ref(false)
+/** 筛选请求失败时的错误文案；非空表示当前页签没有可信数据。 */
+const filterError = ref<string | null>(null)
+let listToken = 0
+
+const sourceWorkspaces = computed(() => {
+  if (statusFilter.value === 'all') return contentStore.workspaces
+  // 纵深防御（design §2.1）：**仅「已归档」**只响应团队空间——个人空间恒为 active，
+  // 不可能归档，若服务端意外返回则不得渲染。注意「活动」视图里个人空间是合法的，
+  // 不能一并过滤掉（那会改变个人空间在默认/活动视图的可见性，破 AC-23）。
+  if (statusFilter.value === 'archived') {
+    return filteredWorkspacesPage.value.filter(workspace => workspace.type === 'team')
+  }
+  return filteredWorkspacesPage.value
+})
+const loading = computed(() => (statusFilter.value === 'all' ? contentStore.loading : loadingFiltered.value))
+
 const filteredWorkspaces = computed(() => {
   const keyword = query.value.trim().toLowerCase()
-  return [...contentStore.workspaces]
+  return [...sourceWorkspaces.value]
     .filter((workspace) =>
       !keyword || `${workspace.name} ${workspace.description} ${workspace.owner}`.toLowerCase().includes(keyword),
     )
     .sort((left, right) => Number(right.type === 'personal') - Number(left.type === 'personal'))
 })
 
+const emptyDescription = computed(() =>
+  statusFilter.value === 'archived' && !query.value.trim() ? '暂无已归档的团队空间' : '没有匹配的工作空间',
+)
+
 const canCreate = computed(() => Boolean(newWorkspaceName.value.trim()))
+
+/**
+ * tablist 键盘操作（design §4「支持键盘」/ AC-16）。roving tabindex 只解决
+ * 「Tab 进入一次」，必须自己实现方向键与 Home/End，否则非选中项键盘不可达。
+ * 视觉上仍是同一组按钮，选中后把焦点移到新选中项。
+ */
+function onFilterKeydown(event: KeyboardEvent, current: WorkspaceStatusFilter) {
+  const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End']
+  if (!keys.includes(event.key)) return
+  event.preventDefault()
+  const index = statusOptions.findIndex(option => option.id === current)
+  if (index < 0) return
+  const nextIndex = event.key === 'Home'
+    ? 0
+    : event.key === 'End'
+      ? statusOptions.length - 1
+      : (index + (event.key === 'ArrowRight' ? 1 : -1) + statusOptions.length) % statusOptions.length
+  const next = statusOptions[nextIndex]
+  if (!next) return
+  setStatusFilter(next.id)
+  void nextTick(() => {
+    const target = document.querySelector<HTMLButtonElement>(`[data-testid="workspace-filter-${next.id}"]`)
+    target?.focus()
+  })
+}
+
+let lastLoadedStatus: WorkspaceStatusFilter | null = null
+async function loadStatusFilter(status: WorkspaceStatusFilter) {
+  if (status === 'all') {
+    lastLoadedStatus = 'all'
+    filteredWorkspacesPage.value = []
+    return
+  }
+  // 同参去重：点击改路由会使 watch 再调一次，这里避免重复请求（真实路由下
+  // 原本每次切换会发两次同样的请求）。去重只在**成功后**记账，失败时不记，
+  // 以便用户在原页签上重试。
+  if (lastLoadedStatus === status && !filterError.value) return
+  const token = ++listToken
+  loadingFiltered.value = true
+  filterError.value = null
+  // 先清空上一个筛选的结果：否则请求失败时，新页签下会继续显示旧筛选的卡片
+  // （符合性/质量评审 F4）。
+  filteredWorkspacesPage.value = []
+  try {
+    const list = await workbenchApi.getWorkspaces(status)
+    if (token !== listToken) return
+    filteredWorkspacesPage.value = list
+    lastLoadedStatus = status
+  } catch (error) {
+    if (token !== listToken) return
+    filterError.value = error instanceof Error ? error.message : '加载工作空间失败'
+    ElMessage.error(filterError.value)
+  } finally {
+    if (token === listToken) loadingFiltered.value = false
+  }
+}
+
+/** 失败后允许原地重试（去重记账只在成功时写入，这里显式重跑当前筛选）。 */
+function retryStatusFilter() {
+  lastLoadedStatus = null
+  void loadStatusFilter(statusFilter.value)
+}
+
+function setStatusFilter(next: WorkspaceStatusFilter) {
+  if (statusFilter.value === next) return
+  statusFilter.value = next
+  const nextQuery = { ...route.query }
+  if (next === 'all') delete nextQuery.status
+  else nextQuery.status = next
+  void router.replace({ query: nextQuery })
+  void loadStatusFilter(next)
+}
+
+/**
+ * 深链/浏览器前进后退：路由 query 是筛选状态的唯一来源。
+ * 实际路由下 `setStatusFilter` 的 `router.replace` 会让这个 watch 也触发一次，
+ * 因此 `loadStatusFilter` 自带同参去重（见 `lastLoadedStatus`），保证每次切换
+ * 只发一次请求，同时「点击」与「深链」两条路径都能正确加载。
+ */
+watch(
+  () => route.query.status,
+  (raw) => {
+    const next = parseStatusFilter(raw)
+    statusFilter.value = next
+    void loadStatusFilter(next)
+  },
+  { immediate: true },
+)
 
 function openWorkspace(workspace: Workspace) {
   void router.push(`/workspaces/${workspace.id}`)
@@ -66,10 +196,27 @@ onMounted(() => contentStore.refresh())
 
     <div class="workspace-toolbar">
       <el-input v-model="query" :prefix-icon="Search" clearable placeholder="搜索工作空间名称或负责人" />
+      <div class="workspace-filter" data-testid="workspace-status-filter" role="tablist" aria-label="工作空间归档筛选">
+        <button
+          v-for="option in statusOptions"
+          :key="option.id"
+          :data-testid="`workspace-filter-${option.id}`"
+          class="workspace-filter__item"
+          :class="{ 'is-active': statusFilter === option.id }"
+          type="button"
+          role="tab"
+          :aria-selected="statusFilter === option.id"
+          :tabindex="statusFilter === option.id ? 0 : -1"
+          @click="setStatusFilter(option.id)"
+          @keydown="onFilterKeydown($event, option.id)"
+        >
+          {{ option.label }}
+        </button>
+      </div>
       <span>{{ filteredWorkspaces.length }} 个可访问工作空间</span>
     </div>
 
-    <div v-if="contentStore.loading" class="workspace-grid">
+    <div v-if="loading" class="workspace-grid">
       <div v-for="index in 3" :key="index" class="workspace-card panel workspace-card--skeleton">
         <el-skeleton :rows="4" animated />
       </div>
@@ -88,7 +235,15 @@ onMounted(() => contentStore.refresh())
           <span class="workspace-card__icon" :class="{ 'workspace-card__icon--personal': workspace.type === 'personal' }">
             <el-icon><component :is="workspace.type === 'personal' ? User : UserFilled" /></el-icon>
           </span>
-          <StatusTag status="neutral" :label="workspace.type === 'personal' ? '个人工作空间' : '团队工作空间'" />
+          <span class="workspace-card__tags">
+            <StatusTag status="neutral" :label="workspace.type === 'personal' ? '个人工作空间' : '团队工作空间'" />
+            <StatusTag
+              v-if="workspace.type === 'team' && workspace.status === 'archived'"
+              data-testid="workspace-card-archived-tag"
+              status="warning"
+              label="已归档"
+            />
+          </span>
         </div>
         <h2>{{ workspace.name }}</h2>
         <p>{{ workspace.description }}</p>
@@ -106,7 +261,15 @@ onMounted(() => contentStore.refresh())
       </button>
     </div>
 
-    <el-empty v-else description="没有匹配的工作空间">
+    <el-empty
+      v-else-if="filterError"
+      data-testid="workspace-filter-error"
+      :description="`加载失败：${filterError}`"
+    >
+      <el-button @click="retryStatusFilter">重试</el-button>
+    </el-empty>
+
+    <el-empty v-else :description="emptyDescription">
       <el-button @click="query = ''">清除筛选</el-button>
     </el-empty>
 
@@ -146,6 +309,46 @@ onMounted(() => contentStore.refresh())
   width: 290px;
 }
 
+/* 归档筛选（design §2.1）：紧凑分段按钮，沿用页签 item 的描边 + 字号规范。 */
+.workspace-filter {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid #e3e5e2;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.workspace-filter__item {
+  min-height: 26px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 7px;
+  color: #777c77;
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--dsh-font-size-caption);
+  transition: color 140ms ease, background 140ms ease;
+}
+
+.workspace-filter__item:hover {
+  color: #244d40;
+  background: #f4f7f5;
+}
+
+.workspace-filter__item.is-active {
+  color: #1f5a49;
+  background: #eaf4f0;
+  font-weight: 620;
+}
+
+.workspace-filter__item:focus-visible {
+  outline: 2px solid #7bb8a6;
+  outline-offset: -2px;
+}
+
 .workspace-toolbar > span {
   margin-left: auto;
   color: var(--dsh-color-muted);
@@ -183,6 +386,14 @@ onMounted(() => contentStore.refresh())
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
+}
+
+.workspace-card__tags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
 .workspace-card__icon {

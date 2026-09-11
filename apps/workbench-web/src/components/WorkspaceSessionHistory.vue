@@ -24,8 +24,13 @@ const props = withDefaults(
     workspaceName?: string
     /** 当前操作人是否有可发起的 Agent 成员，用于「本人尚无对话」时的引导文案。 */
     canStartConversation?: boolean
+    /**
+     * 归档只读态（design §2.7）：归档空间不引导「返回新对话」，空态改为只读说明，
+     * 不展示「请联系负责人添加可用 Agent 成员」（归档不是缺 Agent 能力）。
+     */
+    archived?: boolean
   }>(),
-  { workspaceName: '', canStartConversation: false },
+  { workspaceName: '', canStartConversation: false, archived: false },
 )
 
 const emit = defineEmits<{ 'start-new': [] }>()
@@ -62,9 +67,10 @@ const searchedTitle = computed(() => appliedQuery.value)
  * 空态（design §2.2，随 2A 放弃而收缩）：只有「本人尚无对话」与「筛选无结果」。
  * 列表当前只返回本人发起的会话，因此不再需要探测「空间是否已有会话」。
  */
-const emptyState = computed<'none' | 'own' | 'filter'>(() => {
+const emptyState = computed<'none' | 'own' | 'filter' | 'archived'>(() => {
   if (items.value.length || loading.value || !initialized.value || failed.value) return 'none'
-  return appliedQuery.value ? 'filter' : 'own'
+  if (appliedQuery.value) return 'filter'
+  return props.archived ? 'archived' : 'own'
 })
 
 async function fetchPage(cursor?: string) {
@@ -218,6 +224,12 @@ onBeforeUnmount(() => {
     >
       <el-button @click="load">重试</el-button>
     </el-empty>
+
+    <el-empty
+      v-else-if="emptyState === 'archived'"
+      data-testid="session-history-empty-archived"
+      description="该空间已归档，你没有可查看的历史对话"
+    />
 
     <el-empty
       v-else-if="emptyState === 'own'"

@@ -1,4 +1,4 @@
-import ElementPlus, { ElDialog } from 'element-plus'
+import ElementPlus, { ElDialog, ElMessageBox } from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { workbenchApi } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 import { useContentStore } from '@/stores/content'
-import type { Workspace } from '@/types/domain'
+import type { Artifact, Workspace } from '@/types/domain'
 import WorkspaceDetailView from './WorkspaceDetailView.vue'
 
 const router = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }))
@@ -27,15 +27,18 @@ function workspace(overrides: Partial<Workspace> = {}): Workspace {
     owner: '林岚',
     members: ['林岚', '周航'],
     files: [],
+    status: 'active',
+    archivedAt: null,
     ...overrides,
   }
 }
 
-async function mountView(item: Workspace, options: { ownerName?: string } = {}) {
+async function mountView(item: Workspace, options: { ownerName?: string; artifacts?: Artifact[] } = {}) {
   const pinia = createPinia()
   setActivePinia(pinia)
   const contentStore = useContentStore(pinia)
   contentStore.workspaces.splice(0, contentStore.workspaces.length, item)
+  contentStore.artifacts.splice(0, contentStore.artifacts.length, ...(options.artifacts ?? []))
   // 组件 onMounted 会 refresh；测试固定注入的空间对象。
   vi.spyOn(contentStore, 'refresh').mockResolvedValue(undefined)
   const authStore = useAuthStore(pinia)
@@ -234,5 +237,137 @@ describe('WorkspaceDetailView 团队分支与个人空间红线', () => {
     expect(wrapper.find('[data-testid="workspace-session-history"]').exists()).toBe(false)
     // 新对话仍是唯一内容：个人空间行为与现状一致。
     expect(wrapper.find('conversation-starter-stub').exists()).toBe(true)
+  })
+})
+
+describe('WorkspaceDetailView 归档只读态（design §2.7 / AC-14 / AC-23）', () => {
+  beforeEach(() => {
+    route.params = { id: 'ws-team' }
+    route.query = {}
+    vi.spyOn(workbenchApi, 'listWorkspaceAgentMembers').mockResolvedValue([])
+    vi.spyOn(workbenchApi, 'listWorkspaceMembers').mockResolvedValue({ items: [], currentUserRole: null })
+    vi.spyOn(workbenchApi, 'listWorkspaceSessions').mockResolvedValue({ items: [], nextCursor: null })
+  })
+
+  const archivedFile = {
+    id: 'file-1',
+    name: '库存明细.xlsx',
+    type: 'XLSX',
+    size: '12 KB',
+    uploadedBy: '林岚',
+    uploadedAt: '2026-09-09 10:00',
+  }
+  const artifact: Artifact = {
+    id: 'artifact-1',
+    name: '季度报告.xlsx',
+    type: 'xlsx',
+    version: 1,
+    size: '20 KB',
+    createdAt: '2026-09-10 09:00',
+    runId: 'run-1',
+    workspaceId: 'ws-team',
+    summary: '季度经营分析。',
+  }
+
+  function archivedWorkspace(overrides: Partial<Workspace> = {}) {
+    return workspace({ status: 'archived', archivedAt: '2026-09-11T00:00:00.000Z', ...overrides })
+  }
+
+  it('shows the read-only alert, hides the new-conversation entry and keeps history readable', async () => {
+    vi.mocked(workbenchApi.listWorkspaceMembers).mockResolvedValue({ items: [], currentUserRole: 'owner' })
+    const { wrapper } = await mountView(archivedWorkspace())
+
+    const alert = wrapper.find('[data-testid="workspace-archived-alert"]')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toContain('该空间已归档，仅保留有权限的只读查看与下载')
+    // 归档执行轨：新对话入口（含视图切换）不渲染。
+    expect(wrapper.find('conversation-starter-stub').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="conversation-view-switch"]').exists()).toBe(false)
+    // 内容本身不隐藏：历史对话仍可读。
+    expect(wrapper.find('[data-testid="workspace-session-history"]').exists()).toBe(true)
+    expect(workbenchApi.listWorkspaceSessions).toHaveBeenCalledWith('ws-team', { limit: 20 })
+  })
+
+  it('uses the archived empty state instead of the add-Agent guidance when the member has no history', async () => {
+    vi.mocked(workbenchApi.listWorkspaceMembers).mockResolvedValue({ items: [], currentUserRole: 'owner' })
+    const { wrapper } = await mountView(archivedWorkspace())
+
+    expect(wrapper.find('[data-testid="session-history-empty-archived"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('请联系负责人添加可用 Agent 成员')
+  })
+
+  it('hides upload entries but keeps shared files visible and readable when archived', async () => {
+    route.query = { tab: 'files' }
+    const { wrapper } = await mountView(archivedWorkspace({ files: [archivedFile] }))
+
+    expect(wrapper.find('[data-testid="workspace-upload"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="workspace-upload-empty"]').exists()).toBe(false)
+    // 文件内容与下载/查看入口不受影响；只隐藏指向新对话的引用入口。
+    expect(wrapper.text()).toContain('库存明细.xlsx')
+    expect(wrapper.text()).not.toContain('引用到对话')
+  })
+
+  it('keeps artifacts visible in an archived workspace', async () => {
+    route.query = { tab: 'artifacts' }
+    const { wrapper } = await mountView(archivedWorkspace(), { artifacts: [artifact] })
+
+    expect(wrapper.text()).toContain('季度报告.xlsx')
+  })
+
+  it('offers 恢复空间 only to the owner and restores after confirmation', async () => {
+    vi.mocked(workbenchApi.listWorkspaceMembers).mockResolvedValue({
+      items: [{ userId: 'u-current', displayName: '周航', role: 'owner', joinedAt: '2026-09-01T00:00:00.000Z' }],
+      currentUserRole: 'owner',
+    })
+    const restore = vi.spyOn(workbenchApi, 'restoreWorkspace').mockResolvedValue({
+      id: 'ws-team',
+      status: 'active',
+      archivedAt: null,
+    })
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const { wrapper } = await mountView(archivedWorkspace(), { ownerName: '周航' })
+
+    const button = wrapper.find('[data-testid="workspace-restore"]')
+    expect(button.exists()).toBe(true)
+    await button.trigger('click')
+    await flushPromises()
+
+    expect(ElMessageBox.confirm).toHaveBeenCalled()
+    expect(restore).toHaveBeenCalledWith('ws-team')
+  })
+
+  it('keeps the read-only alert but hides 恢复空间 from a non-owner member', async () => {
+    vi.mocked(workbenchApi.listWorkspaceMembers).mockResolvedValue({
+      items: [{ userId: 'u-owner', displayName: '林岚', role: 'owner', joinedAt: '2026-09-01T00:00:00.000Z' }],
+      currentUserRole: 'viewer',
+    })
+    const { wrapper } = await mountView(archivedWorkspace())
+
+    expect(wrapper.find('[data-testid="workspace-archived-alert"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="workspace-restore"]').exists()).toBe(false)
+  })
+
+  it('renders no archived alert on an active team space', async () => {
+    vi.mocked(workbenchApi.listWorkspaceMembers).mockResolvedValue({ items: [], currentUserRole: 'owner' })
+    const { wrapper } = await mountView(workspace())
+
+    expect(wrapper.find('[data-testid="workspace-archived-alert"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="workspace-restore"]').exists()).toBe(false)
+    expect(wrapper.find('conversation-starter-stub').exists()).toBe(true)
+  })
+
+  it('shows no archived alert or restore entry on a personal space even if it carried the status (AC-23)', async () => {
+    route.params = { id: 'ws-personal' }
+    const { wrapper } = await mountView(workspace({
+      id: 'ws-personal',
+      type: 'personal',
+      owner: '周航',
+      members: ['周航'],
+      memberCount: 1,
+      status: 'archived',
+    }), { ownerName: '周航' })
+
+    expect(wrapper.find('[data-testid="workspace-archived-alert"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="workspace-restore"]').exists()).toBe(false)
   })
 })

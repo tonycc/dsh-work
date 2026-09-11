@@ -293,4 +293,94 @@ describe('workbench API client', () => {
     }))
     expect(result).toEqual({ id: 'wam-1', removed: true })
   })
+
+  it('lists workspaces without a query string for the default 全部 filter', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: [],
+      meta: { api: 'workbench', adapter: 'postgres', timestamp: new Date().toISOString() },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await workbenchApi.getWorkspaces()
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/workbench/v1/workspaces', expect.objectContaining({ method: 'GET' }))
+  })
+
+  it('serializes the archived workspace filter as ?status=archived', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: [{
+        id: 'ws-team-1',
+        name: '九月复盘',
+        description: '',
+        type: 'team',
+        memberCount: 2,
+        sessionCount: 0,
+        artifactCount: 0,
+        updatedAt: '2026-09-11T00:00:00.000Z',
+        owner: '林岚',
+        members: ['林岚', '周航'],
+        files: [],
+        status: 'archived',
+        archivedAt: '2026-09-11T00:00:00.000Z',
+      }],
+      meta: { api: 'workbench', adapter: 'postgres', timestamp: new Date().toISOString() },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const workspaces = await workbenchApi.getWorkspaces('archived')
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/workbench/v1/workspaces?status=archived',
+      expect.objectContaining({ method: 'GET' }),
+    )
+    expect(workspaces[0]).toMatchObject({ id: 'ws-team-1', status: 'archived' })
+  })
+
+  it('archives and restores a team workspace through the lifecycle endpoints', async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({
+      data: { id: 'ws/team-1', status: 'archived', archivedAt: '2026-09-11T00:00:00.000Z' },
+      meta: { api: 'workbench', adapter: 'postgres', timestamp: new Date().toISOString() },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const archived = await workbenchApi.archiveWorkspace('ws/team-1')
+    await workbenchApi.restoreWorkspace('ws/team-1')
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/workbench/v1/workspaces/ws%2Fteam-1/archive', expect.objectContaining({
+      method: 'POST',
+    }))
+    expect(fetchMock).toHaveBeenCalledWith('/api/workbench/v1/workspaces/ws%2Fteam-1/restore', expect.objectContaining({
+      method: 'POST',
+    }))
+    expect(archived).toEqual({ id: 'ws/team-1', status: 'archived', archivedAt: '2026-09-11T00:00:00.000Z' })
+  })
+
+  it('updates workspace name and clears the description with an explicit null through PATCH', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: {
+        id: 'ws/team-1',
+        name: '供应链协作空间',
+        description: '',
+        type: 'team',
+        memberCount: 2,
+        sessionCount: 0,
+        artifactCount: 0,
+        updatedAt: '2026-09-11T00:00:00.000Z',
+        owner: '林岚',
+        members: ['林岚', '周航'],
+        files: [],
+        status: 'active',
+        archivedAt: null,
+      },
+      meta: { api: 'workbench', adapter: 'postgres', timestamp: new Date().toISOString() },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await workbenchApi.updateWorkspace('ws/team-1', { name: '供应链协作空间', description: null })
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/workbench/v1/workspaces/ws%2Fteam-1', expect.objectContaining({
+      method: 'PATCH',
+      body: JSON.stringify({ name: '供应链协作空间', description: null }),
+    }))
+  })
 })

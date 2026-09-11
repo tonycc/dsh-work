@@ -62,12 +62,38 @@
 - **契约**：`docs/contracts/openapi-workbench.json` 补 `status` 筛选参数与两个新端点（含 409 说明）。
 - **未做/超出本任务**：`PATCH /workspaces/:id`（名称/说明保存）仍缺，属 3-T3 依赖的 1A 遗留；前端归档体验为 3-T3；无新增迁移（复用 `0001` 的 `status`/`archived_at` 与 `audit_events`）。
 
-### 3-T3 前端归档体验 ⬜ 未开始
+### 3-T3 前端归档体验 ✅ 已完成（2026-09-11）
 - 空间列表：`全部／活动／已归档` 紧凑筛选（口径见 3-T2），归档卡片显示「已归档」状态标记；计数文案随筛选变化。
-- 归档空间详情：页头下只读提示条 + 负责人可见「恢复空间」；隐藏新增对话、续写、上传、重试入口（`allowedActions` 由服务端给出，前端不自行推断）。
+- 归档空间详情：页头下只读提示条 + 负责人可见「恢复空间」；隐藏新增对话、续写、上传、重试入口。判定依据是服务端返回的 `status`（归档）与 `currentUserRole`（负责人），前端不按创建者/姓名推断；注意 workspace 级**没有** `allowedActions` 字段（该字段只存在于 Agent 成员对象），不要按它渲染空间级动作。
 - 空间设置弹窗：补名称/说明保存（依赖 `PATCH /workspaces/:id`）、归档二次确认与运行中冲突提示、退出空间提示（贡献保留）。
 - 只读成员与归档态的组合：只读成员在归档空间仍可查看与下载，不显示任何写入口。
 - **验收**：AC-14（前端部分）、AC-16（状态可验证）、AC-23（个人空间不显示上述入口）。
+
+**交付记录（2026-09-11）**：
+- **列表筛选（design §2.1/§6）**：`WorkspacesView.vue` 增加 `全部/活动/已归档` 分段筛选，状态写入路由 `?status=active|archived`（默认「全部」不带参数，沿用 `?view=history` 深链写法）。非「全部」结果单独持有，不覆盖全局 `contentStore.workspaces`——避免筛选把个人空间从其它页面（默认空间、详情回退）移除，守住 AC-23。归档卡片追加 `StatusTag status="warning"`「已归档」且仍可点击进入只读详情；归档空态为「暂无已归档的团队空间」。
+- **归档只读详情（design §2.7/§3）**：`WorkspaceDetailView.vue` 页头下新增只读提示条「该空间已归档，仅保留有权限的只读查看与下载」，`恢复空间` 仅当服务端 `GET /workspaces/:id/members` 的 `currentUserRole === 'owner'` 时渲染。归档时隐藏新对话（`ConversationStarter`）、对话视图切换、上传按钮与「引用到对话」，对话页签固定展示历史；会话、文件、成果与历史仍可读/可下载。`WorkspaceSessionHistory.vue` 增加 `archived` 空态，避免归档时误显示「联系负责人添加可用 Agent 成员」。
+- **会话页续写/重试（design §2.7）**：`ConversationView.vue` 按运行所属团队空间的 `status`（服务端返回）隐藏续写输入（TaskComposer）与两处「重新执行本轮」，改为只读提示；个人空间分支不命中（AC-23）。
+- **空间设置（design §2.7）**：`WorkspaceSettingsDialog.vue` 的名称/说明保存改调 `PATCH /workspaces/:id`，清空说明显式传 `description: null`；移除「保存接口未就绪」占位文案。新增「归档空间」区（负责人、二次确认）与归档态「恢复空间」区；归档被在途任务拒绝时（409 `state_conflict`）在弹窗内行内展示服务端给出的任务数量与「请等待任务完成或先取消任务」。
+- **API 与类型**：`src/api/client.ts` 新增 `updateWorkspace`、`archiveWorkspace`、`restoreWorkspace`，`getWorkspaces(status)` 支持 `?status=` 筛选；`src/types/domain.ts` 收紧 `Workspace.status` 为必填并补 `archivedAt`，新增 `WorkspaceStatus`/`WorkspaceStatusFilter`/`WorkspaceLifecycleResult`/`WorkspaceUpdateInput`。
+- **测试**：新增 `WorkspacesView.test.ts`（7）、`ConversationView.test.ts`（3），扩展 `WorkspaceDetailView.test.ts`（18）、`WorkspaceSettingsDialog.test.ts`（13）、`api/client.test.ts`（21）。关键判别性用例经反证：归档标记、隐藏新对话、`恢复空间` 仅负责人、`description: null`、409 行内提示、会话页归档只读——削弱实现即变红。
+- **未做/超出本任务**：本机无浏览器 e2e（OIDC 允许来源限制，见 1B 任务 §3.1），未运行 `pnpm test:e2e`；无新增迁移。
+- **服务端改动（本工作区一并交付）**：3-T3 依赖的 `PATCH /workspaces/:id`（团队空间名称/说明保存，1A 遗留）由本工作区补齐 —— 路由、`updateWorkspace` 服务方法（空间行锁内复核「活跃 + 负责人」）、OpenAPI 路径与集成用例；无迁移。
+
+
+**评审修复（2026-09-11）**：
+- **筛选 tablist 无键盘支持**（符合性评审 F1，硬伤）：roving tabindex 只让当前项可 Tab，未实现方向键，键盘用户永远切不到「活动/已归档」——违反 §4 与 AC-16。已实现 ArrowLeft/ArrowRight/Home/End + 聚焦选中项，并补键盘用例。
+- **PATCH 空请求体返回 500**（F2）：契约只声明 200/403/422，空 body 与超长名称原先靠文案分类落到 500。新增类型化 422（`requestInvalid`，放在 `authorization-errors.ts`，避免应用服务反向依赖 http 层的 `routeValidationFailed`），并补断言。
+- **前端纵深防御**（F3）：`archived` 筛选结果若意外含个人空间，原先会渲染出来。现仅对「已归档」过滤非团队项（注意「活动」视图里个人空间合法，不能一并过滤——初版就是这样写的，被既有用例当场抓住）。
+- **筛选重复请求**（F4）：点击改路由又直接加载，真实路由下每次切换发两次同参请求。已加同参去重，同时保留点击与深链两条加载路径。
+- **文档机制描述失实**（F5）：原写「写入口隐藏由服务端 `allowedActions` 给出」，但 workspace 级没有该字段（只有 Agent 成员有）；实际依据 `status` + `currentUserRole`。已更正。
+- 另补：PATCH 与归档抢空间行锁的判别性用例（原仅注释声称靠行锁防 TOCTOU）。
+
+**质量评审修复（2026-09-11，写入口审计）**：评审按「归档空间里还有哪些写入口可点」逐项审计，抓出详情页之外的四处遗漏，均已修复并各配判别性用例（削弱实现即变红）：
+- **P1 成员/Agent 管理弹窗仍可点击**：`WorkspaceMemberDialog` 原无 `archived` 概念，归档空间里「添加员工/改角色/添加 Agent/停用/升级/移出/开始对话」全部可点（服务端 403，纯死路）。现按归档隐藏全部写入口，**保留移除成员**（紧急收权，服务端 allowArchived 的治理例外）。注意「移除」原先被写在角色编辑的同一 `template` 里，第一版门禁把它一起藏了——已按治理例外拆出。
+- **P2 全局新对话空间选择器列出归档团队空间**：`ConversationStarter` 现只把「个人空间 + 活动团队空间」交给 composer。
+- **P2 侧栏「删除对话」未按归档禁用**：会话删除属执行轨。判定抽成 `utils/archived-workspaces.ts` 的纯函数（只依赖服务端 `type`/`status`，空间未加载时不误禁用），并补单测（含 AC-23：活跃团队与个人空间仍可删）。
+- **P2 筛选请求失败后仍显示上一个筛选的陈旧卡片**：现失败即清空结果、进入错误态并提供「重试」，且去重记账只在成功后写入（否则失败会被误记为「已加载」而无法原地重试）。
+- **P3/P2 契约与文档**：PATCH 的 `200` 改用共享 `Ok`、名称补 `minLength/maxLength`、去掉未强制执行的 `additionalProperties:false`；JSON `null` 请求体现在显式 422（原为 500）；更正交付记录中「未改服务端」的自相矛盾与 `allowedActions` 的失实描述；`WorkspaceInfoPanel` 的过期注释同步。
 
 ### 3-T4 批次 3 集成验证与 CI 接入 ⬜ 未开始
 - 新增/扩展集成套件：归档读/执行双轨、运行中归档拒绝、并发归档与新开跑、恢复语义、列表筛选与负责人展示。

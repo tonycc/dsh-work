@@ -388,4 +388,28 @@ describe('WorkspaceMemberDialog', () => {
     await flushPromises()
     expect(load).toHaveBeenCalledWith('ws-team')
   })
+
+  it('以归档态打开时隐藏所有成员与 Agent 写入口，但保留紧急撤权', async () => {
+    // design §2.7/§3 + 3-T1 执行轨：归档空间的成员/Agent 变更会被服务端 403，
+    // 渲染出来只会让用户走进死路；但移除成员（紧急收权）必须仍可用。
+    const wrapper = mountDialog({ archived: true })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="member-add-employee"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="member-role-select"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="member-add-agent"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="agent-action-disable"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="agent-action-upgrade"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="agent-action-remove"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="agent-start-conversation"]').exists()).toBe(false)
+    // 治理例外：撤权入口保留。
+    expect(wrapper.findAll('[data-testid="member-remove"]').length).toBeGreaterThan(0)
+  })
+
+  it('非归档（默认）仍渲染写入口，避免把归档门禁误加到正常空间', async () => {
+    const wrapper = mountDialog()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="member-add-employee"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="member-add-agent"]').exists()).toBe(true)
+  })
 })

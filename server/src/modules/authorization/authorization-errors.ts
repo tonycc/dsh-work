@@ -109,3 +109,24 @@ export async function canReadWorkspaceObject(
     throw error
   }
 }
+
+/**
+ * Typed request-validation rejection (HTTP 422). `classifyHttpError` recognises some
+ * wording by regex, so a validation message whose text changes silently becomes a 500;
+ * carrying the status explicitly removes that failure mode, mirroring
+ * `authorizationDenied` for 403. Services outside the HTTP layer use this instead of
+ * importing `routeValidationFailed` from the router (that would invert the layering).
+ */
+export class RequestValidationError extends Error {
+  readonly status = 422
+  readonly code = 'invalid_request'
+
+  constructor(message: string) {
+    super(message)
+    this.name = 'RequestValidationError'
+  }
+}
+
+export function requestInvalid(message: string): RequestValidationError {
+  return new RequestValidationError(message)
+}
