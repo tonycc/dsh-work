@@ -95,11 +95,29 @@
 - **P2 筛选请求失败后仍显示上一个筛选的陈旧卡片**：现失败即清空结果、进入错误态并提供「重试」，且去重记账只在成功后写入（否则失败会被误记为「已加载」而无法原地重试）。
 - **P3/P2 契约与文档**：PATCH 的 `200` 改用共享 `Ok`、名称补 `minLength/maxLength`、去掉未强制执行的 `additionalProperties:false`；JSON `null` 请求体现在显式 422（原为 500）；更正交付记录中「未改服务端」的自相矛盾与 `allowedActions` 的失实描述；`WorkspaceInfoPanel` 的过期注释同步。
 
-### 3-T4 批次 3 集成验证与 CI 接入 ⬜ 未开始
+### 3-T4 批次 3 集成验证与 CI 接入 ✅ 已完成（2026-09-11）
 - 新增/扩展集成套件：归档读/执行双轨、运行中归档拒绝、并发归档与新开跑、恢复语义、列表筛选与负责人展示。
 - 真实 DSH 端到端补一条：归档后历史运行可读、新运行被拒。
 - 新套件按 1A/1B 约定用 `createThrowawayDatabase()`；需要时在 `server/package.json`、根 `package.json`、`.github/workflows/ci.yml` 三处登记。
 - **验收**：批次 3 全部验收项在 CI 门禁内有锚点。
+
+**交付记录（2026-09-11）**：
+
+- **集成覆盖盘点**（要求逐项对照，均已存在且进 CI）：
+  | 要求 | 覆盖位置 |
+  | --- | --- |
+  | 归档读/执行双轨 | `team-workspace-lifecycle-api`（归档只读面 + 执行拒绝）、`team-workspace-authorization`（双轨解析器与门禁）、`team-workspace-sessions-api`/`team-workspace-shared-files-api`（HTTP 读轨） |
+  | 运行中归档拒绝 | `team-workspace-lifecycle-api`（queued/running/cancel_requested 三态 409 + 终态后放行） |
+  | 并发归档与新开跑 | 同上 4 条判别性并发用例（开跑需取行锁、归档先提交不穿透、领取不进入运行、排队遗留收敛） |
+  | 恢复语义 | 同上（清空时间、不恢复已移除成员、不扩大授权） |
+  | 列表筛选与负责人展示 | 同上（`status`/`archivedAt`/当前负责人/三态筛选与不可见空间排除） |
+  | 前端归档体验 | `WorkspacesView`/`WorkspaceDetailView`/`WorkspaceSettingsDialog`/`ConversationStarter`/`ConversationView`/`archived-workspaces` 单测 |
+- **CI 接入**：`test:m5:lifecycle:integration` 已登记于 `server/package.json`、根 `package.json`、`.github/workflows/ci.yml`；批次 3 的验收锚点全部进入质量门。
+- **真实 DSH 端到端（本次新增并实跑通过）**：`scripts/runtime/team-workspace-e2e.ts` 在原有「A 上传 → B 引用运行 → 继续对话」之后追加归档环节，实测 `ok: true`：
+  - 读取轨：归档后现任成员的运行详情、事件流、会话列表、共享文件列表**全部可用**；
+  - 执行轨：归档后新运行**被拒**、`activeRunsAfterDeny = 0`（不落库）。
+  - **注意实测细节**：拒绝文案来自调度前 `authorizeRuntime` 的成员/空间校验（`工作空间不存在、已归档或当前用户不是成员`），而非 3-T2 在 `createRun` 内新增的 typed `工作空间已归档，不能创建或继续执行任务`——后者是并发穿透场景的第二道守卫。文档不要把它写成主路径。
+- **说明**：该 e2e 依赖本机真实 DSH 运行时（兼容档 `legacy-0.1.1-rc.2`），属人工/环境验证，**未纳入 CI**（CI 无 DSH 运行时）；批次 3 的 CI 锚点是上面的集成与前端套件。
 
 ### 3-T5 文档与退出条件收尾 ⬜ 未开始
 - 更新方案 §6.4/§6.5/§10、设计 §2.1/§2.7 与 handoff，记录归档语义的最终口径与实现位置。

@@ -164,8 +164,47 @@ try {
       from tool_audit_logs where tenant_id = ${tenantId} and run_id = ${started.id}
   `
 
+  // --- 3-T4：归档后「历史可读、新运行被拒」（真实 DSH 侧的读/执行双轨） ---
+  // 归档入口是 3-T2 的 API，这里直接落库以聚焦授权轨本身；随后用真实服务验证两侧。
+  await database`
+    update workspaces set status = 'archived', archived_at = now()
+     where tenant_id = ${tenantId} and id = ${workspaceId}
+  `
+  const archivedRead = {
+    // 读取轨：现任成员仍可读取历史运行详情与正文。
+    runDetailReadable: Boolean(await conversations.getTask(started.id, memberId)),
+    eventsReadable: (await runs.readEvents(tenantId, started.id)).length > 0,
+    sessionsListable: (await conversations.listWorkspaceSessions({
+      workspaceId,
+      actorUserId: memberId,
+      limit: 5,
+    })).items.length > 0,
+    filesListable: (await content.listWorkspaceFiles({
+      workspaceId,
+      actorUserId: memberId,
+      limit: 5,
+    })).items.length > 0,
+  }
+  // 执行轨：归档后新运行必须被拒绝（不落库）。
+  let archivedExecuteDenied = false
+  let archivedDenyReason = ''
+  try {
+    await orchestration.startRun({
+      userId: memberId,
+      sessionId: session.id,
+      prompt: '归档后不应再执行。',
+      idempotencyKey: `e2e-${suffix}-archived`,
+    })
+  } catch (error) {
+    archivedExecuteDenied = true
+    archivedDenyReason = error instanceof Error ? error.message : String(error)
+  }
+  const archivedRunsAfterDeny = (await runs.listActiveRunsForWorkspaceUser(tenantId, workspaceId, memberId)).length
+
   console.log(JSON.stringify({
-    ok: finished === 'succeeded' && secondFinished === 'succeeded',
+    ok: finished === 'succeeded' && secondFinished === 'succeeded'
+      && archivedRead.runDetailReadable && archivedRead.eventsReadable
+      && archivedExecuteDenied && archivedRunsAfterDeny === 0,
     dshVersion: installation.version,
     workspaceId,
     uploadedFileId: file.id,
@@ -178,6 +217,12 @@ try {
       eventTypes: [...new Set(events.map(event => event.eventType))],
     },
     secondRun: { runId: second.id, status: secondFinished, assistantTextIncludesMarker: secondText.includes(marker) },
+    archivedWorkspace: {
+      readTrack: archivedRead,
+      executeTrack: { denied: archivedExecuteDenied, reason: archivedDenyReason },
+      activeRunsAfterDeny: archivedRunsAfterDeny,
+      note: '3-T4：归档=只读保留。读取轨（历史运行/事件/会话/文件）对现任成员保持可用；执行轨（新运行）必须被拒且不落库。',
+    },
     sourceInformationObserved: {
       toolEventCount: toolEvents.length,
       toolEventMetadataKeys: toolMetadataKeys,
