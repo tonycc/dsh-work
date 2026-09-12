@@ -23,10 +23,12 @@ import type {
   WorkspaceActivityItem,
   WorkspaceAgentMember,
   WorkspaceFile,
+  WorkspaceFileVersion,
   WorkspaceMember,
   WorkspaceNotificationState,
 } from '@/types/domain'
 import ConversationStarter from '@/components/ConversationStarter.vue'
+import WorkspaceFileVersionsDialog from '@/components/WorkspaceFileVersionsDialog.vue'
 import WorkspaceMemberDialog from '@/components/WorkspaceMemberDialog.vue'
 import WorkspaceSessionHistory from '@/components/WorkspaceSessionHistory.vue'
 import WorkspaceSettingsDialog from '@/components/WorkspaceSettingsDialog.vue'
@@ -34,6 +36,7 @@ import { WorkspaceInfoPanel, describeWorkspaceActivity } from '@dsh-work/workben
 import { downloadArtifactFile, notifyActionFailure } from '@/utils/feedback'
 import { resolveCurrentUserRole } from '@/utils/member-roles'
 import { buildActivityDisplayItems } from '@/utils/workspace-activity'
+import { formatFileVersionLabel, toVersionFileReference } from '@/utils/workspace-file-versions'
 
 type WorkspaceTab = 'conversation' | 'files' | 'artifacts'
 /** 对话页签内的视图：新对话（默认）/ 历史对话（design §2.2）。 */
@@ -60,6 +63,23 @@ const panelCollapsed = ref(false)
 const mobileInfoOpen = ref(false)
 const uploadInput = ref<HTMLInputElement>()
 const uploading = ref(false)
+
+/**
+ * TW-07 / 3-T9 文件版本 UI。版本列表与历史下载属读取轨（归档空间仍可用）；上传新
+ * 版本属执行轨（归档与只读成员都没有入口，服务端同样 403）。个人空间不渲染任何
+ * 版本 UI，也不发版本请求（AC-23）。
+ */
+const versionDialogOpen = ref(false)
+const versionDialogFile = ref<{ logicalFileId: string; name: string } | null>(null)
+/** 触发「版本」入口的元素：对话框关闭后把焦点还给它（design §4）。 */
+const versionTrigger = ref<HTMLElement | null>(null)
+const versionUploadInput = ref<HTMLInputElement>()
+/** 已经点开上传、等待用户选文件的逻辑文件 id（`change` 事件里消费）。 */
+const pendingVersionUploadId = ref<string | null>(null)
+/** 正在上传的逻辑文件 id（用于行内 loading，直到请求结束）。 */
+const versionUploadingId = ref<string | null>(null)
+/** 最近一次上传失败的逻辑文件与原因；行内说明「原版本未受影响」。 */
+const versionUploadError = ref<{ logicalFileId: string; message: string } | null>(null)
 
 const memberDialogOpen = ref(false)
 const settingsDialogOpen = ref(false)
@@ -173,6 +193,25 @@ const workspaceArtifacts = computed(() =>
 )
 /** 负责人判定来自服务端角色，不在前端按创建者猜测（负责人-only 动作的唯一依据）。 */
 const isOwner = computed(() => currentUserRole.value === 'owner')
+/**
+ * 上传新版本（执行轨）：归档空间隐藏入口；只读成员（viewer）不给入口；角色**未知**
+ * （名册请求失败，`currentUserRole === null`）时也不给入口——宁可漏开不可误开，
+ * 与 `WorkspaceInfoPanel` 对 `currentUserRole=null` 的既有口径一致。服务端 403 仍是
+ * 最终兜底（评审 P2 修复后注释与实现对齐）。
+ */
+const canUploadFileVersions = computed(() =>
+  isTeam.value
+  && !isArchived.value
+  // 角色未解析出来（名册请求失败）时**不给**入口：与「宁可漏开不可误开」及
+  // WorkspaceInfoPanel 对 currentUserRole=null 的既有口径一致，避免给只读成员
+  // 一个注定 403 的假入口（评审 P2）。
+  && currentUserRole.value !== null
+  && currentUserRole.value !== 'viewer')
+/**
+ * 「引用此版本」与「引用到对话」同口径：归档空间无法发起新对话，因此不渲染引用
+ * 入口（版本列表与下载仍保留）。
+ */
+const canReferenceFileVersion = computed(() => isTeam.value && !isArchived.value)
 /** 动态文件名的解析来源：已加载的空间文件列表（面板与抽屉共用）。 */
 const activityFiles = computed(() => workspace.value?.files ?? [])
 const activitySummaryItems = computed(() => buildActivityDisplayItems(activitySummary.value, activityFiles.value))
@@ -284,6 +323,114 @@ async function onUploadSelected(event: Event) {
   } finally {
     uploading.value = false
     input.value = ''
+  }
+}
+
+/** 文件行是否渲染 TW-07 版本 UI：仅团队逻辑文件（个人空间恒 false，AC-23）。 */
+function showFileVersions(file: WorkspaceFile) {
+  return isTeam.value && Boolean(file.logicalFileId)
+}
+
+/**
+ * 文件行的版本标记文案：只有服务端真的给出正整数版本号时才渲染（旧夹具/边界数据
+ * 可能只有 logicalFileId 而没有 versionNo，否则会出现空白徽标——评审 nit）。
+ */
+function fileVersionLabel(file: WorkspaceFile) {
+  if (!showFileVersions(file)) return ''
+  return formatFileVersionLabel(file)
+}
+
+/** 打开版本列表（读取轨）：归档空间仍可查看历史版本（服务端 allowArchived）。 */
+function openVersionDialog(file: WorkspaceFile, event?: MouseEvent) {
+  if (!file.logicalFileId) return
+  versionTrigger.value = (event?.currentTarget as HTMLElement | null) ?? null
+  versionDialogFile.value = { logicalFileId: file.logicalFileId, name: file.name }
+  versionDialogOpen.value = true
+}
+
+/** 对话框关闭后把焦点还给「版本」触发按钮（design §4）。 */
+watch(versionDialogOpen, (open) => {
+  if (open) return
+  void nextTick(() => {
+    const trigger = versionTrigger.value
+    if (trigger?.isConnected) trigger.focus()
+  })
+})
+
+/**
+ * 按版本引用到新对话：`ConversationStarter.useWorkspaceFile(file)` 用传入对象的
+ * `id` 作为引用的不可变对象 id，因此这里必须传该版本的 `fileId`
+ * （`toVersionFileReference`），历史 Run 才能追溯实际输入版本。
+ */
+function referenceFileVersion(version: WorkspaceFileVersion) {
+  if (!canReferenceFileVersion.value) return
+  versionDialogOpen.value = false
+  useWorkspaceFile(toVersionFileReference(version))
+}
+
+/** 「上传新版本」入口（执行轨）：先选文件，再询问可选的更新说明。 */
+function uploadNewVersion(file: WorkspaceFile) {
+  if (!canUploadFileVersions.value || versionUploadingId.value || !file.logicalFileId) return
+  pendingVersionUploadId.value = file.logicalFileId
+  versionUploadInput.value?.click()
+}
+
+/**
+ * 新版本上传：更新说明 ≤500 且留空时不发送 `X-File-Note`（服务端存 `null`）。
+ * 只有上传成功才刷新文件列表，使服务端判定的新版本成为当前版本；失败时保留原
+ * 有列表与 `current`，只在行内说明「原版本未受影响」（AC-13：解析失败不破坏旧版）。
+ */
+async function onVersionUploadSelected(event: Event) {
+  const input = event.target as HTMLInputElement
+  const selected = input.files?.[0]
+  // 无论结果如何都清空 input，否则同一个文件无法再次触发 change。
+  input.value = ''
+  const logicalFileId = pendingVersionUploadId.value
+  pendingVersionUploadId.value = null
+  const current = workspace.value
+  if (!selected || !logicalFileId || !current || !canUploadFileVersions.value) return
+
+  let note = ''
+  try {
+    const result = await ElMessageBox.prompt(
+      '可填写本次更新说明，便于团队识别升级内容；留空则不记录说明。',
+      '上传新版本',
+      {
+        confirmButtonText: '上传',
+        cancelButtonText: '取消',
+        inputType: 'textarea',
+        inputPlaceholder: '更新说明（可选，最多 500 字）',
+        inputValue: '',
+        inputValidator: (value: string) => !value || value.length <= 500 || '更新说明不能超过 500 字',
+      },
+    )
+    note = String(result.value ?? '')
+  } catch {
+    // 用户取消：不发起上传，也不改变任何既有状态。
+    return
+  }
+
+  versionUploadError.value = null
+  versionUploadingId.value = logicalFileId
+  let uploaded: Awaited<ReturnType<typeof workbenchApi.uploadWorkspaceFileVersion>>
+  try {
+    uploaded = await workbenchApi.uploadWorkspaceFileVersion(current.id, logicalFileId, selected, note)
+  } catch (error) {
+    versionUploadingId.value = null
+    versionUploadError.value = {
+      logicalFileId,
+      message: error instanceof Error ? error.message : '上传新版本失败',
+    }
+    notifyActionFailure('上传新版本', `工作空间“${current.name}”中的文件`, error, '修正文件内容或更新说明后重新上传；原版本仍可继续使用。')
+    return
+  }
+  versionUploadingId.value = null
+  ElMessage.success(`已上传“${selected.name}”的 V${uploaded.versionNo} 版本`)
+  try {
+    // 上传已成功，刷新失败不能反过来把这次上传说成失败。
+    await contentStore.refresh()
+  } catch (error) {
+    notifyActionFailure('刷新文件列表', `工作空间“${current.name}”`, error, '刷新页面查看最新版本。')
   }
 }
 
@@ -579,6 +726,12 @@ watch(workspace, (value) => {
   activityDrawerError.value = false
   activityDrawerLoading.value = false
   activityDrawerLoadingMore.value = false
+  versionDialogOpen.value = false
+  versionDialogFile.value = null
+  versionTrigger.value = null
+  pendingVersionUploadId.value = null
+  versionUploadingId.value = null
+  versionUploadError.value = null
   if (value?.type === 'team') {
     void loadAgentMembers(value.id)
     void loadWorkspaceMembers(value.id)
@@ -761,17 +914,62 @@ watch(workspace, (value) => {
               上传文件
             </el-button>
             <input ref="uploadInput" class="visually-hidden" type="file" accept=".pdf,.docx,.xlsx,.csv,.txt,.md" @change="onUploadSelected" />
+            <!-- 执行轨：上传新版本入口只在「团队 + 活跃 + 非只读成员」时存在。 -->
+            <input
+              v-if="canUploadFileVersions"
+              ref="versionUploadInput"
+              data-testid="workspace-file-upload-input"
+              class="visually-hidden"
+              type="file"
+              accept=".pdf,.docx,.xlsx,.csv,.txt,.md"
+              @change="onVersionUploadSelected"
+            />
           </header>
 
           <div v-if="workspace.files.length" class="workspace-file-list panel">
             <article v-for="file in workspace.files" :key="file.id" class="workspace-file-row">
               <span class="workspace-file-row__icon"><el-icon><Files /></el-icon></span>
               <div class="workspace-file-row__copy">
-                <strong>{{ file.name }}</strong>
-                <span>{{ file.size }} · {{ file.uploadedBy }}上传 · {{ file.uploadedAt }}</span>
+                <strong class="workspace-file-row__name">
+                  <span class="workspace-file-row__name-text">{{ file.name }}</span>
+                  <span
+                    v-if="fileVersionLabel(file)"
+                    data-testid="workspace-file-version"
+                    class="workspace-file-row__version"
+                  >{{ fileVersionLabel(file) }}</span>
+                </strong>
+                <span class="workspace-file-row__meta">{{ file.size }} · {{ file.uploadedBy }}上传 · {{ file.uploadedAt }}</span>
+                <span
+                  v-if="versionUploadError && versionUploadError.logicalFileId === file.logicalFileId"
+                  data-testid="workspace-file-upload-error"
+                  class="workspace-file-row__error"
+                  role="alert"
+                >
+                  上传新版本失败：{{ versionUploadError.message }}。原版本未受影响，仍显示 {{ formatFileVersionLabel(file) }}。
+                </span>
               </div>
               <span class="workspace-file-row__type">{{ file.type }}</span>
-              <el-button v-if="!isArchived" plain @click="useWorkspaceFile(file)">引用到对话</el-button>
+              <div class="workspace-file-row__actions">
+                <el-button
+                  v-if="showFileVersions(file)"
+                  data-testid="workspace-file-versions"
+                  plain
+                  @click="openVersionDialog(file, $event)"
+                >
+                  版本
+                </el-button>
+                <el-button
+                  v-if="canUploadFileVersions && file.logicalFileId"
+                  data-testid="workspace-file-upload-version"
+                  plain
+                  :loading="versionUploadingId === file.logicalFileId"
+                  :disabled="versionUploadingId !== null"
+                  @click="uploadNewVersion(file)"
+                >
+                  上传新版本
+                </el-button>
+                <el-button v-if="!isArchived" plain @click="useWorkspaceFile(file)">引用到对话</el-button>
+              </div>
             </article>
           </div>
 
@@ -987,6 +1185,20 @@ watch(workspace, (value) => {
         @archive-changed="onWorkspaceStatusChanged"
         @transferred="refreshTeamMembers"
         @exited="router.push('/workspaces')"
+      />
+
+      <!--
+        版本列表与历史下载属读取轨：归档空间仍可打开；「引用此版本」随执行轨
+        （归档隐藏）。个人空间不渲染本组件，因此没有任何版本请求路径（AC-23）。
+      -->
+      <WorkspaceFileVersionsDialog
+        v-if="versionDialogFile"
+        v-model:open="versionDialogOpen"
+        :workspace-id="workspace.id"
+        :logical-file-id="versionDialogFile.logicalFileId"
+        :file-name="versionDialogFile.name"
+        :can-reference="canReferenceFileVersion"
+        @reference="referenceFileVersion"
       />
     </template>
 
@@ -1344,10 +1556,52 @@ watch(workspace, (value) => {
   white-space: nowrap;
 }
 
-.workspace-file-row__copy span {
+.workspace-file-row__meta {
   margin-top: 5px;
   color: #909691;
   font-size: var(--dsh-font-size-micro);
+}
+
+.workspace-file-row__name {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  overflow: hidden;
+}
+
+.workspace-file-row__name-text {
+  overflow: hidden;
+  min-width: 0;
+  color: #303530;
+  font-size: var(--dsh-font-size-caption);
+  font-weight: 630;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-file-row__version {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: #155e4b;
+  background: #e7f4ee;
+  font-size: var(--dsh-font-size-micro);
+  font-weight: 650;
+}
+
+.workspace-file-row__error {
+  overflow-wrap: anywhere;
+  color: #8c3226;
+  font-size: var(--dsh-font-size-micro);
+  line-height: 1.6;
+}
+
+.workspace-file-row__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .workspace-file-row__type {
@@ -1567,9 +1821,10 @@ watch(workspace, (value) => {
     display: none;
   }
 
-  .workspace-file-row .el-button {
+  .workspace-file-row__actions {
     grid-column: 2 / -1;
-    justify-self: start;
+    flex-wrap: wrap;
+    justify-content: flex-start;
   }
 
   .workspace-artifact-grid {

@@ -113,6 +113,59 @@ export interface WorkspaceFile {
    * `objectId` 是逻辑文件 id，前端据此从已加载文件列表解析名称，不把它当名称显示。
    */
   logicalFileId?: string
+  /**
+   * 文件列表当前展示的版本号（TW-07：最高解析成功版本，无成功版本时退化为最高
+   * 版本）。个人空间文件没有逻辑文件与版本，因此保持可选；缺失时前端不渲染版本 UI。
+   */
+  versionNo?: number
+  /** 逻辑文件下的版本总数（含失败版本，用于追溯）。 */
+  versionCount?: number
+}
+
+/** 版本解析状态（迁移 0025 的 CHECK 闭合集合，TW-07 契约）。 */
+export type WorkspaceFileVersionParseStatus = 'pending' | 'succeeded' | 'failed'
+
+/** 一个逻辑文件下的单个不可变版本（`GET …/files/:logicalFileId/versions`）。 */
+export interface WorkspaceFileVersion {
+  versionNo: number
+  /** 不可变对象 id：下载与「引用此版本」都必须固定到它，而不是逻辑文件 id。 */
+  fileId: string
+  logicalFileId: string
+  name: string
+  type: string
+  size: string
+  /** 上传新版本时填写的更新说明；未填写为 `null`。 */
+  note: string | null
+  uploadedBy: string
+  uploadedAt: string
+  scanStatus: string
+  parseStatus: WorkspaceFileVersionParseStatus
+  /** 文件列表当前展示的版本（服务端判定，前端不自行比较）。 */
+  current: boolean
+  /** 是否可下载；一律以服务端为准，前端不按扫描/解析状态自行推断。 */
+  canDownload: boolean
+}
+
+export interface WorkspaceFileVersionPage {
+  logicalFileId: string
+  name: string
+  status: string
+  latestVersionNo: number
+  versionCount: number
+  items: WorkspaceFileVersion[]
+}
+
+/** `POST …/files/:logicalFileId/versions` 的 201 返回：新版本的最小摘要。 */
+export interface UploadedWorkspaceFileVersion {
+  id: string
+  logicalFileId: string
+  versionNo: number
+  name: string
+  type: string
+  size: string
+  uploadedBy: string
+  uploadedAt: string
+  extractionStatus: 'succeeded'
 }
 
 export interface Workspace {

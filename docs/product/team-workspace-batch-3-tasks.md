@@ -1,7 +1,7 @@
 # 批次 3 任务拆分与实施约束
 
 **状态：** 进入批次 3 实施的任务边界（2026-09-11）。产品语义以 `team-workspace-plan.md` 为准，界面以 `team-workspace-design.md` 为准，本文件只拆任务、定验收与顺序。
-**批次 3 的范围是 TW-06／TW-07／TW-08 三件事**（方案 §7）：TW-06（3-T1…3-T5）与 **TW-07（3-T6）** 已交付；**TW-08 后端（3-T7）与前端（3-T8）均已完成（各两轮评审已修）**。批次 3 的三项交付（TW-06／TW-07／TW-08）的**既定退出条件已满足**；**仍遗留** TW-07 的前端版本 UI（文件页的上传新版本入口与版本列表，3-T6 明确划到后续，不在批次退出条件内）。
+**批次 3 的范围是 TW-06／TW-07／TW-08 三件事**（方案 §7）：TW-06（3-T1…3-T5）、TW-07（后端 3-T6 + 前端版本 UI 3-T9）、TW-08（后端 3-T7 + 前端 3-T8）**全部交付**，每个任务均经规格符合性与对抗性质量两轮评审并逐条反证。批次 3 的**既定退出条件已满足**，TW-07 至此端到端可用。
 **依赖：** 批次 1A（授权与撤权机制）、1B（团队资料与本人对话、文件与结果读取收权、可见统计基线）已交付。
 
 ## 范围决定（2026-09-11 产品确认）
@@ -307,6 +307,56 @@
 - **本轮回归**：`pnpm test:m5:frontend` workbench **19 files / 197 passed**、admin 6 files / 18 passed；`pnpm typecheck`、`pnpm lint`、`pnpm verify` 通过。
 - **提交与 CI（2026-09-12）**：`54fde3e`（`feat(workbench-web),docs: 团队动态与通知前端（TW-08 / 3-T8）`）已推送 `main`，CI `M6 quality gate`（run `34668358547`）通过。
 
+### 3-T9 TW-07 前端版本 UI（批次 3 补遗）✅ 已完成（2026-09-12，两轮评审已修）
+- **目标**：让 TW-07 的版本能力在员工端真正可用——文件页显示版本、上传新版本、查看版本列表（含失败版本）、下载历史版本、按所选版本引用到对话。3-T6 只交付了后端，本条是 TW-07 的收尾。
+- **后端契约（3-T6 已交付，本任务不改后端）**：
+  - `GET /workspaces/:id/files` 的每一项已带 `logicalFileId`/`versionNo`/`versionCount`（列表展示的是最高**解析成功**版本）。
+  - `GET /workspaces/:id/files/:logicalFileId/versions` → `{ logicalFileId, name, status, latestVersionNo, versionCount, items: [{ versionNo, fileId, logicalFileId, name, type, size, note, uploadedBy, uploadedAt, scanStatus, parseStatus, current, canDownload }] }`（版本号倒序，含失败版本；`current` = 文件列表当前展示的版本）。
+  - `POST /workspaces/:id/files/:logicalFileId/versions`，头部 `X-File-Name`（必填，需 `encodeURIComponent`）与 `X-File-Note`（可选，≤500 字符），body 为文件字节；201 返回新版本（含 `versionNo`）。
+  - `GET /workspaces/:id/files/:logicalFileId/versions/:versionNo/download` → 二进制；不可下载时服务端拒绝。
+- **轨道与门禁**：上传新版本与「按版本引用到对话」都属**执行轨**（归档隐藏入口、只读成员不给上传入口——服务端对 viewer 返回 403）；版本列表与历史版本下载属**读取轨**（归档空间对现任成员仍可用，失权成员拒绝）。
+- **AC-23**：个人空间不渲染任何版本 UI，也不发版本请求。
+- **失败版本（AC-13）**：照常列出并标注解析状态（失败/待解析），**不提供**「引用到对话」；是否可下载一律以服务端 `canDownload` 为准，前端不自行推断。
+- **按版本引用**：`ConversationStarter.useWorkspaceFile(file)` 已经用传入对象的 `id` 作为引用 id，因此「引用此版本」只需把该版本的 `fileId` 作为 `id` 传入（引用最新有效版本的默认路径行为不变）；历史 Run 由此可追溯到实际输入版本。**归档空间隐藏该入口**（与 design §2.7 把「引用到对话」列为归档必须隐藏的执行轨入口一致：归档不渲染 `ConversationStarter`，引用会落成空操作 + 假成功提示）。
+- **状态**：加载中骨架、无版本空态、失败就地错误 + 重试（重试真的重新请求）；上传失败不改变已有版本与 `current` 标记。
+- **测试**：判别性用例至少覆盖——文件行显示版本号与版本数；上传新版本调用契约（头部编码、note 上限、成功后刷新）；归档隐藏上传入口但保留版本列表与下载；viewer 不给上传入口；归档空间隐藏上传与引用入口、但保留版本列表与历史版本下载（**原写「归档仍可引用」是任务书自相矛盾，已按 design §2.7 更正**）；失败版本列出但不可引用、下载按 `canDownload`；个人空间零请求；解析失败上传的错误态；「引用此版本」传入的是该版本的 `fileId`。
+- **不在本任务内**：任何后端改动；AC-29 规模基线重测。
+
+**交付记录（2026-09-12，前端实现；两轮评审见下）**：
+
+- **文件**：新增 `apps/workbench-web/src/components/WorkspaceFileVersionsDialog.vue`（版本列表对话框）与 `apps/workbench-web/src/utils/workspace-file-versions.ts`（`describeVersionParseStatus` / `canReferenceVersion` / `toVersionFileReference` / `formatFileVersionLabel`，纯函数）；`src/api/client.ts` 增加 `listWorkspaceFileVersions` / `uploadWorkspaceFileVersion` / `downloadWorkspaceFileVersion`，`src/types/domain.ts` 补版本 DTO 与 `WorkspaceFile.versionNo?/versionCount?`；`src/views/WorkspaceDetailView.vue` 接入文件行版本徽标、行级「版本」入口（读取轨）与「上传新版本」入口（执行轨）。
+- **UI 选型**：版本列表用 `el-dialog`（单个逻辑文件的从属明细，与全局「全部动态」抽屉分层），复用既有弹窗规范（640px 自适应、自定义 header、关闭按钮 `aria-label`）；焦点恢复沿用 `watch(open)` + `isConnected` 守卫。
+- **上传新版本**：入口条件 `isTeam && !isArchived && 角色已知且非 viewer`；选文件后用 `ElMessageBox.prompt` 询问可选更新说明（`inputValidator` ≤500），空说明**不发** `X-File-Note`（服务端存 `null`）；**只有成功才 `contentStore.refresh()`**，失败时保留原列表与 `current`，仅在行内 `role="alert"` 说明「原版本未受影响，仍显示 V{n}」。
+- **版本列表**：按服务端顺序列出全部版本（含失败/待解析），显示版本号、`current` 标记、解析状态、大小/上传人/时间/更新说明；「下载」只在 `canDownload` 为真时渲染（否则显示文案「不可下载」）；「引用此版本」只在「可下载 **且** 解析成功」时渲染，失败版本永不进入新引用（AC-13 可追溯但不误导）。请求带世代号 + `(workspaceId, logicalFileId)` 双比对，切文件/关弹窗/切空间的晚到响应一律丢弃。
+- **按版本引用**：`emit('reference', version)` → `useWorkspaceFile(toVersionFileReference(version))`，其中 `id = version.fileId`（不可变对象 id），因此历史 Run 可追溯到实际输入版本；默认「引用到对话」路径（最新展示版本）未改动。
+- **测试（实现时）**：`pnpm test:m5:frontend` workbench **21 files / 224 passed**（基线 19/197）、admin 6/18；`pnpm typecheck`、`pnpm lint` 通过。实现代理做了 **15 项反证**（版本总数、文件名编码、空说明不发头部、归档门禁、viewer 门禁、失败版本可引用、下载 gating、引用用 `fileId`、个人空间零请求与「人为发一次请求」证明断言有牙齿、重试/空态/骨架、`current` 标注、失败不刷新、成功必刷新），削弱后逐条变红并还原。
+- **未能验证（实现时）**：真实浏览器的 Esc/遮罩关闭、真实文件选择器与上传进度外观（本机 e2e 受 OIDC 允许来源限制）；上传 loading 无专门判别性用例（mock 即时 resolve，请求契约由客户端用例锁定）。
+- **规格冲突的更正（实现代理提出，父代理核对后采纳）**：任务书原文要求「归档空间『引用此版本』仍可用」，与 design §2.7（「引用到对话」属归档必须隐藏的执行轨入口）及 3-T3 既有断言冲突；且归档不渲染 `ConversationStarter`，引用会落成空操作 + 「已带入新对话」的假成功提示。现实现为**归档同时隐藏上传与引用入口**，保留版本列表与历史版本下载，并加断言；任务书三处已按此更正。
+
+**对抗性质量评审与修复（2026-09-12）**：
+
+- **结论**：**PASS with required fixes**（1 × P1、3 × P2、3 × nit）。评审在 `/tmp` 副本中独立复现，未改动工作树；复核为干净的方面包括上传失败/成功的状态真实性（409/422/403 全部 `refresh=0`、无成功提示、行仍显示旧版本）、头部编码（`%`/`%25`/`+`/`&`/`#`/空格/引号/换行/NUL/emoji/中文/10k 全部可回解）、恶意列表数据（`canDownload:false` 无按钮且不可引用、越界状态文案、3 个 `current` 不崩、500 个版本 ~131ms 渲染）、引用路径、归档/个人空间门禁、焦点恢复与 `aria-label`。
+- **P1（已修）切换逻辑文件残留上一个文件的版本**：宿主关闭对话框时仍保留 `logicalFileId`，组件实例被复用；`loadVersions` 不清空 `versions`，且骨架门是 `loading && !versions.length`，于是「关闭 A → 打开 B」会**把 A 的版本历史渲染在 B 的文件名之下**，行内「下载」还会用 A 的版本号请求 B（评审实测 `[["ws-team","w-B",7]]`）。修复：打开/切换/关闭时先递增世代号并清空 `versions`/`error`/`loading`，另在 `onBeforeUnmount` 作废在途请求。新增判别性用例（切文件后立即断言无 `V7`、且下载调用是 B 的 `logicalFileId` + 正确版本号），**反证**：还原为不清空即红。
+- **P2（已修）关闭/卸载后仍弹失败提示**：世代号只看 seq/空间/文件，不看 `open` 与存活状态。修复同上一并解决（关闭即递增世代号 + 卸载钩子）。新增用例断言关闭后拒绝的请求既不写状态也不调 `notifyActionFailure`，**反证**：去掉清空/递增即红。
+- **P2（已修）角色未知时仍渲染上传入口**：名册请求失败 → `currentUserRole` 为 `null`，而 `!== 'viewer'` 为真，于是给只读成员一个注定 403 的假入口并真的发出请求（评审实测 `VIEWER_UNKNOWN_POST calls=1`）。修复：**角色未知不给入口**（与 `WorkspaceInfoPanel` 对 `currentUserRole=null` 的既有「宁可漏开不可误开」口径一致）；读取轨的「版本」入口不受影响。新增用例，**反证**：还原判定即红。
+- **P2（已修）更新说明截断可抛 `URIError`**：`trim().slice(0, 500)` 会把代理对劈开（`'a'*499 + '😀'`），或让恰好 500 长度的孤立半区通过校验，`encodeURIComponent` 随即抛 `URIError: URI malformed`。修复：新增 `clampFileNote`，按**码点**累加截断到 UTF-16 长度 ≤500，并剔除孤立代理半区。新增用例（三种边界 + 全程无孤立半区），**反证**：还原为 `slice(0,500)` 即红。
+- **nit（已修）空版本徽标**：只有 `logicalFileId` 而没有 `versionNo` 时会渲染空白徽标；改为按格式化后的文案判空。新增用例，**反证**：还原判定即红。
+- **nit（已修）对话框可访问名称不含文件名**：Element Plus 在传 `title` 时只写死 `aria-label='文件版本'`（`dialog.vue:75`），两个文件的版本弹窗对屏幕阅读器完全同名。修复：**不传 `title`**，改为把 `:id="titleId"` 放在同时包含「文件版本」与文件名的头部元素上，让 Element Plus 走 `aria-labelledby` 分支（`dialog.vue:76`）；两条既有/新增用例都断言可访问名称含文件名，**反证**：加回 `title` 即红。
+- **nit（记录，不修）低对比度小字**：`#8b918c`/`#909691` 在白底约 3.0–3.2:1，低于 WCAG AA 4.5:1；这是**既有设计系统口径**（同色在仓库内有 10 处使用），本任务不单独改动色板，作为可访问性技术债记录。
+- **潜在（记录，不修；非本任务 diff）**：服务端 `content-routes.ts` 对更新说明做 `decodeURIComponent(...).slice(0, 500)`，若上游送来 500 长度且以代理对开头的字符串，仍可能在服务端二次截断出孤立半区（PostgreSQL 会存成替换字符 U+FFFD）。本任务客户端修复后**已无法从员工端触发**；作为服务端小项记录，留给后续。
+- **本轮回归**：`pnpm test:m5:frontend` workbench **21 files / 231 passed**、admin 6 files / 18 passed；`pnpm typecheck`、`pnpm lint`、`pnpm verify` 通过。
+
+**规格符合性评审与修复（2026-09-12）**：
+
+- **结论**：**符合**。10 项要求 + TW-07/AC-13/AC-14/AC-23 全部通过，最终树无阻断缺陷；评审用自己的探针独立复验了修复轮（含切文件残影、角色未知入口、空徽标、代理对截断），并确认实现者的 15 项反证所对应的行为。评审同时澄清一件事：它在 R0（修复前）独立发现的问题与质量评审重合，最终结论以 R1（修复后）为准。
+- **F1（nit，已修）越界版本号渲染指数**：`Number.isInteger(1e21)` 为真，会渲染 `V1e+21`/`共 1e+21 个版本`；服务端 `version_no` 是 PostgreSQL integer（≤2147483647），真实后端不可达，但契约外的脏数据不该上屏。修复：改用 `Number.isSafeInteger` + 服务端 integer 上限（`isServerVersionNumber`）。新增边界用例（`1e21`/`MAX_SAFE_INTEGER+2`/`2147483648`/`0`/`-1`/`2.5`/`Infinity`/字符串，以及上界 `2147483647` 仍渲染），**反证**：还原为 `Number.isInteger` 即红。
+- **F2（nit，已修）注释与实现不一致**：`canUploadFileVersions` 的 doc 仍写「角色未知时由服务端兜底拒绝」，与实现（未知即不给入口）矛盾。已改为与实现一致的说明。
+- **F3（nit，记录不修）低对比度小字**：与质量评审同一项，属既有设计系统色板，作为可访问性技术债记录，本任务不改色板。
+- **F4（nit，已修）焦点恢复用例可能空转**：原用例在关闭前从未把焦点移进弹窗，`activeElement` 一直是触发按钮，因此「恢复焦点」与「从未移动」无法区分。已在断言前显式 `close.element.focus()` 并先断言焦点确实在弹窗内。**如实记录一处反证结果**：随后削弱我们自己的 `watch(versionDialogOpen)` 焦点恢复，该用例**仍然通过**——因为 Element Plus 的 dialog focus trap 也会把焦点还给触发元素。也就是说这条用例验证的是**可观察行为**（AC-16 要求的正是行为），不能单独鉴别我们的 watch；我们的 watch 作为 EP 行为变化时的兜底保留。
+- **F5（记录，服务端，超出本任务）**：与质量评审同一项（`content-routes.ts` 的 `slice(0,500)` 仍可能截出孤立代理半区），客户端修复后员工端已无法触发；本任务禁改后端，留给后续。
+- **针对「父代理声称的每项修复削弱即变红」**：规格评审明确说明它没有重做逐条反证，只用自有探针独立证明 R1 行为；本记录中标注为「反证」的条目均由父代理在提交前实跑过（削弱→变红→还原），未跑到的（F4）已如实写明。
+- **本轮回归**：`pnpm test:m5:frontend` workbench **21 files / 232 passed**、admin 6 files / 18 passed；`pnpm typecheck`、`pnpm lint`、`pnpm verify` 通过。
+
 ## 3. 顺序与依赖
 
 ```
@@ -319,10 +369,10 @@ TW-07：T6（迁移 0025 + 版本服务/路由 + 读/执行双轨 + 集成验证
 TW-08：T7（迁移 0026 + 事件源写入点 + 动态/通知服务与路由 + 集成验证）  ✅ 已交付
        └──> T8（前端「最近动态」摘要与「查看全部」抽屉、未读与静音入口）  ✅ 已交付
 
-后续（未拆分）：TW-07 前端版本 UI（文件页上传新版本入口 + 版本列表/历史版本下载）  ⬜ 未开始
+TW-07 收尾：T9（前端版本 UI：版本显示 + 上传新版本 + 版本列表/历史版本下载 + 按版本引用）  ✅ 已交付
 ```
 
-**批次 3 退出条件（方案 §7）**：归档恢复（3-T1…3-T5）、文件升级追溯（3-T6）、动态去重与收权（3-T7 + 3-T8）**均已通过**，批次 3 的退出条件成立。**遗留（明确不在退出条件内）**：TW-07 的前端版本 UI（上传新版本入口、版本列表与历史版本下载入口）尚未交付，前端目前只能看到最新有效版本；该项作为后续任务处理。
+**批次 3 退出条件（方案 §7）**：归档恢复（3-T1…3-T5）、文件升级追溯（3-T6）、动态去重与收权（3-T7 + 3-T8）**均已通过**，批次 3 的退出条件成立。**TW-07 的前端版本 UI（3-T9）也已交付**，TW-07 至此端到端可用（上传新版本、版本列表含失败版本、历史版本下载、按版本引用）。
 
 - T1 必须先做：T2 的归档写入一旦落地，读/执行口径必须已经分开，否则归档会立刻造成过收权（连只读都读不到）。
 - 每个任务：实现（TDD 先红后绿）→ 规格符合性评审 → 质量评审 → 修复 → 复审，流程同 1A/1B。

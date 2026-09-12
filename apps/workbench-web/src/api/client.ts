@@ -13,6 +13,7 @@ import type {
   WorkspaceActivityQuery,
   WorkspaceAgentMember,
   WorkspaceFile,
+  WorkspaceFileVersionPage,
   WorkspaceLifecycleResult,
   WorkspaceMember,
   WorkspaceMemberDirectory,
@@ -22,6 +23,7 @@ import type {
   WorkspaceSessionQuery,
   WorkspaceStatusFilter,
   WorkspaceUpdateInput,
+  UploadedWorkspaceFileVersion,
 } from '../types/domain'
 
 interface ApiEnvelope<T> {
@@ -180,6 +182,40 @@ export const workbenchApi = {
       body: file,
     },
   ),
+  /**
+   * 逻辑文件的全部版本（TW-07 / 3-T9，读取轨：归档空间的现任成员仍可查看）。
+   * 服务端按版本号倒序返回**含失败版本**的全部版本；`current` 与 `canDownload`
+   * 均由服务端判定，前端不自行推断。只在团队分支调用（个人空间服务端返回 422）。
+   */
+  listWorkspaceFileVersions: (workspaceId: string, logicalFileId: string) =>
+    request<WorkspaceFileVersionPage>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/files/${encodeURIComponent(logicalFileId)}/versions`,
+      { method: 'GET' },
+    ),
+  /**
+   * 在既有逻辑文件下上传新版本（TW-07 / 3-T9，执行轨：归档与只读成员服务端返回
+   * 403）。文件名走 `X-File-Name`（必须 `encodeURIComponent`），更新说明走可选的
+   * `X-File-Note`（≤500；留空则不发送该头部，服务端存 `null`）。
+   */
+  uploadWorkspaceFileVersion: (workspaceId: string, logicalFileId: string, file: File, note?: string) => {
+    const trimmedNote = clampFileNote(note)
+    return request<UploadedWorkspaceFileVersion>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/files/${encodeURIComponent(logicalFileId)}/versions`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': file.type || 'application/octet-stream',
+          'X-File-Name': encodeURIComponent(file.name),
+          ...(trimmedNote ? { 'X-File-Note': encodeURIComponent(trimmedNote) } : {}),
+        },
+        body: file,
+      },
+    )
+  },
+  /** 指定版本的历史下载（读取轨）；服务端在不可下载时拒绝。 */
+  downloadWorkspaceFileVersion: (workspaceId: string, logicalFileId: string, versionNo: number) => requestBlob(
+    `/workspaces/${encodeURIComponent(workspaceId)}/files/${encodeURIComponent(logicalFileId)}/versions/${versionNo}/download`,
+  ),
   getArtifacts: () => request<Artifact[]>('/artifacts'),
   downloadArtifact: (artifactId: string, version: number) => requestBlob(
     `/artifacts/${encodeURIComponent(artifactId)}/versions/${version}/download`,
@@ -327,4 +363,24 @@ export const workbenchApi = {
       `/workspaces/${encodeURIComponent(workspaceId)}/notifications/unmute`,
       { method: 'POST' },
     ),
+}
+
+/**
+ * 更新说明的客户端上限（TW-07 / 3-T9）：先 trim，再按**码点**截断到 UTF-16 长度
+ * ≤500。直接 `slice(0, 500)` 会把代理对劈成孤立半区，`encodeURIComponent` 随即抛
+ * `URIError: URI malformed`（评审 P2 实测 `'a'.repeat(499) + '😀'`）；按码点累加也
+ * 保证服务端再 `slice(0, 500)` 时不会二次截断到半个字符。
+ */
+export function clampFileNote(note: string | undefined): string {
+  const trimmed = (note ?? '').trim()
+  let result = ''
+  for (const character of trimmed) {
+    const code = character.codePointAt(0) ?? 0
+    // 孤立代理半区（D800–DFFF）会让 encodeURIComponent 抛 URIError：无论长度是否
+    // 超限都必须先剔除，否则一个恰好 500 长度的坏串就能打挂上传。
+    if (code >= 0xd800 && code <= 0xdfff) continue
+    if (result.length + character.length > 500) break
+    result += character
+  }
+  return result
 }

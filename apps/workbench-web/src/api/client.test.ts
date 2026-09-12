@@ -4,6 +4,21 @@ import { WorkbenchApiError, workbenchApi } from './client'
 
 afterEach(() => vi.unstubAllGlobals())
 
+/** 是否含未配对的代理半区（UTF-16 层面判定，合法 emoji 成对出现）。 */
+function hasLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1)
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return true
+      index += 1
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true
+    }
+  }
+  return false
+}
+
 describe('workbench API client', () => {
   it('deletes an encoded Session through the conversation endpoint', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
@@ -484,5 +499,141 @@ describe('workbench API client', () => {
       method: 'PATCH',
       body: JSON.stringify({ name: '供应链协作空间', description: null }),
     }))
+  })
+
+  it('lists every version of a logical file through the encoded versions endpoint', async () => {
+    const page = {
+      logicalFileId: 'wfile/1',
+      name: '库存明细.xlsx',
+      status: 'active',
+      latestVersionNo: 2,
+      versionCount: 2,
+      items: [
+        {
+          versionNo: 2,
+          fileId: 'file-2',
+          logicalFileId: 'wfile/1',
+          name: '库存明细.xlsx',
+          type: 'XLSX',
+          size: '12 KB',
+          note: '补充 9 月数据',
+          uploadedBy: '林岚',
+          uploadedAt: '2026-09-12 09:00',
+          scanStatus: 'clean',
+          parseStatus: 'succeeded',
+          current: true,
+          canDownload: true,
+        },
+      ],
+    }
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: page,
+      meta: { api: 'workbench', adapter: 'postgres', timestamp: new Date().toISOString() },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await workbenchApi.listWorkspaceFileVersions('ws/team-1', 'wfile/1')
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/workbench/v1/workspaces/ws%2Fteam-1/files/wfile%2F1/versions',
+      expect.objectContaining({ method: 'GET' }),
+    )
+    expect(result.items[0]).toMatchObject({ versionNo: 2, fileId: 'file-2', current: true })
+  })
+
+  it('uploads a new version with an encoded name and note, keeping the file as the binary body', async () => {
+    const file = new File(['库存'], '库存明细 9月.xlsx', { type: 'application/vnd.ms-excel' })
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: {
+        id: 'file-3',
+        logicalFileId: 'wfile-1',
+        versionNo: 3,
+        name: '库存明细 9月.xlsx',
+        type: 'XLSX',
+        size: '8 KB',
+        uploadedBy: '林岚',
+        uploadedAt: '刚刚',
+        extractionStatus: 'succeeded',
+      },
+      meta: { api: 'workbench', adapter: 'postgres', timestamp: new Date().toISOString() },
+    }), { status: 201, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const uploaded = await workbenchApi.uploadWorkspaceFileVersion('ws/team-1', 'wfile-1', file, '补充 9 月数据')
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/workbench/v1/workspaces/ws%2Fteam-1/files/wfile-1/versions')
+    expect(init).toMatchObject({ method: 'POST', body: file })
+    expect(init.headers).toMatchObject({
+      'Content-Type': 'application/vnd.ms-excel',
+      'X-File-Name': encodeURIComponent('库存明细 9月.xlsx'),
+      'X-File-Note': encodeURIComponent('补充 9 月数据'),
+    })
+    expect(uploaded.versionNo).toBe(3)
+  })
+
+  it('omits X-File-Note when the update note is empty so the server stores null', async () => {
+    const file = new File(['x'], '明细.xlsx', { type: 'application/vnd.ms-excel' })
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: { id: 'file-3', logicalFileId: 'wfile-1', versionNo: 2, extractionStatus: 'succeeded' },
+      meta: { api: 'workbench', adapter: 'postgres', timestamp: new Date().toISOString() },
+    }), { status: 201, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await workbenchApi.uploadWorkspaceFileVersion('ws-team-1', 'wfile-1', file, '   ')
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(init.headers).not.toHaveProperty('X-File-Note')
+  })
+
+  it('clamps the update note to 500 characters before sending it', async () => {
+    const file = new File(['x'], '明细.xlsx', { type: 'application/vnd.ms-excel' })
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: { id: 'file-3', logicalFileId: 'wfile-1', versionNo: 2, extractionStatus: 'succeeded' },
+      meta: { api: 'workbench', adapter: 'postgres', timestamp: new Date().toISOString() },
+    }), { status: 201, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await workbenchApi.uploadWorkspaceFileVersion('ws-team-1', 'wfile-1', file, '更'.repeat(620))
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const sent = decodeURIComponent((init.headers as Record<string, string>)['X-File-Note'] ?? '')
+    expect(sent).toHaveLength(500)
+  })
+
+  it('按码点截断更新说明：代理对边界不得抛 URIError，且 UTF-16 长度不超过 500', async () => {
+    const file = new File(['x'], '明细.xlsx', { type: 'application/vnd.ms-excel' })
+    // 每轮都要一个新的 Response：Response body 只能被读取一次。
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({
+      data: { id: 'file-3', logicalFileId: 'wfile-1', versionNo: 2, extractionStatus: 'succeeded' },
+      meta: { api: 'workbench', adapter: 'postgres', timestamp: new Date().toISOString() },
+    }), { status: 201, headers: { 'Content-Type': 'application/json' } })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    // 判别设计：`slice(0, 500)` 会把 'a'*499 + '😀' 的代理对劈开，
+    // encodeURIComponent 随即抛 URIError: URI malformed（评审 P2 实测）。
+    for (const note of ['a'.repeat(499) + '😀', 'a'.repeat(499) + '\uD83D', '😀'.repeat(400)]) {
+      fetchMock.mockClear()
+      await workbenchApi.uploadWorkspaceFileVersion('ws-team-1', 'wfile-1', file, note)
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      const raw = (init.headers as Record<string, string>)['X-File-Note'] ?? ''
+      const decoded = decodeURIComponent(raw)
+      expect(decoded.length).toBeLessThanOrEqual(500)
+      // 不得含任何孤立代理半区（合法的 emoji 以低位代理结尾，因此必须成对判定）。
+      expect(hasLoneSurrogate(decoded)).toBe(false)
+    }
+  })
+
+  it('downloads one historical version through the encoded version download endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('version-body', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const blob = await workbenchApi.downloadWorkspaceFileVersion('ws/team-1', 'wfile/1', 2)
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/workbench/v1/workspaces/ws%2Fteam-1/files/wfile%2F1/versions/2/download',
+      expect.objectContaining({ credentials: 'include' }),
+    )
+    expect(await blob.text()).toBe('version-body')
   })
 })

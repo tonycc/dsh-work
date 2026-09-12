@@ -1,5 +1,7 @@
 import ElementPlus, { ElDialog, ElMessageBox } from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
+import { defineComponent, h } from 'vue'
+import type { Component } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -11,6 +13,9 @@ import type {
   Workspace,
   WorkspaceActivityItem,
   WorkspaceActivityPage,
+  WorkspaceFile,
+  WorkspaceFileVersion,
+  WorkspaceFileVersionPage,
   WorkspaceNotificationState,
   WorkspaceNotificationView,
 } from '@/types/domain'
@@ -75,7 +80,10 @@ function notificationState(overrides: Partial<WorkspaceNotificationState> = {}):
   return { workspaceId: 'ws-team', muted: false, mutedAt: null, lastReadAt: null, unreadCount: 0, ...overrides }
 }
 
-async function mountView(item: Workspace, options: { ownerName?: string; artifacts?: Artifact[] } = {}) {
+async function mountView(
+  item: Workspace,
+  options: { ownerName?: string; artifacts?: Artifact[]; stubs?: Record<string, boolean | Component> } = {},
+) {
   const pinia = createPinia()
   setActivePinia(pinia)
   const contentStore = useContentStore(pinia)
@@ -96,11 +104,11 @@ async function mountView(item: Workspace, options: { ownerName?: string; artifac
   const wrapper = mount(WorkspaceDetailView, {
     global: {
       plugins: [pinia, ElementPlus],
-      stubs: { ConversationStarter: true },
+      stubs: options.stubs ?? { ConversationStarter: true },
     },
   })
   await flushPromises()
-  return { wrapper }
+  return { wrapper, contentStore }
 }
 
 describe('WorkspaceDetailView 团队分支与个人空间红线', () => {
@@ -576,3 +584,331 @@ describe('WorkspaceDetailView 团队动态与通知（TW-08 / 3-T8）', () => {
     wrapper.unmount()
   })
 })
+
+describe('WorkspaceDetailView 文件版本 UI（TW-07 / 3-T9）', () => {
+  beforeEach(() => {
+    route.params = { id: 'ws-team' }
+    route.query = { tab: 'files' }
+    vi.spyOn(workbenchApi, 'listWorkspaceAgentMembers').mockResolvedValue([])
+    vi.spyOn(workbenchApi, 'listWorkspaceMembers').mockResolvedValue({ items: [], currentUserRole: 'owner' })
+    vi.spyOn(workbenchApi, 'listWorkspaceSessions').mockResolvedValue({ items: [], nextCursor: null })
+    vi.spyOn(workbenchApi, 'listWorkspaceActivity').mockResolvedValue(activityPage([]))
+    vi.spyOn(workbenchApi, 'getWorkspaceNotifications').mockResolvedValue(notificationView())
+    vi.spyOn(workbenchApi, 'listWorkspaceFileVersions').mockResolvedValue(versionPage([versionItem()]))
+    vi.spyOn(workbenchApi, 'uploadWorkspaceFileVersion').mockResolvedValue({
+      id: 'file-4',
+      logicalFileId: 'wfile-1',
+      versionNo: 4,
+      name: '库存明细.xlsx',
+      type: 'XLSX',
+      size: '13 KB',
+      uploadedBy: '林岚',
+      uploadedAt: '刚刚',
+      extractionStatus: 'succeeded',
+    })
+    vi.spyOn(workbenchApi, 'downloadWorkspaceFileVersion').mockResolvedValue(new Blob(['x']))
+  })
+
+  function teamFile(overrides: Partial<WorkspaceFile> = {}): WorkspaceFile {
+    return {
+      id: 'file-3',
+      name: '库存明细.xlsx',
+      type: 'XLSX',
+      size: '12 KB',
+      uploadedBy: '林岚',
+      uploadedAt: '2026-09-12 09:00',
+      logicalFileId: 'wfile-1',
+      versionNo: 3,
+      versionCount: 3,
+      ...overrides,
+    }
+  }
+
+  function versionItem(overrides: Partial<WorkspaceFileVersion> = {}): WorkspaceFileVersion {
+    return {
+      versionNo: 3,
+      fileId: 'file-3',
+      logicalFileId: 'wfile-1',
+      name: '库存明细.xlsx',
+      type: 'XLSX',
+      size: '12 KB',
+      note: '补充 9 月数据',
+      uploadedBy: '林岚',
+      uploadedAt: '2026-09-12 09:00',
+      scanStatus: 'clean',
+      parseStatus: 'succeeded',
+      current: true,
+      canDownload: true,
+      ...overrides,
+    }
+  }
+
+  function versionPage(items: WorkspaceFileVersion[]): WorkspaceFileVersionPage {
+    return {
+      logicalFileId: 'wfile-1',
+      name: '库存明细.xlsx',
+      status: 'active',
+      latestVersionNo: 2,
+      versionCount: items.length,
+      items,
+    }
+  }
+
+  it('关闭一个文件再打开另一个文件时不得残留上一个文件的版本（评审 P1）', async () => {
+    // 宿主关闭对话框时仍保留逻辑文件 id，组件实例因此被复用：不清空上一份结果就会
+    // 把 A 的版本历史渲染在 B 的文件名之下，行内「下载」还会用 A 的版本号请求 B。
+    vi.mocked(workbenchApi.listWorkspaceFileVersions).mockImplementation(async (_ws: string, logicalFileId: string) =>
+      versionPage(logicalFileId === 'wfile-a'
+        ? [versionItem({ logicalFileId: 'wfile-a', versionNo: 7, fileId: 'file-a7', name: 'A.xlsx' })]
+        : [versionItem({ logicalFileId: 'wfile-b', versionNo: 2, fileId: 'file-b2', name: 'B.xlsx' })]))
+    const { wrapper } = await mountView(workspace({
+      files: [
+        teamFile({ id: 'file-a', name: 'A.xlsx', logicalFileId: 'wfile-a', versionNo: 7, versionCount: 7 }),
+        teamFile({ id: 'file-b', name: 'B.xlsx', logicalFileId: 'wfile-b', versionNo: 2, versionCount: 2 }),
+      ],
+    }))
+
+    const entries = wrapper.findAll('[data-testid="workspace-file-versions"]')
+    expect(entries).toHaveLength(2)
+    await entries[0]!.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="file-versions-dialog"]').text()).toContain('V7')
+
+    await wrapper.find('[data-testid="file-versions-close"]').trigger('click')
+    await flushPromises()
+
+    await entries[1]!.trigger('click')
+    await flushPromises()
+
+    const body = wrapper.find('[data-testid="file-versions-dialog"]').text()
+    expect(body).toContain('V2')
+    expect(body, '不得在 B 的标题下渲染 A 的版本历史').not.toContain('V7')
+
+    const downloads = wrapper.findAll('[data-testid="file-versions-download"]')
+    expect(downloads).toHaveLength(1)
+    await downloads[0]!.trigger('click')
+    await flushPromises()
+    expect(workbenchApi.downloadWorkspaceFileVersion).toHaveBeenLastCalledWith('ws-team', 'wfile-b', 2)
+  })
+
+  it('名册未就绪（角色未知）时不渲染上传入口，避免注定 403 的假入口（评审 P2）', async () => {
+    vi.mocked(workbenchApi.listWorkspaceMembers).mockRejectedValue(new Error('名册失败'))
+    const { wrapper } = await mountView(workspace({ files: [teamFile()] }))
+
+    expect(wrapper.find('[data-testid="workspace-file-upload-version"]').exists()).toBe(false)
+    // 读取轨不受影响：版本入口仍在。
+    expect(wrapper.find('[data-testid="workspace-file-versions"]').exists()).toBe(true)
+  })
+
+  it('只有 logicalFileId 而没有版本号时不渲染空白徽标（评审 nit）', async () => {
+    const { wrapper } = await mountView(workspace({
+      files: [teamFile({ versionNo: undefined, versionCount: undefined })],
+    }))
+
+    expect(wrapper.find('[data-testid="workspace-file-versions"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="workspace-file-version"]').exists()).toBe(false)
+  })
+
+  async function selectVersionFile(wrapper: Awaited<ReturnType<typeof mountView>>['wrapper'], file: File) {
+    const input = wrapper.find('[data-testid="workspace-file-upload-input"]')
+    Object.defineProperty(input.element, 'files', { value: [file], configurable: true })
+    await input.trigger('change')
+    await flushPromises()
+  }
+
+  it('文件行显示版本号，且只在多于一个版本时补版本总数', async () => {
+    const { wrapper } = await mountView(workspace({
+      files: [
+        teamFile({ versionNo: 2, versionCount: 2 }),
+        teamFile({ id: 'file-a', name: '供应商清单.docx', logicalFileId: 'wfile-2', versionNo: 1, versionCount: 1 }),
+      ],
+    }))
+
+    const labels = wrapper.findAll('[data-testid="workspace-file-version"]')
+    expect(labels).toHaveLength(2)
+    expect(labels[0]!.text()).toBe('V2 · 共 2 个版本')
+    expect(labels[1]!.text()).toBe('V1')
+    // 既有名称/大小/类型/上传人布局保持不变。
+    expect(wrapper.text()).toContain('库存明细.xlsx')
+    expect(wrapper.text()).toContain('12 KB · 林岚上传 · 2026-09-12 09:00')
+    expect(wrapper.text()).toContain('XLSX')
+  })
+
+  it('「版本」入口打开对话框，并按逻辑文件 id 请求版本列表', async () => {
+    const { wrapper } = await mountView(workspace({ files: [teamFile()] }))
+
+    // 未打开对话框前不发版本请求。
+    expect(workbenchApi.listWorkspaceFileVersions).not.toHaveBeenCalled()
+    await wrapper.find('[data-testid="workspace-file-versions"]').trigger('click')
+    await flushPromises()
+
+    expect(workbenchApi.listWorkspaceFileVersions).toHaveBeenCalledWith('ws-team', 'wfile-1')
+    expect(wrapper.find('[data-testid="file-versions-dialog"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="file-versions-row"]').exists()).toBe(true)
+  })
+
+  it('归档空间隐藏上传入口，但保留版本列表与历史下载（引用入口随执行轨隐藏）', async () => {
+    const { wrapper } = await mountView(workspace({
+      status: 'archived',
+      archivedAt: '2026-09-13T00:00:00.000Z',
+      files: [teamFile()],
+    }))
+
+    expect(wrapper.find('[data-testid="workspace-file-upload-version"]').exists()).toBe(false)
+    await wrapper.find('[data-testid="workspace-file-versions"]').trigger('click')
+    await flushPromises()
+
+    expect(workbenchApi.listWorkspaceFileVersions).toHaveBeenCalledWith('ws-team', 'wfile-1')
+    expect(wrapper.find('[data-testid="file-versions-download"]').exists()).toBe(true)
+    // 归档执行轨：与「引用到对话」同口径，不提供「引用此版本」。
+    expect(wrapper.find('[data-testid="file-versions-reference"]').exists()).toBe(false)
+  })
+
+  it('只读成员没有上传入口，但保留可读的版本入口', async () => {
+    vi.mocked(workbenchApi.listWorkspaceMembers).mockResolvedValue({ items: [], currentUserRole: 'viewer' })
+    const { wrapper } = await mountView(workspace({ files: [teamFile()] }))
+
+    expect(wrapper.find('[data-testid="workspace-file-upload-version"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="workspace-file-versions"]').exists()).toBe(true)
+  })
+
+  it('活跃团队空间的非只读成员可见上传新版本入口', async () => {
+    const { wrapper } = await mountView(workspace({ files: [teamFile()] }))
+
+    expect(wrapper.find('[data-testid="workspace-file-upload-version"]').exists()).toBe(true)
+  })
+
+  it('上传新版本先询问可选更新说明，成功后刷新文件列表使新版本成为当前', async () => {
+    vi.spyOn(ElMessageBox, 'prompt').mockResolvedValue({ value: '补充 10 月数据' } as never)
+    const { wrapper, contentStore } = await mountView(workspace({ files: [teamFile({ versionNo: 2, versionCount: 2 })] }))
+    const refreshCallsBefore = vi.mocked(contentStore.refresh).mock.calls.length
+    // 模拟服务端刷新：新版本成为文件列表展示的当前版本。
+    vi.mocked(contentStore.refresh).mockImplementation(async () => {
+      contentStore.workspaces.splice(
+        0,
+        contentStore.workspaces.length,
+        workspace({ files: [teamFile({ id: 'file-4', versionNo: 4, versionCount: 4 })] }),
+      )
+    })
+    const file = new File(['库存'], '库存明细 10月.xlsx', { type: 'application/vnd.ms-excel' })
+
+    await wrapper.find('[data-testid="workspace-file-upload-version"]').trigger('click')
+    await selectVersionFile(wrapper, file)
+
+    expect(ElMessageBox.prompt).toHaveBeenCalled()
+    expect(workbenchApi.uploadWorkspaceFileVersion).toHaveBeenCalledWith('ws-team', 'wfile-1', file, '补充 10 月数据')
+    expect(vi.mocked(contentStore.refresh).mock.calls.length).toBeGreaterThan(refreshCallsBefore)
+    expect(wrapper.find('[data-testid="workspace-file-version"]').text()).toBe('V4 · 共 4 个版本')
+  })
+
+  it('解析失败时行内说明「原版本未受影响」，不刷新列表、当前版本标记不变', async () => {
+    vi.spyOn(ElMessageBox, 'prompt').mockResolvedValue({ value: '' } as never)
+    vi.mocked(workbenchApi.uploadWorkspaceFileVersion).mockRejectedValue(
+      new Error('文件解析失败（m4-basic-v1）：无法读取工作表'),
+    )
+    const { wrapper, contentStore } = await mountView(workspace({ files: [teamFile({ versionNo: 2, versionCount: 2 })] }))
+    const refreshCallsBefore = vi.mocked(contentStore.refresh).mock.calls.length
+
+    await wrapper.find('[data-testid="workspace-file-upload-version"]').trigger('click')
+    await selectVersionFile(wrapper, new File(['坏数据'], '库存明细.xlsx', { type: 'application/vnd.ms-excel' }))
+
+    // 空更新说明原样传给客户端，由客户端决定不发送 X-File-Note。
+    expect(workbenchApi.uploadWorkspaceFileVersion).toHaveBeenCalledWith('ws-team', 'wfile-1', expect.any(File), '')
+    const error = wrapper.find('[data-testid="workspace-file-upload-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.text()).toContain('文件解析失败')
+    expect(error.text()).toContain('原版本未受影响')
+    // 失败不刷新文件列表，行内仍显示原版本。
+    expect(vi.mocked(contentStore.refresh).mock.calls.length).toBe(refreshCallsBefore)
+    expect(wrapper.find('[data-testid="workspace-file-version"]').text()).toBe('V2 · 共 2 个版本')
+  })
+
+  it('取消更新说明弹窗时不发起上传', async () => {
+    vi.spyOn(ElMessageBox, 'prompt').mockRejectedValue(new Error('cancel'))
+    const { wrapper } = await mountView(workspace({ files: [teamFile()] }))
+
+    await wrapper.find('[data-testid="workspace-file-upload-version"]').trigger('click')
+    await selectVersionFile(wrapper, new File(['库存'], '库存明细.xlsx', { type: 'application/vnd.ms-excel' }))
+
+    expect(workbenchApi.uploadWorkspaceFileVersion).not.toHaveBeenCalled()
+  })
+
+  it('「引用此版本」把该版本的不可变对象 id 作为引用 id 传给新对话', async () => {
+    const referenced: WorkspaceFile[] = []
+    const starterStub = defineComponent({
+      name: 'ConversationStarter',
+      setup(_, { expose }) {
+        expose({
+          useWorkspaceFile: (file: WorkspaceFile) => {
+            referenced.push(file)
+          },
+        })
+        return () => h('div', { 'data-testid': 'starter-stub' })
+      },
+    })
+    vi.mocked(workbenchApi.listWorkspaceFileVersions).mockResolvedValue(versionPage([
+      versionItem({ versionNo: 3, fileId: 'file-object-3', current: true, note: null }),
+      versionItem({ versionNo: 1, fileId: 'file-object-1', current: false }),
+    ]))
+    const { wrapper } = await mountView(workspace({ files: [teamFile()] }), {
+      stubs: { ConversationStarter: starterStub },
+    })
+
+    await wrapper.find('[data-testid="workspace-file-versions"]').trigger('click')
+    await flushPromises()
+    const rows = wrapper.findAll('[data-testid="file-versions-row"]')
+    await rows[1]!.find('[data-testid="file-versions-reference"]').trigger('click')
+    await flushPromises()
+
+    expect(referenced).toHaveLength(1)
+    // 引用的是所选版本的对象 id，而不是逻辑文件 id 或文件列表当前版本。
+    expect(referenced[0]!.id).toBe('file-object-1')
+    expect(referenced[0]!.logicalFileId).toBe('wfile-1')
+    expect(router.replace).toHaveBeenCalled()
+  })
+
+  it('个人空间不渲染任何版本 UI，也不发出版本请求（AC-23）', async () => {
+    route.params = { id: 'ws-personal' }
+    const { wrapper } = await mountView(workspace({
+      id: 'ws-personal',
+      type: 'personal',
+      owner: '周航',
+      members: ['周航'],
+      memberCount: 1,
+      // 即便夹具带上了版本字段，个人空间也不得渲染或请求版本 UI。
+      files: [teamFile()],
+    }), { ownerName: '周航' })
+
+    expect(workbenchApi.listWorkspaceFileVersions).not.toHaveBeenCalled()
+    expect(workbenchApi.uploadWorkspaceFileVersion).not.toHaveBeenCalled()
+    expect(workbenchApi.downloadWorkspaceFileVersion).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="workspace-file-versions"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="workspace-file-upload-version"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="workspace-file-version"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="workspace-file-upload-input"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('V3')
+  })
+
+  it('版本对话框关闭按钮有 aria-label，关闭后焦点回到「版本」触发按钮', async () => {
+    const { wrapper } = await mountView(workspace({ files: [teamFile()] }))
+    // happy-dom 只对已挂到 document 的元素维护 activeElement。
+    document.body.appendChild(wrapper.element)
+    const trigger = wrapper.find('[data-testid="workspace-file-versions"]')
+    ;(trigger.element as HTMLElement).focus()
+    await trigger.trigger('click')
+    await flushPromises()
+
+    const close = wrapper.find('[data-testid="file-versions-close"]')
+    expect(close.attributes('aria-label')).toBe('关闭文件版本')
+    // 先把焦点移进弹窗再关闭，否则断言可能空转（关闭前 activeElement 一直是触发按钮，
+    // 恢复焦点与「从未移动」无法区分——规格评审 F4）。
+    ;(close.element as HTMLElement).focus()
+    expect(document.activeElement).toBe(close.element)
+    await close.trigger('click')
+    await flushPromises()
+
+    expect(document.activeElement).toBe(trigger.element)
+    wrapper.unmount()
+  })
+})
+
