@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 
 test('employee can open the workbench and enter a team workspace', async ({ page }) => {
-  await page.goto('http://127.0.0.1:4174/workbench')
+  await page.goto('/workbench')
 
   await expect(page).toHaveTitle(/工作台 · dsh-work/)
   await expect(page.getByRole('heading', { name: /dsh-work，我帮你/ })).toBeVisible()
@@ -34,7 +34,7 @@ test('employee can open the workbench and enter a team workspace', async ({ page
 })
 
 test('administrator can navigate governance modules and switch capability tabs', async ({ page }) => {
-  await page.goto('http://127.0.0.1:4180/capabilities')
+  await page.goto('http://localhost:4180/capabilities')
 
   await expect(page).toHaveTitle(/Skill 与工具 · dsh-work/)
   await expect(page.getByText('管理平台', { exact: true })).toBeVisible()

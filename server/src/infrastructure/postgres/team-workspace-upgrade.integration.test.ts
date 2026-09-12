@@ -141,6 +141,8 @@ test('回滚兼容：删除 0022 对象后旧结构与个人数据完整，重�
   await database.unsafe(`
     drop trigger if exists team_workspace_single_owner on workspace_members;
     drop function if exists assert_team_workspace_single_owner();
+    drop index if exists model_usage_by_attempt;
+    drop index if exists runs_active_by_tenant;
     drop table if exists workspace_notification_states;
     drop table if exists workspace_activity_events;
     drop table if exists workspace_file_versions;
@@ -171,6 +173,10 @@ test('回滚兼容：删除 0022 对象后旧结构与个人数据完整，重�
     reappliedVersions.includes('0026_workspace_activity.sql'),
     '0026（团队动态与通知，纯新增）必须能被重放',
   )
+  assert.ok(
+    reappliedVersions.includes('0028_runs_and_usage_indexes.sql'),
+    '0028（runs 活动索引与每 attempt 唯一索引，纯新增）必须能被重放',
+  )
   assert.equal(reappliedVersions.some(version => version < '0022'), false)
   // 动态与通知状态两张表在重放后必须回来（0026 不依赖任何既有表结构变更）。
   const [activityTables] = await database<{ activity: string | null; notifications: string | null }[]>`
@@ -179,6 +185,13 @@ test('回滚兼容：删除 0022 对象后旧结构与个人数据完整，重�
   `
   assert.equal(activityTables?.activity, 'workspace_activity_events')
   assert.equal(activityTables?.notifications, 'workspace_notification_states')
+  // 0028 的两个索引在重放后必须回来（纯新增，不依赖任何既有表结构变更）。
+  const [usageIndexes] = await database<{ runsActive: string | null; usageByAttempt: string | null }[]>`
+    select to_regclass('public.runs_active_by_tenant')::text as "runsActive",
+           to_regclass('public.model_usage_by_attempt')::text as "usageByAttempt"
+  `
+  assert.equal(usageIndexes?.runsActive, 'runs_active_by_tenant')
+  assert.equal(usageIndexes?.usageByAttempt, 'model_usage_by_attempt')
   const reapplied = await snapshot()
   assert.equal(reapplied.grantCount, beforeRollback.grantCount)
   assert.equal(reapplied.sourceCount, beforeRollback.sourceCount, '重新升级必须复现相同的 legacy 对账清单')

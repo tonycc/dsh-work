@@ -8,11 +8,12 @@ import { after, before, test } from 'node:test'
 
 import type { RequestIdentity } from '../modules/identity/types.ts'
 import { PostgresAuthorizationService } from '../modules/authorization/postgres-authorization-service.ts'
+import { AuthorizationDeniedError, isAuthorizationDenial } from '../modules/authorization/authorization-errors.ts'
 import type { DatabaseClient } from '../infrastructure/postgres/database.ts'
 import { createThrowawayDatabase, type ThrowawayDatabase } from '../infrastructure/postgres/test-database.ts'
 import { PostgresContentService } from '../modules/workbench/application/postgres-content-service.ts'
 import { PostgresWorkspaceMemberService } from '../modules/workbench/application/postgres-workspace-member-service.ts'
-import { Router } from './router.ts'
+import { Router, classifyHttpError } from './router.ts'
 import { registerContentRoutes } from './workbench/content-routes.ts'
 
 const tenantId = 'tenant-dsh-work'
@@ -382,11 +383,13 @@ test('Run 输入挂载不得读取他人私有会话附件，但可挂载空间�
 
   const otherSession = await seedSession(workspaceId, otherId)
   for (const actorId of [otherId, ownerId]) {
-    await assert.rejects(
-      content.prepareRuntimeFiles({ sessionId: otherSession, fileIds: [privateFileId], userId: actorId }),
-      /不存在、不可访问或解析未成功/,
-      `${actorId} 不得把他人私有会话附件挂进 Run 输入（负责人身份也不构成依据）`,
-    )
+    // 5-T4：挂载他人私有附件被拒时也是类型化授权拒绝，HTTP 仍是 403。
+    const denial = await content.prepareRuntimeFiles({ sessionId: otherSession, fileIds: [privateFileId], userId: actorId })
+      .then(() => null, (error: unknown) => error)
+    assert.ok(denial instanceof AuthorizationDeniedError, `必须是类型化授权拒绝，实际：${String(denial)}`)
+    assert.equal(denial.status, 403)
+    assert.equal(denial.code, 'permission_denied')
+    assert.match(denial.message, /不存在、不可访问或解析未成功/, `${actorId} 不得把他人私有会话附件挂进 Run 输入（负责人身份也不构成依据）`)
   }
   const authorOwn = await content.prepareRuntimeFiles({ sessionId: authorSession, fileIds: [privateFileId], userId: authorId })
   assert.equal(authorOwn.length, 1, '作者本人仍可挂载自己的会话附件')
@@ -580,14 +583,40 @@ test('归档团队空间：现任成员仍可读文件/成果/列表，非成员
   assert.equal(artifactResponse.status, 200)
 
   // 非成员仍拒绝，且不可枚举（与「不存在」同文案）。
-  await assert.rejects(
-    content.readFile(fileId, outsiderId),
-    /文件不存在或不可访问/,
+  // 5-T4：这条「不存在或不可访问」的拒绝已类型化，HTTP 仍是 403 permission_denied。
+  const fileDenial = await content.readFile(fileId, outsiderId).then(() => null, (error: unknown) => error)
+  assert.ok(fileDenial instanceof AuthorizationDeniedError, `必须是类型化授权拒绝，实际：${String(fileDenial)}`)
+  assert.equal(fileDenial.status, 403)
+  assert.equal(fileDenial.code, 'permission_denied')
+  assert.match(fileDenial.message, /文件不存在或不可访问/)
+  assert.equal(isAuthorizationDenial(fileDenial), true, '类型化后撤权分类器必须识别')
+  assert.equal(classifyHttpError(fileDenial, `/api/workbench/v1/files/${fileId}/download`).status, 403)
+
+  const artifactDenial = await content.artifactFileId(artifactId, undefined, outsiderId)
+    .then(() => null, (error: unknown) => error)
+  assert.ok(artifactDenial instanceof AuthorizationDeniedError, `必须是类型化授权拒绝，实际：${String(artifactDenial)}`)
+  assert.equal(artifactDenial.status, 403)
+  assert.equal(artifactDenial.code, 'permission_denied')
+  assert.match(artifactDenial.message, /Artifact 不存在或不可访问/)
+
+  // 接口层复核：类型化后响应仍是 403 + permission_denied（状态码与 code 均不变）。
+  const outsiderFileResponse = await fetch(`${baseUrl}/api/workbench/v1/files/${fileId}/download`, {
+    headers: { 'x-test-user-id': outsiderId },
+  })
+  assert.equal(outsiderFileResponse.status, 403)
+  assert.equal(
+    ((await outsiderFileResponse.json()) as { error?: { code?: string } }).error?.code,
+    'permission_denied',
   )
-  await assert.rejects(
-    content.artifactFileId(artifactId, undefined, outsiderId),
-    /Artifact 不存在或不可访问/,
+  const outsiderArtifactResponse = await fetch(`${baseUrl}/api/workbench/v1/artifacts/${artifactId}/download`, {
+    headers: { 'x-test-user-id': outsiderId },
+  })
+  assert.equal(outsiderArtifactResponse.status, 403)
+  assert.equal(
+    ((await outsiderArtifactResponse.json()) as { error?: { code?: string } }).error?.code,
+    'permission_denied',
   )
+
   assert.deepEqual(await content.listArtifacts(outsiderId), [], '非成员看不到归档空间成果')
   await assert.rejects(
     content.listWorkspaceFiles({ workspaceId, actorUserId: outsiderId }),

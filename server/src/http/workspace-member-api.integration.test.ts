@@ -223,6 +223,42 @@ test('任何成员可读取员工名册并拿到自己的角色，非成员被�
   assert.equal(outsider.status, 403, '非成员不得读取名册')
 })
 
+test('员工名册按候选同一口径返回部门，缺省为「未分配部门」（5-T2）', async () => {
+  const workspaceId = 'ws-1a-roster-dept'
+  const ownerId = 'user-1a-roster-dept-owner'
+  const memberId = 'user-1a-roster-dept-member'
+  const noDeptId = 'user-1a-roster-dept-none'
+  const candidateId = 'user-1a-roster-dept-candidate'
+  await createDirectoryUser(ownerId, '部门名册负责人', { department: '供应链中心' })
+  await createDirectoryUser(memberId, '部门名册成员', { department: '计划部' })
+  await createDirectoryUser(noDeptId, '部门名册无部门', { department: null })
+  await createDirectoryUser(candidateId, '部门名册候选无部门', { department: null })
+  await createTeamWorkspace(workspaceId, [
+    { userId: ownerId, role: 'owner' },
+    { userId: memberId, role: 'member' },
+    { userId: noDeptId, role: 'viewer' },
+  ])
+
+  const result = await api('GET', `/api/workbench/v1/workspaces/${workspaceId}/members`, { as: ownerId })
+  assert.equal(result.status, 200)
+  const items = (result.body.data as { items: Array<Record<string, unknown>> }).items
+  assert.deepEqual(items.map(item => item.userId), [ownerId, memberId, noDeptId])
+  assert.equal(items[0]?.department, '供应链中心', '名册部门与 users.department_id 一致')
+  assert.equal(items[1]?.department, '计划部')
+  assert.equal(items[2]?.department, '未分配部门', '缺省部门与候选名册同一口径')
+  assert.deepEqual(
+    Object.keys(items[0] ?? {}).sort(),
+    ['department', 'displayName', 'joinedAt', 'role', 'userId'].sort(),
+  )
+
+  // 候选名册同一用户的部门口径必须一致。
+  const candidates = await api('GET', `/api/workbench/v1/workspaces/${workspaceId}/member-candidates?limit=100`, { as: ownerId })
+  assert.equal(candidates.status, 200)
+  const candidate = (candidates.body.data as { items: Array<{ id: string; department: string }> }).items
+    .find(item => item.id === candidateId)
+  assert.equal(candidate?.department, '未分配部门')
+})
+
 test('成员名册对个人工作空间被拒绝', async () => {
   const personalId = 'ws-personal-user-1a-roster-personal'
   await createDirectoryUser('user-1a-roster-personal', '名册个人空间用户')

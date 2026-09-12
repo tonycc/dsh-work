@@ -13,6 +13,7 @@ import type { DatabaseClient, DatabaseTransaction } from '../../infrastructure/p
 import type { PostgresOperationsService } from '../admin/application/postgres-operations-service.ts'
 import type { PostgresSkillService, RuntimeSkillConfiguration } from '../skill/postgres-skill-service.ts'
 import type { PostgresToolConnectorService } from '../tool/postgres-tool-connector-service.ts'
+import { authorizationDenied } from '../authorization/authorization-errors.ts'
 
 const tenantId = 'tenant-dsh-work'
 
@@ -735,7 +736,7 @@ export class PostgresAgentService {
               and (r.permissions ? 'admin:*' or r.permissions ? 'admin:write')
          )
     `
-    if (!actor) throw new Error(`操作人不存在、已停用或不是平台管理员：${userId}`)
+    if (!actor) throw authorizationDenied(`操作人不存在、已停用或不是平台管理员：${userId}`)
     return actor
   }
 

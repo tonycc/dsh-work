@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
+import { copyFile, mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { createServer } from 'node:http'
+import { tmpdir } from 'node:os'
+import { resolve } from 'node:path'
 import { after, before, test } from 'node:test'
 
 import type { RequestIdentity } from '../modules/identity/types.ts'
 import { PostgresAuthorizationService } from '../modules/authorization/postgres-authorization-service.ts'
 import type { DatabaseClient } from '../infrastructure/postgres/database.ts'
+import { runMigrations } from '../infrastructure/postgres/migration-runner.ts'
 import { createThrowawayDatabase, type ThrowawayDatabase } from '../infrastructure/postgres/test-database.ts'
 import { PostgresWorkspaceService } from '../modules/workbench/application/postgres-workspace-service.ts'
 import {
@@ -17,6 +21,10 @@ import { registerWorkspaceUsageRoutes } from './workbench/workspace-usage-routes
 
 const tenantId = 'tenant-dsh-work'
 const suffix = randomUUID().replaceAll('-', '').slice(0, 8)
+// 测试文件在 server/src/http，向上两级即 server/，再进 migrations。
+const migrationsDirectory = resolve(import.meta.dirname, '../../migrations')
+// 5-T3：runs 活动索引 + model_usage_events 每 attempt 唯一索引。
+const usageIndexMigration = '0028_runs_and_usage_indexes.sql'
 
 let database: DatabaseClient
 let throwaway: ThrowawayDatabase
@@ -443,6 +451,170 @@ test('服务层直接调用同样执行完整门禁（防御性：不依赖路�
 })
 
 // ---------------------------------------------------------------------------
+// 迁移 0028：runs 活动索引 + model_usage_events 每 attempt 唯一（5-T3）
+// ---------------------------------------------------------------------------
+
+test('0028：两个索引在完整迁移链上存在，且注释写明它服务哪些查询 / 去重策略', async () => {
+  const [indexes] = await database<{ runsActive: string | null, usageByAttempt: string | null }[]>`
+    select to_regclass('public.runs_active_by_tenant')::text as "runsActive",
+           to_regclass('public.model_usage_by_attempt')::text as "usageByAttempt"
+  `
+  assert.equal(indexes?.runsActive, 'runs_active_by_tenant', 'runs 活动索引必须存在')
+  assert.equal(indexes?.usageByAttempt, 'model_usage_by_attempt', '每 attempt 唯一索引必须存在')
+
+  const [comments] = await database<{ runsComment: string | null, usageComment: string | null }[]>`
+    select obj_description(to_regclass('public.runs_active_by_tenant'), 'pg_class') as "runsComment",
+           obj_description(to_regclass('public.model_usage_by_attempt'), 'pg_class') as "usageComment"
+  `
+  assert.ok(comments?.runsComment, 'runs 活动索引必须有注释说明它服务哪些查询')
+  assert.ok(comments?.usageComment, '每 attempt 唯一索引必须有注释写出去重策略与理由')
+})
+
+test('每 attempt 唯一：换 id 的重复 (tenant_id, attempt_id) 插入被 23505 拒绝（4-T3 双计路径）', async () => {
+  const ws = uniqueWorkspace('attempt-unique')
+  const owner = `${ws}-owner`
+  await seedUser(owner, '每 attempt 唯一负责人')
+  await seedTeamWorkspace(ws, [{ userId: owner, role: 'owner' }])
+  const { runId, attemptId } = await seedUsageAttempt(database, { workspaceId: ws, userId: owner })
+
+  const countRows = async () => {
+    const [row] = await database<{ count: number }[]>`
+      select count(*)::integer as count from model_usage_events
+       where tenant_id = ${tenantId} and attempt_id = ${attemptId}
+    `
+    return row?.count ?? -1
+  }
+
+  await insertUsageEvent(database, { id: `usage-${attemptId}`, runId, attemptId, occurredAt: new Date() })
+  // 第一道防线不变：写入端的确定性 id `usage-<attemptId>` + on conflict (id) do nothing 吸收同 id 重放。
+  await database`
+    insert into model_usage_events (
+      id, tenant_id, run_id, attempt_id, provider, model, input_tokens, output_tokens,
+      latency_ms, cost_amount, cost_currency, status, trace_id, estimated, occurred_at
+    ) values (
+      ${`usage-${attemptId}`}, ${tenantId}, ${runId}, ${attemptId}, 'dsh-default', 'dsh-default',
+      5, 5, 10, 0, 'CNY', 'success', ${`trace-${attemptId}`}, false, now()
+    ) on conflict (id) do nothing
+  `
+  assert.equal(await countRows(), 1, '同 id 重放不得产生第二行')
+
+  // 第二道防线：换一个 id 的同一 attempt 行必须被唯一索引拒绝，否则空间用量与平台运营双计。
+  await assert.rejects(
+    () => insertUsageEvent(database, {
+      id: `usage-${attemptId}-forged`, runId, attemptId, occurredAt: new Date(),
+    }),
+    (error: unknown) => (error as { code?: string }).code === '23505',
+    '换 id 的重复 attempt 行必须被模型用量唯一索引拒绝',
+  )
+  assert.equal(await countRows(), 1, '被拒的重复行不得留下任何行')
+})
+
+test('0028 去重：同一 attempt 保留 occurred_at 最早者、并列取 id 最小者，且可重复执行', async () => {
+  // 为什么不在全链库上构造 pre-0028 状态：0028 自己就建唯一索引，重放完整迁移链后两条
+  // 重复的 (tenant_id, attempt_id) 根本插不进去——这正是本迁移要保证的性质。所以这里另造
+  // 一个只迁移到 0026 的一次性库，先种下重复行，再按 migration-runner 的方式（事务内
+  // unsafe）执行 0028 原文，从而让「去重」这一步可判别。
+  const preDirectory = await mkdtemp(resolve(tmpdir(), 'dsh-work-migrations-0028-'))
+  const pre = await createThrowawayDatabase({
+    namePrefix: 'dsh_work_usage_0028_test',
+    maxConnections: 2,
+    migrate: false,
+  })
+  try {
+    for (const file of (await readdir(migrationsDirectory)).sort()) {
+      if (file < '0027') await copyFile(resolve(migrationsDirectory, file), resolve(preDirectory, file))
+    }
+    await runMigrations(pre.client, preDirectory)
+
+    const [beforeIndex] = await pre.client<{ index: string | null }[]>`
+      select to_regclass('public.model_usage_by_attempt')::text as index
+    `
+    assert.equal(beforeIndex?.index, null, '前置：0026 基线不得已有 0028 的唯一索引')
+
+    const workspaceId = `ws-usage-0028-${randomUUID().replaceAll('-', '').slice(0, 8)}`
+    await pre.client`
+      insert into workspaces (id, tenant_id, name, description, workspace_type, created_by, status)
+      values (${workspaceId}, ${tenantId}, '5-T3 去重用例空间', '', 'team', 'U00001', 'active')
+    `
+    const { runId, attemptId } = await seedUsageAttempt(pre.client, { workspaceId, userId: 'U00001' })
+
+    // 三条同一 (tenant_id, attempt_id) 的重复行：
+    //   zzz  最早（5 天前，11 tokens）
+    //   tie  与 zzz 并列同一时刻（22 tokens）
+    //   late 最新（1 天前，33 tokens）
+    // id 最小的是 late，因此「只保留最小 id」或「保留最新」都会留下 late，用例可判别。
+    const earliest = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000)
+    const latest = new Date(Date.now() - 24 * 60 * 60 * 1000)
+    await insertUsageEvent(pre.client, { id: `usage-${attemptId}-zzz`, runId, attemptId, occurredAt: earliest, inputTokens: 11 })
+    await insertUsageEvent(pre.client, { id: `usage-${attemptId}-tie`, runId, attemptId, occurredAt: earliest, inputTokens: 22 })
+    await insertUsageEvent(pre.client, { id: `usage-${attemptId}-late`, runId, attemptId, occurredAt: latest, inputTokens: 33 })
+
+    const survivors = async () => pre.client<{ id: string, occurredAt: Date, inputTokens: number }[]>`
+      select id, occurred_at as "occurredAt", input_tokens::integer as "inputTokens"
+        from model_usage_events
+       where tenant_id = ${tenantId} and attempt_id = ${attemptId}
+       order by id
+    `
+    assert.equal((await survivors()).length, 3, '前置：0026 库上三条重复行都已写入')
+
+    // 并列时「已上报」优先于「平台估算」（对抗性评审 F3）：另起一组同刻重复行，且估算行的 id
+    // 更小——只有把 estimated 作为第二排序键才会保留已上报那一行。必须在应用 0028 **之前**种。
+    const { runId: estRunId, attemptId: estAttemptId } = await seedUsageAttempt(pre.client, { workspaceId, userId: 'U00001' })
+    const sameInstant = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000)
+    await insertUsageEvent(pre.client, {
+      id: `usage-${estAttemptId}-aaa-estimated`, runId: estRunId, attemptId: estAttemptId,
+      occurredAt: sameInstant, inputTokens: 7, estimated: true,
+    })
+    await insertUsageEvent(pre.client, {
+      id: `usage-${estAttemptId}-zzz-reported`, runId: estRunId, attemptId: estAttemptId,
+      occurredAt: sameInstant, inputTokens: 8, estimated: false,
+    })
+
+    await applyUsageIndexMigration(pre.client)
+
+    const [estimatedTie] = await pre.client<{ id: string, estimated: boolean }[]>`
+      select id, estimated from model_usage_events
+       where tenant_id = ${tenantId} and attempt_id = ${estAttemptId}
+    `
+    assert.equal(
+      estimatedTie?.id,
+      `usage-${estAttemptId}-zzz-reported`,
+      'occurred_at 并列时必须保留已上报行（estimated=false），而不是 id 更小的估算行',
+    )
+    assert.equal(estimatedTie?.estimated, false)
+
+    const deduped = await survivors()
+    assert.equal(deduped.length, 1, '同一 (tenant_id, attempt_id) 只允许保留一行')
+    assert.equal(deduped[0]?.id, `usage-${attemptId}-tie`, '保留 occurred_at 最早者；并列时取 id 最小者')
+    assert.equal(deduped[0]?.occurredAt.getTime(), earliest.getTime(), '保留的必须是首次记录时刻')
+    assert.equal(deduped[0]?.inputTokens, 22)
+
+    // 唯一索引立刻生效：再插一条换 id 的重复行必须 23505。
+    await assert.rejects(
+      () => insertUsageEvent(pre.client, {
+        id: `usage-${attemptId}-again`, runId, attemptId, occurredAt: new Date(),
+      }),
+      (error: unknown) => (error as { code?: string }).code === '23505',
+    )
+
+    // 可重复执行：重跑 0028 原文是 no-op（不报错、不再删任何行、索引仍在）。
+    await applyUsageIndexMigration(pre.client)
+    const replayed = await survivors()
+    assert.equal(replayed.length, 1, '重放 0028 不得删掉唯一幸存行')
+    assert.equal(replayed[0]?.id, `usage-${attemptId}-tie`)
+    const [afterIndex] = await pre.client<{ runsActive: string | null, usageByAttempt: string | null }[]>`
+      select to_regclass('public.runs_active_by_tenant')::text as "runsActive",
+             to_regclass('public.model_usage_by_attempt')::text as "usageByAttempt"
+    `
+    assert.equal(afterIndex?.runsActive, 'runs_active_by_tenant')
+    assert.equal(afterIndex?.usageByAttempt, 'model_usage_by_attempt')
+  } finally {
+    await pre.dispose()
+    await rm(preDirectory, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -610,4 +782,59 @@ async function seedRawUsageEvent(input: {
       now() - make_interval(days => ${input.daysAgo})
     )
   `
+}
+
+/** 只建会话 → Run → Attempt，返回可复用的 attemptId（5-T3 唯一性与去重用例用）。 */
+async function seedUsageAttempt(
+  client: DatabaseClient,
+  input: { workspaceId: string, userId: string },
+) {
+  const sessionId = `session-usage-${randomUUID()}`
+  await client`
+    insert into sessions (id, tenant_id, workspace_id, created_by, agent_version_id, title, status)
+    values (
+      ${sessionId}, ${tenantId}, ${input.workspaceId}, ${input.userId},
+      'agent-version-dsh-work-assistant-1', '空间用量测试会话', 'active'
+    )
+  `
+  const runId = `run-usage-${randomUUID()}`
+  await client`
+    insert into runs (id, tenant_id, session_id, requested_by, idempotency_key, status)
+    values (${runId}, ${tenantId}, ${sessionId}, ${input.userId}, ${`idem-${runId}`}, 'succeeded')
+  `
+  const attemptId = `attempt-usage-${randomUUID()}`
+  await client`
+    insert into run_attempts (
+      id, tenant_id, run_id, attempt_no, manifest, manifest_sha256, model_route_snapshot, status
+    ) values (
+      ${attemptId}, ${tenantId}, ${runId}, 1, ${client.json({})}, 'sha256-test',
+      ${client.json({ providerKey: 'dsh-default', modelKey: 'dsh-default' })}, 'succeeded'
+    )
+  `
+  return { runId, attemptId }
+}
+
+/** 以调用方给定的 id/occurred_at 写一条用量事件（用于构造重复 attempt 行）。 */
+async function insertUsageEvent(
+  client: DatabaseClient,
+  input: { id: string, runId: string, attemptId: string, occurredAt: Date, inputTokens?: number, estimated?: boolean },
+) {
+  await client`
+    insert into model_usage_events (
+      id, tenant_id, run_id, attempt_id, provider, model, input_tokens, output_tokens,
+      latency_ms, cost_amount, cost_currency, status, trace_id, estimated, occurred_at
+    ) values (
+      ${input.id}, ${tenantId}, ${input.runId}, ${input.attemptId}, 'dsh-default', 'dsh-default',
+      ${input.inputTokens ?? 1}, 1, 10, 0, 'CNY', 'success', ${`trace-${input.id}`}, ${input.estimated ?? false},
+      ${input.occurredAt}
+    )
+  `
+}
+
+/** 与 migration-runner 相同的方式执行 0028 原文：单事务内 unsafe，保证「半升级」不可见。 */
+async function applyUsageIndexMigration(client: DatabaseClient) {
+  const sqlText = await readFile(resolve(migrationsDirectory, usageIndexMigration), 'utf8')
+  await client.begin(async (transaction) => {
+    await transaction.unsafe(sqlText)
+  })
 }

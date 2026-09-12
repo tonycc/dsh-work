@@ -108,7 +108,9 @@ export class PostgresAuthorizationService {
     try {
       const identity = await this.requireIdentity(input.userId, input.roleIds)
       if (!identity.permissions.includes('workbench:use')) {
-        throw new Error('当前用户没有员工工作台使用权限')
+        // 5-T4：授权拒绝统一类型化，HTTP 仍是 403 permission_denied，只是不再依赖
+        // 「没有…权限」这条中文正则。
+        throw authorizationDenied('当前用户没有员工工作台使用权限')
       }
       const workspaceType = workspaceId
         ? await this.requireWorkspaceMembership(input.userId, workspaceId, input.allowArchived === true)
@@ -142,7 +144,10 @@ export class PostgresAuthorizationService {
         input.additionalSkillReferences ?? [],
       )
       if (!intersects(context.roleIds, agent.visibleRoleIds)) {
-        throw new Error('当前用户角色不可使用所选 Agent')
+        // 5-T4 发现、父代理修复：这是真授权拒绝，但文案不含 403 正则里的任何片段
+        // （「不可使用」不在 `/没有.*权限|不可访问|不是成员|不可调用|未授权|不是平台管理员/`），
+        // 因此此前经 HTTP 暴露会落 500 operation_failed——那是误分类。现改为类型化 403。
+        throw authorizationDenied('当前用户角色不可使用所选 Agent')
       }
       requireScopes(context.dataScopes, agent.dataScopes, 'Agent')
 
@@ -196,8 +201,12 @@ export class PostgresAuthorizationService {
        where tenant_id = ${tenantId} and workspace_id = ${input.workspaceId}
          and user_id = ${input.userId}
     `
-    if (!member) throw new Error('当前用户已不是该团队空间成员')
-    if (member.role === 'viewer') throw new Error('当前用户角色为只读，不能继续执行任务')
+    // 5-T4 发现、父代理修复：下面两处同为授权拒绝，此前分类都不是 403——
+    // 「不是该团队空间成员」里「不是成员」不连续 → 500 operation_failed；
+    // 「只读…不能继续执行任务」先命中 `/当前状态|只有.*可以|不能/` → 409 state_conflict。
+    // 按权限矩阵它们都是「无权限」，现统一类型化为 403（消息文本不变，避免枚举空间）。
+    if (!member) throw authorizationDenied('当前用户已不是该团队空间成员')
+    if (member.role === 'viewer') throw authorizationDenied('当前用户角色为只读，不能继续执行任务')
 
     // Agent 关联状态必须与能力授权分开校验：对账把 legacy 来源改写为 manual 后，
     // 停用 Agent 成员不会删除该 grant，仅靠 requireWorkspaceCapabilities 会放行已
@@ -425,7 +434,7 @@ export class PostgresAuthorizationService {
               and (r.permissions ? 'admin:*' or r.permissions ? 'admin:write')
          )
     `
-    if (!row) throw new Error(`操作人不存在、已停用或不是平台管理员：${userId}`)
+    if (!row) throw authorizationDenied(`操作人不存在、已停用或不是平台管理员：${userId}`)
     return row
   }
 
@@ -623,7 +632,7 @@ export class PostgresAuthorizationService {
   ): Promise<CapabilityVersion[]> {
     const resolved = await this.resolveToolVersionRows(references)
     for (const tool of resolved) {
-      if (!intersects(roleIds, tool.allowedRoleIds)) throw new Error(`当前用户角色不可调用工具：${tool.reference}`)
+      if (!intersects(roleIds, tool.allowedRoleIds)) throw authorizationDenied(`当前用户角色不可调用工具：${tool.reference}`)
       requireScopes(dataScopes, tool.requiredDataScopes, `工具 ${tool.reference}`)
     }
     return resolved.map(tool => ({ reference: tool.reference, versionId: tool.versionId }))
@@ -668,12 +677,14 @@ export class PostgresAuthorizationService {
          and capability_type = ${capabilityType}
     `
     if (rows.length === 0) {
-      throw new Error(`工作空间未配置${capabilityLabel(capabilityType)}授权`)
+      // 5-T4 发现、父代理修复：「未配置…授权」不匹配任何一条授权正则，此前落 500；
+      // 语义上就是「该空间没有这项能力授权」，属授权拒绝，现类型化为 403。
+      throw authorizationDenied(`工作空间未配置${capabilityLabel(capabilityType)}授权`)
     }
     const allowed = new Set(rows.map(row => row.capabilityVersionId))
     const denied = capabilities.filter(capability => !allowed.has(capability.versionId))
     if (denied.length) {
-      throw new Error(`工作空间未授权${capabilityLabel(capabilityType)}：${denied.map(item => item.reference).join('、')}`)
+      throw authorizationDenied(`工作空间未授权${capabilityLabel(capabilityType)}：${denied.map(item => item.reference).join('、')}`)
     }
   }
 
@@ -713,7 +724,7 @@ function parseReference(reference: string, label: string) {
 function requireScopes(available: string[], required: string[], label: string) {
   const availableSet = new Set(available)
   const missing = unique(required).filter(scope => !availableSet.has(scope))
-  if (missing.length) throw new Error(`${label}要求未授权的数据范围：${missing.join('、')}`)
+  if (missing.length) throw authorizationDenied(`${label}要求未授权的数据范围：${missing.join('、')}`)
 }
 
 function intersects(left: string[], right: string[]) {

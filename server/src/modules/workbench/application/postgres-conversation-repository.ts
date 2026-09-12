@@ -147,7 +147,7 @@ export class PostgresConversationRepository {
        where s.tenant_id = ${tenantId} and s.id = ${sessionId} and s.created_by = ${userId}
          and s.status = 'active'
     `
-    if (!row) throw new Error(`Session 不存在或不可访问：${sessionId}`)
+    if (!row) throw authorizationDenied(`Session 不存在或不可访问：${sessionId}`)
     return { ...row, createdAt: row.createdAt.toISOString() }
   }
 
@@ -159,7 +159,7 @@ export class PostgresConversationRepository {
            and status = 'active'
          for update
       `
-      if (!session) throw new Error(`Session 不存在或不可访问：${sessionId}`)
+      if (!session) throw authorizationDenied(`Session 不存在或不可访问：${sessionId}`)
       // 删除会话属执行轨（3-T1 决策）：归档是只读保留，删除会销毁要保留的历史内容，
       // 因此归档空间拒绝（活跃团队 + 当前成员，个人空间不受影响）。
       await this.requireWritableWorkspace(session.workspaceId)

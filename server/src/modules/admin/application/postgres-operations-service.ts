@@ -15,6 +15,7 @@ import type { DatabaseClient } from '../../../infrastructure/postgres/database.t
 import type { RunAttemptRecord, RunRecord } from '../../run/run-types.ts'
 import type { AgentRuntimePort } from '../../runtime/runtime-types.ts'
 import type { PostgresAuthorizationService } from '../../authorization/postgres-authorization-service.ts'
+import { authorizationDenied } from '../../authorization/authorization-errors.ts'
 import { redactSensitiveText, sanitizeSafeMetadata } from '../../../security/safe-observability.ts'
 
 const tenantId = 'tenant-dsh-work'
@@ -544,7 +545,7 @@ export class PostgresOperationsService {
               and (r.permissions ? 'admin:*' or r.permissions ? 'admin:write')
          )
     `
-    if (!actor) throw new Error(`操作人不存在、已停用或不是平台管理员：${userId}`)
+    if (!actor) throw authorizationDenied(`操作人不存在、已停用或不是平台管理员：${userId}`)
     return actor
   }
 

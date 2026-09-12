@@ -1,4 +1,4 @@
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElTooltip } from 'element-plus'
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 
@@ -167,5 +167,28 @@ describe('WorkspaceInfoPanel 团队分支', () => {
       .map(node => node.attributes('aria-label'))
 
     expect(labels).toEqual(['Agent 状态：可用', 'Agent 状态：已停用'])
+  })
+
+  it('Agent 第三态：可用但有原因时显示红色「不可用」并在 tooltip 展示原因（5-T1）', () => {
+    const wrapper = mountPanel({
+      agentMembers: [
+        agentMembers[0],
+        {
+          ...agentMembers[1]!,
+          status: 'available',
+          allowedActions: ['disable', 'upgrade', 'remove'],
+          unavailableReason: '版本失效：Agent 版本已下架',
+        },
+      ],
+    })
+    const statuses = wrapper.findAll('[data-testid="panel-agent-status"]')
+
+    expect(statuses[0]?.attributes('aria-label')).toBe('Agent 状态：可用')
+    expect(statuses[1]?.attributes('aria-label')).toBe('Agent 状态：不可用')
+    expect(statuses[1]?.classes()).toContain('workspace-agent__status--danger')
+    // 不可用不渲染「开始对话」入口（服务端 allowedActions 已剔除）。
+    expect(wrapper.findAll('[data-testid="panel-agent-start"]')).toHaveLength(1)
+    const tooltips = wrapper.findAllComponents(ElTooltip)
+    expect(tooltips.some(tooltip => String(tooltip.props('content')).includes('版本失效'))).toBe(true)
   })
 })

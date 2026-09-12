@@ -4,8 +4,9 @@ import { after, before, test } from 'node:test'
 
 import { PostgresAgentService } from '../../modules/agent/postgres-agent-service.ts'
 import { PostgresAuthorizationService } from '../../modules/authorization/postgres-authorization-service.ts'
-import { canReadWorkspaceObject } from '../../modules/authorization/authorization-errors.ts'
+import { canReadWorkspaceObject, AuthorizationDeniedError, isAuthorizationDenial } from '../../modules/authorization/authorization-errors.ts'
 import { PostgresWorkspaceGrantSourceService } from '../../modules/authorization/postgres-workspace-grant-source-service.ts'
+import { classifyHttpError } from '../../http/router.ts'
 import { createDatabase, type DatabaseClient } from './database.ts'
 import { createThrowawayDatabase, type ThrowawayDatabase } from './test-database.ts'
 
@@ -632,6 +633,100 @@ test('listWorkspaceAgentCandidates filters by publish state, join allowance, vis
 })
 
 // ---------------------------------------------------------------------------
+// 5-T4 授权拒绝类型化（去按文案分类）
+// ---------------------------------------------------------------------------
+
+/**
+ * 5-T4：授权服务内这五处拒绝原先抛裸 `Error`，HTTP 层靠中文消息正则才落 403。
+ * 类型化后状态码与 code 必须逐条不变（仍是 403 / permission_denied），文案也保持
+ * 原样——本用例把「消息 → 状态/code」的对照关系锁死，防止有人靠改文案分类。
+ */
+test('5-T4 授权拒绝类型化：消息不变，HTTP 仍是 403 permission_denied', async () => {
+  // 1）缺少 workbench:use：没有任何角色的员工。
+  const bareUserId = `user-t2-typed-bare-${suffix}`
+  await database`
+    insert into users (id, tenant_id, external_subject, display_name, status)
+    values (${bareUserId}, ${tenantId}, ${`bootstrap:${bareUserId}`}, 'T2 无角色员工', 'active')
+  `
+  await expectTypedDenial(
+    'authorizeWorkbench 缺少 workbench:use',
+    '当前用户没有员工工作台使用权限',
+    () => authorization.authorizeWorkbench({ userId: bareUserId }),
+  )
+
+  // 2）平台管理员校验（原先靠「不是平台管理员」文案落 403）。
+  await expectTypedDenial(
+    'requirePlatformAdmin',
+    `操作人不存在、已停用或不是平台管理员：${bareUserId}`,
+    () => authorization.requirePlatformAdmin(bareUserId),
+  )
+
+  // 3）角色不可调用工具：临时把只读工具收紧到平台管理员角色。
+  const [toolBefore] = await database<{ allowedRoleIds: string[] }[]>`
+    select allowed_role_ids as "allowedRoleIds" from tools
+     where tenant_id = ${tenantId} and id = 'read'
+  `
+  await database`
+    update tools set allowed_role_ids = '["role-platform-admin"]'::jsonb
+     where tenant_id = ${tenantId} and id = 'read'
+  `
+  try {
+    await expectTypedDenial(
+      'resolveAndAuthorizeTools',
+      '当前用户角色不可调用工具：read@1.0.0',
+      () => authorization.authorizeRuntime({
+        userId: 'U00001',
+        agentVersionId: 'agent-version-dsh-work-assistant-1',
+      }),
+    )
+  } finally {
+    await database`
+      update tools set allowed_role_ids = ${database.json(toolBefore?.allowedRoleIds ?? ['role-employee', 'role-platform-admin'])}
+       where tenant_id = ${tenantId} and id = 'read'
+    `
+  }
+
+  // 4）空间已配置能力授权，但不含本次请求的 Agent 版本。
+  const workspaceId = `ws-t2-typed-cap-${suffix}`
+  await createTeamWorkspace(workspaceId, [{ userId: 'U00001', role: 'owner' }])
+  await database`
+    insert into workspace_capability_grants (tenant_id, workspace_id, capability_type, capability_version_id)
+    values (${tenantId}, ${workspaceId}, 'agent', 'agent-version-t2-other')
+  `
+  await expectTypedDenial(
+    'requireWorkspaceCapabilities',
+    '工作空间未授权Agent：agent-version-dsh-work-assistant-1',
+    () => authorization.authorizeRuntime({
+      userId: 'U00001',
+      workspaceId,
+      agentVersionId: 'agent-version-dsh-work-assistant-1',
+    }),
+  )
+
+  // 5）数据范围未授权（原先靠「未授权」文案落 403）。
+  await database`
+    delete from data_scope_grants
+     where tenant_id = ${tenantId} and id = 'grant-role-employee-workspace'
+  `
+  try {
+    await expectTypedDenial(
+      'requireScopes',
+      'Agent要求未授权的数据范围：workspace:authorized',
+      () => authorization.authorizeRuntime({
+        userId: 'U00001',
+        agentVersionId: 'agent-version-dsh-work-assistant-1',
+      }),
+    )
+  } finally {
+    await database`
+      insert into data_scope_grants (id, tenant_id, subject_type, subject_id, scope_code, scope_value)
+      values ('grant-role-employee-workspace', ${tenantId}, 'role', 'role-employee', 'capability', 'workspace:authorized')
+      on conflict do nothing
+    `
+  }
+})
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -787,3 +882,129 @@ async function createCandidateAgent(input: {
   }
   return { id: input.id, versionId }
 }
+
+/**
+ * 断言一个拒绝已经是**类型化授权拒绝**，且消息不变、HTTP 映射仍是 403 permission_denied。
+ * `classifyHttpError` 对类型化错误走 status/code 分支、对裸 Error 走文案正则，两者都必须给出
+ * 403——这正是「去文案分类」要保证的可观察行为不变。
+ */
+async function expectTypedDenial(label: string, message: string, run: () => Promise<unknown>) {
+  const error = await run().then(() => null, (thrown: unknown) => thrown)
+  assert.ok(error instanceof AuthorizationDeniedError, `${label} 必须是类型化授权拒绝，实际：${String(error)}`)
+  assert.equal(error.status, 403, `${label} 状态码不得变化`)
+  assert.equal(error.code, 'permission_denied', `${label} code 不得变化`)
+  assert.equal(error.message, message, `${label} 文案不得变化`)
+  assert.equal(isAuthorizationDenial(error), true, `${label} 必须仍被撤权分类器识别`)
+  const mapped = classifyHttpError(error, '/api/workbench/v1/workspaces/ws-t2-typed/agents')
+  assert.equal(mapped.status, 403)
+  assert.equal(mapped.error.code, 'permission_denied')
+}
+
+/** 最小可用的已发布 Agent 版本 + 空间级 agent 授权（无 skill/tool 依赖）。 */
+async function seedAuthorizableAgent(workspaceId: string, versionId: string, visibleRoleIds: string[] = ['role-employee']) {
+  const agentId = `${versionId}-agent`
+  await database`
+    insert into agents (
+      id, tenant_id, name, description, welcome_message, owner_user_id, created_by,
+      status, active_version_id, allow_workspace_join
+    ) values (
+      ${agentId}, ${tenantId}, '5-T4 测试 Agent', '5-T4 类型化拒绝用例。', '',
+      'U00008', 'U00008', 'published', null, true
+    )
+  `
+  await database`
+    insert into agent_versions (
+      id, tenant_id, agent_id, version, name, description, welcome_message,
+      example_prompts, system_prompt, visible_role_ids, data_scopes, max_tokens,
+      timeout_seconds, skill_refs, tool_refs, status, created_by, change_summary
+    ) values (
+      ${versionId}, ${tenantId}, ${agentId}, '1.0.0', '5-T4 测试 Agent', '5-T4 用例版本。', '',
+      ${database.json([] as string[])}, '你是 5-T4 测试 Agent。',
+      ${database.json(visibleRoleIds)}, ${database.json(['enterprise:authorized'] as string[])},
+      12000, 300, ${database.json([] as string[])}, ${database.json([] as string[])},
+      'published', 'U00008', '5-T4 测试版本'
+    )
+  `
+  await database`
+    insert into workspace_capability_grants (tenant_id, workspace_id, capability_type, capability_version_id)
+    values (${tenantId}, ${workspaceId}, 'agent', ${versionId})
+    on conflict do nothing
+  `
+}
+
+test('5-T4 后续：三处原先落 500/409 的授权拒绝已类型化为 403（消息不变）', async () => {
+  // 1）Agent 可见范围不含调用者角色：原分类无正则命中 → 500 operation_failed。
+  const roleScopeVersion = `agent-version-t4-rolescope-${suffix}`
+  const roleScopeWorkspace = `ws-t4-rolescope-${suffix}`
+  // U00001/U00002 由基础种子迁移创建，不要重复插入（会撞主键）。
+  await createTeamWorkspace(roleScopeWorkspace, [{ userId: 'U00001', role: 'owner' }])
+  await seedAuthorizableAgent(roleScopeWorkspace, roleScopeVersion, ['role-platform-admin'])
+  await expectTypedDenial(
+    'authorizeRuntime 角色不在 Agent 可见范围',
+    '当前用户角色不可使用所选 Agent',
+    () => authorization.authorizeRuntime({
+      userId: 'U00001',
+      workspaceId: roleScopeWorkspace,
+      agentVersionId: roleScopeVersion,
+    }),
+  )
+
+  // 2）空间完全没有能力授权：原「未配置…授权」文案不匹配任何授权正则 → 500。
+  const noGrantWorkspace = `ws-t4-nogrant-${suffix}`
+  await createTeamWorkspace(noGrantWorkspace, [{ userId: 'U00001', role: 'owner' }])
+  await database`
+    insert into agents (
+      id, tenant_id, name, description, welcome_message, owner_user_id, created_by,
+      status, active_version_id, allow_workspace_join
+    ) values (
+      ${`${noGrantWorkspace}-agent`}, ${tenantId}, '5-T4 无授权 Agent', '5-T4 用例。', '',
+      'U00008', 'U00008', 'published', null, true
+    )
+  `
+  const noGrantVersion = `${noGrantWorkspace}-version`
+  await database`
+    insert into agent_versions (
+      id, tenant_id, agent_id, version, name, description, welcome_message,
+      example_prompts, system_prompt, visible_role_ids, data_scopes, max_tokens,
+      timeout_seconds, skill_refs, tool_refs, status, created_by, change_summary
+    ) values (
+      ${noGrantVersion}, ${tenantId}, ${`${noGrantWorkspace}-agent`}, '1.0.0', '5-T4 无授权 Agent', '5-T4 用例。', '',
+      ${database.json([] as string[])}, '你是 5-T4 测试 Agent。',
+      ${database.json(['role-employee'] as string[])}, ${database.json(['enterprise:authorized'] as string[])},
+      12000, 300, ${database.json([] as string[])}, ${database.json([] as string[])},
+      'published', 'U00008', '5-T4 测试版本'
+    )
+  `
+  await expectTypedDenial(
+    'requireWorkspaceCapabilities 未配置授权',
+    '工作空间未配置Agent授权',
+    () => authorization.authorizeRuntime({
+      userId: 'U00001',
+      workspaceId: noGrantWorkspace,
+      agentVersionId: noGrantVersion,
+    }),
+  )
+
+  // 3）只读成员的执行前复核：原分类先命中「不能」→ 409 state_conflict，语义上是无权限。
+  const viewerWorkspace = `ws-t4-viewer-${suffix}`
+  const viewerVersion = `${viewerWorkspace}-version`
+  const viewerUserId = `user-t4-viewer-${suffix}`
+  await createUser(viewerUserId, 'T4 只读成员')
+  await createTeamWorkspace(viewerWorkspace, [
+    { userId: 'U00001', role: 'owner' },
+    { userId: viewerUserId, role: 'viewer' },
+  ])
+  await seedAuthorizableAgent(viewerWorkspace, viewerVersion)
+  await expectTypedDenial(
+    'authorizeTeamRunExecution 只读成员',
+    '当前用户角色为只读，不能继续执行任务',
+    () => authorization.authorizeTeamRunExecution({
+      userId: viewerUserId,
+      workspaceId: viewerWorkspace,
+      agentVersionId: viewerVersion,
+    }),
+  )
+
+  // 说明：`authorizeTeamRunExecution` 里「成员在读两次之间被移除」的那条（原 500）只能在竞态窗口
+  // 触发，无法在集成用例里稳定构造；它与上面第 3 条同处一个方法、同一改造方式，故未单独构造。
+})

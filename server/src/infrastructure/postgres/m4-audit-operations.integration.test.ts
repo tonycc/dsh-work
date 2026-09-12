@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto'
 import { after, before, test } from 'node:test'
 
 import { PostgresOperationsService } from '../../modules/admin/application/postgres-operations-service.ts'
+import { AuthorizationDeniedError } from '../../modules/authorization/authorization-errors.ts'
+import { classifyHttpError } from '../../http/router.ts'
 import { PostgresRunRepository } from '../../modules/run/postgres-run-repository.ts'
 import { PostgresConversationRepository } from '../../modules/workbench/application/postgres-conversation-repository.ts'
 import type { DatabaseClient } from './database.ts'
@@ -155,4 +157,23 @@ test('24-hour operations summary is calculated from persisted facts', async () =
   assert.ok(summary.toolCalls24h >= 1)
   assert.ok(summary.artifacts24h >= 1)
   assert.ok(summary.attentionEvents24h >= 3)
+})
+
+test('5-T4 管理操作人校验类型化：仍映射为 403 permission_denied', async () => {
+  // 本套件的 operations 未注入 authorization，因此走的是它自己的 requirePlatformAdmin 分支。
+  const denial = await operations.updateRuntimeConfiguration({
+    runtimeId: 'runtime-local-01',
+    maxConcurrentWorkers: 2,
+    attemptTimeoutMinutes: 2,
+    schedulingStatus: 'accepting',
+    actor: 'U00001',
+  }).then(() => null, (error: unknown) => error)
+
+  assert.ok(denial instanceof AuthorizationDeniedError, `必须是类型化授权拒绝，实际：${String(denial)}`)
+  assert.equal(denial.status, 403)
+  assert.equal(denial.code, 'permission_denied')
+  assert.match(denial.message, /不是平台管理员/)
+  const mapped = classifyHttpError(denial, '/api/admin/v1/runtimes/runtime-local-01/check')
+  assert.equal(mapped.status, 403)
+  assert.equal(mapped.error.code, 'permission_denied')
 })

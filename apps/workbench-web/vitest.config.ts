@@ -11,6 +11,12 @@ export default defineConfig({
   test: {
     environment: 'happy-dom',
     include: ['src/**/*.test.ts'],
+    // 重异步组件用例（如 WorkspaceMemberDialog 的 20 个用例，单个通常 0.3–1s）
+    // 在整机高负载（load avg 25 / 10 CPU）下曾超过默认 5s 而报
+    // 「Test timed out in 5000ms」。这里给纯异步等待留出合理上限；
+    // 它只放宽单用例的墙钟预算，不放宽任何断言，也不使用 bail/重试掩盖真实失败。
+    testTimeout: 20_000,
+    hookTimeout: 20_000,
     restoreMocks: true,
     clearMocks: true,
   },

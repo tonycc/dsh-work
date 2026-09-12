@@ -343,6 +343,12 @@ export interface WorkspaceMember {
   displayName: string
   role: TeamMemberRole
   joinedAt: string
+  /**
+   * 成员所属部门（5-T2）；服务端与候选名册同一口径
+   * `coalesce(users.department_id, '未分配部门')`。添加/角色变更响应不带该字段，
+   * 因此可选，名册渲染时按有无决定是否展示。
+   */
+  department?: string
 }
 
 /**
@@ -429,9 +435,10 @@ export interface WorkspaceAgentMember {
   allowedActions: AgentMemberAction[]
   /**
    * 状态为不可用时的具体原因（平台未授权／版本失效／Runtime 不可用，design
-   * §2.6）。T4 契约目前不返回该字段，前端只在服务端给出时展示 tooltip。
+   * §2.6）。status 仍为 available，服务端按优先级给出；status 为 disabled 时
+   * 恒为 null，前端只在非空时展示行内 tooltip 与红色状态点。
    */
-  unavailableReason?: string
+  unavailableReason?: string | null
 }
 
 export interface WorkbenchSession {

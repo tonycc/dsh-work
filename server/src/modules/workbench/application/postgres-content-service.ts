@@ -350,7 +350,8 @@ export class PostgresContentService {
     })
     const [updated] = (await this.listWorkspaces(actorUserId, { status: 'all' }))
       .filter(workspace => workspace.id === workspaceId)
-    if (!updated) throw new Error('工作空间不存在或不可访问')
+    // 5-T4：与「不可访问」同文案的拒绝统一类型化（HTTP 仍是 403 permission_denied）。
+    if (!updated) throw authorizationDenied('工作空间不存在或不可访问')
     return updated
   }
 
@@ -993,7 +994,7 @@ export class PostgresContentService {
       select id, workspace_id as "workspaceId" from sessions
        where tenant_id = ${tenantId} and id = ${sessionId} and created_by = ${actorUserId} and status = 'active'
     `
-    if (!session) throw new Error('Session 不存在或不可访问')
+    if (!session) throw authorizationDenied('Session 不存在或不可访问')
     // 上传属执行轨（3-T1）：归档不改 session.status，必须单独校验所属空间仍活跃，
     // 否则归档空间仍可上传会话附件（符合性评审 P1-2，实测返回 201）。
     await this.requireActiveWorkspace(session.workspaceId, actorUserId)
@@ -1110,7 +1111,7 @@ export class PostgresContentService {
              )
            )
       `
-      if (!row) throw new Error(`文件不存在、不可访问或解析未成功：${fileId}`)
+      if (!row) throw authorizationDenied(`文件不存在、不可访问或解析未成功：${fileId}`)
       const content = await readFile(this.resolveStorage(row.textStorageKey), 'utf8')
       totalBytes += Buffer.byteLength(content)
       if (totalBytes > 1024 * 1024) throw new Error('本次 Run 的文件解析文本合计超过 1 MB，请减少或拆分文件')
@@ -1284,7 +1285,7 @@ export class PostgresContentService {
            )
          )
     `
-    if (!row) throw new Error('文件不存在或不可访问')
+    if (!row) throw authorizationDenied('文件不存在或不可访问')
     // 会话作者分支不校验团队身份：被移出/退出的成员仍能命中本人旧会话文件，
     // 必须再按对象所属空间复核当前团队读权限（1B-T4 / AC-09）。3-T1 起该门禁走
     // 读取轨：归档空间的现任成员可读，被移出成员与非成员一律拒绝。拒绝统一走
@@ -1305,7 +1306,7 @@ export class PostgresContentService {
          and (${version ?? null}::integer is null or av.version_no = ${version ?? null})
        order by av.version_no desc limit 1
     `
-    if (!row) throw new Error('Artifact 不存在或不可访问')
+    if (!row) throw authorizationDenied('Artifact 不存在或不可访问')
     // 成果读取与团队运行同一收权口径：作者身份不足以越过当前团队读权限（AC-09）。
     if (!(await canReadWorkspaceObject(this.authorization, row.workspaceId, actorUserId))) {
       throw authorizationDenied('Artifact 不存在或不可访问')

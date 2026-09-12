@@ -344,11 +344,13 @@ function startConversation(member: WorkspaceAgentMember) {
 }
 
 function agentStatusLabel(member: WorkspaceAgentMember) {
-  return member.status === 'available' ? '可用' : '已停用'
+  if (member.status !== 'available') return '已停用'
+  return member.unavailableReason ? '不可用' : '可用'
 }
 
 function agentStatusTone(member: WorkspaceAgentMember) {
-  return member.status === 'available' ? 'success' : 'neutral'
+  if (member.status !== 'available') return 'neutral'
+  return member.unavailableReason ? 'danger' : 'success'
 }
 
 function close() {
@@ -395,6 +397,7 @@ defineExpose({ ensureEmployeeCandidates })
             <span class="member-dialog__avatar">{{ Array.from(member.displayName)[0] ?? '成' }}</span>
             <div class="member-dialog__copy">
               <strong>{{ member.displayName }}</strong>
+              <span v-if="member.department">· {{ member.department }}</span>
               <span v-if="isSelf(member)">本人</span>
             </div>
 
@@ -766,6 +769,11 @@ defineExpose({ ensureEmployeeCandidates })
 
 .member-dialog__status--success {
   background: #2e8b70;
+}
+
+/* 第三态「不可用」（available + 原因）：红点区分「已停用」的灰点。 */
+.member-dialog__status--danger {
+  background: var(--dsh-color-danger);
 }
 
 .member-dialog__actions {

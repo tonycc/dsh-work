@@ -6,12 +6,13 @@ import { after, before, test } from 'node:test'
 import type { ApiAudience, RequestIdentity } from '../modules/identity/types.ts'
 import { PostgresAgentService } from '../modules/agent/postgres-agent-service.ts'
 import { PostgresAuthorizationService } from '../modules/authorization/postgres-authorization-service.ts'
+import { AuthorizationDeniedError } from '../modules/authorization/authorization-errors.ts'
 import { PostgresOperationsService } from '../modules/admin/application/postgres-operations-service.ts'
 import { PostgresGrantReconciliationService } from '../modules/admin/application/postgres-grant-reconciliation-service.ts'
 import { PostgresWorkspaceAgentMemberService } from '../modules/workbench/application/postgres-workspace-agent-member-service.ts'
 import type { DatabaseClient } from '../infrastructure/postgres/database.ts'
 import { createThrowawayDatabase, type ThrowawayDatabase } from '../infrastructure/postgres/test-database.ts'
-import { Router } from './router.ts'
+import { Router, classifyHttpError } from './router.ts'
 import { registerAgentRoutes } from './admin/agent-routes.ts'
 import { registerOperationsRoutes } from './admin/operations-routes.ts'
 import { registerWorkspaceAgentMemberRoutes } from './workbench/workspace-agent-member-routes.ts'
@@ -310,6 +311,17 @@ test('对账接口按管理权限保护：非管理员不能完成对账', async
     body: { sourceIds: ['wgs-anything'] },
   })
   assert.equal(forbidden.status, 403)
+
+  // 5-T4：服务层的平台管理员校验同样类型化，HTTP 仍是 403 permission_denied。
+  const denial = await reconciliation.reconcile({ sourceIds: ['wgs-anything'], actor: 'U00001' })
+    .then(() => null, (error: unknown) => error)
+  assert.ok(denial instanceof AuthorizationDeniedError, `必须是类型化授权拒绝，实际：${String(denial)}`)
+  assert.equal(denial.status, 403)
+  assert.equal(denial.code, 'permission_denied')
+  assert.equal(
+    classifyHttpError(denial, '/api/admin/v1/grant-sources/reconcile').error.code,
+    'permission_denied',
+  )
 })
 
 // ---------------------------------------------------------------------------

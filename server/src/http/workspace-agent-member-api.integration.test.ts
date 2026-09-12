@@ -206,6 +206,10 @@ test('负责人加入 Agent 后写入成员关系、Agent/Skill/Tool 授权来�
   assert.equal(member.version, '1.0.0')
   assert.equal(member.addedBy, ownerId)
   assert.deepEqual(member.allowedActions, ['start_conversation', 'disable', 'upgrade', 'remove'])
+  // 5-T1 规格评审 F7：`requireAgentMemberRecord` 这条投影（POST/PATCH 响应）此前没有断言。
+  // 它与名册共用同一段静态 SQL，健康环境下原因必须是显式的 null（而不是缺字段）。
+  assert.ok('unavailableReason' in member, 'POST 响应必须带 unavailableReason 字段')
+  assert.equal(member.unavailableReason, null, '可用成员的原因必须是 null')
 
   const [wam] = await agentMemberRows(workspaceId)
   assert.ok(wam)
@@ -397,7 +401,7 @@ test('成员列表仅返回非移除成员，并按当前角色给出允许动�
   const ownerItems = asOwner.body.data as Array<Record<string, unknown>>
   assert.equal(ownerItems.length, 1)
   const [ownerItem] = ownerItems
-  assert.deepEqual(Object.keys(ownerItem ?? {}).sort(), ['addedBy', 'agentId', 'allowedActions', 'createdAt', 'description', 'id', 'name', 'status', 'version'].sort())
+  assert.deepEqual(Object.keys(ownerItem ?? {}).sort(), ['addedBy', 'agentId', 'allowedActions', 'createdAt', 'description', 'id', 'name', 'status', 'unavailableReason', 'version'].sort())
   assert.equal(ownerItem?.id, wamId)
   assert.equal(ownerItem?.name, '列表Agent')
   assert.deepEqual(ownerItem?.allowedActions, ['start_conversation', 'disable', 'upgrade', 'remove'])
@@ -432,6 +436,107 @@ test('成员列表仅返回非移除成员，并按当前角色给出允许动�
   assert.equal(removed.status, 200)
   const afterRemove = await api('GET', `/api/workbench/v1/workspaces/${workspaceId}/agent-members`, { as: ownerId })
   assert.equal((afterRemove.body.data as unknown[]).length, 0)
+})
+
+// ---------------------------------------------------------------------------
+// 不可用第三态与具体原因（5-T1）
+// ---------------------------------------------------------------------------
+
+test('Agent 成员不可用原因按「版本失效 → 平台未授权 → Runtime 不可用」优先级给出，正常时为 null 且不可用时无 start_conversation', async () => {
+  const workspaceId = 'ws-1a-ag-reason'
+  const ownerId = 'user-1a-ag-reason-owner'
+  const memberId = 'user-1a-ag-reason-member'
+  await createDirectoryUser(ownerId, '不可用原因负责人')
+  await createDirectoryUser(memberId, '不可用原因成员')
+  await createTeamWorkspace(workspaceId, [
+    { userId: ownerId, role: 'owner' },
+    { userId: memberId, role: 'member' },
+  ])
+  await createTool({ id: 'tool-1a-reason' })
+  await createSkill({ id: 'skill-1a-reason', toolRefs: ['tool-1a-reason@1.0.0'] })
+  const agent = await createPublishedAgent({
+    id: 'agent-1a-reason',
+    name: '不可用原因Agent',
+    skillRefs: ['skill-1a-reason@1.0.0'],
+    toolRefs: ['tool-1a-reason@1.0.0'],
+  })
+  const joined = await api('POST', `/api/workbench/v1/workspaces/${workspaceId}/agent-members`, {
+    as: ownerId,
+    body: { agentId: agent.id },
+  })
+  assert.equal(joined.status, 201)
+  const wamId = (joined.body.data as { id: string }).id
+  // 已发布版本不可变（触发器），「版本已下架」用一条草稿版本被成员固定来制造。
+  const draftVersionId = await createAgentVersion({
+    agentId: agent.id,
+    version: '2.0.0',
+    skillRefs: ['skill-1a-reason@1.0.0'],
+    toolRefs: ['tool-1a-reason@1.0.0'],
+    roleIds: ['role-employee'],
+    activate: false,
+    versionStatus: 'draft',
+  })
+
+  try {
+    // 三类原因都不成立：状态可用、原因为 null、允许发起对话。
+    const normal = await onlyAgentMember(workspaceId, ownerId)
+    assert.equal(normal.status, 'available')
+    assert.equal(normal.unavailableReason, null)
+    assert.deepEqual(normal.allowedActions, ['start_conversation', 'disable', 'upgrade', 'remove'])
+
+    // 1a) 固定版本非 published 优先于「授权撤销」与「Runtime 不可用」：同时制造三种不成立条件。
+    await database`
+      update workspace_agent_members set agent_version_id = ${draftVersionId}
+       where tenant_id = ${tenantId} and id = ${wamId}
+    `
+    await revokeAgentMemberSources(workspaceId, wamId)
+    await setRuntimeState('degraded', 'draining')
+    const versionReason = await onlyAgentMember(workspaceId, ownerId)
+    assert.equal(versionReason.status, 'available', '第三态不改 status 取值集合')
+    assert.equal(versionReason.unavailableReason, '版本失效：Agent 版本已下架')
+    assert.ok(!versionReason.allowedActions.includes('start_conversation'), '不可用时不得给出开始对话')
+    assert.deepEqual(versionReason.allowedActions, ['disable', 'upgrade', 'remove'])
+    // 管理员/成员在不可用时没有任何动作（不渲染开始对话入口）。
+    assert.deepEqual((await onlyAgentMember(workspaceId, memberId)).allowedActions, [])
+
+    // 1b) 成员固定版本恢复 published，但所属 Agent 非 published 同样判定「版本失效」。
+    await database`
+      update workspace_agent_members set agent_version_id = ${agent.versionId}
+       where tenant_id = ${tenantId} and id = ${wamId}
+    `
+    await database`
+      update agents set status = 'disabled'
+       where tenant_id = ${tenantId} and id = ${agent.id}
+    `
+    assert.equal((await onlyAgentMember(workspaceId, ownerId)).unavailableReason, '版本失效：Agent 版本已下架')
+
+    // 2) 版本与 Agent 都恢复 published 后，「平台未授权」优先于「Runtime 不可用」。
+    await database`
+      update agents set status = 'published'
+       where tenant_id = ${tenantId} and id = ${agent.id}
+    `
+    const grantReason = await onlyAgentMember(workspaceId, ownerId)
+    assert.equal(grantReason.unavailableReason, '平台未授权：能力授权已被撤销')
+    assert.ok(!grantReason.allowedActions.includes('start_conversation'))
+
+    // 3) 授权恢复后，仅剩 Runtime 不可用。
+    await database`
+      update workspace_grant_sources set status = 'active', revoked_at = null
+       where tenant_id = ${tenantId} and workspace_id = ${workspaceId}
+         and source_type = 'agent_member' and source_ref_id = ${wamId}
+    `
+    const runtimeReason = await onlyAgentMember(workspaceId, ownerId)
+    assert.equal(runtimeReason.unavailableReason, 'Runtime 不可用：暂无可接单的运行节点')
+    assert.ok(!runtimeReason.allowedActions.includes('start_conversation'))
+
+    // 4) Runtime 恢复后回到正常（原因为 null）。
+    await setRuntimeState('healthy', 'accepting')
+    const restored = await onlyAgentMember(workspaceId, ownerId)
+    assert.equal(restored.unavailableReason, null)
+    assert.ok(restored.allowedActions.includes('start_conversation'))
+  } finally {
+    await setRuntimeState('healthy', 'accepting')
+  }
 })
 
 // ---------------------------------------------------------------------------
@@ -1320,6 +1425,35 @@ async function agentMemberRows(workspaceId: string): Promise<AgentMemberRow[]> {
      order by created_at asc, id asc
   `
   return rows.map(row => ({ ...row }))
+}
+
+/** 读取唯一 Agent 成员（5-T1 用例的 workspace 只加入一个）。 */
+async function onlyAgentMember(
+  workspaceId: string,
+  actorUserId: string,
+): Promise<{ status: string; unavailableReason: string | null; allowedActions: string[] }> {
+  const result = await api('GET', `/api/workbench/v1/workspaces/${workspaceId}/agent-members`, { as: actorUserId })
+  assert.equal(result.status, 200)
+  const items = result.body.data as Array<{ status: string; unavailableReason: string | null; allowedActions: string[] }>
+  assert.equal(items.length, 1)
+  return items[0]!
+}
+
+/** 直接撤销该成员的全部 agent_member 来源，制造「平台未授权」。 */
+async function revokeAgentMemberSources(workspaceId: string, memberId: string) {
+  await database`
+    update workspace_grant_sources set status = 'revoked', revoked_at = now()
+     where tenant_id = ${tenantId} and workspace_id = ${workspaceId}
+       and source_type = 'agent_member' and source_ref_id = ${memberId}
+  `
+}
+
+/** 租户只有一个预置 Runtime；用例结束后必须恢复，避免污染同文件后续用例。 */
+async function setRuntimeState(health: 'healthy' | 'degraded' | 'offline', scheduling: 'accepting' | 'draining' | 'disabled') {
+  await database`
+    update runtimes set health_status = ${health}, scheduling_status = ${scheduling}
+     where tenant_id = ${tenantId} and id = 'runtime-local-01'
+  `
 }
 
 async function listSources(workspaceId: string): Promise<SourceRow[]> {

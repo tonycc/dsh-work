@@ -34,13 +34,22 @@ export interface MemberRecord {
 }
 
 /**
+ * 名册条项在成员记录之上补充部门（5-T2）：与候选名册同一口径
+ * `coalesce(u.department_id, '未分配部门')`，供员工端展示「姓名 · 部门」。
+ * 添加/角色变更响应仍是 MemberRecord，不扩散该字段。
+ */
+export interface MemberDirectoryItem extends MemberRecord {
+  department: string
+}
+
+/**
  * Team member roster plus the caller's own role. The caller's role is what lets
  * the workbench render allowed actions from the server rather than guessing
  * ownership from the workspace creator (which stays the creator after a
  * transfer).
  */
 export interface MemberDirectory {
-  items: MemberRecord[]
+  items: MemberDirectoryItem[]
   currentUserRole: MemberRole | null
 }
 
@@ -138,9 +147,11 @@ export class PostgresWorkspaceMemberService {
       displayName: string
       role: MemberRole
       joinedAt: Date
+      department: string
     }[]>`
       select wm.user_id as "userId", u.display_name as "displayName",
-             wm.member_role as role, wm.joined_at as "joinedAt"
+             wm.member_role as role, wm.joined_at as "joinedAt",
+             coalesce(u.department_id, '未分配部门') as department
         from workspace_members wm
         join users u on u.tenant_id = wm.tenant_id and u.id = wm.user_id
        where wm.tenant_id = ${tenantId} and wm.workspace_id = ${workspaceId}
@@ -155,6 +166,7 @@ export class PostgresWorkspaceMemberService {
         displayName: row.displayName,
         role: row.role,
         joinedAt: row.joinedAt.toISOString(),
+        department: row.department,
       })),
     }
   }

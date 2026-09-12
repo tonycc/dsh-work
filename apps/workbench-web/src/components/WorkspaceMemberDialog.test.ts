@@ -8,11 +8,11 @@ import type { WorkspaceAgentMember, WorkspaceMember } from '@/types/domain'
 import WorkspaceMemberDialog from './WorkspaceMemberDialog.vue'
 
 const employees: WorkspaceMember[] = [
-  { userId: 'u-owner', displayName: '林岚', role: 'owner', joinedAt: '2026-09-01T00:00:00.000Z' },
-  { userId: 'u-owner-2', displayName: '郑野', role: 'owner', joinedAt: '2026-09-01T06:00:00.000Z' },
-  { userId: 'u-admin', displayName: '周航', role: 'admin', joinedAt: '2026-09-02T00:00:00.000Z' },
-  { userId: 'u-member', displayName: '陈默', role: 'member', joinedAt: '2026-09-03T00:00:00.000Z' },
-  { userId: 'u-viewer', displayName: '苏晚', role: 'viewer', joinedAt: '2026-09-04T00:00:00.000Z' },
+  { userId: 'u-owner', displayName: '林岚', role: 'owner', joinedAt: '2026-09-01T00:00:00.000Z', department: '供应链中心' },
+  { userId: 'u-owner-2', displayName: '郑野', role: 'owner', joinedAt: '2026-09-01T06:00:00.000Z', department: '供应链中心' },
+  { userId: 'u-admin', displayName: '周航', role: 'admin', joinedAt: '2026-09-02T00:00:00.000Z', department: '计划部' },
+  { userId: 'u-member', displayName: '陈默', role: 'member', joinedAt: '2026-09-03T00:00:00.000Z', department: '计划部' },
+  { userId: 'u-viewer', displayName: '苏晚', role: 'viewer', joinedAt: '2026-09-04T00:00:00.000Z', department: '未分配部门' },
 ]
 
 const agents: WorkspaceAgentMember[] = [
@@ -115,7 +115,11 @@ describe('WorkspaceMemberDialog', () => {
 
     await panelOf(wrapper).find('[data-testid="member-add-employee"]').trigger('click')
     await panelOf(wrapper).find('[data-testid="member-candidate-search"]').setValue('何')
-    await new Promise(resolve => setTimeout(resolve, 350))
+    // 搜索输入有 300ms 防抖：条件等待请求真正发出，替代固定 350ms sleep，减少时序依赖。
+    await vi.waitFor(
+      () => expect(workbenchApi.listMemberCandidates).toHaveBeenCalledWith('ws-team', { query: '何', limit: 10 }),
+      { timeout: 5_000 },
+    )
     await flushPromises()
 
     expect(workbenchApi.listMemberCandidates).toHaveBeenCalledWith('ws-team', { query: '何', limit: 10 })
@@ -139,7 +143,11 @@ describe('WorkspaceMemberDialog', () => {
 
     await panelOf(wrapper).find('[data-testid="member-add-employee"]').trigger('click')
     await panelOf(wrapper).find('[data-testid="member-candidate-search"]').setValue('何')
-    await new Promise(resolve => setTimeout(resolve, 350))
+    // 搜索输入有 300ms 防抖：条件等待请求真正发出，替代固定 350ms sleep，减少时序依赖。
+    await vi.waitFor(
+      () => expect(workbenchApi.listMemberCandidates).toHaveBeenCalledWith('ws-team', { query: '何', limit: 10 }),
+      { timeout: 5_000 },
+    )
     await flushPromises()
 
     await panelOf(wrapper).find('[data-testid="member-candidate-row"] button').trigger('click')
@@ -310,20 +318,46 @@ describe('WorkspaceMemberDialog', () => {
 
   it('shows the unavailable reason inline when the service reports one', async () => {
     const wrapper = mountDialog({
-      agentMembers: [{
-        ...agents[0]!,
-        status: 'disabled',
-        allowedActions: ['remove'],
-        unavailableReason: '版本失效：平台已撤权',
-      }],
+      agentMembers: [
+        {
+          ...agents[0]!,
+          status: 'available',
+          allowedActions: ['disable', 'upgrade', 'remove'],
+          unavailableReason: 'Runtime 不可用：暂无可接单的运行节点',
+        },
+        { ...agents[1]!, unavailableReason: null },
+      ],
     })
     await flushPromises()
+    const panel = panelOf(wrapper)
+    const statuses = panel.findAll('[data-testid="agent-status-tooltip"]')
+    expect(statuses).toHaveLength(2)
 
-    const status = panelOf(wrapper).find('[data-testid="agent-status-tooltip"]')
-    expect(status.exists()).toBe(true)
-    expect(status.attributes('aria-label')).toBe('Agent 状态：已停用')
-    const tooltip = wrapper.findAllComponents(ElTooltip).at(-1)
-    expect(tooltip?.props('content')).toContain('平台已撤权')
+    // 第三态：status 仍是 available，但服务端给出原因 ⇒ 红色「不可用」+ 原因 tooltip。
+    expect(statuses[0]?.attributes('aria-label')).toBe('Agent 状态：不可用')
+    expect(statuses[0]?.classes()).toContain('member-dialog__status--danger')
+    // 已停用仍是灰色 neutral「已停用」，不展示原因。
+    expect(statuses[1]?.attributes('aria-label')).toBe('Agent 状态：已停用')
+    expect(statuses[1]?.classes()).not.toContain('member-dialog__status--danger')
+
+    const tooltipContents = wrapper.findAllComponents(ElTooltip).map(tooltip => String(tooltip.props('content')))
+    expect(tooltipContents).toContain('Runtime 不可用：暂无可接单的运行节点')
+    // 不可用时不得渲染「开始对话」（服务端 allowedActions 已剔除）。
+    expect(panel.findAll('[data-testid="agent-start-conversation"]')).toHaveLength(0)
+    expect(panel.findAll('[data-testid="agent-action-disable"]')).toHaveLength(1)
+  })
+
+  it('renders each employee row as 姓名 · 部门（5-T2）', async () => {
+    const wrapper = mountDialog()
+    await flushPromises()
+
+    const rows = panelOf(wrapper).findAll('[data-testid="member-row"]')
+    expect(rows).toHaveLength(5)
+    expect(rows[0]?.find('.member-dialog__copy').text()).toContain('林岚')
+    expect(rows[0]?.find('.member-dialog__copy').text()).toContain('供应链中心')
+    expect(rows[3]?.find('.member-dialog__copy').text()).toContain('计划部')
+    // 缺省部门由服务端口径补齐后照常渲染。
+    expect(rows[4]?.find('.member-dialog__copy').text()).toContain('未分配部门')
   })
 
   it('renders empty states with role-aware guidance', async () => {
@@ -357,7 +391,11 @@ describe('WorkspaceMemberDialog', () => {
 
     await panelOf(wrapper).find('[data-testid="member-add-agent"]').trigger('click')
     await panelOf(wrapper).find('[data-testid="member-agent-search"]').setValue('排产')
-    await new Promise(resolve => setTimeout(resolve, 350))
+    // Agent 搜索同样有 300ms 防抖：条件等待请求真正发出，替代固定 350ms sleep。
+    await vi.waitFor(
+      () => expect(workbenchApi.listWorkspaceAgentCandidates).toHaveBeenCalledWith('ws-team', { query: '排产', limit: 10 }),
+      { timeout: 5_000 },
+    )
     await flushPromises()
 
     await panelOf(wrapper).find('[data-testid="agent-candidate-row"] button').trigger('click')

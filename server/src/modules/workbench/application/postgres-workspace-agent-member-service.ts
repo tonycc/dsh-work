@@ -15,6 +15,34 @@ import {
 
 const tenantId = 'tenant-dsh-work'
 
+/**
+ * 不可用原因的判定（5-T1）：单条查询内联三个条件，按「版本失效 → 平台未授权 →
+ * Runtime 不可用」优先级取第一个成立者，避免逐成员 N+1。只引用列与常量，不含
+ * 外部输入，可安全作为静态片段复用。status 非 available（已停用/已移出）恒为 null。
+ */
+const unavailableReasonSql = `
+  case
+    when wam.status <> 'available' then null
+    when av.status <> 'published' or a.status <> 'published'
+      then '版本失效：Agent 版本已下架'
+    when not exists (
+      select 1 from workspace_grant_sources g
+       where g.tenant_id = wam.tenant_id
+         and g.workspace_id = wam.workspace_id
+         and g.source_type = 'agent_member'
+         and g.source_ref_id = wam.id
+         and g.status = 'active'
+    ) then '平台未授权：能力授权已被撤销'
+    when not exists (
+      select 1 from runtimes r
+       where r.tenant_id = wam.tenant_id
+         and r.health_status = 'healthy'
+         and r.scheduling_status = 'accepting'
+    ) then 'Runtime 不可用：暂无可接单的运行节点'
+    else null
+  end
+`
+
 export type AgentMemberStatus = 'available' | 'disabled'
 export type AgentMemberPatchAction = 'disable' | 'enable' | 'upgrade'
 export type AgentMemberAction = 'start_conversation' | 'disable' | 'enable' | 'upgrade' | 'remove'
@@ -42,6 +70,12 @@ export interface AgentMemberRecord {
   version: string
   addedBy: string
   createdAt: string
+  /**
+   * 「不可用」第三态的具体原因（5-T1）：状态仍为 available，但平台未授权／版本失效／
+   * Runtime 不可用时给出，供行内 tooltip 展示；status 为 disabled 时恒为 null
+   * （灰色「已停用」已足够）。
+   */
+  unavailableReason: string | null
   allowedActions: AgentMemberAction[]
 }
 
@@ -132,9 +166,11 @@ export class PostgresWorkspaceAgentMemberService {
       version: string
       addedBy: string
       createdAt: Date
+      unavailableReason: string | null
     }[]>`
       select wam.id, wam.agent_id as "agentId", a.name, a.description,
-             wam.status, av.version, wam.added_by as "addedBy", wam.created_at as "createdAt"
+             wam.status, av.version, wam.added_by as "addedBy", wam.created_at as "createdAt",
+             ${this.database.unsafe(unavailableReasonSql)} as "unavailableReason"
         from workspace_agent_members wam
         join agents a on a.tenant_id = wam.tenant_id and a.id = wam.agent_id
         join agent_versions av on av.tenant_id = wam.tenant_id and av.id = wam.agent_version_id
@@ -152,7 +188,8 @@ export class PostgresWorkspaceAgentMemberService {
       version: row.version,
       addedBy: row.addedBy,
       createdAt: row.createdAt.toISOString(),
-      allowedActions: allowedActionsFor(actorRole, row.status),
+      unavailableReason: row.unavailableReason,
+      allowedActions: allowedActionsFor(actorRole, row.status, row.unavailableReason),
     }))
   }
 
@@ -579,9 +616,11 @@ export class PostgresWorkspaceAgentMemberService {
       version: string
       addedBy: string
       createdAt: Date
+      unavailableReason: string | null
     }[]>`
       select wam.id, wam.agent_id as "agentId", a.name, a.description,
-             wam.status, av.version, wam.added_by as "addedBy", wam.created_at as "createdAt"
+             wam.status, av.version, wam.added_by as "addedBy", wam.created_at as "createdAt",
+             ${this.database.unsafe(unavailableReasonSql)} as "unavailableReason"
         from workspace_agent_members wam
         join agents a on a.tenant_id = wam.tenant_id and a.id = wam.agent_id
         join agent_versions av on av.tenant_id = wam.tenant_id and av.id = wam.agent_version_id
@@ -599,7 +638,8 @@ export class PostgresWorkspaceAgentMemberService {
       version: row.version,
       addedBy: row.addedBy,
       createdAt: row.createdAt.toISOString(),
-      allowedActions: allowedActionsFor(actorRole, row.status),
+      unavailableReason: row.unavailableReason,
+      allowedActions: allowedActionsFor(actorRole, row.status, row.unavailableReason),
     }
   }
 
@@ -642,13 +682,17 @@ async function lockWorkspaceRow(transaction: DatabaseTransaction, workspaceId: s
 function allowedActionsFor(
   role: 'owner' | 'admin' | 'member' | 'viewer',
   status: AgentMemberStatus,
+  unavailableReason: string | null,
 ): AgentMemberAction[] {
+  // 不可用（available + 原因）时不得给出 start_conversation：入口可点却必然失败。
+  const canStart = status === 'available' && unavailableReason === null
   if (role === 'owner') {
-    return status === 'available'
+    if (status !== 'available') return ['enable', 'remove']
+    return canStart
       ? ['start_conversation', 'disable', 'upgrade', 'remove']
-      : ['enable', 'remove']
+      : ['disable', 'upgrade', 'remove']
   }
-  if ((role === 'admin' || role === 'member') && status === 'available') {
+  if ((role === 'admin' || role === 'member') && canStart) {
     return ['start_conversation']
   }
   return []

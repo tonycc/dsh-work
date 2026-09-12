@@ -1908,6 +1908,10 @@
           "joinedAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "department": {
+            "type": "string",
+            "description": "成员所属部门。**只有名册接口（GET /workspaces/{workspaceId}/members）返回**，取值与候选名册同一口径 coalesce(users.department_id, '未分配部门')；添加成员与角色变更的响应不含该字段，因此这里不列为 required（前端类型也相应是可选的）。"
           }
         }
       },
@@ -2016,6 +2020,7 @@
           "version",
           "addedBy",
           "createdAt",
+          "unavailableReason",
           "allowedActions"
         ],
         "properties": {
@@ -2050,6 +2055,13 @@
             "type": "string",
             "format": "date-time"
           },
+          "unavailableReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "不可用第三态的具体原因：status 为 available 时按「版本失效：Agent 版本已下架 → 平台未授权：能力授权已被撤销 → Runtime 不可用：暂无可接单的运行节点」优先级取第一条成立者，都不成立时为 null；status 为 disabled 时恒为 null。原因非 null 时 allowedActions 不含 start_conversation。"
+          },
           "allowedActions": {
             "type": "array",
             "items": {
@@ -2062,7 +2074,7 @@
                 "remove"
               ]
             },
-            "description": "当前操作人允许的动作：负责人可用状态为 start_conversation/disable/upgrade/remove，停用状态为 enable/remove；管理员与成员仅在可用状态有 start_conversation；只读成员为空。"
+            "description": "当前操作人允许的动作：负责人可用状态为 start_conversation/disable/upgrade/remove，停用状态为 enable/remove；管理员与成员仅在可用状态有 start_conversation；只读成员为空。不可用（available 且有 unavailableReason）时不包含 start_conversation。"
           }
         }
       },

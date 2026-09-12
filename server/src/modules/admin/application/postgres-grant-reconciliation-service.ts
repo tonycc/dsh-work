@@ -1,4 +1,5 @@
 import type { DatabaseClient, DatabaseTransaction } from '../../../infrastructure/postgres/database.ts'
+import { authorizationDenied } from '../../authorization/authorization-errors.ts'
 import type { PostgresOperationsService } from './postgres-operations-service.ts'
 
 const tenantId = 'tenant-dsh-work'
@@ -241,7 +242,7 @@ export class PostgresGrantReconciliationService {
               and (r.permissions ? 'admin:*' or r.permissions ? 'admin:write')
          )
     `
-    if (!row) throw new Error('操作人不存在、已停用或不是平台管理员')
+    if (!row) throw authorizationDenied('操作人不存在、已停用或不是平台管理员')
     return row.id
   }
 }

@@ -24,6 +24,11 @@ interface WorkspaceAgentMemberInfo {
   description?: string
   status: 'available' | 'disabled'
   /**
+   * 「不可用」第三态的具体原因（5-T1）：status 仍为 available，但版本失效／平台
+   * 未授权／Runtime 不可用时由服务端给出；status 为 disabled 时恒为 null。
+   */
+  unavailableReason?: string | null
+  /**
    * 服务端返回的当前操作人允许动作。只读成员（viewer）为 []，因此不得只凭
    * status 渲染「开始对话」——权限判定以服务端为准。
    */
@@ -141,8 +146,20 @@ function memberInitial(name: string) {
   return Array.from(name)[0] ?? '成'
 }
 
-function agentStatusLabel(status: WorkspaceAgentMemberInfo['status']) {
-  return status === 'available' ? '可用' : '已停用'
+function agentStatusLabel(agent: WorkspaceAgentMemberInfo) {
+  if (agent.status !== 'available') return '已停用'
+  return agent.unavailableReason ? '不可用' : '可用'
+}
+
+/** 第三态用红色状态点（design §2.6/§3）：可用绿／已停用灰／不可用红。 */
+function agentStatusTone(agent: WorkspaceAgentMemberInfo) {
+  if (agent.status !== 'available') return 'neutral'
+  return agent.unavailableReason ? 'danger' : 'available'
+}
+
+/** tooltip 优先展示不可用原因；可用/停用时回落到状态文案。 */
+function agentStatusTooltip(agent: WorkspaceAgentMemberInfo) {
+  return agent.unavailableReason || agentStatusLabel(agent)
 }
 
 /**
@@ -294,12 +311,14 @@ const usageEstimatedCount = computed(() => normalizeUsageCount(props.usageSummar
         >
           <span class="workspace-agent__icon"><el-icon><Cpu /></el-icon></span>
           <strong>{{ agent.name }}</strong>
-          <span
-            data-testid="panel-agent-status"
-            class="workspace-agent__status"
-            :class="{ 'workspace-agent__status--available': agent.status === 'available' }"
-            :aria-label="`Agent 状态：${agentStatusLabel(agent.status)}`"
-          />
+          <el-tooltip :content="agentStatusTooltip(agent)" placement="top">
+            <span
+              data-testid="panel-agent-status"
+              class="workspace-agent__status"
+              :class="`workspace-agent__status--${agentStatusTone(agent)}`"
+              :aria-label="`Agent 状态：${agentStatusLabel(agent)}`"
+            />
+          </el-tooltip>
           <el-button
             v-if="canStartAgentConversation(agent)"
             data-testid="panel-agent-start"
@@ -759,6 +778,11 @@ const usageEstimatedCount = computed(() => normalizeUsageCount(props.usageSummar
 
 .workspace-agent__status--available {
   background: #2e8b70;
+}
+
+/* 第三态「不可用」（available + 原因）：红点，tooltip 展示具体原因。 */
+.workspace-agent__status--danger {
+  background: var(--dsh-color-danger);
 }
 
 .workspace-info-panel__empty {

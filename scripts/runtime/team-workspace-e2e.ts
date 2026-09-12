@@ -343,20 +343,45 @@ try {
   // 其中「状态过滤」的判别力还需要一行第三状态的用量事件——CHECK 允许 blocked 但生产
   // 没有写入者，因此这里显式插一条模拟未来状态（对抗性评审 P2 实测：不加这条时删掉服务
   // 的状态过滤仍会 ok=true）。
-  const [pinnedAttempt] = await database<{ id: string }[]>`
-    select id from run_attempts where tenant_id = ${tenantId} and run_id = ${pinned.id} limit 1
+  // 样本挂在一个**专门的合成 Run/Attempt** 上，而不是真实 DSH 已经写过用量行的 attempt：
+  // 批次 5-T3 的 `model_usage_by_attempt (tenant_id, attempt_id)` 唯一索引会让「在同一
+  // attempt 上再插一行」直接 23505（`on conflict (id)` 捕不到该索引的冲突）。合成 Run
+  // 仍属本空间的会话，因此「服务必须排除 blocked、交叉核对同谓词排除」的判别力不变。
+  const blockedSessionId = `session-e2e-blocked-${suffix}`
+  await database`
+    insert into sessions (id, tenant_id, workspace_id, created_by, agent_version_id, title, status)
+    values (${blockedSessionId}, ${tenantId}, ${workspaceId}, ${ownerId},
+            'agent-version-dsh-work-assistant-1', 'E2E 第三状态样本会话', 'active')
   `
-  if (!pinnedAttempt) throw new Error('固定版本运行没有 attempt，无法插入状态样本')
+  const blockedRunId = `run-e2e-blocked-${suffix}`
+  await database`
+    insert into runs (id, tenant_id, session_id, requested_by, idempotency_key, status)
+    values (${blockedRunId}, ${tenantId}, ${blockedSessionId}, ${ownerId}, ${`idem-blocked-${suffix}`}, 'succeeded')
+  `
+  const blockedAttemptId = `attempt-e2e-blocked-${suffix}`
+  await database`
+    insert into run_attempts (
+      id, tenant_id, run_id, attempt_no, manifest, manifest_sha256, model_route_snapshot, status
+    ) values (
+      ${blockedAttemptId}, ${tenantId}, ${blockedRunId}, 1, ${database.json({})}, 'sha256-e2e-blocked',
+      ${database.json({ providerKey: 'dsh-default', modelKey: 'dsh-default' })}, 'succeeded'
+    )
+  `
   await database`
     insert into model_usage_events (
       id, tenant_id, run_id, attempt_id, provider, model, input_tokens, output_tokens,
       latency_ms, cost_amount, cost_currency, status, trace_id, estimated, occurred_at
     ) values (
-      ${`usage-blocked-sample-${suffix}`}, ${tenantId}, ${pinned.id}, ${pinnedAttempt.id},
+      ${`usage-blocked-sample-${suffix}`}, ${tenantId}, ${blockedRunId}, ${blockedAttemptId},
       'dsh-default', 'dsh-default', 999999, 999999, 1, 0, 'CNY', 'blocked',
       ${`trace-blocked-${suffix}`}, true, now()
-    ) on conflict (id) do nothing
+    ) on conflict (tenant_id, attempt_id) do nothing
   `
+  const [blockedSamplePresent] = await database<{ count: number }[]>`
+    select count(*)::integer as count from model_usage_events
+     where tenant_id = ${tenantId} and attempt_id = ${blockedAttemptId} and status = 'blocked'
+  `
+  if (blockedSamplePresent?.count !== 1) throw new Error('第三状态样本未落库，用量判别力断言将失效')
   const [usageCrossCheck] = await database<{ count: number; tokens: number }[]>`
     select count(*)::integer as count,
            coalesce(sum(mu.input_tokens + mu.output_tokens), 0)::bigint as tokens

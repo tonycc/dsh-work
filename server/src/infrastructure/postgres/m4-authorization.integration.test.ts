@@ -4,6 +4,8 @@ import { after, before, test } from 'node:test'
 
 import { PostgresAgentService } from '../../modules/agent/postgres-agent-service.ts'
 import { PostgresAuthorizationService } from '../../modules/authorization/postgres-authorization-service.ts'
+import { AuthorizationDeniedError, isAuthorizationDenial } from '../../modules/authorization/authorization-errors.ts'
+import { classifyHttpError } from '../../http/router.ts'
 import { ModelGovernanceService } from '../../modules/model/model-governance-service.ts'
 import { PostgresModelGovernanceRepository } from '../../modules/model/postgres-model-governance-repository.ts'
 import { RunOrchestrationService } from '../../modules/run/run-orchestration-service.ts'
@@ -190,6 +192,41 @@ test('authorization is fail-closed and compiles the effective identity into Runt
   `
   assert.ok((audit?.blocked ?? 0) >= 3)
   assert.ok((audit?.success ?? 0) >= 1)
+})
+
+// 5-T4：管理操作人校验与会话「不存在或不可访问」原先抛裸 Error，HTTP 层靠中文文案
+// 正则才落 403；类型化后状态码与 code 不变，但不再依赖文案。
+test('5-T4 管理操作人与会话拒绝类型化：HTTP 仍是 403 permission_denied', async () => {
+  const actorDenial = await agents.createAgent({
+    id: `agent-typed-denied-${randomUUID().slice(0, 8)}`,
+    name: '类型化越权验证',
+    description: '普通员工不能通过 Agent 管理服务创建 Agent。',
+    owner: '', department: '', visibility: '普通员工',
+    roleIds: ['role-employee'], dataScopes: ['enterprise:authorized'],
+    welcomeMessage: '', examplePrompts: ['测试权限'],
+    systemPrompt: '这是一个不会被创建的越权测试 Agent 配置。',
+    maxTokens: 12000, timeoutSeconds: 300,
+    skills: [], tools: [], changeSummary: '越权测试', actor: '林岚',
+  }).then(() => null, (error: unknown) => error)
+  assert.ok(actorDenial instanceof AuthorizationDeniedError, `必须是类型化授权拒绝，实际：${String(actorDenial)}`)
+  assert.equal(actorDenial.status, 403)
+  assert.equal(actorDenial.code, 'permission_denied')
+  assert.match(actorDenial.message, /不是平台管理员/)
+  assert.equal(classifyHttpError(actorDenial, '/api/admin/v1/agents').error.code, 'permission_denied')
+
+  const missingSession = `session-typed-missing-${randomUUID()}`
+  const readDenial = await conversations.requireSession(missingSession, 'U00001')
+    .then(() => null, (error: unknown) => error)
+  assert.ok(readDenial instanceof AuthorizationDeniedError, `必须是类型化授权拒绝，实际：${String(readDenial)}`)
+  assert.equal(readDenial.message, `Session 不存在或不可访问：${missingSession}`)
+  assert.equal(isAuthorizationDenial(readDenial), true, '类型化后撤权分类器必须识别会话语义拒绝')
+  assert.equal(classifyHttpError(readDenial, `/api/workbench/v1/sessions/${missingSession}`).status, 403)
+
+  const archiveDenial = await conversations.archiveSession(missingSession, 'U00001')
+    .then(() => null, (error: unknown) => error)
+  assert.ok(archiveDenial instanceof AuthorizationDeniedError, `必须是类型化授权拒绝，实际：${String(archiveDenial)}`)
+  assert.equal(archiveDenial.status, 403)
+  assert.equal(archiveDenial.code, 'permission_denied')
 })
 
 async function waitForRun(runId: string) {
