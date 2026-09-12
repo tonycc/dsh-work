@@ -93,7 +93,7 @@
       "get": {
         "operationId": "listWorkspaceFiles",
         "summary": "查询团队空间共享文件（所有成员）",
-        "description": "按名称搜索、keyset 分页返回空间内可引用的共享文件；已逻辑移除的文件不再出现。响应含服务端判定的 removable（负责人/管理员可移除任何文件，成员仅自己上传的）与 canDownload。个人空间被拒绝。读取轨（3-T1 归档=只读保留）：空间归档后现任成员仍可列出与下载，此时 removable 一律为 false（移除属执行轨，归档空间拒绝）；上传与移除仍要求活跃空间。非成员与不存在空间不可枚举。",
+        "description": "按名称搜索、keyset 分页返回空间内可引用的共享文件；已逻辑移除的文件不再出现。TW-07 起每个逻辑文件只返回一行（最新有效版本），并附带 logicalFileId / versionNo / versionCount；新版本上传不会让同一文件在列表中重复出现。响应含服务端判定的 removable（负责人/管理员可移除任何文件，成员仅自己创建或最新有效版本由自己上传的）与 canDownload。个人空间被拒绝。读取轨（3-T1 归档=只读保留）：空间归档后现任成员仍可列出与下载，此时 removable 一律为 false（移除属执行轨，归档空间拒绝）；上传与移除仍要求活跃空间。非成员与不存在空间不可枚举。",
         "parameters": [
           {
             "name": "query",
@@ -162,7 +162,17 @@
           "201": {
             "$ref": "#/components/responses/Ok"
           },
-          "413": {
+          "422": {
+            "description": "请求校验失败：文件过大、类型不支持、安全检查未通过、编码无效等（HTTP 层没有 413 分类，超限同样以 422 返回）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
             "$ref": "#/components/responses/Error"
           }
         }
@@ -714,11 +724,15 @@
           "201": {
             "$ref": "#/components/responses/Ok"
           },
-          "413": {
-            "$ref": "#/components/responses/Error"
-          },
           "422": {
-            "$ref": "#/components/responses/Error"
+            "description": "请求校验失败：文件过大、类型不支持、安全检查未通过、编码无效等（HTTP 层没有 413 分类，超限同样以 422 返回）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -1083,7 +1097,7 @@
       "delete": {
         "operationId": "removeWorkspaceFile",
         "summary": "逻辑移除团队空间共享文件（负责人/管理员/上传人）",
-        "description": "逻辑移除：文件对象、解析结果与历史 Run 引用保留，但不再出现在可引用列表且旧 ID 下载被拒绝。只读成员不可移除。",
+        "description": "逻辑移除：文件对象、解析结果与历史 Run 引用保留，但不再出现在可引用列表且旧 ID 下载被拒绝。只读成员不可移除（历史上传人被降级为只读后同样不可移除）。",
         "responses": {
           "200": {
             "$ref": "#/components/responses/Ok"
@@ -1092,6 +1106,143 @@
             "$ref": "#/components/responses/Error"
           },
           "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/workspaces/{workspaceId}/files/{logicalFileId}/versions": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/WorkspaceId"
+        },
+        {
+          "name": "logicalFileId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "逻辑文件 ID（列表响应中的 logicalFileId）"
+        }
+      ],
+      "get": {
+        "operationId": "listWorkspaceFileVersions",
+        "summary": "查询逻辑文件的版本历史（所有成员）",
+        "description": "按版本号倒序返回同一逻辑文件下的全部版本（含解析失败版本），并标记当前最新有效版本 current。版本固定指向不可变 file_objects，历史 Run 可用 run_input_files.file_id 反查实际输入版本（AC-13）。读取轨（3-T1 归档=只读保留）：归档空间的现任成员仍可查看；被移出成员、非成员与个人空间被拒绝。",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "uploadWorkspaceFileVersion",
+        "summary": "上传逻辑文件的新版本（负责人/管理员/成员；只读成员拒绝）",
+        "description": "在同一逻辑文件下新增版本，记录上传人、时间与更新说明；不覆盖既有不可变对象。版本号在逻辑文件行锁内分配，冲突返回 409。新对象只有扫描通过且解析成功才前移最新有效版本；失败版本保留记录但不影响旧版本可用性。执行轨：归档空间、非成员与个人空间被拒绝。请求体为二进制文件内容，文件名与更新说明分别通过 X-File-Name 与 X-File-Note 头传入（URL 编码）。",
+        "parameters": [
+          {
+            "name": "X-File-Name",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "URL 编码的新版本文件名"
+          },
+          {
+            "name": "X-File-Note",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "URL 编码的更新说明（可选，最长 500 字符）"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "description": "请求校验失败：文件过大、类型不支持、安全检查未通过、编码无效等（HTTP 层没有 413 分类，超限同样以 422 返回）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspaces/{workspaceId}/files/{logicalFileId}/versions/{versionNo}/download": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/WorkspaceId"
+        },
+        {
+          "name": "logicalFileId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "versionNo",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      ],
+      "get": {
+        "operationId": "downloadWorkspaceFileVersion",
+        "summary": "鉴权后下载逻辑文件的指定版本",
+        "description": "版本解析到不可变对象后仍走既有 readFile 读取门禁（readFile → canReadWorkspaceObject）：归档空间对现任成员可读，被移出成员与非成员返回 403，且错误与文件不存在同口径以避免枚举。个人空间被拒绝。",
+        "responses": {
+          "200": {
+            "description": "文件内容",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "403": {
             "$ref": "#/components/responses/Error"
           },
           "422": {

@@ -141,6 +141,8 @@ test('回滚兼容：删除 0022 对象后旧结构与个人数据完整，重�
   await database.unsafe(`
     drop trigger if exists team_workspace_single_owner on workspace_members;
     drop function if exists assert_team_workspace_single_owner();
+    drop table if exists workspace_file_versions;
+    drop table if exists workspace_files;
     drop table if exists workspace_revocation_events;
     drop table if exists workspace_grant_sources;
     drop table if exists workspace_agent_members;

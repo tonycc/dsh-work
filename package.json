@@ -60,6 +60,7 @@
     "test:m5:revocation": "pnpm --filter @dsh-work/server test:m5:revocation",
     "test:m5:sessions:integration": "pnpm --filter @dsh-work/server test:m5:sessions:integration",
     "test:m5:shared-files:integration": "pnpm --filter @dsh-work/server test:m5:shared-files:integration",
+    "test:m5:file-versions:integration": "pnpm --filter @dsh-work/server test:m5:file-versions:integration",
     "test:m5:lifecycle:integration": "pnpm --filter @dsh-work/server test:m5:lifecycle:integration",
     "bench:team-workspace-statistics": "node --experimental-strip-types --env-file-if-exists=.env scripts/bench/team-workspace-statistics.ts"
   },

@@ -1,7 +1,7 @@
 # 批次 3 任务拆分与实施约束
 
 **状态：** 进入批次 3 实施的任务边界（2026-09-11）。产品语义以 `team-workspace-plan.md` 为准，界面以 `team-workspace-design.md` 为准，本文件只拆任务、定验收与顺序。
-**批次 3 的范围是 TW-06／TW-07／TW-08 三件事**（方案 §7）：本文件目前只拆分并交付了 **TW-06（空间设置与生命周期／归档语义）**，即 3-T1…3-T5；TW-07（文件更新与版本）与 TW-08（团队动态与通知）尚未拆分，**批次 3 因此未整体完成**。
+**批次 3 的范围是 TW-06／TW-07／TW-08 三件事**（方案 §7）：TW-06（3-T1…3-T5）与 **TW-07（3-T6）** 已交付；TW-08（团队动态与通知）尚未拆分，**批次 3 因此未整体完成**。
 **依赖：** 批次 1A（授权与撤权机制）、1B（团队资料与本人对话、文件与结果读取收权、可见统计基线）已交付。
 
 ## 范围决定（2026-09-11 产品确认）
@@ -130,12 +130,53 @@
 - 设计：§2.1/§2.7 补「归档后写入口必须全部隐藏」的完整清单（含成员/Agent 弹窗、全局新对话空间选择器、侧栏删除对话）与「筛选失败清空旧结果 + 重试」；§5 补 AC-14/AC-23 对应。
 - 交接：handoff 头部与进度表更新，新增 §7「TW-06 交付记录」（含评审轮次、并发保护与既有死锁修复、AC-23 例外），原 §7/§8 顺延为 §8/§9。
 - **1B 遗留的归档语义待定项就此关闭**（产品已签字）。
-- **批次 3 状态澄清**：批次 3 的范围是 TW-06／TW-07／TW-08，本文件目前只拆分并交付了 TW-06；3-T6（TW-07 文件更新与版本）与 3-T7（TW-08 团队动态与通知）尚未拆分，**批次 3 未整体完成**。
+- **批次 3 状态澄清**：批次 3 的范围是 TW-06／TW-07／TW-08；TW-06（3-T1…3-T5）与 TW-07（3-T6）已交付，3-T7（TW-08 团队动态与通知）尚未拆分，**批次 3 未整体完成**。
 
-### 3-T6 文件更新与版本（TW-07）⬜ 未拆分
+### 3-T6 文件更新与版本（TW-07）✅ 已完成（2026-09-12）
 - 逻辑文件与版本关系、新版本上传、旧版本继续可用、引用固定版本、历史 Run 追溯实际版本；P1。
 - 依赖：1B 交付的共享文件与收权读取轨；不依赖 TW-06 的归档语义，但归档空间的写入属执行轨（需拒绝）。
 - **验收**：AC-13、AC-29（文件相关部分）。
+
+**数据模型（实施前先定，避免与不可变对象冲突）**：
+
+- **`file_objects` 保持不可变**（P0 语义，AC-13 要求历史 Run 可追溯）。TW-07 不改它，只在其上加一层「逻辑文件 → 版本」关联：
+  - 新增 `workspace_files`（逻辑文件）：`id`、`tenant_id`、`workspace_id`、`name`（可编辑的展示名）、`created_by`、`created_at`、`updated_at`、`latest_version_no`、`status`（`active` / `removed`）。
+  - 新增 `workspace_file_versions`：`id`、`tenant_id`、`logical_file_id`、`version_no`、`file_object_id`（指向不可变对象）、`note`（更新说明）、`created_by`、`created_at`；同一逻辑文件内 `(logical_file_id, version_no)` 唯一，`file_object_id` 唯一（一个对象只属一个版本）。
+  - **迁移把现有团队共享文件（`file_objects` 中 `session_id is null` 且未移除）回填为各自逻辑文件的 v1**；个人空间文件不回填（P0 不依赖）；`session_id` 非空的会话附件不进入逻辑文件（它们是会话私有附件，不是团队共享文件）。
+- **引用固定版本**：Run 引用仍写 `run_input_files.file_id`（不可变对象 id），因此历史 Run 的「实际输入版本」由 `workspace_file_versions` 反查即可追溯。**不新增会话级 pin 表**：会话附件与共享文件的引用路径已由 `run_input_files` 覆盖。
+- **新版本失败不破坏旧版**：新对象先以 `pending` 落库并解析，只有 `scan_status='clean'` 且解析成功才把 `latest_version_no` 前移；失败版本保留记录但不出现在「最新有效版本」。
+- **并发上传**：版本号分配必须在逻辑文件行锁内完成（`select ... for update` on `workspace_files`），冲突返回明确 409，不做「后写覆盖」。
+- **列表与下载**：`GET /workspaces/:id/files` 默认返回每个逻辑文件的最新有效版本（保持现有响应形状，增加 `logicalFileId`/`versionNo`/`versionCount`）；新增 `GET /workspaces/:id/files/:logicalFileId/versions` 与「上传新版本」接口。下载新版本需 `workspace_file_versions` 解析后仍走既有 `readFile` 鉴权（读取轨，归档可读）。
+- **前端**：文件行显示版本与「上传新版本」入口（归档空间隐藏，属执行轨），版本列表可查看/下载历史版本。
+- **不在本任务内**：TW-08 的动态与通知。
+
+**交付记录（2026-09-12，后端）**：
+
+- **迁移 `0025_workspace_file_versions.sql`**：新增 `workspace_files` 与 `workspace_file_versions`（字段/唯一约束同上方数据模型），复合外键到 `tenants`/`workspaces`/`users`/`file_objects`，`(tenant_id, logical_file_id, version_no)` 与 `(tenant_id, file_object_id)` 唯一，另有 `(tenant_id, workspace_id) where status='active'` 部分索引。**不改 `file_objects`**（集成用例断言其列集合在 0025 前后完全一致）。
+  - 回填：`file_objects` 中 `session_id is null`、`removed_at is null` 且所属空间 `workspace_type='team'` 的行，各自回填一个逻辑文件 + v1 版本行（确定性 ID `wfile-<objectId>` / `wfv-<objectId>`，`on conflict do nothing`）。**个人空间文件（含个人空间里 `session_id is null` 的文件）与会话附件（`session_id` 非空）一律不回填**；已逻辑移除的文件也不回填。
+  - 回填版本号：`latest_version_no` 只在存在成功的 `m4-basic-v1` 解析记录时为 1，否则为 0——记录仍在（可追溯），但不出现在「最新有效版本」里（AC-13）。`parse_status` 由既有解析记录推导为 `succeeded`/`failed`/`pending`。
+  - 相对既定模型的少量增列（不影响语义，已在迁移内 `comment on`）：`workspace_files.removed_at`/`removed_by`（与 `file_objects` 同口径的移除审计）、`workspace_file_versions.parse_status`（区分 pending/succeeded/failed，支撑「失败版本记录保留但不前移」）。
+- **服务层（`postgres-content-service.ts`）**：
+  - `listWorkspaceFiles`：改为按逻辑文件聚合，返回**最高解析成功版本**（`join lateral … order by (parse_status = 'succeeded') desc, version_no desc`；没有任何成功版本时退化为最高版本），并新增 `logicalFileId`/`versionNo`/`versionCount`；同一逻辑文件只出现一行（AC-29 不重复计数），名称搜索与 keyset 游标语义不变。`removable` 口径扩展为「负责人/管理员，或逻辑文件创建人，或最新有效版本上传人」。
+  - `listWorkspaceFileVersions`：按版本号倒序返回全部版本（含失败版本），带 `note`/`parseStatus`/`current`/`canDownload`；读取轨（归档可读），非成员/个人空间拒绝。
+  - `uploadWorkspaceFileVersion`：新版本先落**不可变 `file_objects` 行**（`scan_status='clean'`，安全扫描在事务外同步完成）并在事务内写 `pending` 版本行；**版本号在 `workspace_files` 行 `select ... for update` 内按 `max(version_no)+1` 分配**（不是 `latest_version_no+1`，失败版本不占号但也不被复用）；唯一冲突兜底翻译为类型化 409。解析成功后才把 `latest_version_no` 前移并置 `parse_status='succeeded'`；解析失败置 `'failed'`、保留对象与记录、抛类型化 422，**绝不影响上一版本**（AC-13）。
+  - `resolveWorkspaceFileVersionFileId` + 路由：指定版本下载解析到不可变对象后仍走既有 `readFile` → `canReadWorkspaceObject`（读取轨，归档可读、失权成员拒绝）。
+  - `removeWorkspaceFile`：按逻辑文件移除（兼容传版本对象 ID），置 `workspace_files.status='removed'` 并把该逻辑文件**全部版本对象**标记 `removed_at`（阻止新引用）；版本行、对象、解析结果与 `run_input_files` 引用全部保留（AC-13）。个人空间上传/移除拒绝改为类型化 422。
+  - `listWorkspaces` 的团队文件摘要同样按逻辑文件聚合（个人空间分支保持原查询，AC-23）。
+  - 类型化错误：403 `authorizationDenied`、422 `requestInvalid`（含解析失败与个人空间拒绝）、409 `WorkspaceStateConflictError`（已移除文件再加版本、版本号竞态），不靠文案分类。
+- **路由与契约**：`GET/POST /workspaces/:workspaceId/files/:logicalFileId/versions`、`GET /workspaces/:workspaceId/files/:logicalFileId/versions/:versionNo/download`；上传执行轨（归档 403），两个读取端点 `allowArchived: true`；`docs/contracts/openapi-workbench.json` 同步三条路径、头部参数与 409/422/413 说明，并更新列表描述。
+- **测试**：新增 `server/src/http/team-workspace-file-versions-api.integration.test.ts`（**18 个用例**，`createThrowawayDatabase()`，自行构造 0001~0024 基线后应用 0025 验证回填）；登记为 `test:m5:file-versions:integration`（`server/package.json`、根 `package.json`、`.github/workflows/ci.yml`）。既有 `team-workspace-shared-files-api` 的 `seedFile` 夹具补建逻辑文件+v1（既有 15 条断言不变、全绿）；`team-workspace-upgrade` 的 0022 回滚用例补 drop 0025 对象以覆盖新迁移回滚。
+- **反证（削弱实现即变红）**：① 去掉版本分配 `for update` → 行锁判别用例与三路并发用例均红（并发用例实测出现 `WorkspaceStateConflictError`，只 2/3 成功）；② 失败版本也前移 `latest_version_no` → 失败版本用例红；③ 回填去掉 `workspace_type='team'` → 回填用例红（个人文件被计入）；④ 列表去掉版本关联去重 → 去重用例红；⑤ 列表退回按 `latest_version_no` 关联 → 「历史解析从未成功的文件仍可见」用例红（该回归由父代理复查发现并修复）；⑥ 去掉 `assertCanWriteWorkspaceFiles` → 只读成员上传用例红。均已还原。
+- **符合性/质量评审修复（2026-09-11）**：① **只读成员可上传**（P1，违反 §5/AC-08）：新版本上传与新建共享文件都补 `assertCanWriteWorkspaceFiles`（viewer → 403），OpenAPI 去掉「（所有成员）」的错误口径；② 移除鉴权与列表口径不一致（列表按「最高解析成功版本」判 removable、移除按「最高版本」判权，导致按钮可点却 403）→ 统一为同一排序；③ 列表过滤由 `= 'clean'` 恢复为 `<> 'blocked'`，避免 `pending`/`failed` 的回填文件从列表与空间摘要消失（TW-05 可见态回归）；④ 版本列表的 `current` 改为与展示版本一致、`canDownload` 计入 `removed_at`；⑤ 畸形 `X-File-Name`/`X-File-Note` 百分号编码与安全检查未通过原先落 **500**，改为类型化 422；契约里不可达的 413 改为 422 并说明；⑥ 更正本交付记录（列表口径、反证项、用例数）。
+- **第二轮质量评审合入条件的落实（2026-09-11）**：
+  - **迁移可重复运行**：`0025` 的两张表改 `create table if not exists`；`workspace_files` 回填按主键 `on conflict (id)`（其 id 由对象 id 确定性派生），`workspace_file_versions` 回填按业务唯一键 `on conflict (tenant_id, file_object_id)`（此前只写 `(id)`，重跑会命中唯一约束并让整个迁移回滚）。已用「删除迁移记账后重放整文件」验证可重复执行。**修正过程中的一次失误值得记录**：第一次改错表——把 `(tenant_id, file_object_id)` 写到了没有该列的 `workspace_files` 上，导致全新迁移链直接 `42703` 失败；由验证代理发现，当场修正。
+  - **事务内复核（TOCTOU）**：上传与移除都改为在事务内先取空间行锁、再复核「空间活跃 + 调用者仍是成员（且非只读）」，移除的判权改用**锁内**读到的角色；事务外的检查保留为尽早失败。
+  - **回归锚点**：新增「列表 removable 与移除鉴权同口径」（判别设计：逻辑文件创建者与最高版本上传人都是 owner、被展示版本上传人是 member，按最高版本判权即 403——已反证）。
+  - **未能做出的判别性用例（如实记录）**：评审要求为「移除路径的行锁」补回归测试。实测无法构造具鉴别力的用例——`file_objects` 插入对 `workspaces` 有外键，PostgreSQL 自身会对该行取 `FOR KEY SHARE`，与外部持锁者的 `FOR UPDATE` 冲突，因此**即使删掉显式锁，写入仍会阻塞**；同理「移除后无存活版本对象」这一不变量由事务内的状态复核独立保证（削弱掉全部锁后用例仍绿）。结论：该串行化同时由显式锁、外键的隐式 KEY SHARE 与事务内状态复核三者提供，无法用外部锁用例单独鉴别显式锁；已删除那条不具鉴别力的用例，避免留下「看着在测锁、其实没测」的假锚点。
+  - **同名过度承诺的用例改名**：原「UniqueViolation 走 409」用例实际从未触发唯一约束（行锁保证串行），已改名为它真正验证的行为（版本号按 max 分配 + 已移除文件的类型化 409），并在注释中说明唯一冲突分支只是行锁失效时的兜底。
+- **第二轮验证追加修复（2026-09-11）**：① **新建共享文件的同类 TOCTOU**：`storeWorkspaceFile` 原先只在事务外校验，请求在途时被归档/撤权仍会落库（验证实测 `AFTER_RELEASE=resolved`）；现与上传新版本、移除一致，在事务内先取空间行锁并复核「活跃 + 成员 + 非只读」。② **只读成员不得移除**（验证 D1，既有行为与设计/方案冲突）：`removable` 加 `role !== 'viewer'`，移除路径对 viewer 走既有拒绝文案；注意这修的是 HEAD 就存在的行为（历史上传人被降级为只读后仍可移除），与「上传」口径终于一致。③ 迁移重放不再产生**孤儿逻辑文件**（回填排除已有版本行的对象，验证 P3-1）。④ 契约与记录的 3 处口径修正（新上传接口摘要不再写「所有成员」、DELETE 说明补「降级为只读同样不可移除」、用例数订正）。⑤ 补两条缺失锚点：**扫描中（pending）文件仍在列表与空间摘要可见**（过滤只隐藏 `blocked`，验证 P3-4）、**移除必须取得空间行锁**（验证代理推翻了我此前「该用例无法构造」的判断——移除不插入 `file_objects`，不触发外键的 KEY SHARE，因此可用外部持锁构造判别性用例；已补回并反证）。⑥ 未提供说明时 `note` 保持 `null` 而不是 `''`。
+- **已知潜在（记录，不阻断）**：若某个**被展示版本**的对象是 `blocked`（当前同步扫描不会落库这类对象），外层 `scan_status <> 'blocked'` 会把**整个逻辑文件**从列表挤掉，连更低的可用版本一起消失；`listWorkspaceFileVersions` 也不过滤扫描态。当前不可达，属 TW-05 预留异步扫描态后的潜在回归。
+- **未做/超出本任务**：前端版本 UI（TW-07 前端为后续任务，本任务只保证类型可编译）；AC-29 的既定规模查询计划/延迟基线未在本任务重测（无 TW-07 专项预算），且 `docs/baselines/team-workspace-1b-statistics-findings.md` §8 已标注 1B 基线的文件列表查询形状在 TW-07 之后过时；未新增会话级 pin 表（沿用文档决定）。
 
 ### 3-T7 团队动态与通知（TW-08）⬜ 未拆分
 - 成员变动、文件上传/移除等事件的动态投影与站内通知；幂等去重、按权限过滤、归档空间不泄露正文；P1。
@@ -149,10 +190,11 @@ TW-06：T1（授权双轨）──> T2（归档/恢复 API）──> T3（前端
                               │
                               └──> T4（集成验证与 CI）──> T5（文档收尾）  ✅ 已交付
 
-TW-07（文件版本）与 TW-08（动态通知）尚未拆分；两者都在执行轨/读取轨口径之上实现。
+TW-07：T6（迁移 0025 + 版本服务/路由 + 读/执行双轨 + 集成验证）  ✅ 已交付（后端；前端版本 UI 为后续）
+TW-08（动态通知）尚未拆分；在既有事件源与执行轨/读取轨口径之上实现。
 ```
 
-**批次 3 退出条件（方案 §7）**：归档恢复、文件升级追溯、动态去重与收权均通过 —— 目前仅满足「归档恢复」一项，故**批次 3 未完成**。
+**批次 3 退出条件（方案 §7）**：归档恢复、文件升级追溯、动态去重与收权均通过 —— 目前满足「归档恢复」与「文件升级追溯」，动态去重未交付，故**批次 3 未完成**。
 
 - T1 必须先做：T2 的归档写入一旦落地，读/执行口径必须已经分开，否则归档会立刻造成过收权（连只读都读不到）。
 - 每个任务：实现（TDD 先红后绿）→ 规格符合性评审 → 质量评审 → 修复 → 复审，流程同 1A/1B。

@@ -171,6 +171,12 @@ export interface WorkspaceFile {
   size: string
   uploadedBy: string
   uploadedAt: string
+  /** TW-07 logical file id; present for team workspace files only. */
+  logicalFileId?: string
+  /** Version number the `id` object belongs to (latest effective version). */
+  versionNo?: number
+  /** Total recorded versions under the logical file. */
+  versionCount?: number
 }
 
 export interface Workspace {

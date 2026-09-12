@@ -100,7 +100,7 @@ export function registerContentRoutes(
     const fileNameHeader = request.headers['x-file-name']
     const encodedName = Array.isArray(fileNameHeader) ? fileNameHeader[0] : fileNameHeader
     if (!encodedName) throw new Error('缺少文件名')
-    const name = decodeURIComponent(encodedName)
+    const name = decodeFileNameHeader(encodedName)
     const bytes = await readBinaryBody(request, 20 * 1024 * 1024)
     const file = await content.storeWorkspaceFile(
       context.params['workspaceId'] ?? '',
@@ -152,6 +152,80 @@ export function registerContentRoutes(
     )
   })
 
+  // TW-07 版本列表：读取轨（3-T1），归档空间的现任成员仍可查看历史版本。
+  router.get(`${basePath}/workspaces/:workspaceId/files/:logicalFileId/versions`, async (_request, context) => {
+    const identity = requireRequestIdentity(context, 'workbench')
+    const userId = identity.userId
+    const workspaceId = context.params['workspaceId'] ?? ''
+    await authorization?.authorizeWorkbench({
+      userId,
+      workspaceId,
+      ...sessionAuthorizationContext(identity),
+      allowArchived: true,
+    })
+    return envelope(
+      'workbench',
+      await content.listWorkspaceFileVersions({
+        workspaceId,
+        logicalFileId: context.params['logicalFileId'] ?? '',
+        actorUserId: userId,
+      }),
+      'postgres',
+    )
+  })
+
+  // TW-07 新版本上传：执行轨，归档空间在路由层即被拒绝（与服务层执行轨同口径）。
+  router.post(`${basePath}/workspaces/:workspaceId/files/:logicalFileId/versions`, async (request, context) => {
+    const identity = requireRequestIdentity(context, 'workbench')
+    const userId = identity.userId
+    const workspaceId = context.params['workspaceId'] ?? ''
+    await authorization?.authorizeWorkbench({
+      userId,
+      workspaceId,
+      ...sessionAuthorizationContext(identity),
+    })
+    const encodedName = headerValue(request, 'x-file-name')
+    if (!encodedName) throw routeValidationFailed('缺少文件名')
+    const encodedNote = headerValue(request, 'x-file-note')
+    const bytes = await readBinaryBody(request, 20 * 1024 * 1024)
+    const uploaded = await content.uploadWorkspaceFileVersion({
+      workspaceId,
+      logicalFileId: context.params['logicalFileId'] ?? '',
+      name: decodeFileNameHeader(encodedName),
+      mimeType: request.headers['content-type'] ?? 'application/octet-stream',
+      bytes,
+      // 未提供说明时保持 null（契约声明 `string | null`）：空字符串与「未填写」
+      // 在展示与回填口径上不是一回事（第二轮验证 P3-5）。
+      note: encodedNote ? decodeFileNameHeader(encodedNote).slice(0, 500) : null,
+      actorUserId: userId,
+    })
+    return httpResult(201, envelope('workbench', uploaded, 'postgres'))
+  })
+
+  // TW-07 指定版本下载：解析到不可变对象后仍走既有 readFile 读门禁
+  // （readFile → canReadWorkspaceObject），归档空间对现任成员可读、失权成员拒绝。
+  router.get(`${basePath}/workspaces/:workspaceId/files/:logicalFileId/versions/:versionNo/download`, async (_request, context, response) => {
+    const identity = requireRequestIdentity(context, 'workbench')
+    const userId = identity.userId
+    const workspaceId = context.params['workspaceId'] ?? ''
+    await authorization?.authorizeWorkbench({
+      userId,
+      workspaceId,
+      ...sessionAuthorizationContext(identity),
+      allowArchived: true,
+    })
+    const versionNo = Number(context.params['versionNo'])
+    if (!Number.isInteger(versionNo) || versionNo < 1) throw routeValidationFailed('文件版本号无效')
+    const fileId = await content.resolveWorkspaceFileVersionFileId({
+      workspaceId,
+      logicalFileId: context.params['logicalFileId'] ?? '',
+      versionNo,
+      actorUserId: userId,
+    })
+    const file = await content.readFile(fileId, userId)
+    writeDownload(response, file.name, file.mimeType, file.bytes)
+  })
+
   router.post(`${basePath}/sessions/:sessionId/files`, async (request, context) => {
     const identity = requireRequestIdentity(context, 'workbench')
     const userId = identity.userId
@@ -159,7 +233,7 @@ export function registerContentRoutes(
     const fileNameHeader = request.headers['x-file-name']
     const encodedName = Array.isArray(fileNameHeader) ? fileNameHeader[0] : fileNameHeader
     if (!encodedName) throw new Error('缺少文件名')
-    const name = decodeURIComponent(encodedName)
+    const name = decodeFileNameHeader(encodedName)
     const bytes = await readBinaryBody(request, 20 * 1024 * 1024)
     const file = await content.storeSessionFile(
       context.params['sessionId'] ?? '',
@@ -200,6 +274,21 @@ export function registerContentRoutes(
   })
 }
 
+/**
+ * Decodes an `X-File-Name` / `X-File-Note` header. `decodeURIComponent` throws a
+ * `URIError` on malformed percent-encoding, which `classifyHttpError` maps to a 500;
+ * a client-supplied header must never do that, so translate it to a typed 422.
+ * Empty/absent input decodes to '' and callers decide what that means.
+ */
+function decodeFileNameHeader(value: string | undefined): string {
+  if (!value) return ''
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    throw routeValidationFailed('文件名或说明的编码无效')
+  }
+}
+
 async function readBinaryBody(request: IncomingMessage, maxBytes: number) {
   const chunks: Buffer[] = []
   let length = 0
@@ -222,4 +311,10 @@ function writeDownload(response: ServerResponse, name: string, mimeType: string,
     'X-Content-Type-Options': 'nosniff',
   })
   response.end(bytes)
+}
+
+/** Node collapses repeated headers to an array; take the first value. */
+function headerValue(request: IncomingMessage, name: string) {
+  const header = request.headers[name]
+  return Array.isArray(header) ? header[0] : header
 }

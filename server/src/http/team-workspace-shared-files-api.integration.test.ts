@@ -756,6 +756,7 @@ async function seedFile(input: {
   uploadedBy: string
   createdAt?: string
 }) {
+  const createdAt = input.createdAt ?? new Date().toISOString()
   await database`
     insert into file_objects (
       id, tenant_id, workspace_id, session_id, storage_key, original_name, mime_type,
@@ -763,8 +764,18 @@ async function seedFile(input: {
     ) values (
       ${input.id}, ${tenantId}, ${input.workspaceId}, null, ${`storage/${input.id}`}, ${input.name},
       'application/octet-stream', 2048, ${'a'.repeat(64)}, 'clean', ${input.uploadedBy},
-      ${input.createdAt ?? new Date().toISOString()}
+      ${createdAt}
     )
+  `
+  // TW-07：空间共享文件在逻辑文件模型里必须有对应 v1，否则不属于「有效列表」
+  // （迁移 0025 只回填迁移前就存在的数据）。
+  await database`
+    insert into workspace_files (id, tenant_id, workspace_id, name, status, latest_version_no, created_by, created_at)
+    values (${`wfile-${input.id}`}, ${tenantId}, ${input.workspaceId}, ${input.name}, 'active', 1, ${input.uploadedBy}, ${createdAt})
+  `
+  await database`
+    insert into workspace_file_versions (id, tenant_id, logical_file_id, version_no, file_object_id, note, parse_status, created_by)
+    values (${`wfv-${input.id}`}, ${tenantId}, ${`wfile-${input.id}`}, 1, ${input.id}, null, 'succeeded', ${input.uploadedBy})
   `
 }
 

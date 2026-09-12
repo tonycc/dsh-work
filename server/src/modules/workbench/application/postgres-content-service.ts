@@ -10,6 +10,7 @@ import type { FileMount } from '../../runtime/runtime-types.ts'
 import { BaselineFileSafetyScanner, type FileSafetyScannerPort } from './file-safety-scanner.ts'
 import { extractDocument } from './document-extractor.ts'
 import { PostgresWorkspaceService, type WorkspaceType } from './postgres-workspace-service.ts'
+import { workspaceStateConflict } from './workspace-state-conflict-error.ts'
 
 const tenantId = 'tenant-dsh-work'
 const allowedExtensions = new Set(['.pdf', '.docx', '.xlsx', '.csv', '.txt', '.md'])
@@ -35,11 +36,62 @@ export interface WorkspaceFileSummary {
   scanStatus: string
   removable: boolean
   canDownload: boolean
+  /** 逻辑文件 ID（TW-07）：同一逻辑文件的所有版本共享它。 */
+  logicalFileId: string
+  /** 本行对应的版本号（列表返回最新有效版本）。 */
+  versionNo: number
+  /** 逻辑文件下的版本总数（含失败版本，用于追溯）。 */
+  versionCount: number
 }
 
 export interface WorkspaceFilePage {
   items: WorkspaceFileSummary[]
   nextCursor: string | null
+}
+
+/** One immutable object pinned to a logical file version (TW-07 / AC-13). */
+export interface WorkspaceFileVersionSummary {
+  versionNo: number
+  /** Immutable `file_objects.id` used for download and run references. */
+  fileId: string
+  logicalFileId: string
+  name: string
+  type: string
+  size: string
+  note: string | null
+  uploadedBy: string
+  uploadedAt: string
+  scanStatus: string
+  parseStatus: string
+  /**
+   * True for the version the file list currently displays for this logical file:
+   * the highest successfully-parsed version, or the highest version when none
+   * parsed. Note this can be true while `latestVersionNo` is 0 (a backfilled file
+   * whose historical parse never succeeded), so do not compare the two fields.
+   */
+  current: boolean
+  canDownload: boolean
+}
+
+export interface WorkspaceFileVersionPage {
+  logicalFileId: string
+  name: string
+  status: string
+  latestVersionNo: number
+  versionCount: number
+  items: WorkspaceFileVersionSummary[]
+}
+
+export interface UploadedWorkspaceFileVersion {
+  id: string
+  logicalFileId: string
+  versionNo: number
+  name: string
+  type: string
+  size: string
+  uploadedBy: string
+  uploadedAt: string
+  extractionStatus: 'succeeded'
 }
 
 interface RuntimeFileRow {
@@ -161,16 +213,9 @@ export class PostgresContentService {
         where wm.tenant_id = ${tenantId} and wm.workspace_id = ${row.id}
         order by wm.joined_at asc
       `
-      const files = await this.database<Omit<FileRow, 'workspaceId'>[]>`
-        select f.id, f.storage_key as "storageKey", f.original_name as "originalName",
-               f.mime_type as "mimeType", f.size_bytes as "sizeBytes", f.created_at as "createdAt",
-               u.display_name as "uploadedBy"
-          from file_objects f
-          join users u on u.tenant_id = f.tenant_id and u.id = f.uploaded_by
-         where f.tenant_id = ${tenantId} and f.workspace_id = ${row.id} and f.scan_status = 'clean'
-           and f.session_id is null
-         order by f.created_at desc
-      `
+      const files = row.type === 'team'
+        ? await this.listTeamWorkspaceFileSummaries(row.id)
+        : await this.listPersonalWorkspaceFileSummaries(row.id)
       return {
         id: row.id,
         name: row.name,
@@ -184,15 +229,80 @@ export class PostgresContentService {
         updatedAt: formatDateTime(row.updatedAt),
         owner: row.owner,
         members: members.map((member) => member.name),
-        files: files.map((file) => ({
-          id: file.id,
-          name: file.originalName,
-          type: extname(file.originalName).slice(1).toUpperCase() || 'FILE',
-          size: formatSize(Number(file.sizeBytes)),
-          uploadedBy: file.uploadedBy,
-          uploadedAt: formatDateTime(file.createdAt),
-        })),
+        files,
       }
+    }))
+  }
+
+  /**
+   * 团队空间卡片里的文件摘要按逻辑文件聚合（TW-07 / AC-29）：一个逻辑文件只出现
+   * 一次，取最新有效版本，避免上传新版本后同一文件被重复计数。
+   */
+  private async listTeamWorkspaceFileSummaries(workspaceId: string) {
+    const rows = await this.database<{
+      id: string
+      logicalFileId: string
+      logicalName: string
+      sizeBytes: string | number
+      createdAt: Date
+      uploadedBy: string
+      versionNo: number
+      versionCount: number
+    }[]>`
+      select f.id, wf.id as "logicalFileId", wf.name as "logicalName",
+             f.size_bytes as "sizeBytes", f.created_at as "createdAt",
+             u.display_name as "uploadedBy", wfv.version_no as "versionNo",
+             (select count(*)::integer from workspace_file_versions c
+               where c.tenant_id = wf.tenant_id and c.logical_file_id = wf.id) as "versionCount"
+        from workspace_files wf
+        -- 同 listWorkspaceFiles：优先最高解析成功版本，无成功版本时退化为最高版本，
+        -- 避免失败文件从空间列表摘要里消失。
+        join lateral (
+          select v.version_no, v.file_object_id
+            from workspace_file_versions v
+           where v.tenant_id = wf.tenant_id and v.logical_file_id = wf.id
+           order by (v.parse_status = 'succeeded') desc, v.version_no desc
+           limit 1
+        ) wfv on true
+        join file_objects f on f.tenant_id = wf.tenant_id and f.id = wfv.file_object_id
+        join users u on u.tenant_id = f.tenant_id and u.id = f.uploaded_by
+       where wf.tenant_id = ${tenantId} and wf.workspace_id = ${workspaceId}
+         and wf.status = 'active'
+         and f.scan_status <> 'blocked' and f.removed_at is null
+       order by f.created_at desc
+    `
+    return rows.map(file => ({
+      id: file.id,
+      name: file.logicalName,
+      type: extname(file.logicalName).slice(1).toUpperCase() || 'FILE',
+      size: formatSize(Number(file.sizeBytes)),
+      uploadedBy: file.uploadedBy,
+      uploadedAt: formatDateTime(file.createdAt),
+      logicalFileId: file.logicalFileId,
+      versionNo: file.versionNo,
+      versionCount: file.versionCount,
+    }))
+  }
+
+  /** 个人空间保持既有路径（AC-23）：不读逻辑文件，行为与 TW-07 之前一致。 */
+  private async listPersonalWorkspaceFileSummaries(workspaceId: string) {
+    const files = await this.database<Omit<FileRow, 'workspaceId'>[]>`
+      select f.id, f.storage_key as "storageKey", f.original_name as "originalName",
+             f.mime_type as "mimeType", f.size_bytes as "sizeBytes", f.created_at as "createdAt",
+             u.display_name as "uploadedBy"
+        from file_objects f
+        join users u on u.tenant_id = f.tenant_id and u.id = f.uploaded_by
+       where f.tenant_id = ${tenantId} and f.workspace_id = ${workspaceId} and f.scan_status = 'clean'
+         and f.session_id is null
+       order by f.created_at desc
+    `
+    return files.map(file => ({
+      id: file.id,
+      name: file.originalName,
+      type: extname(file.originalName).slice(1).toUpperCase() || 'FILE',
+      size: formatSize(Number(file.sizeBytes)),
+      uploadedBy: file.uploadedBy,
+      uploadedAt: formatDateTime(file.createdAt),
     }))
   }
 
@@ -317,15 +427,67 @@ export class PostgresContentService {
     }))
   }
 
-  async storeWorkspaceFile(workspaceId: string, name: string, mimeType: string, bytes: Buffer, actorUserId: string) {
-    await this.requireWorkspaceAccess(workspaceId, actorUserId)
-    return this.storeInputFile({ workspaceId, sessionId: null, name, mimeType, bytes, actorUserId })
+  /**
+   * Upload a brand-new team shared file (execution track). TW-07 adds the logical
+   * file on top of the immutable object: the object stays version 1 and later
+   * uploads add versions instead of overwriting it (AC-13).
+   *
+   * Personal spaces keep the pre-TW-07 path untouched (AC-23): no logical file,
+   * no version rows, no change to how the personal file list is produced.
+   */
+  async storeWorkspaceFile(workspaceId: string, name: string, mimeType: string, bytes: Buffer, actorUserId: string): Promise<{
+    id: string
+    name: string
+    size: string
+    type: string
+    uploadedBy: string
+    uploadedAt: string
+    extractionStatus: 'succeeded'
+    /** Null for personal spaces: they stay outside the logical-file model (AC-23). */
+    logicalFileId: string | null
+    versionNo: number | null
+  }> {
+    const access = await this.workspaces.resolveAccessibleWorkspace(workspaceId, actorUserId)
+    // 只读成员不得新建共享文件（方案 §5 / AC-08「直接调用写 API 也被拒绝」）。
+    if (access.type === 'team') {
+      await this.assertCanWriteWorkspaceFiles(workspaceId, actorUserId, '上传共享文件')
+    }
+    const stored = await this.storeInputFile({ workspaceId, sessionId: null, name, mimeType, bytes, actorUserId })
+    if (access.type === 'personal') return { ...stored, logicalFileId: null, versionNo: null }
+
+    const logicalFileId = `wfile-${randomUUID()}`
+    await this.database.begin(async (transaction) => {
+      // 与上传新版本/移除同口径：事务内先取空间行锁并复核「空间活跃 + 仍是成员 + 非只读」，
+      // 否则请求在途时被归档/撤权仍会落库（第二轮验证 F-P2：兄弟路径漏了一处）。
+      await this.lockActiveWorkspaceForFileWrite(transaction, workspaceId, actorUserId, {
+        denyViewer: true,
+        viewerAction: '上传共享文件',
+      })
+      await transaction`
+        insert into workspace_files (
+          id, tenant_id, workspace_id, name, status, latest_version_no, created_by
+        ) values (
+          ${logicalFileId}, ${tenantId}, ${workspaceId}, ${name}, 'active', 1, ${actorUserId}
+        )
+      `
+      await transaction`
+        insert into workspace_file_versions (
+          id, tenant_id, logical_file_id, version_no, file_object_id, note, parse_status, created_by
+        ) values (
+          ${`wfv-${randomUUID()}`}, ${tenantId}, ${logicalFileId}, 1, ${stored.id}, null, 'succeeded', ${actorUserId}
+        )
+      `
+    })
+    return { ...stored, logicalFileId, versionNo: 1 }
   }
 
   /**
    * Shared workspace files for the current space: name search, keyset paging and
-   * server-derived allowed actions (1B-T3 / 设计 §2.3). Removed files leave the
-   * referenceable set here; historical runs keep their own references (AC-13).
+   * server-derived allowed actions (1B-T3 / 设计 §2.3). TW-07 returns one row per
+   * LOGICAL file — the latest valid version — so uploading v2 neither duplicates
+   * the file in the list nor silently hides v1's history (AC-29/AC-13). Removed
+   * files leave the referenceable set here; historical runs keep their own
+   * references.
    */
   async listWorkspaceFiles(input: {
     workspaceId: string
@@ -342,7 +504,7 @@ export class PostgresContentService {
       select status from workspaces where tenant_id = ${tenantId} and id = ${input.workspaceId}
     `
     const writable = workspaceState?.status === 'active'
-    if (access.type === 'personal') throw new Error('仅支持团队工作空间查询共享文件')
+    if (access.type === 'personal') throw requestInvalid('仅支持团队工作空间查询共享文件')
     const role = await this.workspaceMemberRole(input.workspaceId, input.actorUserId)
     const canManageAll = role === 'owner' || role === 'admin'
     const limit = Math.min(Math.max(input.limit ?? 20, 1), 100)
@@ -353,7 +515,11 @@ export class PostgresContentService {
 
     const rows = await this.database<{
       id: string
-      originalName: string
+      logicalFileId: string
+      logicalName: string
+      logicalCreatedBy: string
+      versionNo: number
+      versionCount: number
       mimeType: string
       sizeBytes: string | number
       scanStatus: string
@@ -361,16 +527,31 @@ export class PostgresContentService {
       uploadedBy: string
       createdAt: Date
     }[]>`
-      select f.id, f.original_name as "originalName", f.mime_type as "mimeType",
-             f.size_bytes as "sizeBytes", f.scan_status as "scanStatus",
+      select f.id, wf.id as "logicalFileId", wf.name as "logicalName",
+             wf.created_by as "logicalCreatedBy", wfv.version_no as "versionNo",
+             (select count(*)::integer from workspace_file_versions c
+               where c.tenant_id = wf.tenant_id and c.logical_file_id = wf.id) as "versionCount",
+             f.mime_type as "mimeType", f.size_bytes as "sizeBytes", f.scan_status as "scanStatus",
              f.uploaded_by as "uploadedById", u.display_name as "uploadedBy",
              f.created_at as "createdAt"
-        from file_objects f
+        from workspace_files wf
+        -- 列表展示「最高有效版本」（有效 = 解析成功），这样失败的 v2 不会顶掉可用的
+        -- v1（TW-07）；但当没有任何解析成功版本时（例如回填的历史文件从未解析成功、
+        -- latest_version_no 停在 0），退化为展示最高版本，避免该文件从列表里彻底
+        -- 消失——TW-05 要求失败文件带「失败」状态可见。
+        join lateral (
+          select v.version_no, v.file_object_id
+            from workspace_file_versions v
+           where v.tenant_id = wf.tenant_id and v.logical_file_id = wf.id
+           order by (v.parse_status = 'succeeded') desc, v.version_no desc
+           limit 1
+        ) wfv on true
+        join file_objects f on f.tenant_id = wf.tenant_id and f.id = wfv.file_object_id
         join users u on u.tenant_id = f.tenant_id and u.id = f.uploaded_by
-       where f.tenant_id = ${tenantId} and f.workspace_id = ${input.workspaceId}
-         and f.session_id is null and f.removed_at is null
-         and f.scan_status <> 'blocked'
-         and ${pattern === null ? this.database`true` : this.database`f.original_name ilike ${pattern} escape '\\'`}
+       where wf.tenant_id = ${tenantId} and wf.workspace_id = ${input.workspaceId}
+         and wf.status = 'active'
+         and f.removed_at is null and f.scan_status <> 'blocked'
+         and ${pattern === null ? this.database`true` : this.database`wf.name ilike ${pattern} escape '\\'`}
          and ${cursor === null
            ? this.database`true`
            : this.database`(f.created_at, f.id) < (${cursor.createdAt}::timestamptz, ${cursor.id})`}
@@ -382,16 +563,23 @@ export class PostgresContentService {
     const page = rows.slice(0, limit)
     const items = page.map(row => ({
       id: row.id,
-      name: row.originalName,
-      type: extname(row.originalName).slice(1).toUpperCase() || 'FILE',
+      logicalFileId: row.logicalFileId,
+      versionNo: row.versionNo,
+      versionCount: row.versionCount,
+      name: row.logicalName,
+      type: extname(row.logicalName).slice(1).toUpperCase() || 'FILE',
       size: formatSize(Number(row.sizeBytes)),
       uploadedBy: row.uploadedBy,
       uploadedAt: formatDateTime(row.createdAt),
       scanStatus: row.scanStatus,
-      // 权限在服务端判定：负责人/管理员可移除任何文件，成员只能移除自己上传的；
-      // 只读成员不能移除（仍可引用与下载）。归档空间属执行轨（3-T1）：移除会被拒，
-      // 因此不得回报 removable，否则前端会渲染必然失败的入口（质量评审 P2）。
-      removable: writable && (canManageAll || row.uploadedById === input.actorUserId),
+      // 权限在服务端判定：负责人/管理员可移除任何文件，成员只能移除自己创建或
+      // 展示版本由自己上传的；**只读成员一律不能移除**（设计 §2.3「只读成员不渲染
+      // 移除入口」/ 方案 §5「只读成员仅查看和下载」）——注意历史上传人被降级为
+      // 只读后不再保留移除权，这与「上传」的判定一致（验证代理 D1）。
+      // 归档空间属执行轨（3-T1）：移除会被拒，因此不得回报 removable。
+      removable: writable && role !== 'viewer' && (
+        canManageAll || row.logicalCreatedBy === input.actorUserId || row.uploadedById === input.actorUserId
+      ),
       canDownload: row.scanStatus === 'clean',
     }))
     // 游标必须用原始时间戳：uploadedAt 是展示格式，喂回 timestamptz 会解析失败。
@@ -405,31 +593,343 @@ export class PostgresContentService {
   }
 
   /**
-   * Logical removal of a shared workspace file (1B-T3): the object, its parsed
-   * result and every historical run reference stay intact; only the
-   * referenceable listing and future reads lose the file (AC-13).
+   * Version history of one logical file, newest first (TW-07). Read track: current
+   * members keep access after the workspace is archived; non-members and personal
+   * spaces are rejected exactly like `listWorkspaceFiles`.
+   */
+  async listWorkspaceFileVersions(input: {
+    workspaceId: string
+    logicalFileId: string
+    actorUserId: string
+  }): Promise<WorkspaceFileVersionPage> {
+    const access = await this.workspaces.resolveReadableWorkspace(input.workspaceId, input.actorUserId)
+    if (access.type === 'personal') throw requestInvalid('仅支持团队工作空间查询文件版本')
+
+    const [logical] = await this.database<{
+      id: string
+      name: string
+      status: string
+      latestVersionNo: number
+    }[]>`
+      select id, name, status, latest_version_no as "latestVersionNo"
+        from workspace_files
+       where tenant_id = ${tenantId} and id = ${input.logicalFileId}
+         and workspace_id = ${input.workspaceId} and status = 'active'
+    `
+    if (!logical) throw authorizationDenied('文件不存在或不可访问')
+
+    const rows = await this.database<{
+      versionNo: number
+      fileObjectId: string
+      note: string | null
+      parseStatus: string
+      originalName: string
+      mimeType: string
+      sizeBytes: string | number
+      scanStatus: string
+      removedAt: Date | null
+      uploadedBy: string
+      createdAt: Date
+    }[]>`
+      select wfv.version_no as "versionNo", wfv.file_object_id as "fileObjectId",
+             wfv.note, wfv.parse_status as "parseStatus",
+             f.original_name as "originalName", f.mime_type as "mimeType",
+             f.size_bytes as "sizeBytes", f.scan_status as "scanStatus",
+             f.removed_at as "removedAt",
+             u.display_name as "uploadedBy", wfv.created_at as "createdAt"
+        from workspace_file_versions wfv
+        join file_objects f on f.tenant_id = wfv.tenant_id and f.id = wfv.file_object_id
+        join users u on u.tenant_id = f.tenant_id and u.id = f.uploaded_by
+       where wfv.tenant_id = ${tenantId} and wfv.logical_file_id = ${input.logicalFileId}
+       order by wfv.version_no desc
+    `
+
+    return {
+      logicalFileId: logical.id,
+      name: logical.name,
+      status: logical.status,
+      latestVersionNo: logical.latestVersionNo,
+      versionCount: rows.length,
+      items: (() => {
+        // `current` 必须与列表展示的版本一致：列表选「最高解析成功版本」，无成功
+        // 版本时退化为最高版本（符合性评审 F4：此前用 latest_version_no 比较，
+        // 在 latest=0 的文件上没有任何一行被标为 current）。
+        const ordered = [...rows].sort((left, right) => {
+          const leftOk = left.parseStatus === 'succeeded' ? 0 : 1
+          const rightOk = right.parseStatus === 'succeeded' ? 0 : 1
+          return leftOk - rightOk || right.versionNo - left.versionNo
+        })
+        const shownVersionNo = ordered[0]?.versionNo ?? null
+        return rows.map(row => ({
+          versionNo: row.versionNo,
+          fileId: row.fileObjectId,
+          logicalFileId: logical.id,
+          name: row.originalName,
+          type: extname(row.originalName).slice(1).toUpperCase() || 'FILE',
+          size: formatSize(Number(row.sizeBytes)),
+          note: row.note,
+          uploadedBy: row.uploadedBy,
+          uploadedAt: formatDateTime(row.createdAt),
+          scanStatus: row.scanStatus,
+          parseStatus: row.parseStatus,
+          current: shownVersionNo !== null && row.versionNo === shownVersionNo,
+          // 可下载还要看移除状态：已移除的对象即便扫描通过也下载不到（F5）。
+          canDownload: row.scanStatus === 'clean' && row.removedAt === null,
+        }))
+      })(),
+    }
+  }
+
+  /**
+   * Append a new version to an existing logical file (TW-07, execution track).
+   *
+   * Version-number allocation serializes on the logical-file row
+   * (`select ... for update`), so two concurrent uploads cannot claim the same
+   * version number or overwrite each other. The object starts as an immutable
+   * `file_objects` row plus a `pending` version row; `latest_version_no` only
+   * advances after the extraction succeeded, so a failed version never breaks
+   * the previous one (AC-13).
+   */
+  async uploadWorkspaceFileVersion(input: {
+    workspaceId: string
+    logicalFileId: string
+    name: string
+    mimeType: string
+    bytes: Buffer
+    note: string | null
+    actorUserId: string
+  }): Promise<UploadedWorkspaceFileVersion> {
+    const access = await this.workspaces.resolveAccessibleWorkspace(input.workspaceId, input.actorUserId)
+    if (access.type === 'personal') throw requestInvalid('仅支持团队工作空间上传文件版本')
+    // 方案 §5 权限矩阵：只读成员不得上传。上传是执行轨动作，必须查角色，
+    // 不能只靠「空间可访问」（符合性评审 F1：viewer 此前可上传并拿到 201）。
+    await this.assertCanWriteWorkspaceFiles(input.workspaceId, input.actorUserId, '上传文件版本')
+
+    // 先在事务外完成校验、安全扫描与落盘：版本行只引用不可变对象，对象写入失败
+    // 不会分配版本号。
+    const prepared = await this.prepareObjectWrite({
+      workspaceId: input.workspaceId,
+      sessionId: null,
+      name: input.name,
+      mimeType: input.mimeType,
+      bytes: input.bytes,
+      actorUserId: input.actorUserId,
+    })
+
+    let versionNo = 0
+    try {
+      await this.database.begin(async (transaction) => {
+        // 先取空间行锁，再在锁内复核「空间活跃 + 成员角色」：事务外的复核（上面）
+        // 与写入之间存在窗口，并发的移除成员/归档会让已被撤权的人写入成功
+        // （质量评审 F6，与 3-T2 修掉的成员变更 TOCTOU 同类）。
+        await this.lockActiveWorkspaceForFileWrite(transaction, input.workspaceId, input.actorUserId, {
+          denyViewer: true,
+          viewerAction: '上传文件版本',
+        })
+        const [logical] = await transaction<{ status: string }[]>`
+          select status from workspace_files
+           where tenant_id = ${tenantId} and id = ${input.logicalFileId}
+             and workspace_id = ${input.workspaceId}
+           for update
+        `
+        if (!logical) throw authorizationDenied('文件不存在或不可访问')
+        if (logical.status !== 'active') throw workspaceStateConflict('该文件已移除，不能上传新版本')
+        const [next] = await transaction<{ next: number }[]>`
+          select (coalesce(max(version_no), 0) + 1)::integer as next
+            from workspace_file_versions
+           where tenant_id = ${tenantId} and logical_file_id = ${input.logicalFileId}
+        `
+        versionNo = next?.next ?? 1
+        await transaction`
+          insert into file_objects (
+            id, tenant_id, workspace_id, session_id, storage_key, original_name, mime_type,
+            size_bytes, sha256, scan_status, uploaded_by
+          ) values (
+            ${prepared.fileId}, ${tenantId}, ${input.workspaceId}, null, ${prepared.storageKey},
+            ${input.name}, ${input.mimeType || 'application/octet-stream'},
+            ${input.bytes.length}, ${prepared.sha256}, 'clean', ${input.actorUserId}
+          )
+        `
+        await transaction`
+          insert into workspace_file_versions (
+            id, tenant_id, logical_file_id, version_no, file_object_id, note, parse_status, created_by
+          ) values (
+            ${`wfv-${randomUUID()}`}, ${tenantId}, ${input.logicalFileId}, ${versionNo},
+            ${prepared.fileId}, ${input.note}, 'pending', ${input.actorUserId}
+          )
+        `
+      })
+    } catch (error) {
+      // 行锁存在时理论上不会撞唯一约束；这里兜底把竞态翻译成明确 409，绝不后写覆盖。
+      if (isUniqueViolation(error)) throw workspaceStateConflict('版本号分配冲突，请刷新后重试')
+      throw error
+    }
+
+    try {
+      const extraction = await this.extractInto(prepared.fileId, input.name, input.bytes, prepared.extension)
+      await this.database.begin(async (transaction) => {
+        await transaction`
+          update workspace_file_versions set parse_status = 'succeeded'
+           where tenant_id = ${tenantId} and logical_file_id = ${input.logicalFileId} and version_no = ${versionNo}
+        `
+        await transaction`
+          update workspace_files
+             set latest_version_no = greatest(latest_version_no, ${versionNo}), updated_at = now()
+           where tenant_id = ${tenantId} and id = ${input.logicalFileId} and status = 'active'
+        `
+      })
+      return {
+        id: prepared.fileId,
+        logicalFileId: input.logicalFileId,
+        versionNo,
+        name: input.name,
+        type: prepared.extension.slice(1).toUpperCase(),
+        size: formatSize(input.bytes.length),
+        uploadedBy: await this.userDisplayName(input.actorUserId),
+        uploadedAt: '刚刚',
+        extractionStatus: extraction,
+      }
+    } catch (error) {
+      // 失败版本保留记录与对象（可追溯），但绝不让 latest_version_no 前移。
+      await this.database`
+        update workspace_file_versions set parse_status = 'failed'
+         where tenant_id = ${tenantId} and logical_file_id = ${input.logicalFileId} and version_no = ${versionNo}
+      `
+      throw error
+    }
+  }
+
+  /**
+   * Resolve one version to its immutable object id for download. The caller still
+   * runs `readFile` on the result, so the existing read gate
+   * (`readFile` → `canReadWorkspaceObject`) remains the single authorization
+   * decision — archived workspaces stay readable for current members, removed
+   * members are denied.
+   */
+  async resolveWorkspaceFileVersionFileId(input: {
+    workspaceId: string
+    logicalFileId: string
+    versionNo: number
+    actorUserId: string
+  }): Promise<string> {
+    const access = await this.workspaces.resolveReadableWorkspace(input.workspaceId, input.actorUserId)
+    if (access.type === 'personal') throw requestInvalid('仅支持团队工作空间下载文件版本')
+
+    const [row] = await this.database<{ fileObjectId: string; removedAt: Date | null }[]>`
+      select wfv.file_object_id as "fileObjectId", f.removed_at as "removedAt"
+        from workspace_file_versions wfv
+        join file_objects f on f.tenant_id = wfv.tenant_id and f.id = wfv.file_object_id
+        join workspace_files wf on wf.tenant_id = wfv.tenant_id and wf.id = wfv.logical_file_id
+       where wfv.tenant_id = ${tenantId} and wfv.logical_file_id = ${input.logicalFileId}
+         and wfv.version_no = ${input.versionNo} and wf.workspace_id = ${input.workspaceId}
+         and wf.status = 'active'
+    `
+    if (!row || row.removedAt) throw authorizationDenied('文件不存在或不可访问')
+    return row.fileObjectId
+  }
+
+  /**
+   * Logical removal of a shared workspace file (1B-T3 + TW-07): the logical file
+   * leaves the effective list and every version object is marked removed so it
+   * cannot be referenced again; version rows, objects, parse results and every
+   * historical run reference stay intact (AC-13). Accepts either the logical file
+   * id or any version's object id (the pre-TW-07 endpoint contract).
    */
   async removeWorkspaceFile(workspaceId: string, fileId: string, actorUserId: string): Promise<{ id: string; removed: true }> {
     const access = await this.workspaces.resolveAccessibleWorkspace(workspaceId, actorUserId)
-    if (access.type === 'personal') throw new Error('仅支持团队工作空间移除共享文件')
-    const role = await this.workspaceMemberRole(workspaceId, actorUserId)
-    const [file] = await this.database<{ uploadedBy: string; removedAt: Date | null }[]>`
-      select uploaded_by as "uploadedBy", removed_at as "removedAt"
-        from file_objects
-       where tenant_id = ${tenantId} and id = ${fileId} and workspace_id = ${workspaceId}
-         and session_id is null
-    `
-    if (!file) throw new Error('文件不存在或不可访问')
-    if (file.removedAt) return { id: fileId, removed: true }
-    const canManageAll = role === 'owner' || role === 'admin'
-    if (!canManageAll && file.uploadedBy !== actorUserId) {
-      throw authorizationDenied('只有负责人、管理员或上传人本人可以移除该文件')
-    }
-    await this.database`
-      update file_objects set removed_at = now(), removed_by = ${actorUserId}
-       where tenant_id = ${tenantId} and id = ${fileId} and removed_at is null
-    `
-    return { id: fileId, removed: true }
+    if (access.type === 'personal') throw requestInvalid('仅支持团队工作空间移除共享文件')
+    // 早失败用的角色探测；真正的判定在事务内（见下面 canManageAllLocked）。
+    await this.workspaceMemberRole(workspaceId, actorUserId)
+
+    return this.database.begin(async (transaction) => {
+      // 事务内复核（质量评审 F6）：锁空间行后再确认「空间活跃 + 调用者仍是成员」，
+      // 并把最终角色以锁内读到的为准重新计算，避免并发撤权/归档穿透。
+      await this.lockActiveWorkspaceForFileWrite(transaction, workspaceId, actorUserId, {
+        denyViewer: false,
+        viewerAction: '移除共享文件',
+      })
+      const [lockedRole] = await transaction<{ role: string }[]>`
+        select member_role as role from workspace_members
+         where tenant_id = ${tenantId} and workspace_id = ${workspaceId}
+           and user_id = ${actorUserId}
+      `
+      const canManageAllLocked = lockedRole?.role === 'owner' || lockedRole?.role === 'admin'
+      // 只读成员一律不能移除（设计 §2.3 / 方案 §5）：历史上传人被降级后不再保留移除权。
+      const viewerDenied = !lockedRole || lockedRole.role === 'viewer'
+      // 先按逻辑文件 ID 解析；兼容既有端点：也用某个版本的对象 ID 定位逻辑文件。
+      const [direct] = await transaction<{ id: string; createdBy: string; removedAt: Date | null }[]>`
+        select id, created_by as "createdBy", removed_at as "removedAt"
+          from workspace_files
+         where tenant_id = ${tenantId} and workspace_id = ${workspaceId} and id = ${fileId}
+         for update
+      `
+      let logical = direct
+      if (!logical) {
+        const [version] = await transaction<{ logicalFileId: string }[]>`
+          select logical_file_id as "logicalFileId"
+            from workspace_file_versions
+           where tenant_id = ${tenantId} and file_object_id = ${fileId}
+        `
+        if (version) {
+          const [locked] = await transaction<{ id: string; createdBy: string; removedAt: Date | null }[]>`
+            select id, created_by as "createdBy", removed_at as "removedAt"
+              from workspace_files
+             where tenant_id = ${tenantId} and workspace_id = ${workspaceId} and id = ${version.logicalFileId}
+             for update
+          `
+          logical = locked
+        }
+      }
+
+      if (logical) {
+        if (logical.removedAt) return { id: fileId, removed: true }
+        // 鉴权口径必须与列表一致：列表展示的是「最高解析成功版本」（无成功版本时
+        // 退化为最高版本），若这里按最高版本判权，失败的 v3 会让 v2 的上传人
+        // 看到可移除按钮却拿到 403（符合性评审 F2）。
+        const [latest] = await transaction<{ createdBy: string }[]>`
+          select created_by as "createdBy" from workspace_file_versions
+           where tenant_id = ${tenantId} and logical_file_id = ${logical.id}
+           order by (parse_status = 'succeeded') desc, version_no desc
+           limit 1
+        `
+        if (viewerDenied || (!canManageAllLocked && logical.createdBy !== actorUserId && latest?.createdBy !== actorUserId)) {
+          throw authorizationDenied('只有负责人、管理员或上传人本人可以移除该文件')
+        }
+        await transaction`
+          update workspace_files
+             set status = 'removed', removed_at = now(), removed_by = ${actorUserId}, updated_at = now()
+           where tenant_id = ${tenantId} and id = ${logical.id} and status = 'active'
+        `
+        await transaction`
+          update file_objects set removed_at = now(), removed_by = ${actorUserId}
+           where tenant_id = ${tenantId} and removed_at is null
+             and id in (
+               select file_object_id from workspace_file_versions
+                where tenant_id = ${tenantId} and logical_file_id = ${logical.id}
+             )
+        `
+        return { id: fileId, removed: true }
+      }
+
+      // 兼容 TW-07 之前直接落在 file_objects 上的共享文件（无逻辑文件行）。
+      const [file] = await transaction<{ uploadedBy: string; removedAt: Date | null }[]>`
+        select uploaded_by as "uploadedBy", removed_at as "removedAt"
+          from file_objects
+         where tenant_id = ${tenantId} and id = ${fileId} and workspace_id = ${workspaceId}
+           and session_id is null
+         for update
+      `
+      if (!file) throw authorizationDenied('文件不存在或不可访问')
+      if (file.removedAt) return { id: fileId, removed: true }
+      if (viewerDenied || (!canManageAllLocked && file.uploadedBy !== actorUserId)) {
+        throw authorizationDenied('只有负责人、管理员或上传人本人可以移除该文件')
+      }
+      await transaction`
+        update file_objects set removed_at = now(), removed_by = ${actorUserId}
+         where tenant_id = ${tenantId} and id = ${fileId} and removed_at is null
+      `
+      return { id: fileId, removed: true }
+    })
   }
 
   /** Current team role of the actor, or null when not a member. */
@@ -452,6 +952,50 @@ export class PostgresContentService {
     // 否则归档空间仍可上传会话附件（符合性评审 P1-2，实测返回 201）。
     await this.requireActiveWorkspace(session.workspaceId, actorUserId)
     return this.storeInputFile({ workspaceId: session.workspaceId, sessionId, name, mimeType, bytes, actorUserId })
+  }
+
+  /**
+   * 文件写入的事务内复核（质量评审 F6）：先取空间行锁——与归档、开跑、成员变更
+   * 同一把锁、同一顺序（workspaces → …）——再在锁内确认空间仍活跃且调用者仍有
+   * 上传资格。事务外的检查只用于尽早失败，不能作为唯一依据。
+   */
+  private async lockActiveWorkspaceForFileWrite(
+    transaction: DatabaseTransaction,
+    workspaceId: string,
+    actorUserId: string,
+    options: { denyViewer: boolean; viewerAction: string },
+  ) {
+    const [workspace] = await transaction<{ status: string }[]>`
+      select status from workspaces
+       where tenant_id = ${tenantId} and id = ${workspaceId}
+       for update
+    `
+    if (!workspace) throw authorizationDenied('工作空间不存在或不可访问')
+    if (workspace.status !== 'active') {
+      throw authorizationDenied('工作空间已归档，仅支持有权限的只读查看与下载')
+    }
+    const [member] = await transaction<{ role: string }[]>`
+      select member_role as role from workspace_members
+       where tenant_id = ${tenantId} and workspace_id = ${workspaceId}
+         and user_id = ${actorUserId}
+    `
+    if (!member) throw authorizationDenied('当前用户不是该空间的成员')
+    // 注意：**只有上传**对只读成员一律拒绝；移除的规则是「负责人/管理员/上传人本人」，
+    // 被降级为只读的历史上传人仍可移除自己上传的文件，因此移除路径不在这里拦 viewer。
+    if (options.denyViewer && member.role === 'viewer') {
+      throw authorizationDenied(`只读成员没有权限${options.viewerAction}`)
+    }
+  }
+
+  /**
+   * 团队空间文件上传的角色闸门（方案 §5 / AC-08）：只读成员没有上传权限。
+   * 管理动作（移除）另有规则，因此这里只表达「能否上传」。
+   */
+  private async assertCanWriteWorkspaceFiles(workspaceId: string, actorUserId: string, action: string) {
+    const role = await this.workspaceMemberRole(workspaceId, actorUserId)
+    if (role === 'viewer') {
+      throw authorizationDenied(`只读成员没有权限${action}`)
+    }
   }
 
   /**
@@ -552,6 +1096,76 @@ export class PostgresContentService {
     return rows.map(row => row.fileId)
   }
 
+  /**
+   * Validate, scan and persist the raw bytes of a NEW object, returning the fields
+   * needed to insert its immutable `file_objects` row. The row itself is inserted
+   * by the caller (inside the version-allocation transaction for TW-07).
+   */
+  private async prepareObjectWrite(input: {
+    workspaceId: string
+    sessionId: string | null
+    name: string
+    mimeType: string
+    bytes: Buffer
+    actorUserId: string
+  }) {
+    const { workspaceId, sessionId, name, mimeType, bytes } = input
+    const extension = extname(name).toLowerCase()
+    if (!allowedExtensions.has(extension)) throw new Error('仅支持 PDF、DOCX、XLSX、CSV、TXT 和 Markdown 文件')
+    if (bytes.length < 1 || bytes.length > 20 * 1024 * 1024) throw new Error('文件大小必须为 1 B～20 MB')
+    const scan = await this.scanner.scan({ name, mimeType, bytes })
+    // 安全扫描拒绝是请求内容不合法，不是服务器故障：裸 Error 不含分类关键字会被
+    // 映射成 500（质量评审实测 `MZ…` 请求体返回 500），改抛类型化 422。
+    if (!scan.clean) {
+      throw requestInvalid(`文件安全检查未通过：${scan.reason ?? '未知原因'}`)
+    }
+    const fileId = `file-${randomUUID()}`
+    const sha256 = createHash('sha256').update(bytes).digest('hex')
+    const storageKey = join(sessionId ? 'session-files' : 'workspace-files', sessionId ?? workspaceId ?? 'unknown', `${fileId}${extension}`)
+    await this.writeStorage(storageKey, bytes)
+    return { fileId, extension, sha256, storageKey }
+  }
+
+  /**
+   * Parse a stored object and record the outcome. A failure is a typed 422 and is
+   * kept as a failed `file_extractions` row plus a failed version row — it never
+   * overwrites or invalidates a previous version (AC-13).
+   */
+  private async extractInto(fileId: string, name: string, bytes: Buffer, extension: string) {
+    const extractionId = `extraction-${randomUUID()}`
+    try {
+      const extraction = extractDocument(name, bytes)
+      const textBytes = Buffer.from(extraction.text, 'utf8')
+      const textSha256 = createHash('sha256').update(textBytes).digest('hex')
+      const textStorageKey = join('extractions', fileId, 'm4-basic-v1.txt')
+      await this.writeStorage(textStorageKey, textBytes)
+      await this.database`
+        insert into file_extractions (
+          id, tenant_id, file_id, extractor_version, detected_type, status,
+          text_storage_key, text_sha256, character_count, page_count, sheet_count, row_count
+        ) values (
+          ${extractionId}, ${tenantId}, ${fileId}, 'm4-basic-v1', ${extraction.detectedType}, 'succeeded',
+          ${textStorageKey}, ${textSha256}, ${extraction.text.length}, ${extraction.pageCount},
+          ${extraction.sheetCount}, ${extraction.rowCount}
+        )
+      `
+      return 'succeeded' as const
+    } catch (cause) {
+      const error = cause instanceof Error ? cause : new Error('未知解析错误')
+      const code = 'code' in error && typeof error.code === 'string' ? error.code : 'FILE_EXTRACTION_FAILED'
+      await this.database`
+        insert into file_extractions (
+          id, tenant_id, file_id, extractor_version, detected_type, status, error_code, error_message
+        ) values (
+          ${extractionId}, ${tenantId}, ${fileId}, 'm4-basic-v1', ${detectedType(extension)}, 'failed',
+          ${code}, ${error.message.slice(0, 500)}
+        )
+      `
+      // 类型化 422：解析失败属请求输入问题，不能靠文案分类落到 500。
+      throw requestInvalid(`文件解析失败（${code}）：${error.message}`)
+    }
+  }
+
   private async storeInputFile(input: {
     workspaceId: string
     sessionId: string | null
@@ -561,62 +1175,26 @@ export class PostgresContentService {
     actorUserId: string
   }) {
     const { workspaceId, sessionId, name, mimeType, bytes, actorUserId } = input
-    const extension = extname(name).toLowerCase()
-    if (!allowedExtensions.has(extension)) throw new Error('仅支持 PDF、DOCX、XLSX、CSV、TXT 和 Markdown 文件')
-    if (bytes.length < 1 || bytes.length > 20 * 1024 * 1024) throw new Error('文件大小必须为 1 B～20 MB')
-    const scan = await this.scanner.scan({ name, mimeType, bytes })
-    if (!scan.clean) throw new Error(`文件安全检查未通过：${scan.reason ?? '未知原因'}`)
-    const id = `file-${randomUUID()}`
-    const sha256 = createHash('sha256').update(bytes).digest('hex')
-    const storageKey = join(sessionId ? 'session-files' : 'workspace-files', sessionId ?? workspaceId ?? 'unknown', `${id}${extension}`)
-    await this.writeStorage(storageKey, bytes)
+    const prepared = await this.prepareObjectWrite(input)
     await this.database`
       insert into file_objects (
         id, tenant_id, workspace_id, session_id, storage_key, original_name, mime_type,
         size_bytes, sha256, scan_status, uploaded_by
       ) values (
-        ${id}, ${tenantId}, ${workspaceId}, ${sessionId}, ${storageKey}, ${name}, ${mimeType || 'application/octet-stream'},
-        ${bytes.length}, ${sha256}, 'clean', ${actorUserId}
+        ${prepared.fileId}, ${tenantId}, ${workspaceId}, ${sessionId}, ${prepared.storageKey},
+        ${name}, ${mimeType || 'application/octet-stream'},
+        ${bytes.length}, ${prepared.sha256}, 'clean', ${actorUserId}
       )
     `
-    const extractionId = `extraction-${randomUUID()}`
-    try {
-      const extraction = extractDocument(name, bytes)
-      const textBytes = Buffer.from(extraction.text, 'utf8')
-      const textSha256 = createHash('sha256').update(textBytes).digest('hex')
-      const textStorageKey = join('extractions', id, 'm4-basic-v1.txt')
-      await this.writeStorage(textStorageKey, textBytes)
-      await this.database`
-        insert into file_extractions (
-          id, tenant_id, file_id, extractor_version, detected_type, status,
-          text_storage_key, text_sha256, character_count, page_count, sheet_count, row_count
-        ) values (
-          ${extractionId}, ${tenantId}, ${id}, 'm4-basic-v1', ${extraction.detectedType}, 'succeeded',
-          ${textStorageKey}, ${textSha256}, ${extraction.text.length}, ${extraction.pageCount},
-          ${extraction.sheetCount}, ${extraction.rowCount}
-        )
-      `
-      return {
-        id,
-        name,
-        size: formatSize(bytes.length),
-        type: extension.slice(1).toUpperCase(),
-        uploadedBy: await this.userDisplayName(actorUserId),
-        uploadedAt: '刚刚',
-        extractionStatus: 'succeeded' as const,
-      }
-    } catch (cause) {
-      const error = cause instanceof Error ? cause : new Error('未知解析错误')
-      const code = 'code' in error && typeof error.code === 'string' ? error.code : 'FILE_EXTRACTION_FAILED'
-      await this.database`
-        insert into file_extractions (
-          id, tenant_id, file_id, extractor_version, detected_type, status, error_code, error_message
-        ) values (
-          ${extractionId}, ${tenantId}, ${id}, 'm4-basic-v1', ${detectedType(extension)}, 'failed',
-          ${code}, ${error.message.slice(0, 500)}
-        )
-      `
-      throw new Error(`文件解析失败（${code}）：${error.message}`)
+    await this.extractInto(prepared.fileId, name, bytes, prepared.extension)
+    return {
+      id: prepared.fileId,
+      name,
+      size: formatSize(bytes.length),
+      type: prepared.extension.slice(1).toUpperCase(),
+      uploadedBy: await this.userDisplayName(actorUserId),
+      uploadedAt: '刚刚',
+      extractionStatus: 'succeeded' as const,
     }
   }
 
@@ -719,10 +1297,6 @@ export class PostgresContentService {
     })
   }
 
-  private async requireWorkspaceAccess(workspaceId: string, actorUserId: string) {
-    await this.workspaces.resolveAccessibleWorkspace(workspaceId, actorUserId)
-  }
-
   private async userDisplayName(userId: string) {
     const [user] = await this.database<{ displayName: string }[]>`
       select display_name as "displayName" from users
@@ -784,4 +1358,9 @@ function decodeFileCursor(cursor: string): { createdAt: string; id: string } {
   } catch {
     throw new Error('无效的分页游标')
   }
+}
+
+/** PostgreSQL unique_violation; used to translate a lost version-allocation race into a 409. */
+function isUniqueViolation(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === '23505'
 }
