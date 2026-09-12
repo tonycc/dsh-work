@@ -422,4 +422,4 @@
 
 **1A 已知遗留（2026-09-12 复核后）**（不阻断该批退出条件，转后续批次或专项）：Agent「不可用」第三态与具体原因未落地；员工名册未返回 `department`；归档空间 pending 撤权事件无归宿、清扫器关闭竞态、`listActiveRuns*` 缺 `(tenant_id, status)` 索引；授权服务内约 20 处旧拒绝仍按文案分类。**已由批次 3 修掉的两项**：`GET /workspaces` 的 `owner`/`status`（3-T2）、缺 `PATCH /workspaces/:id`（3-T3）。
 
-**批次 3 之后仍开放的事项**：TW-09 仅「空间用量」已交付（批次 4），其余四项经产品决定不做；发布与部署未执行；A/B/C/D 四账户人工验收未执行；TW-07 的 AC-29 规模基线未在版本化后重测（`docs/baselines/team-workspace-1b-statistics-findings.md` §8 已标注 1B 的文件列表查询形状过时）；两项小技术债记录在 `team-workspace-batch-3-tasks.md`（小字对比度、服务端更新说明截断的潜在代理对问题）。
+**批次 3 之后仍开放的事项**：TW-09 仅「空间用量」已交付（批次 4）；**TW-07／TW-08／空间用量的真实 DSH 端到端已补齐并多次实跑通过（4-T3，`team-workspace-batch-4-tasks.md` §10/§11）**；其余四项经产品决定不做；发布与部署未执行；A/B/C/D 四账户人工验收未执行；TW-07 的 AC-29 规模基线未在版本化后重测（`docs/baselines/team-workspace-1b-statistics-findings.md` §8 已标注 1B 的文件列表查询形状过时）；两项小技术债记录在 `team-workspace-batch-3-tasks.md`（小字对比度、服务端更新说明截断的潜在代理对问题）。

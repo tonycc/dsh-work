@@ -24,6 +24,11 @@ import { PostgresAuthorizationService } from '../../server/src/modules/authoriza
 import { PostgresAgentService } from '../../server/src/modules/agent/postgres-agent-service.ts'
 import { PostgresOperationsService } from '../../server/src/modules/admin/application/postgres-operations-service.ts'
 import { PostgresWorkspaceAgentMemberService } from '../../server/src/modules/workbench/application/postgres-workspace-agent-member-service.ts'
+import { PostgresWorkspaceMemberService } from '../../server/src/modules/workbench/application/postgres-workspace-member-service.ts'
+import { PostgresWorkspaceLifecycleService } from '../../server/src/modules/workbench/application/postgres-workspace-lifecycle-service.ts'
+import { PostgresWorkspaceActivityService } from '../../server/src/modules/workbench/application/postgres-workspace-activity-service.ts'
+import { PostgresWorkspaceUsageService } from '../../server/src/modules/workbench/application/postgres-workspace-usage-service.ts'
+import { PostgresWorkspaceService } from '../../server/src/modules/workbench/application/postgres-workspace-service.ts'
 import { ModelGovernanceService } from '../../server/src/modules/model/model-governance-service.ts'
 import { PostgresModelGovernanceRepository } from '../../server/src/modules/model/postgres-model-governance-repository.ts'
 import { RunOrchestrationService } from '../../server/src/modules/run/run-orchestration-service.ts'
@@ -45,13 +50,48 @@ if (!maintenanceUrl) throw new Error('DSH_WORK_TEST_DATABASE_URL 未配置')
 
 const databaseName = `dsh_work_e2e_${randomUUID().replaceAll('-', '')}`
 const adminUrl = new URL(maintenanceUrl)
+// 这个脚本会 create/drop 数据库：只允许本地/回环维护库，避免误指生产（评审 P2）。
+const allowedDatabaseHosts = new Set(['localhost', '127.0.0.1', '::1'])
+if (!allowedDatabaseHosts.has(adminUrl.hostname) && process.env['DSH_WORK_E2E_ALLOW_REMOTE_DATABASE'] !== '1') {
+  throw new Error(
+    `拒绝在非本地数据库上运行端到端脚本（host=${adminUrl.hostname}）；`
+    + '如确需远程维护库，请显式设置 DSH_WORK_E2E_ALLOW_REMOTE_DATABASE=1。',
+  )
+}
 adminUrl.pathname = '/postgres'
 const admin = createDatabase({ url: adminUrl.toString(), maxConnections: 2 })
-await admin.unsafe(`create database "${databaseName}"`)
 
 let database: DatabaseClient | undefined
 let runtime: DshAcpRuntimeAdapter | undefined
 let dataRoot: string | undefined
+let cleanedUp = false
+
+/**
+ * 幂等清理：关闭 DSH 运行时（连带终止 ACP 子进程）、删除临时数据根、结束连接、
+ * 删除一次性库。
+ *
+ * 正常路径与抛错路径由 `finally` 调用；**信号路径也必须调用**——Node 在 SIGINT/
+ * SIGTERM 下不会执行 `finally`，实测会遗留 `dsh_work_e2e_*` 库、临时目录与孤儿
+ * DSH 子进程（对抗性评审 P1）。因此这里额外注册信号处理器，等清理真正完成再退出。
+ */
+async function cleanup(): Promise<void> {
+  if (cleanedUp) return
+  cleanedUp = true
+  await runtime?.close().catch(() => undefined)
+  if (dataRoot) await rm(dataRoot, { recursive: true, force: true }).catch(() => undefined)
+  await database?.end().catch(() => undefined)
+  await admin.unsafe(`drop database if exists "${databaseName}" with (force)`).catch(() => undefined)
+  await admin.end().catch(() => undefined)
+}
+
+for (const [signal, exitCode] of [['SIGINT', 130], ['SIGTERM', 143]] as const) {
+  process.once(signal, () => {
+    console.error(`收到 ${signal}：正在清理一次性库、临时目录与 DSH 运行时…`)
+    void cleanup().finally(() => process.exit(exitCode))
+  })
+}
+
+await admin.unsafe(`create database "${databaseName}"`)
 
 try {
   const testUrl = new URL(maintenanceUrl)
@@ -94,6 +134,12 @@ try {
     undefined,
     authorization,
   )
+  // TW-07 / TW-08 / 空间用量（批次 3 与批次 4）需要的服务：全部走真实实现。
+  const workspaceService = new PostgresWorkspaceService(database)
+  const lifecycle = new PostgresWorkspaceLifecycleService(database)
+  const members = new PostgresWorkspaceMemberService(database, authorization)
+  const activity = new PostgresWorkspaceActivityService(database, workspaceService)
+  const usage = new PostgresWorkspaceUsageService(database, workspaceService, authorization)
 
   // --- 合成账户与团队空间（对齐方案 §8：A=负责人、B=成员） ---
   await seedUser(ownerId, 'E2E 负责人')
@@ -164,12 +210,222 @@ try {
       from tool_audit_logs where tenant_id = ${tenantId} and run_id = ${started.id}
   `
 
-  // --- 3-T4：归档后「历史可读、新运行被拒」（真实 DSH 侧的读/执行双轨） ---
-  // 归档入口是 3-T2 的 API，这里直接落库以聚焦授权轨本身；随后用真实服务验证两侧。
-  await database`
-    update workspaces set status = 'archived', archived_at = now()
-     where tenant_id = ${tenantId} and id = ${workspaceId}
+  // ==========================================================================
+  // TW-07（3-T6 后端 + 3-T9 前端契约）：新版本、旧版可用、引用固定版本、失败版本
+  // ==========================================================================
+  const logicalFileId = file.logicalFileId
+  if (!logicalFileId) throw new Error('共享文件缺少 logicalFileId（TW-07 未生效？）')
+  const beforeV2 = await content.listWorkspaceFileVersions({ workspaceId, logicalFileId, actorUserId: ownerId })
+  const v1 = beforeV2.items.find(item => item.versionNo === 1)
+  if (!v1) throw new Error('版本列表中缺少 v1')
+  const markerV2 = `${marker}V2`
+  const uploadedV2 = await content.uploadWorkspaceFileVersion({
+    workspaceId,
+    logicalFileId,
+    name: 'e2e-inventory.md',
+    mimeType: 'text/markdown',
+    bytes: Buffer.from(`# 库存状态\n\n标记：${markerV2}\n\n华东仓可用 90，华北仓补货中。\n`, 'utf8'),
+    note: 'e2e 第二版：更新库存数字',
+    actorUserId: ownerId,
+  })
+  const afterV2 = await content.listWorkspaceFileVersions({ workspaceId, logicalFileId, actorUserId: ownerId })
+  const currentAfterV2 = afterV2.items.find(item => item.current)
+  const fileListAfterV2 = await content.listWorkspaceFiles({ workspaceId, actorUserId: ownerId, limit: 10 })
+  const displayedAfterV2 = fileListAfterV2.items.find(item => item.logicalFileId === logicalFileId)
+
+  // 失败版本（坏 .docx）：必须被拒，且不得前移 current、不得破坏旧版（AC-13）。
+  let failedVersionRejected = false
+  let failedVersionReason = ''
+  try {
+    await content.uploadWorkspaceFileVersion({
+      workspaceId,
+      logicalFileId,
+      name: 'e2e-broken.docx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      bytes: Buffer.from('this is not a zip container, so docx extraction must fail', 'utf8'),
+      note: null,
+      actorUserId: ownerId,
+    })
+  } catch (error) {
+    failedVersionRejected = true
+    failedVersionReason = error instanceof Error ? error.message : String(error)
+  }
+  const afterFailure = await content.listWorkspaceFileVersions({ workspaceId, logicalFileId, actorUserId: ownerId })
+  const failedRow = afterFailure.items.find(item => item.parseStatus === 'failed')
+
+  // 引用**固定到 v1 的不可变对象**发起真实运行：助手必须回显 v1 的标记（而不是 v2）。
+  // 必须用一个**新会话**：`conversations.getTask` 返回整段会话的全部消息（没有按 Run
+  // 过滤，见 postgres-conversation-repository 的 mapMessage），若复用第一个会话，历史里
+  // 已有回显 marker 的助手消息，`includes(marker)` 就可能来自回忆而不是读取文件
+  // （对抗性评审 P2 实测：把 fileIds 置空仍能回显）。新会话让该断言真正承重。
+  const pinnedSession = await orchestration.createSession({
+    userId: memberId,
+    title: '4-T3 固定版本读取（独立会话）',
+    workspaceId,
+    agentVersionId: 'agent-version-dsh-work-assistant-1',
+  })
+  const pinned = await orchestration.startRun({
+    userId: memberId,
+    sessionId: pinnedSession.id,
+    prompt: '请读取我提供的共享文件，并且只回复文件中的完整标记。不要猜测，也不要读取其他版本。',
+    idempotencyKey: `e2e-${suffix}-pinned-v1`,
+    fileIds: [v1.fileId],
+  })
+  if (!pinned) throw new Error('引用 v1 的 Run 创建失败')
+  const pinnedFinished = await waitForRun(runs, pinned.id, 240_000)
+  const pinnedTask = await conversations.getTask(pinned.id, memberId)
+  const pinnedText = (pinnedTask?.messages ?? []).filter(message => message.role === 'assistant').map(message => message.content).join('')
+  // 可追溯：该 Run 的输入文件对象 → workspace_file_versions 必须指向 v1。
+  const [trace] = await database<{ versionNo: number | null }[]>`
+    select wfv.version_no as "versionNo"
+      from run_input_files rif
+      join workspace_file_versions wfv
+        on wfv.tenant_id = rif.tenant_id and wfv.file_object_id = rif.file_id
+     where rif.tenant_id = ${tenantId} and rif.run_id = ${pinned.id}
+     limit 1
   `
+
+  // ==========================================================================
+  // TW-08（3-T7 + 3-T8）：动态投影、幂等、通知与收权
+  // ==========================================================================
+  const viewerId = `user-e2e-viewer-${suffix}`
+  const adminId = `user-e2e-admin-${suffix}`
+  await seedUser(viewerId, 'E2E 只读成员')
+  await seedUser(adminId, 'E2E 管理员')
+  await members.addMember(workspaceId, viewerId, 'member', ownerId)
+  // 同一角色的重复变更必须幂等（只留一条 role_changed 动态）。
+  await members.changeMemberRole(workspaceId, viewerId, 'viewer', ownerId)
+  await members.changeMemberRole(workspaceId, viewerId, 'viewer', ownerId)
+  await members.addMember(workspaceId, adminId, 'admin', ownerId)
+
+  const feedForOwner = await activity.listActivity({ workspaceId, actorUserId: ownerId, limit: 50 })
+  const kinds = feedForOwner.items.map(item => item.kind)
+  const roleChangedForViewer = feedForOwner.items.filter(item => item.kind === 'role_changed' && item.objectId === viewerId)
+  const activityRows = await database<{ kind: string; metadata: Record<string, unknown> }[]>`
+    select kind, safe_metadata as metadata from workspace_activity_events
+     where tenant_id = ${tenantId} and workspace_id = ${workspaceId}
+  `
+  // 泄露红线：动态的 safe_metadata 不得出现文件正文/提示词/文件名/标记。
+  const activityBlob = JSON.stringify([feedForOwner.items, activityRows])
+  // 搜索词覆盖 3-T7 白名单禁止的全部内容类型：两版标记、文件名、正文片段，以及
+  // **更新说明**与**失败版本文件名**——只泄露后两者的实现此前不会被这条检查抓住
+  // （规格评审 F2）。
+  const activityLeaks = [
+    marker,
+    markerV2,
+    'e2e-inventory.md',
+    'e2e-broken.docx',
+    '库存状态',
+    'e2e 第二版：更新库存数字',
+  ].filter(needle => activityBlob.includes(needle))
+
+  const unreadBefore = await activity.getNotifications({ workspaceId, actorUserId: memberId, limit: 50 })
+  const mutedState = await activity.setNotificationsMuted({ workspaceId, actorUserId: memberId, muted: true })
+  const mutedView = await activity.getNotifications({ workspaceId, actorUserId: memberId, limit: 50 })
+  const readState = await activity.markNotificationsRead({ workspaceId, actorUserId: memberId })
+  const unmuted = await activity.setNotificationsMuted({ workspaceId, actorUserId: memberId, muted: false })
+
+  // 收权：被移除的成员不能再读动态或旧通知条目（接收与点击都重新校验）。
+  const oldActivityId = feedForOwner.items[0]?.id ?? ''
+  await members.removeMember(workspaceId, viewerId, ownerId)
+  const revokedFeedDenied = await deniedWith403(() => activity.listActivity({ workspaceId, actorUserId: viewerId, limit: 5 }))
+  const revokedItemDenied = await deniedWith403(() => activity.getActivityItem({ workspaceId, activityId: oldActivityId, actorUserId: viewerId }))
+  const revokedNotificationsDenied = await deniedWith403(() => activity.getNotifications({ workspaceId, actorUserId: viewerId, limit: 5 }))
+  // 移除动作发生之后再看一次动态：member_removed 必须已落库（上面的快照是移除前的）。
+  const feedAfterRemoval = await activity.listActivity({ workspaceId, actorUserId: ownerId, limit: 50 })
+  const kindsAfterRemoval = [...new Set(feedAfterRemoval.items.map(item => item.kind))]
+
+  // ==========================================================================
+  // 批次 4（TW-09）：空间用量（真实 DSH 运行留下的 model_usage_events）
+  // ==========================================================================
+  const usageForOwner = await usage.getWorkspaceUsage({ workspaceId, actorUserId: ownerId, range: '7d' })
+  // 交叉核对刻意与服务**同谓词**（含状态与时间窗），这样去掉任一条件都会让两边不一致；
+  // 其中「状态过滤」的判别力还需要一行第三状态的用量事件——CHECK 允许 blocked 但生产
+  // 没有写入者，因此这里显式插一条模拟未来状态（对抗性评审 P2 实测：不加这条时删掉服务
+  // 的状态过滤仍会 ok=true）。
+  const [pinnedAttempt] = await database<{ id: string }[]>`
+    select id from run_attempts where tenant_id = ${tenantId} and run_id = ${pinned.id} limit 1
+  `
+  if (!pinnedAttempt) throw new Error('固定版本运行没有 attempt，无法插入状态样本')
+  await database`
+    insert into model_usage_events (
+      id, tenant_id, run_id, attempt_id, provider, model, input_tokens, output_tokens,
+      latency_ms, cost_amount, cost_currency, status, trace_id, estimated, occurred_at
+    ) values (
+      ${`usage-blocked-sample-${suffix}`}, ${tenantId}, ${pinned.id}, ${pinnedAttempt.id},
+      'dsh-default', 'dsh-default', 999999, 999999, 1, 0, 'CNY', 'blocked',
+      ${`trace-blocked-${suffix}`}, true, now()
+    ) on conflict (id) do nothing
+  `
+  const [usageCrossCheck] = await database<{ count: number; tokens: number }[]>`
+    select count(*)::integer as count,
+           coalesce(sum(mu.input_tokens + mu.output_tokens), 0)::bigint as tokens
+      from model_usage_events mu
+      join runs r on r.tenant_id = mu.tenant_id and r.id = mu.run_id
+      join sessions s on s.tenant_id = r.tenant_id and s.id = r.session_id
+     where s.tenant_id = ${tenantId} and s.workspace_id = ${workspaceId}
+       and mu.status in ('success', 'failed')
+       and mu.occurred_at >= current_date - make_interval(days => 6)
+       and mu.occurred_at < current_date + interval '1 day'
+  `
+  // 跨空间隔离：另一个空间（同一负责人）的用量事件不得混入本空间。
+  const otherWorkspaceId = `ws-e2e-other-${suffix}`
+  await database`
+    insert into workspaces (id, tenant_id, name, description, workspace_type, created_by, status)
+    values (${otherWorkspaceId}, ${tenantId}, 'E2E 另一空间', '', 'team', ${ownerId}, 'active')
+  `
+  await database`
+    insert into workspace_members (tenant_id, workspace_id, user_id, member_role, added_by)
+    values (${tenantId}, ${otherWorkspaceId}, ${ownerId}, 'owner', ${ownerId})
+  `
+  const otherSessionId = `session-e2e-other-${suffix}`
+  await database`
+    insert into sessions (id, tenant_id, workspace_id, created_by, agent_version_id, title, status)
+    values (${otherSessionId}, ${tenantId}, ${otherWorkspaceId}, ${ownerId},
+            'agent-version-dsh-work-assistant-1', 'E2E 另一空间会话', 'active')
+  `
+  const otherRunId = `run-e2e-other-${suffix}`
+  await database`
+    insert into runs (id, tenant_id, session_id, requested_by, idempotency_key, status)
+    values (${otherRunId}, ${tenantId}, ${otherSessionId}, ${ownerId}, ${`idem-other-${suffix}`}, 'succeeded')
+  `
+  const otherAttemptId = `attempt-e2e-other-${suffix}`
+  await database`
+    insert into run_attempts (
+      id, tenant_id, run_id, attempt_no, manifest, manifest_sha256, model_route_snapshot, status
+    ) values (
+      ${otherAttemptId}, ${tenantId}, ${otherRunId}, 1, ${database.json({})}, 'sha256-e2e-other',
+      ${database.json({ providerKey: 'dsh-default', modelKey: 'dsh-default' })}, 'succeeded'
+    )
+  `
+  await database`
+    insert into model_usage_events (
+      id, tenant_id, run_id, attempt_id, provider, model, input_tokens, output_tokens,
+      latency_ms, cost_amount, cost_currency, status, trace_id, estimated, occurred_at
+    ) values (
+      ${`usage-${otherAttemptId}`}, ${tenantId}, ${otherRunId}, ${otherAttemptId},
+      'dsh-default', 'dsh-default', 5000000, 5000000, 1, 0, 'CNY', 'success',
+      ${`trace-other-${suffix}`}, false, now()
+    )
+  `
+  const usageAfterOtherWorkspace = await usage.getWorkspaceUsage({ workspaceId, actorUserId: ownerId, range: '7d' })
+  const usage30d = await usage.getWorkspaceUsage({ workspaceId, actorUserId: ownerId, range: '30d' })
+  const usageForAdmin = await usage.getWorkspaceUsage({ workspaceId, actorUserId: adminId, range: '7d' })
+  const usageForMemberDenied = await usage.getWorkspaceUsage({ workspaceId, actorUserId: memberId, range: '7d' })
+    .then(() => false, (error: unknown) => (error as { status?: number }).status === 403)
+  const [personalWorkspace] = await database<{ id: string }[]>`
+    select id from workspaces where tenant_id = ${tenantId} and workspace_type = 'personal' and created_by = ${ownerId}
+  `
+  const usageForPersonalRejected = personalWorkspace
+    ? await usage.getWorkspaceUsage({ workspaceId: personalWorkspace.id, actorUserId: ownerId, range: '7d' })
+      .then(() => false, (error: unknown) => (error as { status?: number }).status === 422)
+    : false
+
+  // --- 3-T4：归档后「历史可读、新运行被拒」（真实 DSH 侧的读/执行双轨） ---
+  // 走真实归档服务（而不是直接改库），这样审计与 workspace_archived 动态一并产生。
+  await lifecycle.archiveWorkspace(workspaceId, ownerId)
+  const archivedFeed = await activity.listActivity({ workspaceId, actorUserId: ownerId, limit: 50 })
+  const archivedUsage = await usage.getWorkspaceUsage({ workspaceId, actorUserId: ownerId, range: '7d' })
   const archivedRead = {
     // 读取轨：现任成员仍可读取历史运行详情与正文。
     runDetailReadable: Boolean(await conversations.getTask(started.id, memberId)),
@@ -201,10 +457,70 @@ try {
   }
   const archivedRunsAfterDeny = (await runs.listActiveRunsForWorkspaceUser(tenantId, workspaceId, memberId)).length
 
+  const tw07Ok = currentAfterV2?.versionNo === uploadedV2.versionNo
+    && currentAfterV2?.note === 'e2e 第二版：更新库存数字'
+    && currentAfterV2?.canDownload === true
+    && displayedAfterV2?.versionNo === uploadedV2.versionNo
+    && (displayedAfterV2?.versionCount ?? 0) >= 2
+    && failedVersionRejected
+    && failedRow?.versionNo === uploadedV2.versionNo + 1
+    && afterFailure.items.some(item => item.current && item.versionNo === uploadedV2.versionNo)
+    && pinnedFinished === 'succeeded'
+    && pinnedText.includes(marker)
+    && !pinnedText.includes(markerV2)
+    && trace?.versionNo === 1
+
+  const tw08Ok = kinds.includes('member_added')
+    && kinds.includes('role_changed')
+    && kindsAfterRemoval.includes('member_removed')
+    && kinds.includes('file_uploaded')
+    && kinds.includes('file_version_added')
+    && roleChangedForViewer.length === 1
+    && activityLeaks.length === 0
+    && unreadBefore.unreadCount > 0
+    && mutedState.muted === true
+    && mutedView.unreadCount === 0
+    && mutedView.items.length > 0
+    && readState.lastReadAt !== null
+    && unmuted.muted === false
+    && revokedFeedDenied && revokedItemDenied && revokedNotificationsDenied
+
+  const usageOk = usageForOwner.totals.callCount >= 3
+    && usageForOwner.totals.totalTokens > 0
+    && usageForOwner.totals.callCount === usageForOwner.totals.successCount + usageForOwner.totals.failedCount
+    && usageForOwner.daily.length === 7
+    && usageForOwner.daily[6]!.callCount >= 3
+    // 同谓词交叉核对（含状态过滤与时间窗）：blocked 样本绝不能计入。
+    && usageCrossCheck?.count === usageForOwner.totals.callCount
+    && Number(usageCrossCheck?.tokens ?? -1) === usageForOwner.totals.totalTokens
+    && usageForOwner.totals.estimatedCount === 0
+    // 另一空间同一负责人的 500 万 token 事件不得混入，也不得改变 totals。
+    && usageAfterOtherWorkspace.totals.callCount === usageForOwner.totals.callCount
+    && usageAfterOtherWorkspace.totals.totalTokens === usageForOwner.totals.totalTokens
+    // 30 天窗口：日序列长度与服务端 rangeDays 一致，计数不变（本环境所有事件都在今天）。
+    && usage30d.rangeDays === 30
+    && usage30d.daily.length === 30
+    && usage30d.totals.callCount === usageForOwner.totals.callCount
+    && usageForAdmin.totals.callCount === usageForOwner.totals.callCount
+    && usageForMemberDenied
+    && usageForPersonalRejected
+    && archivedUsage.totals.callCount === usageForOwner.totals.callCount
+
+  // 归档读取轨的每一项都必须进入总判定：此前只有运行详情/事件被 gate，导致
+  // 「会话/文件/动态仍可读」「动态含 workspace_archived」只是打印而无人保证
+  // （评审 P1：删掉 workspace_archived 的活动写入后 ok 仍为 true）。
+  const archiveReadOk = archivedRead.runDetailReadable
+    && archivedRead.eventsReadable
+    && archivedRead.sessionsListable
+    && archivedRead.filesListable
+    && archivedFeed.items.length > 0
+    && archivedFeed.items.some(item => item.kind === 'workspace_archived')
+
   console.log(JSON.stringify({
     ok: finished === 'succeeded' && secondFinished === 'succeeded'
-      && archivedRead.runDetailReadable && archivedRead.eventsReadable
-      && archivedExecuteDenied && archivedRunsAfterDeny === 0,
+      && archiveReadOk
+      && archivedExecuteDenied && archivedRunsAfterDeny === 0
+      && tw07Ok && tw08Ok && usageOk,
     dshVersion: installation.version,
     workspaceId,
     uploadedFileId: file.id,
@@ -218,10 +534,67 @@ try {
     },
     secondRun: { runId: second.id, status: secondFinished, assistantTextIncludesMarker: secondText.includes(marker) },
     archivedWorkspace: {
+      ok: archiveReadOk,
       readTrack: archivedRead,
       executeTrack: { denied: archivedExecuteDenied, reason: archivedDenyReason },
       activeRunsAfterDeny: archivedRunsAfterDeny,
-      note: '3-T4：归档=只读保留。读取轨（历史运行/事件/会话/文件）对现任成员保持可用；执行轨（新运行）必须被拒且不落库。',
+      activityReadable: archivedFeed.items.length > 0,
+      activityIncludesArchived: archivedFeed.items.some(item => item.kind === 'workspace_archived'),
+      usageReadableByOwner: archivedUsage.totals.callCount,
+      note: '3-T4：归档=只读保留。读取轨（历史运行/事件/会话/文件/动态/用量）对现任成员保持可用；执行轨（新运行）必须被拒且不落库。归档现在走真实归档服务，因此同时产生审计与 workspace_archived 动态。',
+    },
+    tw07Versions: {
+      ok: tw07Ok,
+      v1FileId: v1.fileId,
+      uploadedV2: { versionNo: uploadedV2.versionNo, note: currentAfterV2?.note ?? null },
+      versions: afterFailure.items.map(item => ({
+        versionNo: item.versionNo,
+        parseStatus: item.parseStatus,
+        current: item.current,
+        canDownload: item.canDownload,
+      })),
+      displayedVersionNo: displayedAfterV2?.versionNo ?? null,
+      displayedVersionCount: displayedAfterV2?.versionCount ?? null,
+      failedVersion: { rejected: failedVersionRejected, reason: failedVersionReason, recordedAs: failedRow?.versionNo ?? null },
+      pinnedRun: {
+        runId: pinned.id,
+        status: pinnedFinished,
+        readV1Marker: pinnedText.includes(marker),
+        leakedV2Marker: pinnedText.includes(markerV2),
+        traceableVersionNo: trace?.versionNo ?? null,
+      },
+      note: 'TW-07：新版本成为 current 且不覆盖旧对象；坏版本被拒但记录保留、current 不前移；引用 v1 的真实 DSH 运行只读到 v1 内容，且 run_input_files → workspace_file_versions 可追溯实际版本号。',
+    },
+    tw08Activity: {
+      ok: tw08Ok,
+      kinds,
+      kindsAfterRemoval,
+      roleChangedForViewer: roleChangedForViewer.length,
+      leaks: activityLeaks,
+      notifications: {
+        unreadBefore: unreadBefore.unreadCount,
+        mutedUnread: mutedView.unreadCount,
+        mutedItemsVisible: mutedView.items.length,
+        lastReadAt: readState.lastReadAt,
+        unmuted: unmuted.muted,
+      },
+      revocation: { feedDenied: revokedFeedDenied, oldItemDenied: revokedItemDenied, notificationsDenied: revokedNotificationsDenied },
+      note: 'TW-08：成员/文件/归档动态由真实业务动作产生且幂等（同一角色重复变更只留一条）；safe_metadata 不含文件名/正文/标记；静音不改列表、未读可清零；被移除成员读动态与旧条目均被拒。',
+    },
+    tw09Usage: {
+      ok: usageOk,
+      totals: usageForOwner.totals,
+      dailyLast: usageForOwner.daily[6],
+      dailyLength: usageForOwner.daily.length,
+      crossCheckRows: usageCrossCheck?.count ?? null,
+      crossCheckTokens: Number(usageCrossCheck?.tokens ?? -1),
+      blockedSampleExcluded: usageForOwner.totals.callCount === usageCrossCheck?.count,
+      otherWorkspaceIsolated: usageAfterOtherWorkspace.totals.totalTokens === usageForOwner.totals.totalTokens,
+      range30d: { rangeDays: usage30d.rangeDays, dailyLength: usage30d.daily.length, callCount: usage30d.totals.callCount },
+      adminReadable: usageForAdmin.totals.callCount,
+      memberDeniedWith403: usageForMemberDenied,
+      personalRejectedWith422: usageForPersonalRejected,
+      note: '批次 4：用量来自真实 DSH 运行写入的 model_usage_events，聚合计数与逐行交叉核对一致；仅负责人/管理员可读，成员 403、个人空间 422，归档后仍可读。',
     },
     sourceInformationObserved: {
       toolEventCount: toolEvents.length,
@@ -232,11 +605,7 @@ try {
     },
   }, null, 2))
 } finally {
-  await runtime?.close().catch(() => undefined)
-  if (dataRoot) await rm(dataRoot, { recursive: true, force: true }).catch(() => undefined)
-  await database?.end().catch(() => undefined)
-  await admin.unsafe(`drop database if exists "${databaseName}" with (force)`).catch(() => undefined)
-  await admin.end().catch(() => undefined)
+  await cleanup()
 }
 
 async function seedUser(id: string, displayName: string) {
@@ -250,6 +619,19 @@ async function seedUser(id: string, displayName: string) {
     insert into user_roles (tenant_id, user_id, role_id, source_key)
     values (${tenantId}, ${id}, 'role-employee', 'local') on conflict do nothing
   `
+}
+
+/**
+ * 只有「类型化 403」才算收权生效：500、连接错误或其它异常都不能伪装成拒绝
+ * （对抗性评审 P2：此前 `.then(() => false, () => true)` 会接受任何异常）。
+ */
+async function deniedWith403(run: () => Promise<unknown>): Promise<boolean> {
+  try {
+    await run()
+    return false
+  } catch (error) {
+    return (error as { status?: number }).status === 403
+  }
 }
 
 async function waitForRun(

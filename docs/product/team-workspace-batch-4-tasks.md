@@ -76,6 +76,12 @@
 - **验收**：AC-30（前端部分）、AC-16。
 - **测试**：沿用 vitest + `@vue/test-utils`。判别性用例至少覆盖：负责人/管理员渲染摘要且只请求一次；**普通成员/只读成员不渲染且零请求**；**角色未知不请求**；**个人空间不渲染且零请求（AC-23）**；估算值提示；`7 天/30 天` 切换按正确 range 请求；加载失败错误态 + 重试真的重发；空数据（全零）显示零值而不是错误态；切换空间后旧响应不落回（世代号）；详情弹窗可访问名称与焦点恢复。
 
+### 4-T3 真实 DSH 端到端补全（TW-07 / TW-08 / 空间用量）✅ 已完成（2026-09-12）
+- **目标**：批次 3 的 TW-07、TW-08 与批次 4 的空间用量此前只有集成 + 前端用例，**缺少真实 DSH 运行时下的端到端验证**（只有 1B 与 TW-06 归档各跑过一次）。本任务把 `scripts/runtime/team-workspace-e2e.ts` 扩展成一条覆盖三者的真实运行链路并实跑。
+- **做法**：在既有「A 上传 → B 引用运行 → 继续对话 → 归档」之后追加三段真实服务调用（不 mock、不打桩）：TW-07 的新版本/失败版本/固定版本引用与追溯；TW-08 的真实成员动作产生的动态、幂等、通知与收权；批次 4 的用量聚合与权限矩阵。归档改为调用真实 `archiveWorkspace`（因此审计与 `workspace_archived` 动态一并产生）。
+- **不在 CI**：CI 无 DSH 运行时，本脚本属人工/环境验证；批次 3/4 的 CI 锚点仍是集成与前端套件。
+- **验收**：AC-13（新版本/失败版本/固定版本引用与追溯部分）、AC-15（动态幂等、无私有内容、收权后旧通知不可读）、AC-30（用量聚合与权限矩阵）在真实 DSH 运行时下的端到端证据。**不在本 e2e 内**：AC-13 的「文件移除阻止新引用」、AC-15 的「不显示私有对话」、AC-30 的「不展示金额/估算值明示」——这三处由集成与前端套件覆盖（见 §11 边界）。
+
 ## 4. 顺序与依赖
 
 ```
@@ -148,3 +154,55 @@
 - `pnpm test:m5:frontend`：workbench **24 files / 267 tests**、admin **6 files / 18 tests**。
 - `pnpm verify`、`pnpm typecheck`、`pnpm lint` 全部通过。
 - **一次不可复现的前端失败（如实记录）**：修复轮中有一轮 `pnpm test:m5:frontend` 与 `pnpm lint`、服务端集成套件并发执行时出现 1 例失败（未捕获用例名），随后**连续 8 次单独运行均 267/267 全绿**，无法复现。判断为 CPU 争用下的时序抖动（`WorkspaceMemberDialog` 的 20 个异步用例单个约 0.3–1s，属既有套件），非本批引入；CI 质量门中前端套件独立执行。若后续在 CI 上复现，需按 flake 单独排查。
+
+## 10. 真实 DSH 端到端（4-T3，2026-09-12）
+
+**运行命令（本机，真实 DSH 检出 `legacy-0.1.1-rc.2` 兼容档；生产档不接受兼容模式）**
+
+```bash
+DSH_WORK_TEST_DATABASE_URL='postgres://dsh_work:change-me@127.0.0.1:15433/postgres' \
+DSH_RUNTIME_HOME=/Users/max/projects/deepseek-harness \
+DSH_RUNTIME_COMPATIBILITY=legacy-0.1.1-rc.2 \
+DSH_EXPECTED_VERSION=0.1.1-rc.2 \
+DSH_EXPECTED_COMMIT=b150a551b8d465e31e418e1b2eaf5e79bbb7d28e \
+node --experimental-strip-types scripts/runtime/team-workspace-e2e.ts
+```
+
+**结果：连续多次运行 `ok: true`**（修复轮后父代理 2 次、两位评审各 2 次；每次在一次性库上跑 3 个真实 DSH Run，同一台机器实测耗时 **26s–82s**，被强制的 240s 超时用例约 277s——不要把耗时写成固定区间）。
+
+| 段 | 实测证据 |
+| --- | --- |
+| TW-07（3-T6/3-T9） | 上传 v2（说明「e2e 第二版：更新库存数字」）后 `current = v2`、空间列表展示 `versionNo=2`；坏 `.docx` 被拒（`ZIP_STRUCTURE_INVALID：Office 文件不是有效的 ZIP 容器`）但**记录保留**为 v3 且 `parseStatus=failed`、`current` 仍为 v2；引用 **v1 不可变对象**的真实 DSH 运行 `succeeded` 且只回显 v1 标记（未泄露 v2 标记）——该运行现在跑在**独立新会话**里（此前复用第一个会话，历史里已有回显 marker 的助手消息，`includes(marker)` 可能来自回忆而不是读文件；评审实测把 `fileIds` 置空仍能回显）；`run_input_files → workspace_file_versions` 反查得 `version_no = 1` |
+| TW-08（3-T7/3-T8） | 泄露搜索词覆盖两版标记、文件名、正文、**更新说明**与**失败版本文件名**；真实业务动作产生动态：`member_added`（两名成员各一条）、`role_changed`、`file_uploaded`、`file_version_added`、`agent_member_added`，移除后 `member_removed`；**同一角色重复变更只留 1 条 `role_changed`**（幂等）；`safe_metadata` 与响应中不含标记/文件名/正文（泄露检查为空）；通知未读 7 → 静音后未读 0 但**条目仍 7 条可见** → 标记已读写入 `lastReadAt` → 取消静音；被移除成员读动态、按旧 id 点击、读通知列表**三种路径全部被拒** |
+| 归档（3-T4 复核） | 走真实归档服务：读取轨（运行详情/事件/会话/文件/动态/用量）对现任成员全部可读，且动态中含 `workspace_archived`——**这四项现在都进入 `ok`**（此前只有运行详情/事件被判定，评审实测「删掉 `workspace_archived` 的活动写入后 `ok` 仍为 true」）；执行轨新运行被拒、`activeRunsAfterDeny = 0` |
+| 空间用量（批次 4） | 3 个真实 DSH Run 产生实测 `callCount=3`、`success=3`、`failed=0`、`estimated=0`（DSH 上报真实 token，非平台估算）；token 数随真实模型输出浮动（一次样例 `input=682/output=515/total=1197`，另几次 1061/1091 等，**不要当成可复现值**）；`daily` 长度 7、当日桶 3；与 `model_usage_events` **同谓词**交叉核对（含状态过滤与时间窗）计数与 token 双项一致；显式插入一条 `blocked` 样本证明第三状态不计入；插入另一空间同负责人的 500 万 token 事件证明**跨空间隔离**；`range=30d` 返回 30 个日桶且计数不变；管理员同值可读；成员类型化 403；个人空间 422；**归档后仍可读** |
+
+**如实记录的两点**：
+- 开发过程中我第一版断言写错了一次（在移除成员**之前**取动态快照却断言含 `member_removed`），实测 `ok: false` 暴露后修正为移除后再取一次快照——这正是该脚本的价值：断言错误会让 `ok` 变 false，而不是静默放过。
+- `estimatedCount` 在真实 DSH 下为 0（运行时会回报 token 用量），因此前端「其中 N 次为估算值」提示在本环境不会出现；该提示仍保留以覆盖 DSH 未回报用量的情况。
+
+## 11. 4-T3 两轮评审与修复（2026-09-12）
+
+**结论**：规格符合性评审 **有条件符合**（0 个功能确认缺陷，1 个可误判缺口 + 3 个文档/断言精度问题，全 Low）；对抗性质量评审 **PASS with required fixes**（2 × P1 + 4 × P2）。两位评审都独立实跑脚本（各 2 次 `ok: true`）并做了证伪。
+
+**已修（每条都经过削弱→变红→还原或信号实测）**
+
+| 发现 | 修复 | 验证 |
+| --- | --- | --- |
+| **P1 信号不安全**：`SIGINT`/`SIGTERM` 下 Node 不执行 `finally`，实测遗留 `dsh_work_e2e_*` 库、临时目录与孤儿 DSH 子进程 | 抽出幂等 `cleanup()` 并注册 `SIGINT`(130)/`SIGTERM`(143) 处理器，等清理完成再退出 | 父代理实测：`SIGTERM` → 退出码 143、无遗留库/临时目录/DSH 子进程；`SIGINT` → 130、同样干净；处理器日志各出现 1 次 |
+| **P1 `ok` 未 gate 归档读取轨**：删掉 `workspace_archived` 的活动写入后 `ok` 仍为 true | 把 `sessionsListable`/`filesListable`/`activityReadable`/`activityIncludesArchived` 纳入总判定，并输出 `archivedWorkspace.ok` | 新增判定后两次运行 `archive=true` |
+| **P2 固定版本断言被会话历史污染**（规格 F1）：`getTask` 返回整段会话消息，且 `mapMessage` 不带 `runId`，无法按 Run 过滤 | 固定版本运行改用**独立新会话**，让 `includes(marker)` 只能来自文件 | 评审证伪：把 `fileIds` 换成 v2 或置空即可让 `trace`/`leakedV2Marker` 翻红；`trace.versionNo===1` 一直是承重断言 |
+| **P2 泄露检查覆盖不足**（规格 F2）：更新说明与失败版文件名不是搜索词 | 搜索词补 `e2e-broken.docx` 与「e2e 第二版：更新库存数字」 | 评审证伪：注入含文件名的 `safe_metadata` 即 `leaks=['e2e-inventory.md']`、`tw08=false` |
+| **P2 收权检查接受任意异常**：`.then(()=>false,()=>true)` 会把 500/连接错误当成拒绝 | 新增 `deniedWith403()`，只认 `status === 403` | 与用量段的 403/422 判定口径一致（静态修正） |
+| **P2 用量交叉核对无判别力**（规格 F3）：与服务同谓词但缺时间窗、无第二空间、无第三状态、只跑 7d | 交叉核对补时间窗与 token 双项；显式插入 `blocked` 样本；插入另一空间同负责人的 500 万 token 事件；补 `30d` 断言 | 两次运行 `usage=true`；评审证实「不加 `blocked` 样本时删掉状态过滤仍 `ok=true`」（该行为由集成套件 `team-workspace-usage-api.integration.test.ts` 覆盖） |
+| **P2 无非生产库护栏**：指向生产库时会用生产凭据 create/drop 数据库 | 仅允许 `localhost`/`127.0.0.1`/`::1`，否则拒绝（可用 `DSH_WORK_E2E_ALLOW_REMOTE_DATABASE=1` 显式放行） | 静态修正；数据隔离本身也已确认只创建/删除 `dsh_work_e2e_*` |
+| **P2/nit 文档数字**：`约 3–5 分钟` 与固定 token 值不成立 | 改为实测区间 26s–82s（超时用例 277s），token 明确标注为「一次样例、随真实输出浮动」 | 父代理与两位评审的实测值并列记录 |
+
+**如实记录的边界（评审未能验证 / 本 e2e 不覆盖）**
+
+- **AC-13「文件移除阻止新引用」**、**AC-15「不显示私有对话」**、**AC-30「不展示金额/估算值明示」** 不在本 e2e 内，由集成与前端套件覆盖；§3 的验收描述已按此收紧。
+- 幂等断言证明的是「同一角色重复变更只留一行」，走的是成员服务的**状态守卫早退**，不是 `(tenant, workspace, dedupe_key)` 的冲突路径。
+- `estimatedCount` 在真实 DSH 下恒为 0（运行时会回报 token），「估算值」提示在本环境不会出现；该分支由集成套件的 `estimated` 行覆盖。
+- `resolveDshRuntimeInstallation` 会把生成的 ACP 覆盖层写到 `<repo>/.runtime/dsh-config/`（gitignore、既有行为），不在 `mkdtemp` 临时根内；attempts/storage/session 快照仍在临时根内。
+- `scripts/` 不参与 `pnpm typecheck`（只有 lint 覆盖），与本脚本「环境验证」的定位一致。
+- **与 4-T3 无关但需知会**：`pnpm test:scripts` 在当前工作树上失败，原因是**并行的那条工作流**新增的未跟踪文档 `docs/product/skill-installation-plan.md`、`docs/product/admin-assistant-plan.md` 里的链接指向尚未落盘的文件（`scripts/checks/checks.test.mjs` 的文档链接白名单检查）；只叠加本任务两个文件时 `test:scripts` 20/20 通过。
