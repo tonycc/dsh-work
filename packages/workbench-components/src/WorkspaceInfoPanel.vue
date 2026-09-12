@@ -46,6 +46,17 @@ interface WorkspaceActivityInfo {
   occurredAt?: string
 }
 
+/**
+ * 右栏「空间用量」摘要（TW-09 / design §2.10）。只接收合计的三个展示字段；
+ * 面板自身不发请求，角色门禁与加载由宿主负责（AC-30）。
+ */
+interface WorkspaceUsageSummaryInfo {
+  callCount: number
+  totalTokens: number
+  /** 其中平台估算（非 DSH 上报）的次数；> 0 时明示。 */
+  estimatedCount: number
+}
+
 const props = withDefaults(
   defineProps<{
     workspace: WorkspaceInfo
@@ -67,6 +78,14 @@ const props = withDefaults(
     unreadCount?: number
     /** 调用者本人是否关闭了该空间的提醒。 */
     muted?: boolean
+    /** 是否渲染「空间用量」区块（仅团队 + 负责人/管理员；宿主判定，面板不发请求）。 */
+    canViewUsage?: boolean
+    /** 用量摘要（totals 的三个展示字段）：由宿主加载后传入。 */
+    usageSummary?: WorkspaceUsageSummaryInfo | null
+    /** 用量摘要加载中。 */
+    usageLoading?: boolean
+    /** 用量摘要加载失败：就地错误 + 「重试」，绝不渲染成零消耗。 */
+    usageError?: boolean
   }>(),
   {
     collapsible: false,
@@ -78,6 +97,10 @@ const props = withDefaults(
     notificationError: false,
     unreadCount: 0,
     muted: false,
+    canViewUsage: false,
+    usageSummary: null,
+    usageLoading: false,
+    usageError: false,
   },
 )
 
@@ -95,6 +118,10 @@ const emit = defineEmits<{
   'mark-activity-read': []
   'toggle-activity-mute': []
   'retry-activity': []
+  /** 打开「空间用量」详情；携带触发元素用于关闭后恢复焦点（design §4）。 */
+  'view-usage-detail': [event?: MouseEvent]
+  /** 用量摘要加载失败后的原地重试。 */
+  'retry-usage': []
 }>()
 
 /** 摘要固定只展示最新 3 条（服务端以 `limit=3` 取数，这里再兜一层）。 */
@@ -139,6 +166,18 @@ function activityDescription(item: WorkspaceActivityInfo) {
     fileName: item.fileName,
   })
 }
+
+/**
+ * 用量计数一律规范化：越界值（负数/小数/NaN/1e9）不得渲染成「-5 次调用」或
+ * 「NaN tokens」。只保留非负整数（小数向下取整，沿用未读徽标的既有口径）。
+ */
+function normalizeUsageCount(value: number | null | undefined) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 1 ? Math.floor(value) : 0
+}
+
+const usageCallCount = computed(() => normalizeUsageCount(props.usageSummary?.callCount))
+const usageTotalTokens = computed(() => normalizeUsageCount(props.usageSummary?.totalTokens))
+const usageEstimatedCount = computed(() => normalizeUsageCount(props.usageSummary?.estimatedCount))
 </script>
 
 <template>
@@ -274,6 +313,63 @@ function activityDescription(item: WorkspaceActivityInfo) {
         </article>
       </div>
       <p v-else class="workspace-info-panel__empty">尚未加入 Agent</p>
+    </section>
+
+    <section
+      v-if="canViewUsage && workspace.type === 'team'"
+      data-testid="panel-usage-section"
+      class="workspace-info-panel__section"
+    >
+      <div class="workspace-info-panel__section-heading">
+        <div>
+          <h3>空间用量</h3>
+        </div>
+        <button
+          data-testid="panel-usage-view-detail"
+          class="workspace-info-panel__link"
+          type="button"
+          @click="emit('view-usage-detail', $event)"
+        >
+          查看详情
+        </button>
+      </div>
+
+      <el-skeleton
+        v-if="usageLoading && !usageSummary && !usageError"
+        data-testid="panel-usage-skeleton"
+        class="workspace-info-panel__usage-skeleton"
+        :rows="2"
+        animated
+      />
+
+      <div
+        v-else-if="usageError"
+        data-testid="panel-usage-error"
+        class="workspace-info-panel__usage-error"
+      >
+        <span>用量加载失败</span>
+        <button
+          data-testid="panel-usage-retry"
+          class="workspace-info-panel__link"
+          type="button"
+          @click="emit('retry-usage')"
+        >
+          重试
+        </button>
+      </div>
+
+      <template v-else-if="usageSummary">
+        <p data-testid="panel-usage-summary" class="workspace-info-panel__usage-summary">
+          近 7 天 {{ usageCallCount }} 次调用 · {{ usageTotalTokens }} tokens
+        </p>
+        <p
+          v-if="usageEstimatedCount > 0"
+          data-testid="panel-usage-estimated"
+          class="workspace-info-panel__usage-estimated"
+        >
+          其中 {{ usageEstimatedCount }} 次为估算值
+        </p>
+      </template>
     </section>
 
     <section
@@ -731,6 +827,40 @@ function activityDescription(item: WorkspaceActivityInfo) {
 
 .workspace-activity__time {
   color: #9ba09c;
+  font-size: var(--dsh-font-size-micro);
+}
+
+/* 空间用量摘要（design §2.10）：只展示 token 与调用次数，界面上不出现任何金额字段。 */
+.workspace-info-panel__usage-skeleton {
+  margin-top: 8px;
+  padding: 2px;
+}
+
+.workspace-info-panel__usage-summary {
+  margin: 10px 0 0;
+  color: #3b403c;
+  font-size: var(--dsh-font-size-micro);
+  font-weight: 620;
+  line-height: 1.55;
+}
+
+.workspace-info-panel__usage-estimated {
+  margin: 4px 0 0;
+  color: #7d827d;
+  font-size: var(--dsh-font-size-micro);
+  line-height: 1.55;
+}
+
+.workspace-info-panel__usage-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 9px 10px;
+  border-radius: 9px;
+  color: #a04b52;
+  background: #fdf1f2;
   font-size: var(--dsh-font-size-micro);
 }
 

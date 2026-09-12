@@ -278,6 +278,51 @@ export interface WorkspaceNotificationView extends WorkspaceActivityPage {
   unreadCount: number
 }
 
+/**
+ * 空间用量时间窗（TW-09 / 4-T2 契约 §2）：只接受 `7d`/`30d`，缺省 `7d`。
+ * 服务端按日零填充返回该窗口内的 token 与调用次数，不返回金额或币种。
+ */
+export type WorkspaceUsageRange = '7d' | '30d'
+
+/** 空间用量合计。`totalTokens = inputTokens + outputTokens`，`estimatedCount` 是其中平台估算的次数。 */
+export interface WorkspaceUsageTotals {
+  callCount: number
+  successCount: number
+  failedCount: number
+  estimatedCount: number
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+}
+
+/** 按日分桶的一行；`day` 为 `MM-DD`，无消耗的日子零填充。 */
+export interface WorkspaceUsageDay {
+  day: string
+  callCount: number
+  successCount: number
+  failedCount: number
+  inputTokens: number
+  outputTokens: number
+}
+
+/**
+ * `GET /workspaces/:workspaceId/usage` 的 200 响应。契约字段严格按 §2，不新增金额、
+ * 币种、provider/model 或员工身份字段（最小必要面）。
+ */
+export interface WorkspaceUsage {
+  workspaceId: string
+  range: WorkspaceUsageRange
+  rangeDays: number
+  totals: WorkspaceUsageTotals
+  /** 长度恒为 `rangeDays`，升序，零填充。 */
+  daily: WorkspaceUsageDay[]
+}
+
+/** 用量查询参数；`range` 缺省时服务端按 `7d`。 */
+export interface WorkspaceUsageQuery {
+  range?: WorkspaceUsageRange
+}
+
 /** 团队空间员工角色：负责人、管理员、成员、只读成员。 */
 export type TeamMemberRole = 'owner' | 'admin' | 'member' | 'viewer'
 

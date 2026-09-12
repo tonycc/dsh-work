@@ -23,6 +23,8 @@ import type {
   WorkspaceSessionQuery,
   WorkspaceStatusFilter,
   WorkspaceUpdateInput,
+  WorkspaceUsage,
+  WorkspaceUsageQuery,
   UploadedWorkspaceFileVersion,
 } from '../types/domain'
 
@@ -363,6 +365,20 @@ export const workbenchApi = {
       `/workspaces/${encodeURIComponent(workspaceId)}/notifications/unmute`,
       { method: 'POST' },
     ),
+  /**
+   * 空间用量（TW-09 / 4-T2，读取轨）。只展示 token 与调用次数，服务端不返回金额
+   * （口径 §1）。仅负责人／管理员可读：普通成员与只读成员服务端返回 403，个人空间
+   * 422，因此调用方必须先在角色门禁内判定后才请求（AC-30）。
+   */
+  listWorkspaceUsage: (workspaceId: string, input: WorkspaceUsageQuery = {}) => {
+    const search = new URLSearchParams()
+    if (input.range) search.set('range', input.range)
+    const suffix = search.size > 0 ? `?${search.toString()}` : ''
+    return request<WorkspaceUsage>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/usage${suffix}`,
+      { method: 'GET' },
+    )
+  },
 }
 
 /**

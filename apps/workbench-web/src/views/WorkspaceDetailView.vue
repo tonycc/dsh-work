@@ -26,12 +26,15 @@ import type {
   WorkspaceFileVersion,
   WorkspaceMember,
   WorkspaceNotificationState,
+  WorkspaceUsageRange,
+  WorkspaceUsageTotals,
 } from '@/types/domain'
 import ConversationStarter from '@/components/ConversationStarter.vue'
 import WorkspaceFileVersionsDialog from '@/components/WorkspaceFileVersionsDialog.vue'
 import WorkspaceMemberDialog from '@/components/WorkspaceMemberDialog.vue'
 import WorkspaceSessionHistory from '@/components/WorkspaceSessionHistory.vue'
 import WorkspaceSettingsDialog from '@/components/WorkspaceSettingsDialog.vue'
+import WorkspaceUsageDialog from '@/components/WorkspaceUsageDialog.vue'
 import { WorkspaceInfoPanel, describeWorkspaceActivity } from '@dsh-work/workbench-components'
 import { downloadArtifactFile, notifyActionFailure } from '@/utils/feedback'
 import { resolveCurrentUserRole } from '@/utils/member-roles'
@@ -113,6 +116,19 @@ const activityDrawerError = ref(false)
 const activityTrigger = ref<HTMLElement | null>(null)
 
 /**
+ * 空间用量（TW-09 / 4-T2，口径 §1）：仅团队 + 负责人/管理员可见。摘要固定按 7 天
+ * 窗口加载；普通成员／只读成员、角色未解析（名册请求失败）与个人空间一律不渲染、
+ * 零请求（AC-30 / AC-23，沿用「宁可漏开不可误开」）。
+ */
+const USAGE_SUMMARY_RANGE: WorkspaceUsageRange = '7d'
+const usageSummary = ref<WorkspaceUsageTotals | null>(null)
+const usageLoading = ref(false)
+const usageError = ref(false)
+const usageDialogOpen = ref(false)
+/** 触发「查看详情」的元素：弹窗关闭后把焦点还给它（design §4）。 */
+const usageTrigger = ref<HTMLElement | null>(null)
+
+/**
  * 动态相关请求的世代号（摘要／通知状态／抽屉三条流各自独立）。异步回写前必须同时
  * 比对世代号与发起时的空间 id：切换空间或连续重试时，晚到的旧响应否则会把上一个
  * 空间的动态、未读数与静音标签写进当前视图（评审 P1-2 实测）。
@@ -120,6 +136,11 @@ const activityTrigger = ref<HTMLElement | null>(null)
 let summaryRequestSeq = 0
 let notificationRequestSeq = 0
 let drawerRequestSeq = 0
+/**
+ * 空间用量摘要请求的世代号（与 3-T8/3-T9 同一模式）：回写前必须同时比对世代号与
+ * 发起时的空间 id，切换空间或连续重试时晚到的旧响应不得写进当前视图。
+ */
+let usageRequestSeq = 0
 
 type ActivityStream = 'summary' | 'notification' | 'drawer'
 
@@ -212,6 +233,24 @@ const canUploadFileVersions = computed(() =>
  * 入口（版本列表与下载仍保留）。
  */
 const canReferenceFileVersion = computed(() => isTeam.value && !isArchived.value)
+/**
+ * 空间用量可见门禁的**角色来源**：只认服务端给出的角色——父组件显式传入的
+ * `currentUserRole`（管理端嵌入时）或 `GET /workspaces/:id/members` 返回的
+ * `currentUserRole`。**刻意不使用** `currentUserRole` computed 的姓名推断回退
+ * （`resolveCurrentUserRole`：「负责人姓名 == 当前用户姓名 ⇒ owner」）：用量是
+ * 消耗/费用类数据，只有服务端确认的负责人/管理员才该看到；名册失败时宁可漏开。
+ * 评审 P2/N3 实测：名册失败 + 姓名相同会让回退判定为 owner，从而渲染区块并发一次
+ * 注定 403 的请求。
+ */
+const usageServerRole = computed<TeamMemberRole | null>(() =>
+  props.currentUserRole !== undefined ? props.currentUserRole : serverUserRole.value)
+/**
+ * 空间用量的可见门禁：仅团队空间中**服务端确认**的负责人／管理员。角色未知
+ * （名册请求失败）时不渲染也不请求——宁可漏开不可误开（AC-30）。归档空间属读取轨，
+ * 负责人/管理员仍可查看（口径 §1）。
+ */
+const canViewUsage = computed(() =>
+  isTeam.value && (usageServerRole.value === 'owner' || usageServerRole.value === 'admin'))
 /** 动态文件名的解析来源：已加载的空间文件列表（面板与抽屉共用）。 */
 const activityFiles = computed(() => workspace.value?.files ?? [])
 const activitySummaryItems = computed(() => buildActivityDisplayItems(activitySummary.value, activityFiles.value))
@@ -526,6 +565,59 @@ function retryActivity() {
   void loadNotificationState()
 }
 
+/** 用量请求是否仍属于当前空间且未被更新的请求取代。 */
+function isCurrentUsageRequest(seq: number, workspaceId: string) {
+  return seq === usageRequestSeq && workspaceId === (workspace.value?.id ?? '')
+}
+
+/** 空间切换时作废在途用量请求（即使切回同一个空间也不会落回旧响应）。 */
+function invalidateUsageRequests() {
+  usageRequestSeq += 1
+}
+
+/**
+ * 空间用量摘要（固定 7 天窗口）。只在角色门禁内调用；失败时清空摘要并进入错误态，
+ * 绝不把失败渲染成「零消耗」（design §2.10）。
+ */
+async function loadWorkspaceUsage(workspaceId = workspace.value?.id ?? '') {
+  if (!workspaceId || !canViewUsage.value) return
+  const seq = ++usageRequestSeq
+  usageLoading.value = true
+  try {
+    const usage = await workbenchApi.listWorkspaceUsage(workspaceId, { range: USAGE_SUMMARY_RANGE })
+    if (!isCurrentUsageRequest(seq, workspaceId)) return
+    usageSummary.value = usage.totals
+    usageError.value = false
+  } catch (error) {
+    if (!isCurrentUsageRequest(seq, workspaceId)) return
+    usageSummary.value = null
+    usageError.value = true
+    notifyActionFailure('加载空间用量', `工作空间“${workspace.value?.name ?? workspaceId}”`, error, '稍后点击「重试」；若仍失败，请联系工作空间管理员。')
+  } finally {
+    if (isCurrentUsageRequest(seq, workspaceId)) usageLoading.value = false
+  }
+}
+
+/** 用量摘要加载失败后的原地重试（真的重新请求）。 */
+function retryUsage() {
+  void loadWorkspaceUsage()
+}
+
+/** 打开用量详情弹窗，并记住触发元素用于关闭后恢复焦点（design §4）。 */
+function openUsageDialog(event?: MouseEvent) {
+  usageTrigger.value = (event?.currentTarget as HTMLElement | null) ?? null
+  usageDialogOpen.value = true
+}
+
+/** 弹窗关闭后把焦点还给「查看详情」（design §4）。 */
+watch(usageDialogOpen, (open) => {
+  if (open) return
+  void nextTick(() => {
+    const trigger = usageTrigger.value
+    if (trigger?.isConnected) trigger.focus()
+  })
+})
+
 /**
  * 标记全部已读：归档空间同样可用（只写调用者本人的通知状态，属读取轨）。
  * 成功后未读徽标归零并重新渲染。
@@ -709,6 +801,7 @@ watch(workspace, (value) => {
   loadedWorkspaceId = nextId || null
   // 先作废在途请求，再清空本地状态：否则旧响应会在清空之后落回来（评审 P1-2）。
   invalidateActivityRequests()
+  invalidateUsageRequests()
   presetAgentMember.value = null
   memberDialogOpen.value = false
   settingsDialogOpen.value = false
@@ -732,6 +825,11 @@ watch(workspace, (value) => {
   pendingVersionUploadId.value = null
   versionUploadingId.value = null
   versionUploadError.value = null
+  usageSummary.value = null
+  usageLoading.value = false
+  usageError.value = false
+  usageDialogOpen.value = false
+  usageTrigger.value = null
   if (value?.type === 'team') {
     void loadAgentMembers(value.id)
     void loadWorkspaceMembers(value.id)
@@ -740,6 +838,29 @@ watch(workspace, (value) => {
     void loadNotificationState(value.id)
   }
 }, { immediate: true })
+
+/**
+ * 空间用量在「角色门禁 + 空间」任一变化时重新判定：先作废在途请求并清空本地状态，
+ * 只有 `canViewUsage` 为 true 才加载。角色未解析出来（名册请求仍在途或失败）时这里
+ * 拿到的是 false，**不发请求**；名册返回后 computed 变化会自动触发一次加载。
+ * 个人空间、成员与只读成员因此天然零请求（AC-30 / AC-23）。
+ *
+ * 注册在主 workspace watcher 之后，保证切换空间时先走上面的状态重置（含作废世代号）。
+ */
+watch(
+  () => [canViewUsage.value, workspaceId.value] as const,
+  ([allowed, id]) => {
+    invalidateUsageRequests()
+    usageSummary.value = null
+    usageLoading.value = false
+    usageError.value = false
+    usageDialogOpen.value = false
+    usageTrigger.value = null
+    if (!allowed || !id) return
+    void loadWorkspaceUsage(id)
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
@@ -1027,6 +1148,10 @@ watch(workspace, (value) => {
         :notification-error="notificationError"
         :unread-count="activityUnread"
         :muted="activityMuted"
+        :can-view-usage="canViewUsage"
+        :usage-summary="usageSummary"
+        :usage-loading="usageLoading"
+        :usage-error="usageError"
         collapsible
         @collapse="panelCollapsed = true"
         @manage-members="memberDialogOpen = true"
@@ -1036,6 +1161,8 @@ watch(workspace, (value) => {
         @mark-activity-read="markActivityRead"
         @toggle-activity-mute="toggleActivityMute"
         @retry-activity="retryActivity"
+        @view-usage-detail="openUsageDialog"
+        @retry-usage="retryUsage"
       />
     </aside>
 
@@ -1057,6 +1184,10 @@ watch(workspace, (value) => {
         :notification-error="notificationError"
         :unread-count="activityUnread"
         :muted="activityMuted"
+        :can-view-usage="canViewUsage"
+        :usage-summary="usageSummary"
+        :usage-loading="usageLoading"
+        :usage-error="usageError"
         @manage-members="memberDialogOpen = true"
         @open-settings="settingsDialogOpen = true"
         @start-agent-conversation="startAgentConversation"
@@ -1064,6 +1195,8 @@ watch(workspace, (value) => {
         @mark-activity-read="markActivityRead"
         @toggle-activity-mute="toggleActivityMute"
         @retry-activity="retryActivity"
+        @view-usage-detail="openUsageDialog"
+        @retry-usage="retryUsage"
       />
     </el-drawer>
 
@@ -1199,6 +1332,17 @@ watch(workspace, (value) => {
         :file-name="versionDialogFile.name"
         :can-reference="canReferenceFileVersion"
         @reference="referenceFileVersion"
+      />
+
+      <!--
+        空间用量详情（4-T2）：只在负责人/管理员时挂载，普通成员／只读成员与角色未
+        解析时连组件都不存在（零请求）；个人空间外层 isTeam 已排除（AC-30 / AC-23）。
+      -->
+      <WorkspaceUsageDialog
+        v-if="canViewUsage"
+        v-model:open="usageDialogOpen"
+        :workspace-id="workspace.id"
+        :workspace-name="workspace.name"
       />
     </template>
 

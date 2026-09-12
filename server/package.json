@@ -45,7 +45,8 @@
     "test:m5:shared-files:integration": "node --experimental-strip-types --test src/http/team-workspace-shared-files-api.integration.test.ts",
     "test:m5:file-versions:integration": "node --experimental-strip-types --test src/http/team-workspace-file-versions-api.integration.test.ts",
     "test:m5:lifecycle:integration": "node --experimental-strip-types --test src/http/team-workspace-lifecycle-api.integration.test.ts",
-    "test:m5:activity:integration": "node --experimental-strip-types --test src/http/team-workspace-activity-api.integration.test.ts"
+    "test:m5:activity:integration": "node --experimental-strip-types --test src/http/team-workspace-activity-api.integration.test.ts",
+    "test:m5:usage:integration": "node --experimental-strip-types --test src/http/team-workspace-usage-api.integration.test.ts"
   },
   "devDependencies": {
     "@types/node": "^24.7.2",

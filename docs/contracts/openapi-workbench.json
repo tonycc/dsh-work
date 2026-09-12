@@ -1648,6 +1648,64 @@
           }
         }
       }
+    },
+    "/workspaces/{workspaceId}/usage": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/WorkspaceId"
+        }
+      ],
+      "get": {
+        "operationId": "getTeamWorkspaceUsage",
+        "summary": "查询团队空间用量（仅负责人与管理员）",
+        "description": "读取轨：归档空间的现任负责人/管理员仍可读取历史用量。以 model_usage_events（每次 attempt 一行）为准，只统计该空间全部会话所属 Run 的用量事件，不按成员拆分。按数据库会话时区做 current_date 与按日分桶，daily 恒为 rangeDays 条、升序且零填充（无消耗的日子也返回 0，曲线不跳变），day 为 MM-DD。totals 由日序列求和，totalTokens = inputTokens + outputTokens。只返回 token 计数与调用次数：不含金额、币种、provider/model 与员工身份（cost_amount 目前恒为 0，展示金额会误导）。range 缺省 7d，只接受 7d/30d，其它值类型化 422。个人空间不支持（422，AC-23）；非成员与不存在空间返回完全一致的拒绝，不可枚举；现任成员但角色不足（普通成员/只读成员）为类型化 403，不落 500。统计状态口径：只统计 model_usage_events 中 status 为 success/failed 的行（0004 的 CHECK 还允许 blocked，但当前没有任何写入者），因此 callCount 恒等于 successCount + failedCount、estimatedCount 不超过 callCount；token 计数为 JSON 整数，超过 2^53-1 的极端值不具备精确表示（实际不可达）。按日分桶依据数据库会话时区（与既有管理端用量页同口径）；若部署时区非业务时区，日界会有偏移（中国区最多 8 小时），需要本地日界时应另行引入时区来源。",
+        "parameters": [
+          {
+            "name": "range",
+            "in": "query",
+            "required": false,
+            "description": "统计窗口；缺省 7d。只接受 7d 或 30d，其它值（含空串）类型化 422。",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "7d",
+                "30d"
+              ],
+              "default": "7d"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "空间用量（按日零填充）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/WorkspaceUsageView"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2120,6 +2178,126 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "WorkspaceUsageDailyPoint": {
+        "type": "object",
+        "required": [
+          "day",
+          "callCount",
+          "successCount",
+          "failedCount",
+          "inputTokens",
+          "outputTokens"
+        ],
+        "properties": {
+          "day": {
+            "type": "string",
+            "description": "MM-DD，按数据库会话时区分桶；daily 升序且恒为 rangeDays 条（零填充）。"
+          },
+          "callCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "successCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "failedCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "inputTokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "outputTokens": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "WorkspaceUsageTotals": {
+        "type": "object",
+        "required": [
+          "callCount",
+          "successCount",
+          "failedCount",
+          "estimatedCount",
+          "inputTokens",
+          "outputTokens",
+          "totalTokens"
+        ],
+        "properties": {
+          "callCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "successCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "failedCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "estimatedCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "其中 estimated = true 的调用次数（平台估算而非 DSH 上报），界面必须明示。"
+          },
+          "inputTokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "outputTokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "totalTokens": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "inputTokens + outputTokens。"
+          }
+        }
+      },
+      "WorkspaceUsageView": {
+        "type": "object",
+        "required": [
+          "workspaceId",
+          "range",
+          "rangeDays",
+          "totals",
+          "daily"
+        ],
+        "properties": {
+          "workspaceId": {
+            "type": "string"
+          },
+          "range": {
+            "type": "string",
+            "enum": [
+              "7d",
+              "30d"
+            ]
+          },
+          "rangeDays": {
+            "type": "integer",
+            "enum": [
+              7,
+              30
+            ]
+          },
+          "totals": {
+            "$ref": "#/components/schemas/WorkspaceUsageTotals"
+          },
+          "daily": {
+            "type": "array",
+            "description": "恒为 rangeDays 条、升序、零填充；无消耗的日子返回全 0。",
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceUsageDailyPoint"
+            }
           }
         }
       },

@@ -467,7 +467,10 @@ export class PostgresAuthorizationService {
     `
     if (!member) throw authorizationDenied('工作空间不存在、已归档或当前用户不是成员')
     if (!allowedRoles.includes(member.role)) {
-      throw new Error(`当前用户角色无权执行此操作（允许角色：${allowedRoles.join('、')}）`)
+      // 类型化拒绝（批次 4 评审 S2）：原先抛裸 Error，HTTP 层会把它分类成 500，
+      // 调用方只能靠匹配中文消息前缀来兜。消息文本保持不变，仍满足既有调用点
+      // （`workspace-member-routes.ts` 的 `isTeamRoleDenial`）与既有断言。
+      throw authorizationDenied(`当前用户角色无权执行此操作（允许角色：${allowedRoles.join('、')}）`)
     }
   }
 

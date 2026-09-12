@@ -451,6 +451,42 @@ test('归档与恢复写入动态；重复归档不重复写；归档→恢复�
 // Feed 可见性、分页、归档可读
 // ---------------------------------------------------------------------------
 
+test('`standalone` 哨兵与空白 id 一样被拒绝，且读接口不得创建个人空间（批次 4 质量评审 P2 顺带修复 3-T7）', async () => {
+  // 与 4-T1 同源：`normalizeWorkspaceId` 把 '' 与 'standalone' 都归一为 null，
+  // resolveReadableWorkspace 的 null 回退会 `ensurePersonalWorkspace()` 写库，于是
+  // 一个 GET 会凭空建出调用者的个人空间。`users` 上的触发器会在用户插入时自动建
+  // 个人空间，因此先临时停用它来构造「没有个人空间」的调用者。
+  const actor = `user-activity-standalone-${randomUUID().replaceAll('-', '').slice(0, 8)}`
+  await database`alter table users disable trigger users_personal_workspace_provisioning`
+  try {
+    await seedUser(actor, '哨兵动态调用者')
+  } finally {
+    await database`alter table users enable trigger users_personal_workspace_provisioning`
+  }
+  const personalWorkspaceId = `ws-personal-${actor}`
+  const personalCount = async () => {
+    const [row] = await database<{ count: number }[]>`
+      select count(*)::integer as count from workspaces
+       where tenant_id = ${tenantId} and id = ${personalWorkspaceId}
+    `
+    return row?.count ?? -1
+  }
+  assert.equal(await personalCount(), 0, '前置：该用户此刻没有个人空间')
+
+  // `standalone` 会被 normalizeWorkspaceId 归一为 null 从而**穿过**路由前置守卫，
+  // 必须由服务层拒绝（422）；空白 id 则在路由守卫处按「不是成员」拒绝（403，既有
+  // 行为）。两者都不得产生写副作用——这才是本条的关键。
+  const standalone = await api('GET', '/api/workbench/v1/workspaces/standalone/activity', { as: actor })
+  assert.equal(standalone.status, 422, 'standalone 哨兵必须类型化 422')
+  assert.equal(await personalCount(), 0, 'standalone 不得触发个人空间创建（读接口无写副作用）')
+
+  for (const rawId of [' ', '   ']) {
+    const response = await api('GET', `/api/workbench/v1/workspaces/${encodeURIComponent(rawId)}/activity`, { as: actor })
+    assert.equal(response.status, 403, `${rawId} 由路由守卫按非成员拒绝（既有行为）`)
+    assert.equal(await personalCount(), 0, `${rawId} 不得触发个人空间创建（读接口无写副作用）`)
+  }
+})
+
 test('动态仅成员可读；非成员与不存在空间返回完全一致的拒绝（不可枚举）', async () => {
   const ws = uniqueWorkspace('feed-access')
   const owner = `${ws}-owner`

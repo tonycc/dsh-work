@@ -229,9 +229,15 @@ export class PostgresWorkspaceActivityService {
    */
   private async assertReadableTeamWorkspace(rawWorkspaceId: string, actorUserId: string): Promise<string> {
     const workspaceId = rawWorkspaceId?.trim()
-    // An empty id would make resolveReadableWorkspace fall back to the caller's
-    // personal workspace; reject it before it can be created as a side effect.
-    if (!workspaceId) throw requestInvalid('仅支持团队工作空间查看团队动态')
+    // An empty id — and the `standalone` sentinel, which `normalizeWorkspaceId` maps to
+    // null the same way — would make resolveReadableWorkspace fall back to the caller's
+    // personal workspace, whose lookup calls `ensurePersonalWorkspace()` and therefore
+    // WRITES on a GET (adversarial review P2 measured `GET /workspaces/standalone/...`
+    // creating a personal workspace + membership before the 422). Reject both values
+    // before any workspace resolution.
+    if (!workspaceId || workspaceId === 'standalone') {
+      throw requestInvalid('仅支持团队工作空间查看团队动态')
+    }
     const access = await this.workspaces.resolveReadableWorkspace(workspaceId, actorUserId)
     if (access.type === 'personal') throw requestInvalid('仅支持团队工作空间查看团队动态')
     return workspaceId

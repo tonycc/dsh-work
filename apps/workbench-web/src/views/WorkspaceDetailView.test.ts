@@ -18,6 +18,7 @@ import type {
   WorkspaceFileVersionPage,
   WorkspaceNotificationState,
   WorkspaceNotificationView,
+  WorkspaceUsage,
 } from '@/types/domain'
 import WorkspaceDetailView from './WorkspaceDetailView.vue'
 
@@ -80,6 +81,25 @@ function notificationState(overrides: Partial<WorkspaceNotificationState> = {}):
   return { workspaceId: 'ws-team', muted: false, mutedAt: null, lastReadAt: null, unreadCount: 0, ...overrides }
 }
 
+/** 空间用量摘要（4-T2）：宿主只在团队 + 负责人/管理员时请求，这里给出默认成功响应。 */
+function usageFixture(workspaceId = 'ws-team'): WorkspaceUsage {
+  return {
+    workspaceId,
+    range: '7d',
+    rangeDays: 7,
+    totals: {
+      callCount: 12,
+      successCount: 10,
+      failedCount: 2,
+      estimatedCount: 0,
+      inputTokens: 12345,
+      outputTokens: 6789,
+      totalTokens: 19134,
+    },
+    daily: [],
+  }
+}
+
 async function mountView(
   item: Workspace,
   options: { ownerName?: string; artifacts?: Artifact[]; stubs?: Record<string, boolean | Component> } = {},
@@ -122,6 +142,7 @@ describe('WorkspaceDetailView 团队分支与个人空间红线', () => {
     vi.spyOn(workbenchApi, 'listWorkspaceSessions').mockResolvedValue({ items: [], nextCursor: null })
     vi.spyOn(workbenchApi, 'listWorkspaceActivity').mockResolvedValue(activityPage([]))
     vi.spyOn(workbenchApi, 'getWorkspaceNotifications').mockResolvedValue(notificationView())
+    vi.spyOn(workbenchApi, 'listWorkspaceUsage').mockResolvedValue(usageFixture())
   })
 
   it('renders the Agent segment for a team space and loads members via the T4 API', async () => {
@@ -159,6 +180,9 @@ describe('WorkspaceDetailView 团队分支与个人空间红线', () => {
 
     expect(wrapper.find('[data-testid="panel-manage-members"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="panel-workspace-settings"]').exists()).toBe(true)
+    // 服务端确认 owner：4-T2 的空间用量区块与详情弹窗随之挂载（默认关闭）。
+    expect(wrapper.find('[data-testid="panel-usage-section"]').exists()).toBe(true)
+    expect(wrapper.findAllComponents(ElDialog).map(dialog => dialog.props('modelValue'))).toEqual([false, false, false])
   })
 
   it('opens the team management entry only for the resolved owner', async () => {
@@ -168,6 +192,10 @@ describe('WorkspaceDetailView 团队分支与个人空间红线', () => {
     expect(entry.exists()).toBe(true)
     const settingsEntry = wrapper.find('[data-testid="panel-workspace-settings"]')
     expect(settingsEntry.exists()).toBe(true)
+    // 本用例的名册返回 currentUserRole: null（角色未由服务端解析），因此 4-T2 的
+    // 空间用量区块与弹窗**不挂载**——用量只认服务端确认的 owner/admin，不回退到
+    // 「负责人姓名 == 登录者姓名」（评审 P2/N3）。成员/设置入口仍按既有姓名回退渲染。
+    expect(wrapper.find('[data-testid="panel-usage-section"]').exists()).toBe(false)
     const dialogs = wrapper.findAllComponents(ElDialog)
     expect(dialogs.map(dialog => dialog.props('modelValue'))).toEqual([false, false])
 
@@ -301,6 +329,7 @@ describe('WorkspaceDetailView 归档只读态（design §2.7 / AC-14 / AC-23）'
     vi.spyOn(workbenchApi, 'listWorkspaceSessions').mockResolvedValue({ items: [], nextCursor: null })
     vi.spyOn(workbenchApi, 'listWorkspaceActivity').mockResolvedValue(activityPage([]))
     vi.spyOn(workbenchApi, 'getWorkspaceNotifications').mockResolvedValue(notificationView())
+    vi.spyOn(workbenchApi, 'listWorkspaceUsage').mockResolvedValue(usageFixture())
   })
 
   const archivedFile = {
@@ -435,6 +464,7 @@ describe('WorkspaceDetailView 团队动态与通知（TW-08 / 3-T8）', () => {
     vi.spyOn(workbenchApi, 'listWorkspaceSessions').mockResolvedValue({ items: [], nextCursor: null })
     vi.spyOn(workbenchApi, 'listWorkspaceActivity').mockResolvedValue(activityPage([]))
     vi.spyOn(workbenchApi, 'getWorkspaceNotifications').mockResolvedValue(notificationView())
+    vi.spyOn(workbenchApi, 'listWorkspaceUsage').mockResolvedValue(usageFixture())
     vi.spyOn(workbenchApi, 'markWorkspaceNotificationsRead').mockResolvedValue(notificationState())
     vi.spyOn(workbenchApi, 'muteWorkspaceNotifications').mockResolvedValue(notificationState({ muted: true, mutedAt: '2026-09-10T08:00:00.000Z' }))
     vi.spyOn(workbenchApi, 'unmuteWorkspaceNotifications').mockResolvedValue(notificationState())
@@ -594,6 +624,7 @@ describe('WorkspaceDetailView 文件版本 UI（TW-07 / 3-T9）', () => {
     vi.spyOn(workbenchApi, 'listWorkspaceSessions').mockResolvedValue({ items: [], nextCursor: null })
     vi.spyOn(workbenchApi, 'listWorkspaceActivity').mockResolvedValue(activityPage([]))
     vi.spyOn(workbenchApi, 'getWorkspaceNotifications').mockResolvedValue(notificationView())
+    vi.spyOn(workbenchApi, 'listWorkspaceUsage').mockResolvedValue(usageFixture())
     vi.spyOn(workbenchApi, 'listWorkspaceFileVersions').mockResolvedValue(versionPage([versionItem()]))
     vi.spyOn(workbenchApi, 'uploadWorkspaceFileVersion').mockResolvedValue({
       id: 'file-4',

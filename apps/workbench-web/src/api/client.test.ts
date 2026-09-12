@@ -415,6 +415,67 @@ describe('workbench API client', () => {
     )
   })
 
+  it('serializes the usage range as a query parameter (TW-09 / 4-T2)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: {
+        workspaceId: 'ws/team-1',
+        range: '30d',
+        rangeDays: 30,
+        totals: {
+          callCount: 12,
+          successCount: 10,
+          failedCount: 2,
+          estimatedCount: 3,
+          inputTokens: 12345,
+          outputTokens: 6789,
+          totalTokens: 19134,
+        },
+        daily: [{ day: '09-06', callCount: 2, successCount: 2, failedCount: 0, inputTokens: 1000, outputTokens: 500 }],
+      },
+      meta: { api: 'workbench', adapter: 'postgres', timestamp: new Date().toISOString() },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await workbenchApi.listWorkspaceUsage('ws/team-1', { range: '30d' })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/workbench/v1/workspaces/ws%2Fteam-1/usage?range=30d',
+      expect.objectContaining({ method: 'GET' }),
+    )
+    expect(result.rangeDays).toBe(30)
+    expect(result.totals).toMatchObject({ callCount: 12, totalTokens: 19134, estimatedCount: 3 })
+    expect(result.daily[0]).toMatchObject({ day: '09-06', inputTokens: 1000, outputTokens: 500 })
+  })
+
+  it('omits the usage query string entirely when no range is given (server defaults to 7d)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: {
+        workspaceId: 'ws-team-1',
+        range: '7d',
+        rangeDays: 7,
+        totals: {
+          callCount: 0,
+          successCount: 0,
+          failedCount: 0,
+          estimatedCount: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+        },
+        daily: [],
+      },
+      meta: { api: 'workbench', adapter: 'postgres', timestamp: new Date().toISOString() },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await workbenchApi.listWorkspaceUsage('ws-team-1')
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/workbench/v1/workspaces/ws-team-1/usage',
+      expect.objectContaining({ method: 'GET' }),
+    )
+  })
+
   it('loads the unread notification page with the reminder state', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       data: {
