@@ -305,6 +305,7 @@
 - **F5（nit，记录）摘要顺序纯依赖服务端 `order by occurred_at desc, id desc`**：前端只做 map，不重排（避免用不完整的客户端信息伪造服务端排序）。契约由服务端集成用例的「分页顺序与一次性读取一致」断言保证。
 - **F6（记录）评审期间规格文档与代码同步改动**：评审以 HEAD 版 design §2.9（当时只有「仅预留位置」）与任务书原 3-T8 为基准判定，而本次改动同时改写了 design §2.9/§5 与任务书——这是父代理的文档职责，但也说明**同一提交内的规格改写不能作为实现的自我证明**；本条以评审的独立探针结论为准。
 - **本轮回归**：`pnpm test:m5:frontend` workbench **19 files / 197 passed**、admin 6 files / 18 passed；`pnpm typecheck`、`pnpm lint`、`pnpm verify` 通过。
+- **提交与 CI（2026-09-12）**：`54fde3e`（`feat(workbench-web),docs: 团队动态与通知前端（TW-08 / 3-T8）`）已推送 `main`，CI `M6 quality gate`（run `34668358547`）通过。
 
 ## 3. 顺序与依赖
 
