@@ -129,6 +129,10 @@
 - **N4（已修）面板重复「近 7 天」**：删除区块副标题里的重复文案，只保留摘要句。
 - **命名（已修）**：`WorkspaceUsageView.test.ts` 实际挂载的是 `WorkspaceDetailView`，改名为 `WorkspaceDetailView.usage.test.ts`。
 - **时间语义（观察，已记录）**：按日分桶依赖数据库会话时区（与既有管理端用量页同口径）；中国区「今天」最多偏移 8 小时，需要本地日界时应另行引入时区来源。已写入设计 §2.10 与 OpenAPI 描述。
+- **fix round 后的复审（两位评审都在最终提交上复跑）**：规格符合性评审修订为 **符合**（首轮 3 suspicion + 4 nit 全部修复或如实豁免，无新增回归）；对抗性质量评审的 P1 在最终版本上复测通过（usage 套件 2003ms → 802ms，逐日数值一致）。`standalone` 无写副作用、`callCount === success + failed`、前端同名场景零请求、类型化 403 承重——均由评审用独立探针复核。
+- **接受的一条低风险观察（不改）**：`assertUsageRole` 把 `requireTeamRole` 抛出的任何 403 都重打成「仅负责人或管理员可以查看空间用量」（该文案由集成用例钉住）。理论上「两次查询之间成员被移除」的竞争拒绝也会显示成角色不足；但 `assertReadableTeamWorkspace` 已先解析成员资格，实际不可达，且 status/code 仍为 403 `permission_denied`。若改回按消息区分两类拒绝，反而要重新引入文案匹配（正是 S2 修掉的坏味道），故保留现状并记录。
+- **提交与 CI（2026-09-12）**：`de7d247`（`feat(server),feat(workbench-web),docs: 空间用量（TW-09 / 批次 4）`）已推送 `main`，CI `M6 quality gate`（run `34676010309`）通过。
+- **工作树提醒**：本批提交全部按路径暂存；工作树另有**与本批无关**的改动——`docs/README.md`(M) 与未跟踪的 `docs/product/skill-installation-plan.md`（Skill 安装产品方案，属另一条工作流），未纳入本批提交，也未删除。
 
 ## 8. 已知项（记录，不阻断）
 
