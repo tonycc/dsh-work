@@ -178,7 +178,7 @@
 - **已知潜在（记录，不阻断）**：若某个**被展示版本**的对象是 `blocked`（当前同步扫描不会落库这类对象），外层 `scan_status <> 'blocked'` 会把**整个逻辑文件**从列表挤掉，连更低的可用版本一起消失；`listWorkspaceFileVersions` 也不过滤扫描态。当前不可达，属 TW-05 预留异步扫描态后的潜在回归。
 - **未做/超出本任务**：前端版本 UI（TW-07 前端为后续任务，本任务只保证类型可编译）；AC-29 的既定规模查询计划/延迟基线未在本任务重测（无 TW-07 专项预算），且 `docs/baselines/team-workspace-1b-statistics-findings.md` §8 已标注 1B 基线的文件列表查询形状在 TW-07 之后过时；未新增会话级 pin 表（沿用文档决定）。
 
-### 3-T7 团队动态与通知（TW-08 后端）✅ 已完成（2026-09-12，两轮评审已修）
+### 3-T7 团队动态与通知（TW-08 后端）✅ 已完成（2026-09-12，两轮评审已修并入 main）
 - 成员变动、文件上传/移除等事件的动态投影与站内通知；幂等去重、按权限过滤、归档空间不泄露正文；P1。
 - 依赖：需要事件源（TW-01/02 的成员事件、1B/3-T6 的文件事件）。
 - **验收**：AC-15、AC-16（动态部分）。
@@ -245,6 +245,7 @@
 - **D2（措辞更正）**：初版交付记录写「a retried or racing occurrence cannot add a second row」——该表述只对**同一业务事实的重复写入**（并发重复、同事务重放）成立，**不构成 HTTP 重试幂等**：同内容再次上传会产生新的逻辑文件或新版本号，因而各写一条动态（评审实测 2 条）。本文已按此口径更正。
 - **D4（口径已记录）**：新成员会把加入前的历史动态计为未读（评审实测加入前 3 条 + 自己加入 1 条 = 4）。与既定数据模型一致（按当前成员过滤、不按 `joined_at` 过滤），首版**保留**；若要改为「只计加入之后」，需在 feed 与未读查询里接入 `workspace_members.joined_at`，属范围变更。
 - **D6（口径已记录）**：`workspace_notification_states` 不随成员移除清理，被移除后重新加入会继承旧的 `last_read_at`/`muted_at`。按「每人每空间一份通知偏好」的模型**保留**；若产品要求「重新加入即重置」，需在移除路径删除该行。
+- **提交与 CI（2026-09-12）**：`24774e6`（`feat(server),docs: 团队动态与站内通知（TW-08 / 3-T7）`）已推送 `main`，CI `M6 quality gate`（run `34666778699`，4m28s）通过；`test:m5:activity:integration` 已进 CI 质量门。
 - **回归（本次修复后重跑）**：activity **21/21（连续三次稳定）**、members 36/36、lifecycle 20/20、file-versions 18/18、shared-files 15/15、agent-members 19/19、security 4/4、workspace:upgrade 4/4；`pnpm verify`、`pnpm lint`、`pnpm typecheck` 全部通过。
 
 ### 3-T8 前端团队动态与通知（TW-08 前端）⬜ 未开始
