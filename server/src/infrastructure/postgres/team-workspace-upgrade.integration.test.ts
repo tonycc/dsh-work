@@ -141,6 +141,8 @@ test('回滚兼容：删除 0022 对象后旧结构与个人数据完整，重�
   await database.unsafe(`
     drop trigger if exists team_workspace_single_owner on workspace_members;
     drop function if exists assert_team_workspace_single_owner();
+    drop table if exists workspace_notification_states;
+    drop table if exists workspace_activity_events;
     drop table if exists workspace_file_versions;
     drop table if exists workspace_files;
     drop table if exists workspace_revocation_events;
@@ -161,7 +163,22 @@ test('回滚兼容：删除 0022 对象后旧结构与个人数据完整，重�
   const results = await runMigrations(database)
   const reappliedVersions = results.filter(result => result.applied).map(result => result.version)
   assert.ok(reappliedVersions.includes('0022_team_workspace_authorization.sql'))
+  assert.ok(
+    reappliedVersions.includes('0025_workspace_file_versions.sql'),
+    '0025 是纯新增迁移，回滚后必须能被重放',
+  )
+  assert.ok(
+    reappliedVersions.includes('0026_workspace_activity.sql'),
+    '0026（团队动态与通知，纯新增）必须能被重放',
+  )
   assert.equal(reappliedVersions.some(version => version < '0022'), false)
+  // 动态与通知状态两张表在重放后必须回来（0026 不依赖任何既有表结构变更）。
+  const [activityTables] = await database<{ activity: string | null; notifications: string | null }[]>`
+    select to_regclass('public.workspace_activity_events')::text as activity,
+           to_regclass('public.workspace_notification_states')::text as notifications
+  `
+  assert.equal(activityTables?.activity, 'workspace_activity_events')
+  assert.equal(activityTables?.notifications, 'workspace_notification_states')
   const reapplied = await snapshot()
   assert.equal(reapplied.grantCount, beforeRollback.grantCount)
   assert.equal(reapplied.sourceCount, beforeRollback.sourceCount, '重新升级必须复现相同的 legacy 对账清单')

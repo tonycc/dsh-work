@@ -14,6 +14,7 @@ import { registerWorkbenchRoutes } from './http/workbench/routes.ts'
 import { registerConversationRoutes } from './http/workbench/conversation-routes.ts'
 import { registerContentRoutes } from './http/workbench/content-routes.ts'
 import { registerWorkspaceLifecycleRoutes } from './http/workbench/workspace-lifecycle-routes.ts'
+import { registerWorkspaceActivityRoutes } from './http/workbench/workspace-activity-routes.ts'
 import { registerWorkspaceMemberRoutes } from './http/workbench/workspace-member-routes.ts'
 import { registerWorkspaceAgentMemberRoutes } from './http/workbench/workspace-agent-member-routes.ts'
 import { registerWorkbenchAgentRoutes } from './http/workbench/agent-routes.ts'
@@ -43,6 +44,8 @@ import { PostgresContentService } from './modules/workbench/application/postgres
 import { PostgresWorkspaceMemberService } from './modules/workbench/application/postgres-workspace-member-service.ts'
 import { PostgresWorkspaceLifecycleService } from './modules/workbench/application/postgres-workspace-lifecycle-service.ts'
 import { PostgresWorkspaceAgentMemberService } from './modules/workbench/application/postgres-workspace-agent-member-service.ts'
+import { PostgresWorkspaceActivityService } from './modules/workbench/application/postgres-workspace-activity-service.ts'
+import { PostgresWorkspaceService } from './modules/workbench/application/postgres-workspace-service.ts'
 import { PostgresAgentService } from './modules/agent/postgres-agent-service.ts'
 import { PostgresSkillService } from './modules/skill/postgres-skill-service.ts'
 import { PostgresToolConnectorService } from './modules/tool/postgres-tool-connector-service.ts'
@@ -117,6 +120,7 @@ async function start() {
     const runs = new PostgresRunRepository(database)
     const workspaceMembers = new PostgresWorkspaceMemberService(database, authorization)
     const workspaceLifecycle = new PostgresWorkspaceLifecycleService(database)
+    const workspaceActivity = new PostgresWorkspaceActivityService(database, new PostgresWorkspaceService(database))
     const operations = new PostgresOperationsService(
       database,
       runtime,
@@ -152,6 +156,7 @@ async function start() {
     registerContentRoutes(router, content, authorization)
     registerWorkspaceMemberRoutes(router, workspaceMembers, authorization)
     registerWorkspaceLifecycleRoutes(router, workspaceLifecycle, authorization)
+    registerWorkspaceActivityRoutes(router, workspaceActivity, authorization)
     registerWorkspaceAgentMemberRoutes(router, workspaceAgentMembers, authorization)
     registerOperationsRoutes(router, operations, new PostgresGrantReconciliationService(database, operations))
     registerAgentRoutes(router, agents)

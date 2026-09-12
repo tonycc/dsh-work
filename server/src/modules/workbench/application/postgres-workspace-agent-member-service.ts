@@ -8,6 +8,10 @@ import type {
 import type { PostgresAuthorizationService } from '../../authorization/postgres-authorization-service.ts'
 import { authorizationDenied } from '../../authorization/authorization-errors.ts'
 import { PostgresWorkspaceGrantSourceService } from '../../authorization/postgres-workspace-grant-source-service.ts'
+import {
+  currentTeamAuthRevision,
+  recordWorkspaceActivity,
+} from './workspace-activity-writer.ts'
 
 const tenantId = 'tenant-dsh-work'
 
@@ -213,6 +217,19 @@ export class PostgresWorkspaceAgentMemberService {
         ...skillVersions.map(skill => ({ capabilityType: 'skill' as const, capabilityVersionId: skill.versionId, sourceType: 'agent_member' as const, sourceRefId: memberId, createdBy: actorUserId })),
         ...toolVersions.map(tool => ({ capabilityType: 'tool' as const, capabilityVersionId: tool.versionId, sourceType: 'agent_member' as const, sourceRefId: memberId, createdBy: actorUserId })),
       ], workspaceId)
+      // addGrantSources bumps the workspace auth revision; the post-bump value
+      // separates a later re-add of the same (row-reusing) membership from this
+      // join, while a racing duplicate join already throws above.
+      const revision = await currentTeamAuthRevision(transaction, workspaceId)
+      await recordWorkspaceActivity(transaction, {
+        workspaceId,
+        kind: 'agent_member_added',
+        actorUserId,
+        objectType: 'agent_member',
+        objectId: memberId,
+        dedupeKey: `agent_member_added:${memberId}:${revision}`,
+        metadata: { agentMemberId: memberId, agentId },
+      })
     })
     return this.requireAgentMemberRecord(workspaceId, memberId, actorUserId)
   }
@@ -272,6 +289,19 @@ export class PostgresWorkspaceAgentMemberService {
       await this.writeRevocationEvent(transaction, workspaceId, memberId, 'agent_removed', {
         agentMemberId: memberId,
         agentId: locked.agentId,
+      })
+      // revokeGrantSourcesByRef bumps the revision; the post-bump value makes a
+      // later remove-after-re-add distinct while a duplicate remove already
+      // throws above.
+      const revision = await currentTeamAuthRevision(transaction, workspaceId)
+      await recordWorkspaceActivity(transaction, {
+        workspaceId,
+        kind: 'agent_member_removed',
+        actorUserId,
+        objectType: 'agent_member',
+        objectId: memberId,
+        dedupeKey: `agent_member_removed:${memberId}:${revision}`,
+        metadata: { agentMemberId: memberId, agentId: locked.agentId },
       })
     })
     return { id: memberId, removed: true }

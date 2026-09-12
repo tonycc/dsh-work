@@ -11,6 +11,7 @@ import { BaselineFileSafetyScanner, type FileSafetyScannerPort } from './file-sa
 import { extractDocument } from './document-extractor.ts'
 import { PostgresWorkspaceService, type WorkspaceType } from './postgres-workspace-service.ts'
 import { workspaceStateConflict } from './workspace-state-conflict-error.ts'
+import { recordWorkspaceActivity } from './workspace-activity-writer.ts'
 
 const tenantId = 'tenant-dsh-work'
 const allowedExtensions = new Set(['.pdf', '.docx', '.xlsx', '.csv', '.txt', '.md'])
@@ -477,6 +478,18 @@ export class PostgresContentService {
           ${`wfv-${randomUUID()}`}, ${tenantId}, ${logicalFileId}, 1, ${stored.id}, null, 'succeeded', ${actorUserId}
         )
       `
+      // 同事务写入动态：新增共享文件（v1）是一条团队动态。safe_metadata 只放
+      // 逻辑文件 id 与版本号——文件名不进入动态（会话附件名属私有，团队动态统一
+      // 不携带任何名称）。
+      await recordWorkspaceActivity(transaction, {
+        workspaceId,
+        kind: 'file_uploaded',
+        actorUserId,
+        objectType: 'file',
+        objectId: logicalFileId,
+        dedupeKey: `file_uploaded:${stored.id}`,
+        metadata: { logicalFileId, versionNo: 1 },
+      })
     })
     return { ...stored, logicalFileId, versionNo: 1 }
   }
@@ -758,6 +771,18 @@ export class PostgresContentService {
             ${prepared.fileId}, ${input.note}, 'pending', ${input.actorUserId}
           )
         `
+        // 新版本对象与版本行同事务落库，动态也同事务写入：版本号由行锁内的
+        // max(version_no)+1 分配，因此 (logicalFileId, versionNo) 是本次业务事件的
+        // 确定性去重键。safe_metadata 只放 id 与版本号，不含文件名/更新说明。
+        await recordWorkspaceActivity(transaction, {
+          workspaceId: input.workspaceId,
+          kind: 'file_version_added',
+          actorUserId: input.actorUserId,
+          objectType: 'file',
+          objectId: input.logicalFileId,
+          dedupeKey: `file_version_added:${input.logicalFileId}:${versionNo}`,
+          metadata: { logicalFileId: input.logicalFileId, versionNo },
+        })
       })
     } catch (error) {
       // 行锁存在时理论上不会撞唯一约束；这里兜底把竞态翻译成明确 409，绝不后写覆盖。
@@ -908,6 +933,17 @@ export class PostgresContentService {
                 where tenant_id = ${tenantId} and logical_file_id = ${logical.id}
              )
         `
+        // 逻辑文件移除是一条团队动态；一个逻辑文件只会从 active 变成 removed
+        // 一次（上面的 removedAt 早退保证），所以逻辑文件 id 就是确定性去重键。
+        await recordWorkspaceActivity(transaction, {
+          workspaceId,
+          kind: 'file_removed',
+          actorUserId,
+          objectType: 'file',
+          objectId: logical.id,
+          dedupeKey: `file_removed:${logical.id}`,
+          metadata: { logicalFileId: logical.id },
+        })
         return { id: fileId, removed: true }
       }
 
@@ -928,6 +964,16 @@ export class PostgresContentService {
         update file_objects set removed_at = now(), removed_by = ${actorUserId}
          where tenant_id = ${tenantId} and id = ${fileId} and removed_at is null
       `
+      // 兼容路径（TW-07 之前直接落在 file_objects 上的共享文件）：对象 id 即去重键。
+      await recordWorkspaceActivity(transaction, {
+        workspaceId,
+        kind: 'file_removed',
+        actorUserId,
+        objectType: 'file',
+        objectId: fileId,
+        dedupeKey: `file_removed:${fileId}`,
+        metadata: {},
+      })
       return { id: fileId, removed: true }
     })
   }

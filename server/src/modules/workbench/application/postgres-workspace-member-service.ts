@@ -4,6 +4,10 @@ import type { DatabaseClient, DatabaseTransaction } from '../../../infrastructur
 import type { PostgresAuthorizationService } from '../../authorization/postgres-authorization-service.ts'
 import { bumpTeamAuthRevision } from '../../authorization/postgres-workspace-grant-source-service.ts'
 import { authorizationDenied } from '../../authorization/authorization-errors.ts'
+import {
+  currentTeamAuthRevision,
+  recordWorkspaceActivity,
+} from './workspace-activity-writer.ts'
 
 const tenantId = 'tenant-dsh-work'
 
@@ -191,12 +195,28 @@ export class PostgresWorkspaceMemberService {
       // 并在锁内复核空间仍活跃：此前状态只在事务外检查，归档若在此期间提交，
       // 成员变更仍会成功（验证代理 D4 强制时序实测 8/8 复现）。
       await lockWorkspaceRow(transaction, workspaceId)
-      await transaction`
+      // `returning` tells us whether this transaction actually created the
+      // membership: a concurrent/duplicate add hits `on conflict do nothing` and
+      // must not add a second `member_added` activity (AC-15). The membership
+      // row's `joined_at` is the generation token, so add → remove → re-add
+      // produces distinct keys while a duplicate insert keeps the same one.
+      const [inserted] = await transaction<{ joinedAt: string }[]>`
         insert into workspace_members (tenant_id, workspace_id, user_id, member_role, added_by)
         values (${tenantId}, ${workspaceId}, ${targetUserId}, ${role}, ${actorUserId})
         on conflict (tenant_id, workspace_id, user_id) do nothing
+        returning joined_at::text as "joinedAt"
       `
       await bumpTeamAuthRevision(transaction, workspaceId)
+      if (!inserted) return
+      await recordWorkspaceActivity(transaction, {
+        workspaceId,
+        kind: 'member_added',
+        actorUserId,
+        objectType: 'member',
+        objectId: targetUserId,
+        dedupeKey: `member_added:${targetUserId}:${inserted.joinedAt}`,
+        metadata: { userId: targetUserId, role },
+      })
     })
     const member = await this.findMemberRecord(workspaceId, targetUserId)
     if (!member) throw new Error('成员添加失败，请稍后重试')
@@ -224,19 +244,55 @@ export class PostgresWorkspaceMemberService {
     if (member.role === role) return member
 
     await this.runMembershipMutation(workspaceId, async (transaction) => {
-      await transaction`
+      // 角色必须在**事务内、拿到空间行锁之后**重新读：`member.role` 是锁外快照，
+      // 两个并发改角色时败者会把过期的 from 写进撤销事件与动态（质量评审 F2 / 规格
+      // 评审 D5 实测：真实链路 member→admin→viewer，却记成两条 from=member）。
+      // `for update` 同时把该成员的这次转换串行化。行锁顺序不变：workspaces → workspace_members。
+      const [current] = await transaction<{ fromRole: MemberRole }[]>`
+        select member_role as "fromRole"
+          from workspace_members
+         where tenant_id = ${tenantId}
+           and workspace_id = ${workspaceId}
+           and user_id = ${targetUserId}
+         for update
+      `
+      if (!current) return
+      const fromRole = current.fromRole
+      // 用事务内读到的真实角色重跑授权判定：否则锁外快照为 member、实际已是 admin 时，
+      // 管理员可以借竞态把另一个管理员降级（既可过期又可越权）。
+      this.assertRoleChangeAllowed(actorRole, fromRole, role)
+      if (fromRole === role) return
+      // `is distinct from` makes a racing duplicate change a no-op instead of a
+      // second write, so only a real transition writes a revocation event and an
+      // activity row (AC-15). The post-bump auth revision then separates an
+      // A->B->A->B oscillation: the resulting role repeats but the revision does
+      // not, so the second A->B keeps its own activity row.
+      const [changed] = await transaction<{ joinedAt: string }[]>`
         update workspace_members
            set member_role = ${role}
          where tenant_id = ${tenantId}
            and workspace_id = ${workspaceId}
            and user_id = ${targetUserId}
+           and member_role is distinct from ${role}
+        returning joined_at::text as "joinedAt"
       `
+      await bumpTeamAuthRevision(transaction, workspaceId)
+      if (!changed) return
       await this.writeRevocationEvent(transaction, workspaceId, targetUserId, 'role_changed', {
-        from: member.role,
+        from: fromRole,
         to: role,
         by: actorUserId,
       })
-      await bumpTeamAuthRevision(transaction, workspaceId)
+      const revision = await currentTeamAuthRevision(transaction, workspaceId)
+      await recordWorkspaceActivity(transaction, {
+        workspaceId,
+        kind: 'role_changed',
+        actorUserId,
+        objectType: 'member',
+        objectId: targetUserId,
+        dedupeKey: `role_changed:${targetUserId}:${changed.joinedAt}:${fromRole}->${role}:${revision}`,
+        metadata: { userId: targetUserId, from: fromRole, to: role },
+      })
     })
     const updated = await this.findMemberRecord(workspaceId, targetUserId)
     if (!updated) throw new Error('目标成员不存在于该空间')
@@ -274,16 +330,29 @@ export class PostgresWorkspaceMemberService {
 
     await this.runMembershipMutation(workspaceId, async (transaction) => {
       // 治理例外：归档空间仍必须能紧急撤权。
-      await transaction`
+      // `returning` 区分「真的删掉了成员」与并发重复删除：只有前者才写撤权事件
+      // 与动态；删除行的 joined_at 是成员代际，重加后再移除会得到不同去重键。
+      const [deleted] = await transaction<{ joinedAt: string }[]>`
         delete from workspace_members
          where tenant_id = ${tenantId}
            and workspace_id = ${workspaceId}
            and user_id = ${targetUserId}
+        returning joined_at::text as "joinedAt"
       `
+      await bumpTeamAuthRevision(transaction, workspaceId)
+      if (!deleted) return
       await this.writeRevocationEvent(transaction, workspaceId, targetUserId, 'member_removed', {
         by: actorUserId,
       })
-      await bumpTeamAuthRevision(transaction, workspaceId)
+      await recordWorkspaceActivity(transaction, {
+        workspaceId,
+        kind: 'member_removed',
+        actorUserId,
+        objectType: 'member',
+        objectId: targetUserId,
+        dedupeKey: `member_removed:${targetUserId}:${deleted.joinedAt}`,
+        metadata: { userId: targetUserId },
+      })
     }, { allowArchived: true })
     return { userId: targetUserId, removed: true }
   }
@@ -307,16 +376,27 @@ export class PostgresWorkspaceMemberService {
     if (actorRole === 'owner') throw new Error('负责人不能直接退出空间，请先转交负责人')
 
     await this.runMembershipMutation(workspaceId, async (transaction) => {
-      await transaction`
+      const [deleted] = await transaction<{ joinedAt: string }[]>`
         delete from workspace_members
          where tenant_id = ${tenantId}
            and workspace_id = ${workspaceId}
            and user_id = ${actorUserId}
+        returning joined_at::text as "joinedAt"
       `
+      await bumpTeamAuthRevision(transaction, workspaceId)
+      if (!deleted) return
       await this.writeRevocationEvent(transaction, workspaceId, actorUserId, 'member_exit', {
         by: actorUserId,
       })
-      await bumpTeamAuthRevision(transaction, workspaceId)
+      await recordWorkspaceActivity(transaction, {
+        workspaceId,
+        kind: 'member_exit',
+        actorUserId,
+        objectType: 'member',
+        objectId: actorUserId,
+        dedupeKey: `member_exit:${actorUserId}:${deleted.joinedAt}`,
+        metadata: { userId: actorUserId },
+      })
     })
     return { workspaceId, exited: true }
   }
@@ -363,24 +443,43 @@ export class PostgresWorkspaceMemberService {
            and workspace_id = ${workspaceId}
            and user_id = ${previousOwnerId}
       `
-      await transaction`
+      // `is distinct from` detects a real promotion: a racing duplicate transfer
+      // finds the target already owner and must not add a second
+      // owner_transferred activity. The post-bump revision separates an
+      // A->B->A->B transfer oscillation.
+      const [promoted] = await transaction<{ joinedAt: string }[]>`
         update workspace_members
            set member_role = 'owner'
          where tenant_id = ${tenantId}
            and workspace_id = ${workspaceId}
            and user_id = ${toUserId}
+           and member_role is distinct from 'owner'
+        returning joined_at::text as "joinedAt"
       `
       await this.writeRevocationEvent(transaction, workspaceId, previousOwnerId, 'role_changed', {
         from: 'owner',
         to: 'member',
         by: actorUserId,
       })
-      await this.writeRevocationEvent(transaction, workspaceId, toUserId, 'role_changed', {
-        from: targetRole,
-        to: 'owner',
-        by: actorUserId,
-      })
+      if (promoted) {
+        await this.writeRevocationEvent(transaction, workspaceId, toUserId, 'role_changed', {
+          from: targetRole,
+          to: 'owner',
+          by: actorUserId,
+        })
+      }
       await bumpTeamAuthRevision(transaction, workspaceId)
+      if (!promoted) return
+      const revision = await currentTeamAuthRevision(transaction, workspaceId)
+      await recordWorkspaceActivity(transaction, {
+        workspaceId,
+        kind: 'owner_transferred',
+        actorUserId,
+        objectType: 'member',
+        objectId: toUserId,
+        dedupeKey: `owner_transferred:${previousOwnerId}->${toUserId}:${revision}`,
+        metadata: { fromUserId: previousOwnerId, toUserId },
+      })
     }, { allowArchived: true })
     return { workspaceId, previousOwnerId, newOwnerId: toUserId }
   }

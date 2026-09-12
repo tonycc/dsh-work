@@ -1,7 +1,7 @@
 # 批次 3 任务拆分与实施约束
 
 **状态：** 进入批次 3 实施的任务边界（2026-09-11）。产品语义以 `team-workspace-plan.md` 为准，界面以 `team-workspace-design.md` 为准，本文件只拆任务、定验收与顺序。
-**批次 3 的范围是 TW-06／TW-07／TW-08 三件事**（方案 §7）：TW-06（3-T1…3-T5）与 **TW-07（3-T6）** 已交付；TW-08（团队动态与通知）尚未拆分，**批次 3 因此未整体完成**。
+**批次 3 的范围是 TW-06／TW-07／TW-08 三件事**（方案 §7）：TW-06（3-T1…3-T5）与 **TW-07（3-T6）** 已交付；**TW-08 后端（3-T7）已完成（两轮评审已修）**，TW-08 前端（3-T8）已拆分、未开始，**批次 3 因此未整体完成**。
 **依赖：** 批次 1A（授权与撤权机制）、1B（团队资料与本人对话、文件与结果读取收权、可见统计基线）已交付。
 
 ## 范围决定（2026-09-11 产品确认）
@@ -178,10 +178,90 @@
 - **已知潜在（记录，不阻断）**：若某个**被展示版本**的对象是 `blocked`（当前同步扫描不会落库这类对象），外层 `scan_status <> 'blocked'` 会把**整个逻辑文件**从列表挤掉，连更低的可用版本一起消失；`listWorkspaceFileVersions` 也不过滤扫描态。当前不可达，属 TW-05 预留异步扫描态后的潜在回归。
 - **未做/超出本任务**：前端版本 UI（TW-07 前端为后续任务，本任务只保证类型可编译）；AC-29 的既定规模查询计划/延迟基线未在本任务重测（无 TW-07 专项预算），且 `docs/baselines/team-workspace-1b-statistics-findings.md` §8 已标注 1B 基线的文件列表查询形状在 TW-07 之后过时；未新增会话级 pin 表（沿用文档决定）。
 
-### 3-T7 团队动态与通知（TW-08）⬜ 未拆分
+### 3-T7 团队动态与通知（TW-08 后端）✅ 已完成（2026-09-12，两轮评审已修）
 - 成员变动、文件上传/移除等事件的动态投影与站内通知；幂等去重、按权限过滤、归档空间不泄露正文；P1。
 - 依赖：需要事件源（TW-01/02 的成员事件、1B/3-T6 的文件事件）。
 - **验收**：AC-15、AC-16（动态部分）。
+
+**事件源核查结论（实施前先定，2026-09-11）**：
+
+现有可复用面**不足以支撑动态投影**，必须自建事件源：
+
+| 候选 | 现状 | 能否直接用 |
+| --- | --- | --- |
+| `workspace_revocation_events` | 有 `member_removed`/`member_exit`/`role_changed`，含 `payload_hash` 去重，是**收权机制**的输入 | ❌ 不是通用活动日志：它按撤权语义去重（一次转交产生两条 `role_changed`），且不含文件、归档等事件 |
+| 文件上传/移除 | **完全没有写事件**（3-T6 也未写） | ❌ 需要新增 |
+| `audit_events` | 由 admin 运营动作写入（`PostgresOperationsService`），面向平台治理 | ❌ 方案明确「审计日志与团队动态使用不同的可见投影」 |
+| `run_events` | 单次 Run 的执行事件 | ❌ 普通发送消息不得进入团队动态 |
+
+**数据模型（实施前先定）**：
+
+- 新增 `workspace_activity_events`（append-only 动态事实）：`id`、`tenant_id`、`workspace_id`、`kind`（首版：`member_added`/`member_removed`/`member_exit`/`role_changed`/`owner_transferred`/`agent_member_added`/`agent_member_removed`/`file_uploaded`/`file_removed`/`file_version_added`/`workspace_archived`/`workspace_restored`）、`actor_user_id`、`object_type`、`object_id`、`safe_metadata`（jsonb，**只放可对全员展示的最小信息**，禁止私有正文/附件名）、`dedupe_key`、`occurred_at`；唯一键 `(tenant_id, workspace_id, dedupe_key)` 保证同一业务事件幂等只产生一条。
+- 事件必须**与业务变更同事务写入**（业务成功才产生事件）；动态写入失败**不得**把已成功的业务变更伪装成失败——首版采用同事务写入即天然满足「不伪装失败」，若改为异步投影则必须保证这一点。
+- 新增 `workspace_notification_states`（每人每空间一行）：`tenant_id`、`workspace_id`、`user_id`、`last_read_at`、`muted_at`。未读数 = 该空间在 `last_read_at` 之后的动态条数；`muted_at` 非空表示关闭提醒（仍可在动态里看到，只是不计数/不提醒）。
+- **可见投影**：`GET /workspaces/:id/activity` 与通知列表都要求**当前成员**（读轨，归档空间仍可读）；查询按 `workspace_members` 过滤，非成员与不存在空间不可枚举。失去权限后**不得**通过旧通知读取正文或敏感名称——因此 `safe_metadata` 只存最小信息，且每次读取都重新校验成员资格（不缓存跨撤权）。
+- **明确不进入动态**：普通消息发送、未共享的对话活动、Run 的执行细节（方案 TW-08 第 2 条）。
+- **不在本任务内**：前端「最近动态」摘要与「查看全部」抽屉（3-T8）、邮件/短信/外部聊天（首版明确不做）。
+
+**交付记录（2026-09-12，后端实现；两轮评审与修复见下）**：
+
+- **迁移 `0026_workspace_activity.sql`**（100 行，纯新增、不 `alter` 任何既有表，因此可重复执行且对既有数据零影响）：
+  - `workspace_activity_events`（append-only 动态事实）：`id`/`tenant_id`/`workspace_id`/`kind`/`actor_user_id`/`object_type`/`object_id`/`safe_metadata`/`dedupe_key`/`occurred_at`；`kind` 与 `object_type` 均为 **CHECK 闭合集合**（kind 12 种、object_type 4 种），消息正文与 Run 执行细节**不可表示**；唯一键 `(tenant_id, workspace_id, dedupe_key)`；外键 `(tenant_id, workspace_id) → workspaces(tenant_id, id)` 与 `(tenant_id, actor_user_id) → users(tenant_id, id)`；feed 索引 `(tenant_id, workspace_id, occurred_at desc, id desc)`（同一索引兼作 `occurred_at > last_read_at` 的未读计数）。
+  - `workspace_notification_states`（每人每空间一行）：`last_read_at`、`muted_at`，主键 `(tenant_id, workspace_id, user_id)`。**无行 = 从未读过也从未静音**（不预建行）。
+  - **不做回填**：历史动态不凭空发明（任务书「不清点历史动态」）；也**不为个人空间写入任何行**，个人空间没有任何端点读这两张表（AC-23）。
+- **写入器 `workspace-activity-writer.ts`**：`recordWorkspaceActivity(tx, input)` **必须在业务事务内调用**，`on conflict (tenant_id, workspace_id, dedupe_key) do nothing` —— 重复写入是静默 no-op，既不会产生第二条动态，也不会把业务事务打挂。同事务是「不伪装失败」的实现方式：活动写入失败会连带回滚业务变更，而不是让已提交的变更事后报错。
+- **去重键设计（三种令牌，按事件形状选择；这是本任务最容易做错的地方）**：
+
+  | 形状 | 令牌 | 适用 kind |
+  | --- | --- | --- |
+  | 结果状态不会重复（或行本身一次性） | 自然键 | `member_added`/`member_removed`/`member_exit`（`user_id + joined_at` 代际）、`file_uploaded`（`file_object_id`）、`file_removed`（逻辑文件/对象 id）、`file_version_added`（`logical_file_id + version_no`）、`owner_transferred`（`from->to + revision`） |
+  | 结果状态可重复出现（A→B→A→B、归档→恢复→归档、Agent 重加） | `activityTransitionToken(tx)` = `pg_current_xact_id()::text`（同一事务内稳定、跨事务唯一） | `workspace_archived`/`workspace_restored` |
+  | 成员/Agent 变更（同一事务内已 `bumpTeamAuthRevision`） | `currentTeamAuthRevision(tx)` = bump 后的 `workspaces.team_auth_revision` | `role_changed`、`agent_member_added`/`agent_member_removed` |
+
+- 纯状态派生键（例如只用 `from->to`）会把 A→B→A→B 的后面几次**真实变更静默吞掉**；纯 `now()` 键又会让重试产生第二条。上述令牌同时满足「重试/并发重复 → 一条」与「真实重复状态变更 → 各自一条」。
+  - 「是否真的变了」由**每个调用点的判别守卫**保证（不是靠去重键猜）：`insert … on conflict do nothing returning joined_at`（成员新增）、`delete … returning joined_at`（移除/退出）、`update … where member_role is distinct from $role returning joined_at`（改角色/转交）、归档恢复入口的「已是目标状态即早退」、`insert … on conflict (tenant_id, file_object_id)`（新版本）。
+- **写入点（全部在同一业务事务内）**：`postgres-workspace-member-service.ts`（`member_added`/`role_changed`/`member_removed`/`member_exit`/`owner_transferred`）、`postgres-workspace-agent-member-service.ts`（`agent_member_added`/`agent_member_removed`）、`postgres-content-service.ts`（`file_uploaded`（新建共享文件 v1）、`file_version_added`（上传新版本）、`file_removed`（逻辑文件路径与 TW-07 之前直接落在 `file_objects` 上的兼容路径各一处））、`postgres-workspace-lifecycle-service.ts`（`workspace_archived`/`workspace_restored`）。
+  - 记录一处**顺带修正**：转交负责人的第二个撤销事件（目标成员的 `role_changed`）原先无条件写入，现改为仅在该事务真的把目标提升为 owner 时写入；并发重复转交的败者不再写一条并不存在的 `role_changed`（同时也不再产生 `owner_transferred` 动态）。
+  - **`safe_metadata` 白名单**（只放 id／角色／版本号，任何名称与正文都不进入）：成员类 `{userId, role}`／`{userId, from, to}`／`{fromUserId, toUserId}`；Agent 类 `{agentMemberId, agentId}`；文件类 `{logicalFileId, versionNo}`（文件名、更新说明、会话附件名一律不写）；归档类 `{}`。动态项只带 `object_id`，名称交给「成员本来就能读」的文件/成员列表去解析。
+- **服务层 `postgres-workspace-activity-service.ts`**：`listActivity`／`getActivityItem`／`getNotifications`／`markNotificationsRead`／`setNotificationsMuted`。每个公开方法**先重新解析读取轨**（`workspaces.resolveReadableWorkspace`，每次查库、不缓存成员资格）：归档团队空间可读、个人空间 422「仅支持团队工作空间查看团队动态」、非成员与不存在空间返回**完全一致**的 403（不可枚举）；空 `workspaceId` 在解析前就 422，避免 `resolveReadableWorkspace` 的空值回退把「查看者自己的个人空间」当默认值创建出来。
+- **游标与精度（实现代理实测发现）**：分页为 `(occurred_at desc, id desc)` 的 keyset；服务端把游标编成 `base64url(JSON{t,i})`。**关键点**：`occurred_at` 作为 JS `Date` 只有毫秒精度，而 DDL 是微秒精度的 `timestamptz`，直接把 `Date` 传回驱动做游标会让同一毫秒内的行重复或漏掉——因此查询额外取 `occurred_at::text`（DB 侧全精度文本）作为游标令牌，回传时写成 `((${token}::text)::timestamptz)` 双重转换：先按字符串发送（否则 postgres.js 会把 `timestamptz` 参数折成毫秒），再在库内解析。`limit` 默认 20、必须在 1..100 的十进制整数，否则类型化 422（评审 F6：`Number()` 会放行 `0x10`/`1e2`，已在路由层按形状拒绝）；多取一行判断 `nextCursor`。**畸形游标**（base64/JSON 合法但 `t` 不是时间戳、空串、含 NUL）由形状校验 + SQLSTATE 翻译统一落类型化 422，绝不落 500（评审 F1/D1，见下）。
+- **未读与静音语义**：未读 = `occurred_at > last_read_at`（无状态行则全部未读）；`markNotificationsRead` 用 upsert 把 `last_read_at` 推进到 `now()`；`muted_at` 非空时 `unreadCount` 报 0 但**动态 feed 照常返回**（对齐 TW-08「关闭提醒仍可在动态里看到」），静音不清空已读位置。
+- **路由与契约**：`GET /workspaces/:id/activity`、`GET /workspaces/:id/activity/:activityId`、`GET /workspaces/:id/notifications`、`POST /workspaces/:id/notifications/read|mute|unmute`（6 条，`workspace-activity-routes.ts`，`main.ts` 接线）。**全部为读取轨（`allowArchived: true`）**；写路径只有「某人自己的已读/静音状态」，不触碰空间业务数据，因此归档空间仍可用。`docs/contracts/openapi-workbench.json` 同步 6 条路径与 4 个 schema（含 limit/cursor、422/403 说明）。
+- **测试**：新增 `server/src/http/team-workspace-activity-api.integration.test.ts`（**评审修复后 21 个用例**，`createThrowawayDatabase()`），登记为 `test:m5:activity:integration`（`server/package.json`、根 `package.json`、`.github/workflows/ci.yml` 三处，已进 CI 质量门）。覆盖：0026 可重复执行且不回填（AC-17）、成员增/删/退/改角色/转交与重复无变化的去重、**并发改角色的 from/to 链路完整**、被拒绝的变更不产生动态、Agent 增删、文件上传/新版本/移除且不泄露文件名与正文、会话附件不进入动态、归档/恢复及「归档→恢复→归档」两条、非成员与不存在空间拒绝一致（不可枚举）、归档空间可读、keyset 分页无重复无遗漏、**同一毫秒内两条动态的微秒游标**、**构造型畸形游标一律 422（不落 500）**、**limit 只接受 1..100 十进制整数**、失权成员不能再用旧 id 读取、未读计数与标记已读、**标记已读的 last_read_at 单调不回拨**、静音与恢复计数、个人空间 422 且不产生任何动态（AC-23）。
+- **本机验证**：`pnpm verify`、`pnpm typecheck`、`pnpm lint` 通过；`test:m5:activity:integration` **21/21（连续三次稳定）**。
+- **明确不做**：前端「最近动态」摘要与「查看全部」抽屉（3-T8）；邮件/短信/外部聊天；历史动态回填；普通消息、未共享对话活动与 Run 执行细节进入动态；AC-29 规模基线未重测（沿用 `docs/baselines/team-workspace-1b-statistics-findings.md` §8 对既有文件列表查询形状的过时告警）。
+
+**两轮评审与修复（2026-09-12）**：
+
+- **结论**：独立规格符合性评审「有条件符合 → 修 D1 后符合」；独立对抗性质量评审「PASS with one P1 fix required」。两轮各自独立复核并**互相印证**的核心结论：事件源必须自建、去重与并发重复、同事务原子性（强制动态写入失败时业务变更整体回滚）、接收与点击两次鉴权、不可枚举、归档读取轨、个人空间零面（AC-23）、`safe_metadata` 白名单无泄露、无 SQL 注入（参数化）。两轮也都**独立验证**了「游标必须用数据库文本令牌」这一 claim：质量评审实测 postgres.js 把 `timestamptz` 参数（Date 与字符串都一样）折到毫秒，规格评审实测只有 `(($n::text)::timestamptz)` 双重转换能保留微秒，毫秒令牌会漏行。
+- **F1/D1（P1，两轮同时发现，已修）**：构造型游标（base64 与 JSON 都合法、`t` 不是时间戳、空串、不可能日期、`i` 含 NUL）直达 `(($n::text)::timestamptz)`，PostgreSQL 报 **22007/22021**，被路由器分类成 **500 `operation_failed`**——任何成员都能制造 500 与告警噪音，且与契约只声明 422 不符。修复：`decodeActivityCursor` 增加形状校验（非空、无 NUL、长度上限），新增 `runCursorQuery` 把 **22007 / 22008 / 22021 / 22P02** 翻译为类型化 422 `invalid_request`。新增「6 种畸形游标 × 2 个端点」用例 + 合法游标仍 200；**反证**：禁用翻译即红（实测「非时间戳文本 游标在 /activity 上必须 422，实际 500」）。
+- **F2/D5（P2，已修；并顺带修掉同一处的一处越权竞态）**：`role_changed` 的 `from` 取自**事务外**的角色快照（`:241` → metadata/撤权 payload），并发改角色时败者写入过期 `from`（质量评审实测真实链路 member→admin→viewer 却记成两条 `from=member`）。修复：在事务内、拿到空间行锁后用 `select … for update` 重读角色，撤权 payload、动态 `metadata` 与去重键统一使用该值；**并在事务内重跑 `assertRoleChangeAllowed`**——否则锁外快照为 `member`、实际已是 `admin` 时，管理员可以借竞态把另一个管理员降级。新增判别性用例（外部事务持有空间行锁，强制两个请求在锁外读完快照后一起排队；只靠 `Promise.all` 不稳定，削弱实现时该用例仍绿，故必须强制时序）并反证（削弱即红，实测链路 `[{from:member,to:admin},{from:member,to:viewer}]`）。
+- **F4（P2，已修）**：`markNotificationsRead` 的 `do update set last_read_at = now()` 会把已读位置**往回拨**（质量评审 DB 级实证），即已读状态可倒退。改为 `greatest(coalesce(现值, now()), now())` 保持单调。新增用例（预置 2099 年的已读位置后标记已读不得倒退；落后位置仍须被推进）并反证。
+- **F6（nit，已修）**：路由 `Number(raw)` 会把 `limit=0x10`（16）与 `1e2`（100）当合法值放行。改为只接受 `^[0-9]{1,3}$`，其余走类型化 422。新增用例并反证（实测削弱后 `limit=0x10` 返回 200）。
+- **D3（nit，已修）**：升级套件的 0022 回滚用例补 drop 并重放 0026 的两张表，断言 `0025`/`0026` 均被重放、`to_regclass` 确认 `workspace_activity_events` 与 `workspace_notification_states` 回到库中。
+- **F3（P2，口径已确认）**：归档空间允许「标记已读／关闭提醒」（只写调用者**本人**的通知状态行，属读取轨），业务写入仍全部 403。2026-09-12 确认**保留**该入口（否则归档空间会出现无法消除的未读徽标），并更正任务书原句「不显示会触发写入的入口」的过宽表述。
+- **F5（记录，不修）**：评审用触发器强制动态写入失败后，业务变更在 4 条路径上全部正确回滚（0 成员/0 文件/0 动态），客户端得到 500 `operation_failed`。这是**基础设施故障**而非可键入错误，评审也未找到任何客户端可达的触发路径；改成 4xx 反而会掩盖真实故障。AC-15 要求的原子性由该实验证明。
+- **F7 / D2(c)（记录，按设计）**：`file_version_added` 在上传事务内写入，而解析在其后的事务里，因此解析失败时该动态仍保留。这是刻意的：不可变对象与版本行都保留（AC-13 可追溯），动态只声明「提交了一个新版本」，版本列表会以 `parseStatus=failed` 说明真实结果。
+- **D2（措辞更正）**：初版交付记录写「a retried or racing occurrence cannot add a second row」——该表述只对**同一业务事实的重复写入**（并发重复、同事务重放）成立，**不构成 HTTP 重试幂等**：同内容再次上传会产生新的逻辑文件或新版本号，因而各写一条动态（评审实测 2 条）。本文已按此口径更正。
+- **D4（口径已记录）**：新成员会把加入前的历史动态计为未读（评审实测加入前 3 条 + 自己加入 1 条 = 4）。与既定数据模型一致（按当前成员过滤、不按 `joined_at` 过滤），首版**保留**；若要改为「只计加入之后」，需在 feed 与未读查询里接入 `workspace_members.joined_at`，属范围变更。
+- **D6（口径已记录）**：`workspace_notification_states` 不随成员移除清理，被移除后重新加入会继承旧的 `last_read_at`/`muted_at`。按「每人每空间一份通知偏好」的模型**保留**；若产品要求「重新加入即重置」，需在移除路径删除该行。
+- **回归（本次修复后重跑）**：activity **21/21（连续三次稳定）**、members 36/36、lifecycle 20/20、file-versions 18/18、shared-files 15/15、agent-members 19/19、security 4/4、workspace:upgrade 4/4；`pnpm verify`、`pnpm lint`、`pnpm typecheck` 全部通过。
+
+### 3-T8 前端团队动态与通知（TW-08 前端）⬜ 未开始
+- 右栏成员区之后「最近动态」摘要（3 条）与「查看全部」抽屉；未读标记与按空间关闭提醒入口。
+- 归档空间的动态仍可读（读取轨）；**不显示会触发业务写入的入口**（动态项只做跳转，不提供上传/续写等动作）。
+- **验收**：AC-15（前端部分）、AC-16。
+
+**范围与实现要点（实施前先定，2026-09-12）**：
+
+- **数据来源（3-T7 已交付的 6 条接口）**：摘要与抽屉都用 `GET /workspaces/:id/activity`（`limit=3` 取摘要，抽屉分页 `limit=20` + `cursor`）；未读与静音用 `GET /workspaces/:id/notifications`、`POST …/notifications/read|mute|unmute`。前端**不新增接口**，也不解析 `safe_metadata` 之外的内容。
+- **渲染位置**：`packages/workbench-components/src/WorkspaceInfoPanel.vue` 是纯展示组件且自身不发请求（数据由宿主 `WorkspaceDetailView.vue` 传入），因此沿用该模式：宿主负责加载动态/未读/静音并传 props，新的「最近动态」区块与「查看全部」抽屉放在成员区之后（design §2.9；抽屉用 `el-drawer`，不占第四个主内容页签）。个人空间分支**不发任何动态请求**（AC-23）。
+- **动态文案**：只按 `kind` + `objectId`（+ `safeMetadata` 的角色/版本号）+ `actorDisplayName` 生成；**不使用任何名称字段**（服务端本就不返回）。文件类动态的名称展示交由「成员本来就能读」的文件列表解析，解析不到时显示中性占位（例如「一个文件」），不得显示 id 原文作为名称。
+- **未读与静音**：空间卡片/右栏显示未读计数徽标；「标记全部已读」调 read；「关闭提醒/恢复提醒」调 mute/unmute。静音后未读计数按服务端口径为 0（`muted=true`），但动态列表仍显示全部条目——前端不得自行过滤。
+- **归档空间**：动态摘要与抽屉**仍渲染**（读取轨）；归档态不显示业务写入口（沿用 3-T3 的 `status` 判定）。**口径已确认（2026-09-12）**：未读/静音是「本人通知偏好」而非空间业务写入，服务端在归档空间也允许（路由 `allowArchived: true`）；归档空间**保留**「标记已读／关闭提醒」入口（否则用户会出现无法消除的未读徽标），仅隐藏上传/续写等业务写入口。此条更正任务书原句「不显示会触发写入的入口」的过宽表述。
+- **删除与保留**：动态为 append-only，前端不提供删除入口；不新增「动态」主内容页签（design §2.9／方案 3.2）。
+- **测试**：沿用 `apps/workbench-web` 的 vitest + `@vue/test-utils`；判别性用例至少覆盖：摘要只取 3 条、抽屉分页与游标、未读徽标与标记已读后归零、静音后徽标消失但列表仍显示、归档空间仍渲染且无业务写入口、个人空间不发请求、kind → 文案映射不读名称字段、动态加载失败进入错误态并可就地重试。
+- **不在本任务内**：任何后端改动（3-T7 已交付）；邮件/短信/外部聊天；历史动态回填。
 
 ## 3. 顺序与依赖
 
@@ -191,13 +271,16 @@ TW-06：T1（授权双轨）──> T2（归档/恢复 API）──> T3（前端
                               └──> T4（集成验证与 CI）──> T5（文档收尾）  ✅ 已交付
 
 TW-07：T6（迁移 0025 + 版本服务/路由 + 读/执行双轨 + 集成验证）  ✅ 已交付（后端；前端版本 UI 为后续）
-TW-08（动态通知）尚未拆分；在既有事件源与执行轨/读取轨口径之上实现。
+
+TW-08：T7（迁移 0026 + 事件源写入点 + 动态/通知服务与路由 + 集成验证）  ✅ 已交付
+       └──> T8（前端「最近动态」摘要与「查看全部」抽屉、未读与静音入口）  ⬜ 未开始（已拆分，见 §2 3-T8）
 ```
 
-**批次 3 退出条件（方案 §7）**：归档恢复、文件升级追溯、动态去重与收权均通过 —— 目前满足「归档恢复」与「文件升级追溯」，动态去重未交付，故**批次 3 未完成**。
+**批次 3 退出条件（方案 §7）**：归档恢复、文件升级追溯、动态去重与收权均通过 —— 三项的后端交付（3-T1…3-T7）均已成立；但 TW-08 前端（3-T8）未交付，故**批次 3 未完成**。
 
 - T1 必须先做：T2 的归档写入一旦落地，读/执行口径必须已经分开，否则归档会立刻造成过收权（连只读都读不到）。
 - 每个任务：实现（TDD 先红后绿）→ 规格符合性评审 → 质量评审 → 修复 → 复审，流程同 1A/1B。
+- 3-T8 依赖的 6 条接口已由 3-T7 提供；3-T8 不改后端，只在前端消费（含归档读取轨与个人空间分支）。
 
 ## 4. 贯穿约束（违反即回退）
 

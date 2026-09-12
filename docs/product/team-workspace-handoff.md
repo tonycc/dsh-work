@@ -1,8 +1,8 @@
 # 团队工作空间实施交接文档
 
 **交接时间：** 2026-09-11  
-**分支：** `main`（已推送至 `5058f73`；1A、1B 与批次 3 的 TW-06 均已合入）  
-**目的：** 供接手的其他 agent/会话从此状态继续批次 3 剩余工作（TW-07 文件更新与版本、TW-08 团队动态与通知）。本文是当前进度的事实快照；产品语义以 `team-workspace-plan.md` 为准（该方案已于 2026-09-11 按产品决定收敛范围，见 §6.1；归档语义见 §7）。
+**分支：** `main`（已推送至 `624acc4`：1A、1B、批次 3 的 TW-06 与 TW-07 后端均已合入；TW-08 后端改动在工作树中、尚未提交）  
+**目的：** 供接手的其他 agent/会话从此状态继续批次 3 剩余工作（TW-08 后端评审与前端 3-T8；TW-07 前端版本 UI）。本文是当前进度的事实快照；产品语义以 `team-workspace-plan.md` 为准（该方案已于 2026-09-11 按产品决定收敛范围，见 §6.1；归档语义见 §7；批次 3 任务拆分见 §10 所指文档）。
 
 ## 1. 文档地图（必读顺序）
 
@@ -12,6 +12,7 @@
 | `docs/product/team-workspace-design.md` | 批次 0 UI 增量设计（第 6 节已确认决策；2A／2B 章节已删除） |
 | `docs/product/team-workspace-batch-1a-convergence.md` | 1A 四项技术收敛草案 + 已确认决策（授权来源模型、负责人约束、收权机制、Agent 允许范围） |
 | `docs/product/team-workspace-batch-1b-tasks.md` | 1B 五任务拆分与现状核查；T2 已随范围收敛标记取消 |
+| `docs/product/team-workspace-batch-3-tasks.md` | 批次 3（TW-06／TW-07／TW-08）任务拆分、事件源结论、交付记录与验收锚点 |
 
 ## 2. 进度快照
 
@@ -30,7 +31,8 @@
 | **1B 团队资料与本人对话** | 🚧 **进行中**：T1、T3 已交付；T2 已取消；剩余 T4（结果读取收权）、T5（可见统计性能基线）。范围＝TW-03 本人历史列表、TW-05、团队 Session 分页、文件／SSE 收权、可见统计性能基线 | `dfeb1f1`、`c196c82` 等 |
 | 2A / 2B | ❌ **已放弃** | 产品确认取消，不再交付 |
 | **TW-06 归档语义与生命周期（批次 3 第一部分）** | ✅ **已交付并合入 main**：3-T1 授权双轨 → 3-T2 归档/恢复 API → 3-T3 前端归档体验 → 3-T4 集成验证与真实 DSH e2e → 3-T5 文档收尾 | `58514a2`、`46fecb0`、`befb7c9`、`5058f73` |
-| TW-07 文件更新与版本 / TW-08 团队动态与通知 | ⬜ 未拆分（批次 3 剩余范围） | 见 `team-workspace-batch-3-tasks.md` |
+| **TW-07 文件更新与版本（批次 3 第二部分）** | ✅ **后端已交付并合入 main**（3-T6）：迁移 0025 逻辑文件/版本、新版本上传、历史版本下载与追溯、读/执行双轨；`test:m5:file-versions:integration` 18 用例。前端版本 UI 未做 | `624acc4` |
+| **TW-08 团队动态与通知（批次 3 第三部分）** | ✅ **后端已交付**（3-T7，两轮评审已修）：迁移 0026、事件写入点、动态/通知读取路由、`test:m5:activity:integration` 21 用例；前端（3-T8）未开始（已拆分） | 待提交 |
 | TW-09 | ⬜ 未开始 | — |
 
 **T6/T7 评审结论与关键技术结论（2026-09-10）：**
@@ -239,4 +241,21 @@ WIP 首次运行是 **16 个用例 8 失败**，修复分两类：
 - 多 Agent 共享授权不误删（AC-26）✅：`workspace_grant_sources` 多来源、撤销单来源不误删（`workspace-agent-member-api` 用例）、legacy 对账后保留共享工具授权（T7）。
 - Agent 或员工收权能阻止新增、排队和后续交付（AC-09）✅：撤权清扫 + 执行前复核 + 系统取消 + SSE 逐批拦截 + REST 详情/列表/取消读取拦截（T5 及其评审修复）。
 
-以上三条由 `pnpm verify` 的 `team-workspace-1a` 检查组锁定证据锚点（契约路径、迁移、关键用例），任一处被删或改名即失败。`team-workspace-plan.md` 第 10 节已同步交付状态。后续进度：1B 已交付（见 §6）；批次 3 的 TW-06 已交付（见 §7），TW-07／TW-08 待拆分。
+以上三条由 `pnpm verify` 的 `team-workspace-1a` 检查组锁定证据锚点（契约路径、迁移、关键用例），任一处被删或改名即失败。`team-workspace-plan.md` 第 10 节已同步交付状态。后续进度：1B 已交付（见 §6）；批次 3 的 TW-06 已交付（见 §7）、TW-07 后端已交付、TW-08 后端已交付（见 §10）。
+
+## 10. TW-07 / TW-08（批次 3 第二、三部分）
+
+详细交付记录在 `docs/product/team-workspace-batch-3-tasks.md`（3-T6 / 3-T7 两节），此处只留接手所需的要点与坐标。
+
+**TW-07 文件更新与版本（3-T6，✅ 后端已合入 `main`，`624acc4`）**
+- 迁移 `0025_workspace_file_versions.sql`：`workspace_files`（逻辑文件）+ `workspace_file_versions`（版本），`file_objects` 保持不可变（AC-13）；既有团队共享文件回填为 v1，个人空间文件与会话附件不回填。
+- 服务与路由：`listWorkspaceFiles` 按逻辑文件聚合、`GET/POST …/files/:logicalFileId/versions`、按版本下载走既有 `readFile` 读取轨；版本号在逻辑文件行锁内按 `max(version_no)+1` 分配，失败版本保留记录但不上移 `latest_version_no`。
+- 前端版本 UI 未做（属批次 3 剩余工作）。AC-29 的规模基线**未在本任务重测**，`docs/baselines/team-workspace-1b-statistics-findings.md` §8 已标注 1B 的文件列表查询形状在 TW-07 之后过时。
+
+**TW-08 团队动态与通知（3-T7，✅ 后端已完成、两轮评审已修）**
+- 迁移 `0026_workspace_activity.sql`：`workspace_activity_events`（12 种 kind 的闭合集合、`(tenant_id, workspace_id, dedupe_key)` 唯一、feed 索引）+ `workspace_notification_states`（`last_read_at`/`muted_at`）；纯新增、可重复执行、**不回填历史**。
+- 事件源结论（为什么自建）：`workspace_revocation_events` 是收权输入且按撤权语义去重、文件操作此前**完全不写事件**、`audit_events` 是治理投影、`run_events` 是执行细节——都不能当通用动态。**普通消息、未共享对话活动、Run 执行细节明确不进入动态**。
+- 写入方式：**与业务变更同事务**（`recordWorkspaceActivity`），`on conflict do nothing` 幂等；去重键按事件形状选自然键／`pg_current_xact_id()`／`team_auth_revision`，「是否真的变了」由各调用点的 `returning`/`is distinct from` 守卫保证（A→B→A→B、归档→恢复→归档都要各自留痕）。
+- 读取：6 条路由全为读取轨（归档可读），每次读取重新解析成员资格（不缓存跨撤权）；非成员与不存在空间拒绝一致（不可枚举）；个人空间 422（AC-23）。`safe_metadata` 只放 id／角色／版本号，**任何名称与正文都不进入动态**。
+- 游标：`(occurred_at, id)` keyset，游标令牌取 DB 侧 `occurred_at::text`（JS `Date` 只有毫秒精度，直接用会把同毫秒内的行重复/漏掉）；构造型畸形游标由形状校验 + SQLSTATE 22007/22008/22021/22P02 翻译统一落类型化 422（评审 P1）。「标记已读」用 `greatest()` 保持 `last_read_at` 单调不回拨。
+- 评审：规格符合性「有条件符合 → 已修」；质量评审「PASS，一处 P1 必修」；两轮发现已全部修复并各自反证。待做：提交推送；前端（3-T8）右栏「最近动态」摘要 + 「查看全部」抽屉 + 未读与静音入口。

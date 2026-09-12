@@ -1348,6 +1348,306 @@
           }
         }
       }
+    },
+    "/workspaces/{workspaceId}/activity": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/WorkspaceId"
+        }
+      ],
+      "get": {
+        "operationId": "listTeamWorkspaceActivity",
+        "summary": "查询团队空间动态（所有当前成员）",
+        "description": "读取轨：归档空间的现任成员仍可读取。按 (occurred_at, id) 最新优先做 keyset 分页，limit 必须为 1-100 的十进制整数；游标由上一页 nextCursor 原样回传，非法或构造的游标一律类型化 422。仅返回安全对象引用与 safe_metadata：不含私有对话正文、附件名或凭据。非成员与不存在空间返回完全一致的拒绝，不可枚举。个人空间不支持（422，AC-23）。每次读取都重新校验当前成员资格，失权成员不能通过旧 id 读取。",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "动态分页",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/WorkspaceActivityPage"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/workspaces/{workspaceId}/activity/{activityId}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/WorkspaceId"
+        },
+        {
+          "name": "activityId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getTeamWorkspaceActivityItem",
+        "summary": "读取单条团队动态（点击通知）",
+        "description": "点击时重新校验当前成员资格：成员被移除后，同一个旧动态 id 一律 403。跨空间的 id 与不存在的 id 都不暴露存在性。",
+        "responses": {
+          "200": {
+            "description": "动态条目",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/WorkspaceActivityItem"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/workspaces/{workspaceId}/notifications": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/WorkspaceId"
+        }
+      ],
+      "get": {
+        "operationId": "getTeamWorkspaceNotifications",
+        "summary": "查询本人在该空间的未读通知（所有当前成员）",
+        "description": "游标由上一页 nextCursor 原样回传，非法或构造的游标一律类型化 422。未读 = last_read_at 之后的动态（无状态行表示全部未读）；标记已读只会把 last_read_at 向前推进，不会倒退。关闭提醒（muted）时 unreadCount 返回 0 且不再提醒，但未读条目仍可见、动态 feed 不受影响。读取轨：归档空间可读；非成员与不存在空间不可枚举；个人空间 422。每次读取都重新校验当前成员资格。",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "未读通知与状态",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/WorkspaceNotificationView"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/workspaces/{workspaceId}/notifications/read": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/WorkspaceId"
+        }
+      ],
+      "post": {
+        "operationId": "markTeamWorkspaceNotificationsRead",
+        "summary": "把该空间的全部动态标记为已读（本人）",
+        "description": "把 last_read_at 推进到当前时间；保留关闭提醒状态。仅站内已读状态，不发送邮件/短信/外部聊天（TW-08 首版）。读取轨：归档空间可读；非成员与不存在空间拒绝。",
+        "responses": {
+          "200": {
+            "description": "已读后的状态",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/WorkspaceNotificationState"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/workspaces/{workspaceId}/notifications/mute": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/WorkspaceId"
+        }
+      ],
+      "post": {
+        "operationId": "muteTeamWorkspaceNotifications",
+        "summary": "按空间关闭提醒（本人）",
+        "description": "仅影响本人的提醒开关：关闭后未读计数为 0、不再提醒，但动态 feed 仍可见、已读状态保留。仅站内，不接入邮件/短信/外部聊天。读取轨：归档空间可读；非成员与不存在空间拒绝；个人空间 422。",
+        "responses": {
+          "200": {
+            "description": "提醒状态",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/WorkspaceNotificationState"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/workspaces/{workspaceId}/notifications/unmute": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/WorkspaceId"
+        }
+      ],
+      "post": {
+        "operationId": "unmuteTeamWorkspaceNotifications",
+        "summary": "按空间重新开启提醒（本人）",
+        "description": "仅影响本人的提醒开关：关闭后未读计数为 0、不再提醒，但动态 feed 仍可见、已读状态保留。仅站内，不接入邮件/短信/外部聊天。读取轨：归档空间可读；非成员与不存在空间拒绝；个人空间 422。",
+        "responses": {
+          "200": {
+            "description": "提醒状态",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/WorkspaceNotificationState"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1731,6 +2031,179 @@
               "disable",
               "enable",
               "upgrade"
+            ]
+          }
+        }
+      },
+      "WorkspaceActivityItem": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "actorUserId",
+          "actorDisplayName",
+          "objectType",
+          "objectId",
+          "safeMetadata",
+          "occurredAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "member_added",
+              "member_removed",
+              "member_exit",
+              "role_changed",
+              "owner_transferred",
+              "agent_member_added",
+              "agent_member_removed",
+              "file_uploaded",
+              "file_removed",
+              "file_version_added",
+              "workspace_archived",
+              "workspace_restored"
+            ]
+          },
+          "actorUserId": {
+            "type": "string"
+          },
+          "actorDisplayName": {
+            "type": "string"
+          },
+          "objectType": {
+            "type": "string",
+            "enum": [
+              "member",
+              "agent_member",
+              "file",
+              "workspace"
+            ]
+          },
+          "objectId": {
+            "type": "string",
+            "description": "安全对象引用：只有 id，读取时按当前读取轨重新解析。"
+          },
+          "occurredAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "safeMetadata": {
+            "type": "object",
+            "description": "safe_metadata：仅含全员可见的最小字段（角色、from/to、Agent id、版本号），不含文件名、正文或凭据。",
+            "additionalProperties": true
+          }
+        }
+      },
+      "WorkspaceActivityPage": {
+        "type": "object",
+        "required": [
+          "workspaceId",
+          "items",
+          "nextCursor"
+        ],
+        "properties": {
+          "workspaceId": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceActivityItem"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "WorkspaceNotificationState": {
+        "type": "object",
+        "required": [
+          "workspaceId",
+          "muted",
+          "mutedAt",
+          "lastReadAt",
+          "unreadCount"
+        ],
+        "properties": {
+          "workspaceId": {
+            "type": "string"
+          },
+          "muted": {
+            "type": "boolean"
+          },
+          "mutedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lastReadAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "unreadCount": {
+            "type": "integer",
+            "description": "last_read_at 之后的动态条数；关闭提醒时为 0。"
+          }
+        }
+      },
+      "WorkspaceNotificationView": {
+        "type": "object",
+        "required": [
+          "workspaceId",
+          "muted",
+          "mutedAt",
+          "lastReadAt",
+          "unreadCount",
+          "items",
+          "nextCursor"
+        ],
+        "properties": {
+          "workspaceId": {
+            "type": "string"
+          },
+          "muted": {
+            "type": "boolean"
+          },
+          "mutedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lastReadAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "unreadCount": {
+            "type": "integer"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceActivityItem"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
             ]
           }
         }

@@ -3,6 +3,10 @@ import { randomUUID } from 'node:crypto'
 import type { DatabaseClient, DatabaseTransaction } from '../../../infrastructure/postgres/database.ts'
 import { redactSensitiveText } from '../../../security/safe-observability.ts'
 import { authorizationDenied } from '../../authorization/authorization-errors.ts'
+import {
+  activityTransitionToken,
+  recordWorkspaceActivity,
+} from './workspace-activity-writer.ts'
 import { workspaceStateConflict } from './workspace-state-conflict-error.ts'
 
 const tenantId = 'tenant-dsh-work'
@@ -108,6 +112,21 @@ export class PostgresWorkspaceLifecycleService {
            set status = ${target}, archived_at = ${archivedAt}
          where tenant_id = ${tenantId} and id = ${workspaceId}
       `
+      // Activity in the same transaction as the status change: the early return
+      // above already makes a repeated archive/restore a no-op without a second
+      // event, and the per-transaction token keeps a genuine
+      // archive -> restore -> archive sequence distinct (the resulting status
+      // alone would repeat, so a state-only key would silently drop it).
+      const token = await activityTransitionToken(transaction)
+      await recordWorkspaceActivity(transaction, {
+        workspaceId,
+        kind: target === 'archived' ? 'workspace_archived' : 'workspace_restored',
+        actorUserId,
+        objectType: 'workspace',
+        objectId: workspaceId,
+        dedupeKey: `${target === 'archived' ? 'workspace_archived' : 'workspace_restored'}:${token}`,
+        metadata: {},
+      })
       await writeAudit(
         transaction,
         actorUserId,
