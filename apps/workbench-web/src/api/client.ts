@@ -9,11 +9,15 @@ import type {
   WorkbenchSession,
   WorkbenchSkill,
   Workspace,
+  WorkspaceActivityPage,
+  WorkspaceActivityQuery,
   WorkspaceAgentMember,
   WorkspaceFile,
   WorkspaceLifecycleResult,
   WorkspaceMember,
   WorkspaceMemberDirectory,
+  WorkspaceNotificationState,
+  WorkspaceNotificationView,
   WorkspaceSessionPage,
   WorkspaceSessionQuery,
   WorkspaceStatusFilter,
@@ -275,5 +279,52 @@ export const workbenchApi = {
     request<{ id: string; removed: true }>(
       `/workspaces/${encodeURIComponent(workspaceId)}/agent-members/${encodeURIComponent(id)}`,
       { method: 'DELETE' },
+    ),
+  /**
+   * 团队动态 feed（TW-08 / design §2.9，读取轨）。摘要传 `limit: 3`，抽屉传
+   * `limit: 20` + `cursor`。归档团队空间仍可读；个人空间服务端返回 422（AC-23），
+   * 因此调用方只在团队分支请求。
+   */
+  listWorkspaceActivity: (workspaceId: string, input: WorkspaceActivityQuery = {}) => {
+    const search = new URLSearchParams()
+    if (input.cursor) search.set('cursor', input.cursor)
+    if (input.limit !== undefined) search.set('limit', String(input.limit))
+    const suffix = search.size > 0 ? `?${search.toString()}` : ''
+    return request<WorkspaceActivityPage>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/activity${suffix}`,
+      { method: 'GET' },
+    )
+  },
+  /**
+   * 未读通知分页 + 调用者本人的静音／已读状态。`items` 是**未读**条目，未读计数
+   * 由服务端按 `last_read_at` 计算；静音时服务端报 0，但动态 feed 不受影响。
+   */
+  getWorkspaceNotifications: (workspaceId: string, input: WorkspaceActivityQuery = {}) => {
+    const search = new URLSearchParams()
+    if (input.cursor) search.set('cursor', input.cursor)
+    if (input.limit !== undefined) search.set('limit', String(input.limit))
+    const suffix = search.size > 0 ? `?${search.toString()}` : ''
+    return request<WorkspaceNotificationView>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/notifications${suffix}`,
+      { method: 'GET' },
+    )
+  },
+  /** 标记全部已读：只推进调用者本人的 `last_read_at`，归档空间同样可用。 */
+  markWorkspaceNotificationsRead: (workspaceId: string) =>
+    request<WorkspaceNotificationState>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/notifications/read`,
+      { method: 'POST' },
+    ),
+  /** 关闭提醒：不隐藏动态，只让未读计数按服务端口径归零。 */
+  muteWorkspaceNotifications: (workspaceId: string) =>
+    request<WorkspaceNotificationState>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/notifications/mute`,
+      { method: 'POST' },
+    ),
+  /** 恢复提醒。 */
+  unmuteWorkspaceNotifications: (workspaceId: string) =>
+    request<WorkspaceNotificationState>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/notifications/unmute`,
+      { method: 'POST' },
     ),
 }

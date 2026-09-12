@@ -6,7 +6,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { workbenchApi } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 import { useContentStore } from '@/stores/content'
-import type { Artifact, Workspace } from '@/types/domain'
+import type {
+  Artifact,
+  Workspace,
+  WorkspaceActivityItem,
+  WorkspaceActivityPage,
+  WorkspaceNotificationState,
+  WorkspaceNotificationView,
+} from '@/types/domain'
 import WorkspaceDetailView from './WorkspaceDetailView.vue'
 
 const router = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }))
@@ -31,6 +38,41 @@ function workspace(overrides: Partial<Workspace> = {}): Workspace {
     archivedAt: null,
     ...overrides,
   }
+}
+
+function activityItem(overrides: Partial<WorkspaceActivityItem> = {}): WorkspaceActivityItem {
+  return {
+    id: 'wact-1',
+    kind: 'file_uploaded',
+    actorUserId: 'u-1',
+    actorDisplayName: '林岚',
+    objectType: 'file',
+    objectId: 'wfile-secret-id',
+    safeMetadata: {},
+    occurredAt: '2026-09-10T08:00:00.000Z',
+    ...overrides,
+  }
+}
+
+function activityPage(items: WorkspaceActivityItem[], nextCursor: string | null = null): WorkspaceActivityPage {
+  return { workspaceId: 'ws-team', items, nextCursor }
+}
+
+function notificationView(overrides: Partial<WorkspaceNotificationView> = {}): WorkspaceNotificationView {
+  return {
+    workspaceId: 'ws-team',
+    items: [],
+    nextCursor: null,
+    muted: false,
+    mutedAt: null,
+    lastReadAt: null,
+    unreadCount: 0,
+    ...overrides,
+  }
+}
+
+function notificationState(overrides: Partial<WorkspaceNotificationState> = {}): WorkspaceNotificationState {
+  return { workspaceId: 'ws-team', muted: false, mutedAt: null, lastReadAt: null, unreadCount: 0, ...overrides }
 }
 
 async function mountView(item: Workspace, options: { ownerName?: string; artifacts?: Artifact[] } = {}) {
@@ -70,6 +112,8 @@ describe('WorkspaceDetailView 团队分支与个人空间红线', () => {
     vi.spyOn(workbenchApi, 'listMemberCandidates').mockResolvedValue({ items: [], nextCursor: null })
     vi.spyOn(workbenchApi, 'listWorkspaceAgentCandidates').mockResolvedValue({ items: [], nextCursor: null })
     vi.spyOn(workbenchApi, 'listWorkspaceSessions').mockResolvedValue({ items: [], nextCursor: null })
+    vi.spyOn(workbenchApi, 'listWorkspaceActivity').mockResolvedValue(activityPage([]))
+    vi.spyOn(workbenchApi, 'getWorkspaceNotifications').mockResolvedValue(notificationView())
   })
 
   it('renders the Agent segment for a team space and loads members via the T4 API', async () => {
@@ -247,6 +291,8 @@ describe('WorkspaceDetailView 归档只读态（design §2.7 / AC-14 / AC-23）'
     vi.spyOn(workbenchApi, 'listWorkspaceAgentMembers').mockResolvedValue([])
     vi.spyOn(workbenchApi, 'listWorkspaceMembers').mockResolvedValue({ items: [], currentUserRole: null })
     vi.spyOn(workbenchApi, 'listWorkspaceSessions').mockResolvedValue({ items: [], nextCursor: null })
+    vi.spyOn(workbenchApi, 'listWorkspaceActivity').mockResolvedValue(activityPage([]))
+    vi.spyOn(workbenchApi, 'getWorkspaceNotifications').mockResolvedValue(notificationView())
   })
 
   const archivedFile = {
@@ -369,5 +415,164 @@ describe('WorkspaceDetailView 归档只读态（design §2.7 / AC-14 / AC-23）'
 
     expect(wrapper.find('[data-testid="workspace-archived-alert"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="workspace-restore"]').exists()).toBe(false)
+  })
+})
+
+describe('WorkspaceDetailView 团队动态与通知（TW-08 / 3-T8）', () => {
+  beforeEach(() => {
+    route.params = { id: 'ws-team' }
+    route.query = {}
+    vi.spyOn(workbenchApi, 'listWorkspaceAgentMembers').mockResolvedValue([])
+    vi.spyOn(workbenchApi, 'listWorkspaceMembers').mockResolvedValue({ items: [], currentUserRole: 'owner' })
+    vi.spyOn(workbenchApi, 'listWorkspaceSessions').mockResolvedValue({ items: [], nextCursor: null })
+    vi.spyOn(workbenchApi, 'listWorkspaceActivity').mockResolvedValue(activityPage([]))
+    vi.spyOn(workbenchApi, 'getWorkspaceNotifications').mockResolvedValue(notificationView())
+    vi.spyOn(workbenchApi, 'markWorkspaceNotificationsRead').mockResolvedValue(notificationState())
+    vi.spyOn(workbenchApi, 'muteWorkspaceNotifications').mockResolvedValue(notificationState({ muted: true, mutedAt: '2026-09-10T08:00:00.000Z' }))
+    vi.spyOn(workbenchApi, 'unmuteWorkspaceNotifications').mockResolvedValue(notificationState())
+  })
+
+  it('摘要只取 3 条，未读徽标取服务端数字并在标记已读后清零', async () => {
+    vi.mocked(workbenchApi.listWorkspaceActivity).mockResolvedValue(activityPage([
+      activityItem({ id: 'a-1' }),
+      activityItem({ id: 'a-2' }),
+      activityItem({ id: 'a-3' }),
+      activityItem({ id: 'a-4' }),
+    ]))
+    vi.mocked(workbenchApi.getWorkspaceNotifications).mockResolvedValue(notificationView({ unreadCount: 4 }))
+    const { wrapper } = await mountView(workspace())
+
+    expect(workbenchApi.listWorkspaceActivity).toHaveBeenCalledWith('ws-team', { limit: 3 })
+    expect(wrapper.findAll('[data-testid="panel-activity-row"]')).toHaveLength(3)
+    expect(wrapper.find('[data-testid="panel-activity-unread"]').text()).toContain('4')
+
+    await wrapper.find('[data-testid="panel-activity-mark-read"]').trigger('click')
+    await flushPromises()
+
+    expect(workbenchApi.markWorkspaceNotificationsRead).toHaveBeenCalledWith('ws-team')
+    expect(wrapper.find('[data-testid="panel-activity-unread"]').exists()).toBe(false)
+  })
+
+  it('静音后徽标消失，但动态列表仍渲染全部条目（服务端 0 也不过滤）', async () => {
+    vi.mocked(workbenchApi.listWorkspaceActivity).mockResolvedValue(activityPage([
+      activityItem({ id: 'a-1' }),
+      activityItem({ id: 'a-2' }),
+    ]))
+    // 服务端在静音时返回 0；即便返回非 0，前端也不得显示徽标。
+    vi.mocked(workbenchApi.getWorkspaceNotifications).mockResolvedValue(
+      notificationView({ muted: true, mutedAt: '2026-09-10T08:00:00.000Z', unreadCount: 5 }),
+    )
+    const { wrapper } = await mountView(workspace())
+
+    expect(wrapper.find('[data-testid="panel-activity-unread"]').exists()).toBe(false)
+    expect(wrapper.findAll('[data-testid="panel-activity-row"]')).toHaveLength(2)
+
+    await wrapper.find('[data-testid="panel-activity-mute"]').trigger('click')
+    await flushPromises()
+
+    expect(workbenchApi.unmuteWorkspaceNotifications).toHaveBeenCalledWith('ws-team')
+    expect(wrapper.findAll('[data-testid="panel-activity-row"]')).toHaveLength(2)
+  })
+
+  it('查看全部抽屉以 limit=20 分页，并按 nextCursor 加载更多', async () => {
+    vi.mocked(workbenchApi.listWorkspaceActivity).mockImplementation(async (_workspaceId, input = {}) => {
+      if (input.limit === 3) return activityPage([activityItem({ id: 'a-summary' })])
+      if (input.cursor === 'cursor-1') return activityPage([activityItem({ id: 'a-2' }), activityItem({ id: 'a-3' })])
+      return activityPage([activityItem({ id: 'a-1' })], 'cursor-1')
+    })
+    const { wrapper } = await mountView(workspace())
+
+    await wrapper.find('[data-testid="panel-activity-view-all"]').trigger('click')
+    await flushPromises()
+
+    expect(workbenchApi.listWorkspaceActivity).toHaveBeenCalledWith('ws-team', { limit: 20 })
+    expect(wrapper.findAll('[data-testid="activity-drawer-row"]')).toHaveLength(1)
+    expect(wrapper.find('[data-testid="activity-drawer-end"]').exists()).toBe(false)
+
+    await wrapper.find('[data-testid="activity-drawer-load-more"]').trigger('click')
+    await flushPromises()
+
+    expect(workbenchApi.listWorkspaceActivity).toHaveBeenLastCalledWith('ws-team', { cursor: 'cursor-1', limit: 20 })
+    expect(wrapper.findAll('[data-testid="activity-drawer-row"]')).toHaveLength(3)
+    expect(wrapper.find('[data-testid="activity-drawer-end"]').exists()).toBe(true)
+  })
+
+  it('动态加载失败时摘要就地显示重试，重试会重新请求且不清空其它区块', async () => {
+    const listActivity = vi.mocked(workbenchApi.listWorkspaceActivity)
+    listActivity.mockRejectedValueOnce(new Error('boom'))
+    listActivity.mockResolvedValueOnce(activityPage([activityItem({ id: 'a-1' })]))
+    const { wrapper } = await mountView(workspace())
+
+    expect(wrapper.find('[data-testid="panel-activity-error"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="panel-employee-section"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="panel-agent-section"]').exists()).toBe(true)
+    expect(listActivity).toHaveBeenCalledTimes(1)
+
+    await wrapper.find('[data-testid="panel-activity-retry"]').trigger('click')
+    await flushPromises()
+
+    expect(listActivity).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('[data-testid="panel-activity-error"]').exists()).toBe(false)
+    expect(wrapper.findAll('[data-testid="panel-activity-row"]')).toHaveLength(1)
+  })
+
+  it('归档空间仍渲染动态与「标记已读／关闭提醒」入口', async () => {
+    vi.mocked(workbenchApi.listWorkspaceActivity).mockResolvedValue(activityPage([
+      activityItem({ id: 'a-1', kind: 'workspace_archived', objectType: 'workspace', objectId: 'ws-team' }),
+    ]))
+    vi.mocked(workbenchApi.getWorkspaceNotifications).mockResolvedValue(notificationView({ unreadCount: 1 }))
+    const { wrapper } = await mountView(workspace({ status: 'archived', archivedAt: '2026-09-11T00:00:00.000Z' }))
+
+    expect(wrapper.find('[data-testid="panel-activity-section"]').exists()).toBe(true)
+    expect(wrapper.findAll('[data-testid="panel-activity-row"]')).toHaveLength(1)
+    expect(wrapper.find('[data-testid="panel-activity-mark-read"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="panel-activity-mute"]').exists()).toBe(true)
+  })
+
+  it('解析不到文件名的动态显示中性占位，绝不把 objectId 当名称渲染', async () => {
+    vi.mocked(workbenchApi.listWorkspaceActivity).mockResolvedValue(activityPage([
+      activityItem({ kind: 'file_uploaded', objectId: 'wfile-secret-id' }),
+    ]))
+    const { wrapper } = await mountView(workspace())
+
+    const row = wrapper.find('[data-testid="panel-activity-row"]')
+    expect(row.text()).toContain('一个文件')
+    expect(wrapper.text()).not.toContain('wfile-secret-id')
+  })
+
+  it('个人空间不发出任何动态／通知请求（AC-23）', async () => {
+    route.params = { id: 'ws-personal' }
+    const { wrapper } = await mountView(workspace({
+      id: 'ws-personal',
+      type: 'personal',
+      owner: '周航',
+      members: ['周航'],
+      memberCount: 1,
+    }), { ownerName: '周航' })
+
+    expect(workbenchApi.listWorkspaceActivity).not.toHaveBeenCalled()
+    expect(workbenchApi.getWorkspaceNotifications).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="panel-activity-section"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('最近动态')
+  })
+
+  it('抽屉关闭按钮有 aria-label，关闭后焦点回到触发的「查看全部」按钮', async () => {
+    const { wrapper } = await mountView(workspace())
+    // happy-dom 只对已挂到 document 的元素维护 activeElement。
+    document.body.appendChild(wrapper.element)
+    const trigger = wrapper.find('[data-testid="panel-activity-view-all"]')
+    ;(trigger.element as HTMLElement).focus()
+    expect(document.activeElement).toBe(trigger.element)
+    await trigger.trigger('click')
+    await flushPromises()
+
+    const close = wrapper.find('[data-testid="activity-drawer-close"]')
+    expect(close.attributes('aria-label')).toBe('关闭全部动态')
+
+    await close.trigger('click')
+    await flushPromises()
+
+    expect(document.activeElement).toBe(trigger.element)
+    wrapper.unmount()
   })
 })

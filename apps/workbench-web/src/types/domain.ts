@@ -108,6 +108,11 @@ export interface WorkspaceFile {
   uploadedBy: string
   uploadedAt: string
   extractionStatus?: 'succeeded' | 'failed'
+  /**
+   * 逻辑文件 id（TW-07 起团队共享文件按逻辑文件聚合返回）。团队动态的
+   * `objectId` 是逻辑文件 id，前端据此从已加载文件列表解析名称，不把它当名称显示。
+   */
+  logicalFileId?: string
 }
 
 export interface Workspace {
@@ -148,6 +153,76 @@ export interface WorkspaceLifecycleResult {
 export interface WorkspaceUpdateInput {
   name?: string
   description?: string | null
+}
+
+/**
+ * 团队动态 kind 的闭合集合（迁移 0026 CHECK 约束，TW-08 / 3-T7 契约）。
+ * 服务端不返回任何名称字段：动态文案由 kind + safeMetadata + 演员名生成。
+ */
+export type WorkspaceActivityKind =
+  | 'member_added'
+  | 'member_removed'
+  | 'member_exit'
+  | 'role_changed'
+  | 'owner_transferred'
+  | 'agent_member_added'
+  | 'agent_member_removed'
+  | 'file_uploaded'
+  | 'file_removed'
+  | 'file_version_added'
+  | 'workspace_archived'
+  | 'workspace_restored'
+
+export type WorkspaceActivityObjectType = 'member' | 'agent_member' | 'file' | 'workspace'
+
+/**
+ * 一条团队动态。`objectId` 只是安全对象引用（成员／Agent／逻辑文件／空间 id），
+ * 读取时由调用方按当前读取轨重新解析；它绝不是可展示的名称。
+ */
+export interface WorkspaceActivityItem {
+  id: string
+  kind: WorkspaceActivityKind
+  actorUserId: string
+  actorDisplayName: string
+  objectType: WorkspaceActivityObjectType
+  objectId: string
+  /** safeMetadata：仅含 id／角色／版本号白名单，不含名称与正文。 */
+  safeMetadata: Record<string, unknown>
+  occurredAt: string
+}
+
+export interface WorkspaceActivityPage {
+  workspaceId: string
+  items: WorkspaceActivityItem[]
+  /** null 表示已到末尾。 */
+  nextCursor: string | null
+}
+
+/** 动态与通知分页参数；`limit` 服务端限定 1..100。 */
+export interface WorkspaceActivityQuery {
+  cursor?: string
+  limit?: number
+}
+
+/** 未读／静音状态（`POST …/notifications/read|mute|unmute` 的最小返回）。 */
+export interface WorkspaceNotificationState {
+  workspaceId: string
+  muted: boolean
+  mutedAt: string | null
+  lastReadAt: string | null
+  /** `last_read_at` 之后的动态条数；静音时为 0。 */
+  unreadCount: number
+}
+
+/**
+ * 未读通知分页：与服务端「未读」口径一致（`items` 是未读条目），并附带调用者
+ * 本人的静音与已读位置。静音不影响动态 feed。
+ */
+export interface WorkspaceNotificationView extends WorkspaceActivityPage {
+  muted: boolean
+  mutedAt: string | null
+  lastReadAt: string | null
+  unreadCount: number
 }
 
 /** 团队空间员工角色：负责人、管理员、成员、只读成员。 */

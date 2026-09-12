@@ -355,6 +355,108 @@ describe('workbench API client', () => {
     expect(archived).toEqual({ id: 'ws/team-1', status: 'archived', archivedAt: '2026-09-11T00:00:00.000Z' })
   })
 
+  it('lists team activity with limit and cursor as query parameters', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: {
+        workspaceId: 'ws/team-1',
+        items: [{
+          id: 'wact-1',
+          kind: 'member_added',
+          actorUserId: 'user-1',
+          actorDisplayName: '林岚',
+          objectType: 'member',
+          objectId: 'user-2',
+          safeMetadata: { userId: 'user-2', role: 'member' },
+          occurredAt: '2026-09-10T08:00:00.000Z',
+        }],
+        nextCursor: 'cursor-1',
+      },
+      meta: { api: 'workbench', adapter: 'postgres', timestamp: new Date().toISOString() },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const page = await workbenchApi.listWorkspaceActivity('ws/team-1', { cursor: 'cur-1', limit: 20 })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/workbench/v1/workspaces/ws%2Fteam-1/activity?cursor=cur-1&limit=20',
+      expect.objectContaining({ method: 'GET' }),
+    )
+    expect(page.items[0]).toMatchObject({ id: 'wact-1', kind: 'member_added', actorDisplayName: '林岚' })
+    expect(page.nextCursor).toBe('cursor-1')
+  })
+
+  it('omits the activity query string entirely when no paging is given', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: { workspaceId: 'ws-team-1', items: [], nextCursor: null },
+      meta: { api: 'workbench', adapter: 'postgres', timestamp: new Date().toISOString() },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await workbenchApi.listWorkspaceActivity('ws-team-1')
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/workbench/v1/workspaces/ws-team-1/activity',
+      expect.objectContaining({ method: 'GET' }),
+    )
+  })
+
+  it('loads the unread notification page with the reminder state', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: {
+        workspaceId: 'ws-team-1',
+        items: [],
+        nextCursor: null,
+        muted: true,
+        mutedAt: '2026-09-10T08:00:00.000Z',
+        lastReadAt: null,
+        unreadCount: 0,
+      },
+      meta: { api: 'workbench', adapter: 'postgres', timestamp: new Date().toISOString() },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const view = await workbenchApi.getWorkspaceNotifications('ws-team-1', { limit: 1 })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/workbench/v1/workspaces/ws-team-1/notifications?limit=1',
+      expect.objectContaining({ method: 'GET' }),
+    )
+    expect(view).toMatchObject({ muted: true, unreadCount: 0 })
+  })
+
+  it('marks notifications read and toggles the workspace reminder through POST endpoints', async () => {
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => new Response(JSON.stringify({
+      data: {
+        workspaceId: 'ws/team-1',
+        muted: String(url).endsWith('/mute'),
+        mutedAt: String(url).endsWith('/mute') ? '2026-09-10T08:00:00.000Z' : null,
+        lastReadAt: '2026-09-10T08:00:00.000Z',
+        unreadCount: 0,
+      },
+      meta: { api: 'workbench', adapter: 'postgres', timestamp: new Date().toISOString() },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await workbenchApi.markWorkspaceNotificationsRead('ws/team-1')
+    const muted = await workbenchApi.muteWorkspaceNotifications('ws/team-1')
+    const unmuted = await workbenchApi.unmuteWorkspaceNotifications('ws/team-1')
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/workbench/v1/workspaces/ws%2Fteam-1/notifications/read',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/workbench/v1/workspaces/ws%2Fteam-1/notifications/mute',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/workbench/v1/workspaces/ws%2Fteam-1/notifications/unmute',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(muted.muted).toBe(true)
+    expect(unmuted.muted).toBe(false)
+  })
+
   it('updates workspace name and clears the description with an explicit null through PATCH', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       data: {

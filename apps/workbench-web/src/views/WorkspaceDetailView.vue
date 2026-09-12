@@ -5,6 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   ArrowRight,
   ChatDotRound,
+  Close,
   Document,
   Files,
   InfoFilled,
@@ -19,17 +20,20 @@ import type {
   Artifact,
   TeamMemberRole,
   Workspace,
+  WorkspaceActivityItem,
   WorkspaceAgentMember,
   WorkspaceFile,
   WorkspaceMember,
+  WorkspaceNotificationState,
 } from '@/types/domain'
 import ConversationStarter from '@/components/ConversationStarter.vue'
 import WorkspaceMemberDialog from '@/components/WorkspaceMemberDialog.vue'
 import WorkspaceSessionHistory from '@/components/WorkspaceSessionHistory.vue'
 import WorkspaceSettingsDialog from '@/components/WorkspaceSettingsDialog.vue'
-import { WorkspaceInfoPanel } from '@dsh-work/workbench-components'
+import { WorkspaceInfoPanel, describeWorkspaceActivity } from '@dsh-work/workbench-components'
 import { downloadArtifactFile, notifyActionFailure } from '@/utils/feedback'
 import { resolveCurrentUserRole } from '@/utils/member-roles'
+import { buildActivityDisplayItems } from '@/utils/workspace-activity'
 
 type WorkspaceTab = 'conversation' | 'files' | 'artifacts'
 /** 对话页签内的视图：新对话（默认）/ 历史对话（design §2.2）。 */
@@ -68,6 +72,51 @@ const startableAgentMemberIds = computed(() => agentMembers.value
   .filter(member => member.status === 'available' && member.allowedActions.includes('start_conversation'))
   .map(member => member.id))
 const presetAgentMember = ref<WorkspaceAgentMember | null>(null)
+
+/** 摘要固定取最新 3 条；抽屉分页 20 条（design §2.9 / TW-08）。 */
+const ACTIVITY_SUMMARY_LIMIT = 3
+const ACTIVITY_PAGE_SIZE = 20
+/** 最近动态摘要（服务端 limit=3）；个人空间不请求（AC-23）。 */
+const activitySummary = ref<WorkspaceActivityItem[]>([])
+const activityLoading = ref(false)
+const activityError = ref(false)
+/** 调用者本人的未读与静音状态；null 表示尚未加载或加载失败。 */
+const notificationState = ref<WorkspaceNotificationState | null>(null)
+const notificationError = ref(false)
+const activityDrawerOpen = ref(false)
+const activityDrawerItems = ref<WorkspaceActivityItem[]>([])
+const activityDrawerCursor = ref<string | null>(null)
+const activityDrawerLoading = ref(false)
+const activityDrawerLoadingMore = ref(false)
+const activityDrawerError = ref(false)
+/** 触发「查看全部」的元素：抽屉关闭后把焦点还给它（design §4）。 */
+const activityTrigger = ref<HTMLElement | null>(null)
+
+/**
+ * 动态相关请求的世代号（摘要／通知状态／抽屉三条流各自独立）。异步回写前必须同时
+ * 比对世代号与发起时的空间 id：切换空间或连续重试时，晚到的旧响应否则会把上一个
+ * 空间的动态、未读数与静音标签写进当前视图（评审 P1-2 实测）。
+ */
+let summaryRequestSeq = 0
+let notificationRequestSeq = 0
+let drawerRequestSeq = 0
+
+type ActivityStream = 'summary' | 'notification' | 'drawer'
+
+function currentRequestSeq(stream: ActivityStream) {
+  return stream === 'summary' ? summaryRequestSeq : stream === 'notification' ? notificationRequestSeq : drawerRequestSeq
+}
+
+function isCurrentActivityRequest(seq: number, workspaceId: string, stream: ActivityStream) {
+  return seq === currentRequestSeq(stream) && workspaceId === (workspace.value?.id ?? '')
+}
+
+/** 空间切换时作废所有在途动态请求（即使切回同一个空间也不会落回旧响应）。 */
+function invalidateActivityRequests() {
+  summaryRequestSeq += 1
+  notificationRequestSeq += 1
+  drawerRequestSeq += 1
+}
 
 const requestedTab = String(route.query.tab ?? 'conversation')
 const activeTab = ref<WorkspaceTab>(
@@ -124,6 +173,25 @@ const workspaceArtifacts = computed(() =>
 )
 /** 负责人判定来自服务端角色，不在前端按创建者猜测（负责人-only 动作的唯一依据）。 */
 const isOwner = computed(() => currentUserRole.value === 'owner')
+/** 动态文件名的解析来源：已加载的空间文件列表（面板与抽屉共用）。 */
+const activityFiles = computed(() => workspace.value?.files ?? [])
+const activitySummaryItems = computed(() => buildActivityDisplayItems(activitySummary.value, activityFiles.value))
+/** 未读计数；静音时按服务端口径视为 0（面板侧再兜一层）。 */
+const activityUnread = computed(() => (notificationState.value?.muted ? 0 : notificationState.value?.unreadCount ?? 0))
+const activityMuted = computed(() => notificationState.value?.muted ?? false)
+/** 「查看全部」抽屉行：文案同样只由 kind + safeMetadata + 演员名生成。 */
+const activityDrawerRows = computed(() => activityDrawerItems.value.map((item) => {
+  const [display] = buildActivityDisplayItems([item], activityFiles.value)
+  return {
+    ...display!,
+    description: describeWorkspaceActivity({
+      kind: item.kind,
+      actorDisplayName: item.actorDisplayName,
+      safeMetadata: item.safeMetadata,
+      fileName: display?.fileName,
+    }),
+  }
+}))
 const workspaceTabs = computed(() => [
   {
     id: 'conversation' as const,
@@ -264,7 +332,161 @@ async function loadWorkspaceMembers(workspaceId = workspace.value?.id ?? '') {
   }
 }
 
+/**
+ * 最近动态摘要（服务端 limit=3）。只在团队分支调用，个人空间不产生任何动态
+ * 请求（AC-23）。失败时就地显示错误与「重试」，不清空右栏其它区块。
+ */
+async function loadActivitySummary(workspaceId = workspace.value?.id ?? '') {
+  if (!workspaceId || !isTeam.value) return
+  const seq = ++summaryRequestSeq
+  activityLoading.value = true
+  try {
+    const page = await workbenchApi.listWorkspaceActivity(workspaceId, { limit: ACTIVITY_SUMMARY_LIMIT })
+    if (!isCurrentActivityRequest(seq, workspaceId, 'summary')) return
+    const items = Array.isArray(page.items) ? page.items : []
+    activitySummary.value = items.slice(0, ACTIVITY_SUMMARY_LIMIT)
+    activityError.value = false
+  } catch (error) {
+    if (!isCurrentActivityRequest(seq, workspaceId, 'summary')) return
+    activityError.value = true
+    activitySummary.value = []
+    notifyActionFailure('加载最近动态', `工作空间“${workspace.value?.name ?? workspaceId}”`, error, '稍后点击「重试」；若仍失败，请联系工作空间管理员。')
+  } finally {
+    if (isCurrentActivityRequest(seq, workspaceId, 'summary')) activityLoading.value = false
+  }
+}
+
+/** 未读计数与静音状态；未读条目本身由抽屉的 activity feed 提供，这里只要状态。 */
+async function loadNotificationState(workspaceId = workspace.value?.id ?? '') {
+  if (!workspaceId || !isTeam.value) return
+  const seq = ++notificationRequestSeq
+  try {
+    const state = await workbenchApi.getWorkspaceNotifications(workspaceId, { limit: 1 })
+    if (!isCurrentActivityRequest(seq, workspaceId, 'notification')) return
+    notificationState.value = state
+    notificationError.value = false
+  } catch (error) {
+    if (!isCurrentActivityRequest(seq, workspaceId, 'notification')) return
+    // 保留旧值/空值并显式进入错误态：不把「加载失败」渲染成「没有未读」。
+    notificationError.value = true
+    notifyActionFailure('加载提醒状态', `工作空间“${workspace.value?.name ?? workspaceId}”`, error, '稍后点击「重试」；若仍失败，请联系工作空间管理员。')
+  }
+}
+
+/** 摘要加载失败后的原地重试（同时重取提醒状态）。 */
+function retryActivity() {
+  void loadActivitySummary()
+  void loadNotificationState()
+}
+
+/**
+ * 标记全部已读：归档空间同样可用（只写调用者本人的通知状态，属读取轨）。
+ * 成功后未读徽标归零并重新渲染。
+ */
+async function markActivityRead() {
+  const current = workspace.value
+  if (!current || !isTeam.value) return
+  const seq = ++notificationRequestSeq
+  try {
+    const state = await workbenchApi.markWorkspaceNotificationsRead(current.id)
+    if (!isCurrentActivityRequest(seq, current.id, 'notification')) return
+    notificationState.value = state
+    notificationError.value = false
+  } catch (error) {
+    if (!isCurrentActivityRequest(seq, current.id, 'notification')) return
+    notifyActionFailure('标记全部已读', `工作空间“${current.name}”的团队动态`, error, '稍后重试；若仍失败，请联系工作空间管理员。')
+  }
+}
+
+/** 关闭／恢复提醒；静音只影响徽标，绝不过滤动态列表。 */
+async function toggleActivityMute() {
+  const current = workspace.value
+  if (!current || !isTeam.value) return
+  const muted = notificationState.value?.muted ?? false
+  const seq = ++notificationRequestSeq
+  try {
+    const state = muted
+      ? await workbenchApi.unmuteWorkspaceNotifications(current.id)
+      : await workbenchApi.muteWorkspaceNotifications(current.id)
+    if (!isCurrentActivityRequest(seq, current.id, 'notification')) return
+    notificationState.value = state
+    notificationError.value = false
+  } catch (error) {
+    if (!isCurrentActivityRequest(seq, current.id, 'notification')) return
+    notifyActionFailure(muted ? '恢复提醒' : '关闭提醒', `工作空间“${current.name}”的团队动态`, error, '稍后重试；若仍失败，请联系工作空间管理员。')
+  }
+}
+
+/** 打开「查看全部」抽屉：首次打开加载第一页，并记住触发元素用于焦点恢复。 */
+function openActivityDrawer(event?: MouseEvent) {
+  activityTrigger.value = (event?.currentTarget as HTMLElement | null) ?? null
+  activityDrawerOpen.value = true
+  if (!activityDrawerItems.value.length && !activityDrawerLoading.value) void loadActivityPage()
+}
+
+/** 抽屉关闭后把焦点还给「查看全部」（design §4）。 */
+watch(activityDrawerOpen, (open) => {
+  if (open) return
+  void nextTick(() => {
+    const trigger = activityTrigger.value
+    if (trigger?.isConnected) trigger.focus()
+  })
+})
+
+/** 抽屉第一页：`limit=20`，游标分页跟随服务端 `nextCursor`。 */
+async function loadActivityPage(workspaceId = workspace.value?.id ?? '') {
+  if (!workspaceId || !isTeam.value) return
+  const seq = ++drawerRequestSeq
+  activityDrawerLoading.value = true
+  try {
+    const page = await workbenchApi.listWorkspaceActivity(workspaceId, { limit: ACTIVITY_PAGE_SIZE })
+    if (!isCurrentActivityRequest(seq, workspaceId, 'drawer')) return
+    const items = Array.isArray(page.items) ? page.items : []
+    activityDrawerItems.value = items
+    // 空首页即使带游标也视为到底：否则会出现「空列表 + 可加载更多」的死角，点下去还是空页。
+    activityDrawerCursor.value = items.length > 0 ? page.nextCursor ?? null : null
+    activityDrawerError.value = false
+  } catch (error) {
+    if (!isCurrentActivityRequest(seq, workspaceId, 'drawer')) return
+    activityDrawerError.value = true
+    activityDrawerItems.value = []
+    activityDrawerCursor.value = null
+    notifyActionFailure('加载全部动态', `工作空间“${workspace.value?.name ?? workspaceId}”`, error, '稍后点击「重试」；若仍失败，请联系工作空间管理员。')
+  } finally {
+    if (isCurrentActivityRequest(seq, workspaceId, 'drawer')) activityDrawerLoading.value = false
+  }
+}
+
+/** 追加下一页；失败时保留已加载行与游标，可再次点击「加载更多」。 */
+async function loadMoreActivity() {
+  const workspaceId = workspace.value?.id ?? ''
+  const cursor = activityDrawerCursor.value
+  if (!workspaceId || !isTeam.value || !cursor || activityDrawerLoadingMore.value) return
+  // 不递增世代号：这是对当前页的追加，必须与当前页同世代；但首页重新加载会让它作废。
+  const seq = drawerRequestSeq
+  activityDrawerLoadingMore.value = true
+  try {
+    const page = await workbenchApi.listWorkspaceActivity(workspaceId, { cursor, limit: ACTIVITY_PAGE_SIZE })
+    if (!isCurrentActivityRequest(seq, workspaceId, 'drawer')) return
+    const incoming = Array.isArray(page.items) ? page.items : []
+    const known = new Set(activityDrawerItems.value.map(item => item.id))
+    const fresh = incoming.filter(item => !known.has(item.id))
+    activityDrawerItems.value = [...activityDrawerItems.value, ...fresh]
+    const next = page.nextCursor ?? null
+    // 服务端重复给出同一游标、或本页没有新条目时视为到底：既避免重复渲染，也避免无限翻页。
+    activityDrawerCursor.value = next && fresh.length > 0 && next !== cursor ? next : null
+  } catch (error) {
+    if (!isCurrentActivityRequest(seq, workspaceId, 'drawer')) return
+    notifyActionFailure('加载更多动态', `工作空间“${workspace.value?.name ?? workspaceId}”`, error, '稍后点击「加载更多」重试。')
+  } finally {
+    if (isCurrentActivityRequest(seq, workspaceId, 'drawer')) activityDrawerLoadingMore.value = false
+  }
+}
+
 function startAgentConversation(agentMemberId: string) {
+  // 纵深防御：归档空间不得新开对话（执行轨）。右栏入口已在面板内隐藏，这里再挡一次，
+  // 避免任何其它调用路径绕过。
+  if (isArchived.value) return
   const member = agentMembers.value.find(item => item.id === agentMemberId)
   if (!member) return
   presetAgentMember.value = member
@@ -327,16 +549,42 @@ onMounted(() => {
  * 空间详情依赖 Store 里的空间对象：解析结果可能是团队或个人。团队分支在
  * 对象就绪后再加载 Agent 成员；个人空间分支不产生任何新请求（AC-23）。
  */
+/** 上一次真正加载过的空间 id：同 id 的对象替换不重复请求（规格评审 F1）。 */
+let loadedWorkspaceId: string | null = null
+
 watch(workspace, (value) => {
+  const nextId = value?.id ?? ''
+  // `onMounted` 的 `contentStore.refresh()` 会用新对象替换 store 数组，`workspace`
+  // computed 因此再次触发。同一个 id 只是同一空间的新对象，重复加载没有意义（评审
+  // F1 实测摘要与提醒状态各发 2 次请求）；只有真正的空间切换才重置状态并加载。
+  // 与 3-T3 列表筛选的「同参去重」同一思路。
+  if (nextId && nextId === loadedWorkspaceId) return
+  loadedWorkspaceId = nextId || null
+  // 先作废在途请求，再清空本地状态：否则旧响应会在清空之后落回来（评审 P1-2）。
+  invalidateActivityRequests()
   presetAgentMember.value = null
   memberDialogOpen.value = false
   settingsDialogOpen.value = false
   agentMembers.value = []
   workspaceMembers.value = []
   serverUserRole.value = null
+  activitySummary.value = []
+  activityLoading.value = false
+  activityError.value = false
+  notificationState.value = null
+  notificationError.value = false
+  activityDrawerOpen.value = false
+  activityDrawerItems.value = []
+  activityDrawerCursor.value = null
+  activityDrawerError.value = false
+  activityDrawerLoading.value = false
+  activityDrawerLoadingMore.value = false
   if (value?.type === 'team') {
     void loadAgentMembers(value.id)
     void loadWorkspaceMembers(value.id)
+    // 团队动态与通知只在团队分支加载；个人空间零请求（AC-23）。
+    void loadActivitySummary(value.id)
+    void loadNotificationState(value.id)
   }
 }, { immediate: true })
 </script>
@@ -575,11 +823,21 @@ watch(workspace, (value) => {
         :data-scopes="authStore.user.dataScopes"
         :current-user-role="currentUserRole"
         :agent-members="agentMembers"
+        :activity-items="activitySummaryItems"
+        :activity-loading="activityLoading"
+        :activity-error="activityError"
+        :notification-error="notificationError"
+        :unread-count="activityUnread"
+        :muted="activityMuted"
         collapsible
         @collapse="panelCollapsed = true"
         @manage-members="memberDialogOpen = true"
         @open-settings="settingsDialogOpen = true"
         @start-agent-conversation="startAgentConversation"
+        @view-all-activity="openActivityDrawer"
+        @mark-activity-read="markActivityRead"
+        @toggle-activity-mute="toggleActivityMute"
+        @retry-activity="retryActivity"
       />
     </aside>
 
@@ -595,10 +853,112 @@ watch(workspace, (value) => {
         :data-scopes="authStore.user.dataScopes"
         :current-user-role="currentUserRole"
         :agent-members="agentMembers"
+        :activity-items="activitySummaryItems"
+        :activity-loading="activityLoading"
+        :activity-error="activityError"
+        :notification-error="notificationError"
+        :unread-count="activityUnread"
+        :muted="activityMuted"
         @manage-members="memberDialogOpen = true"
         @open-settings="settingsDialogOpen = true"
         @start-agent-conversation="startAgentConversation"
+        @view-all-activity="openActivityDrawer"
+        @mark-activity-read="markActivityRead"
+        @toggle-activity-mute="toggleActivityMute"
+        @retry-activity="retryActivity"
       />
+    </el-drawer>
+
+    <el-drawer
+      v-model="activityDrawerOpen"
+      class="workspace-activity-drawer"
+      direction="rtl"
+      size="min(420px, 100vw)"
+      :with-header="false"
+      aria-label="全部动态"
+      :aria-labelledby="undefined"
+    >
+      <div class="workspace-activity-drawer__body" data-testid="activity-drawer">
+        <header class="workspace-activity-drawer__header">
+          <div>
+            <span>团队上下文</span>
+            <strong>全部动态</strong>
+          </div>
+          <button
+            data-testid="activity-drawer-close"
+            class="workspace-activity-drawer__close"
+            type="button"
+            aria-label="关闭全部动态"
+            @click="activityDrawerOpen = false"
+          >
+            <el-icon><Close /></el-icon>
+          </button>
+        </header>
+
+        <div class="workspace-activity-drawer__actions">
+          <el-button
+            v-if="activityUnread > 0 && !activityMuted"
+            data-testid="activity-drawer-mark-read"
+            size="small"
+            @click="markActivityRead"
+          >
+            标记全部已读
+          </el-button>
+          <el-button
+            data-testid="activity-drawer-mute"
+            size="small"
+            plain
+            @click="toggleActivityMute"
+          >
+            {{ activityMuted ? '恢复提醒' : '关闭提醒' }}
+          </el-button>
+        </div>
+
+        <el-skeleton v-if="activityDrawerLoading && !activityDrawerItems.length" :rows="6" animated />
+
+        <div
+          v-else-if="activityDrawerError && !activityDrawerItems.length"
+          data-testid="activity-drawer-error"
+          class="workspace-activity-drawer__error"
+        >
+          <p>动态加载失败</p>
+          <el-button @click="loadActivityPage()">重试</el-button>
+        </div>
+
+        <el-empty v-else-if="!activityDrawerItems.length" description="暂无团队动态" />
+
+        <div v-else-if="activityDrawerItems.length" class="workspace-activity-drawer__list">
+          <article
+            v-for="row in activityDrawerRows"
+            :key="row.id"
+            data-testid="activity-drawer-row"
+            class="workspace-activity-drawer__row"
+          >
+            <p>{{ row.description }}</p>
+            <time :datetime="row.occurredAt">{{ row.time }}</time>
+          </article>
+        </div>
+
+        <!--
+          分页脚与列表分开渲染：只要服务端还给了游标就必然给出「加载更多」出口，
+          因此空首页带游标时不会出现「有游标却无处可点」的死角；首页加载后若条目
+          为空则游标已被清空，这里也不会承诺还有更多。
+        -->
+        <div
+          v-if="!activityDrawerLoading && !activityDrawerError && (activityDrawerItems.length > 0 || activityDrawerCursor)"
+          class="workspace-activity-drawer__pager"
+        >
+          <el-button
+            v-if="activityDrawerCursor"
+            data-testid="activity-drawer-load-more"
+            :loading="activityDrawerLoadingMore"
+            @click="loadMoreActivity"
+          >
+            加载更多
+          </el-button>
+          <span v-else data-testid="activity-drawer-end">已加载全部</span>
+        </div>
+      </div>
     </el-drawer>
 
     <template v-if="isTeam">
@@ -1009,6 +1369,149 @@ watch(workspace, (value) => {
 
 :deep(.workspace-context-drawer .el-drawer__body) {
   padding: 0;
+}
+
+/* 「查看全部」动态抽屉（design §2.9）：不占第四个主内容页签。 */
+.workspace-activity-drawer__body {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  background: #fafbf9;
+}
+
+.workspace-activity-drawer__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 18px 14px;
+  border-bottom: 1px solid #e5e8e4;
+}
+
+.workspace-activity-drawer__header > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.workspace-activity-drawer__header span {
+  color: #969b97;
+  font-size: var(--dsh-font-size-micro);
+  font-weight: 650;
+  letter-spacing: 0.08em;
+}
+
+.workspace-activity-drawer__header strong {
+  margin-top: 3px;
+  color: #252825;
+  font-size: var(--dsh-font-size-body);
+  font-weight: 650;
+}
+
+.workspace-activity-drawer__close {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  color: #747a75;
+  background: transparent;
+  cursor: pointer;
+}
+
+.workspace-activity-drawer__close:hover {
+  color: #202420;
+  background: #eceeeb;
+}
+
+.workspace-activity-drawer__close:focus-visible {
+  outline: 2px solid #7bb8a6;
+  outline-offset: -2px;
+}
+
+.workspace-activity-drawer__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 18px 0;
+}
+
+.workspace-activity-drawer__list {
+  min-height: 0;
+  flex: 1;
+  margin: 12px 18px 18px;
+  overflow-y: auto;
+  border: 1px solid #e6e8e5;
+  border-radius: 11px;
+  background: #fff;
+}
+
+.workspace-activity-drawer__row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border-bottom: 1px solid #eef0ed;
+}
+
+.workspace-activity-drawer__row:last-of-type {
+  border-bottom: 0;
+}
+
+.workspace-activity-drawer__row p {
+  margin: 0;
+  color: #454a46;
+  font-size: var(--dsh-font-size-caption);
+  line-height: 1.6;
+  /* 文件名可能极长：必须就地折行，不能把抽屉撑破。 */
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.workspace-activity-drawer__row time {
+  color: #9ba09c;
+  font-size: var(--dsh-font-size-micro);
+}
+
+.workspace-activity-drawer__pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 54px;
+  border-top: 1px solid #eef0ed;
+}
+
+.workspace-activity-drawer__pager span {
+  color: #909691;
+  font-size: var(--dsh-font-size-micro);
+}
+
+.workspace-activity-drawer__error {
+  padding: 24px 18px;
+  text-align: center;
+}
+
+.workspace-activity-drawer__error p {
+  margin: 0 0 12px;
+  color: #747a75;
+  font-size: var(--dsh-font-size-caption);
+}
+
+:deep(.workspace-activity-drawer .el-drawer__body) {
+  padding: 0;
+}
+
+@media (max-width: 640px) {
+  .workspace-activity-drawer__actions {
+    flex-wrap: wrap;
+    padding: 12px 14px 0;
+  }
+
+  .workspace-activity-drawer__list {
+    margin: 12px 14px 14px;
+  }
 }
 
 @media (max-width: 1180px) {

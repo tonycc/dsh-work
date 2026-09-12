@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { ArrowRight, ChatDotRound, Cpu, FolderOpened, Lock, Setting, UserFilled } from '@element-plus/icons-vue'
 
 import { StatusTag } from '@dsh-work/ui-core'
+import { describeWorkspaceActivity, type WorkspaceActivityKind } from './workspace-activity'
 
 type TeamMemberRole = 'owner' | 'admin' | 'member' | 'viewer'
 
@@ -28,7 +30,23 @@ interface WorkspaceAgentMemberInfo {
   allowedActions?: string[]
 }
 
-withDefaults(
+/**
+ * 右栏「最近动态」摘要项（TW-08 / design §2.9）。由宿主加载并传入，面板自身不发
+ * 请求；`fileName` 由宿主从文件列表解析，解析不到时不传（显示中性占位）。
+ */
+interface WorkspaceActivityInfo {
+  id: string
+  kind: WorkspaceActivityKind
+  actorDisplayName: string
+  safeMetadata: Record<string, unknown>
+  fileName?: string
+  /** 相对时间或日期。 */
+  time: string
+  /** 原始 ISO 时间，供 `<time datetime>` 使用。 */
+  occurredAt?: string
+}
+
+const props = withDefaults(
   defineProps<{
     workspace: WorkspaceInfo
     dataScopes: string[]
@@ -37,11 +55,29 @@ withDefaults(
     currentUserRole?: TeamMemberRole | null
     /** Agent 成员摘要：由宿主按既有 T4 接口加载后传入，面板自身不发请求。 */
     agentMembers?: WorkspaceAgentMemberInfo[]
+    /** 最近动态摘要（最多 3 条）：由宿主加载后传入。 */
+    activityItems?: WorkspaceActivityInfo[]
+    /** 摘要首屏加载中。 */
+    activityLoading?: boolean
+    /** 摘要加载失败：就地显示错误与「重试」，不清空面板其它区块。 */
+    activityError?: boolean
+    /** 未读/静音状态加载失败：仍给「重试」，不把「加载失败」伪装成「没有未读」。 */
+    notificationError?: boolean
+    /** 服务端未读计数。 */
+    unreadCount?: number
+    /** 调用者本人是否关闭了该空间的提醒。 */
+    muted?: boolean
   }>(),
   {
     collapsible: false,
     currentUserRole: null,
     agentMembers: () => [],
+    activityItems: () => [],
+    activityLoading: false,
+    activityError: false,
+    notificationError: false,
+    unreadCount: 0,
+    muted: false,
   },
 )
 
@@ -54,7 +90,25 @@ const emit = defineEmits<{
    * 右栏 Agent 条目就是他们唯一可达的选择入口。不可用状态不触发。
    */
   'start-agent-conversation': [agentMemberId: string]
+  /** 打开「查看全部」动态抽屉；携带触发元素用于关闭后恢复焦点（design §4）。 */
+  'view-all-activity': [event?: MouseEvent]
+  'mark-activity-read': []
+  'toggle-activity-mute': []
+  'retry-activity': []
 }>()
+
+/** 摘要固定只展示最新 3 条（服务端以 `limit=3` 取数，这里再兜一层）。 */
+const visibleActivity = computed(() => props.activityItems.slice(0, 3))
+/**
+ * 静音后按服务端口径把未读视为 0：即使服务端仍返回数字也不显示徽标，但动态
+ * 列表一条都不过滤（TW-08「关闭提醒仍可在动态里看到」）。
+ */
+const effectiveUnread = computed(() => {
+  if (props.muted) return 0
+  const count = props.unreadCount
+  // 越界值（负数/小数/1e9/NaN）不得变成「-5 条未读」「2.5 条未读」这类文案。
+  return Number.isFinite(count) && count >= 1 ? Math.floor(count) : 0
+})
 
 function memberInitial(name: string) {
   return Array.from(name)[0] ?? '成'
@@ -64,9 +118,26 @@ function agentStatusLabel(status: WorkspaceAgentMemberInfo['status']) {
   return status === 'available' ? '可用' : '已停用'
 }
 
-/** 与服务端 allowedActions 一致：缺省视为不允许，宁可漏开不可误开。 */
+/**
+ * 与服务端 allowedActions 一致：缺省视为不允许，宁可漏开不可误开。
+ *
+ * 归档空间属执行轨（design §2.7：归档后「开始对话」必须隐藏），因此同样按服务端返回的
+ * `status` 判定——3-T3 的写入口审计漏了这一处（规格评审 F2）。成员/Agent 条目本身仍
+ * 展示（只读可看），只是不再给出可点的写入口。
+ */
 function canStartAgentConversation(agent: WorkspaceAgentMemberInfo) {
+  if (props.workspace.status === 'archived') return false
   return agent.status === 'available' && (agent.allowedActions?.includes('start_conversation') ?? false)
+}
+
+/** 只用 kind + safeMetadata + 演员名 +（可选）文件名生成描述，绝不使用 id 当名称。 */
+function activityDescription(item: WorkspaceActivityInfo) {
+  return describeWorkspaceActivity({
+    kind: item.kind,
+    actorDisplayName: item.actorDisplayName,
+    safeMetadata: item.safeMetadata,
+    fileName: item.fileName,
+  })
 }
 </script>
 
@@ -203,6 +274,97 @@ function canStartAgentConversation(agent: WorkspaceAgentMemberInfo) {
         </article>
       </div>
       <p v-else class="workspace-info-panel__empty">尚未加入 Agent</p>
+    </section>
+
+    <section
+      v-if="workspace.type === 'team'"
+      data-testid="panel-activity-section"
+      class="workspace-info-panel__section"
+    >
+      <div class="workspace-info-panel__section-heading">
+        <div>
+          <h3>最近动态</h3>
+          <span
+            v-if="effectiveUnread > 0"
+            data-testid="panel-activity-unread"
+            class="workspace-info-panel__unread"
+            role="status"
+            aria-live="polite"
+          >{{ effectiveUnread }} 条未读</span>
+          <span v-else-if="muted" class="workspace-info-panel__muted-note">已关闭提醒</span>
+        </div>
+        <button
+          data-testid="panel-activity-view-all"
+          class="workspace-info-panel__link"
+          type="button"
+          @click="emit('view-all-activity', $event)"
+        >
+          查看全部
+        </button>
+      </div>
+
+      <div class="workspace-info-panel__activity-actions">
+        <button
+          v-if="effectiveUnread > 0"
+          data-testid="panel-activity-mark-read"
+          class="workspace-info-panel__link"
+          type="button"
+          @click="emit('mark-activity-read')"
+        >
+          标记全部已读
+        </button>
+        <button
+          data-testid="panel-activity-mute"
+          class="workspace-info-panel__link"
+          type="button"
+          @click="emit('toggle-activity-mute')"
+        >
+          {{ muted ? '恢复提醒' : '关闭提醒' }}
+        </button>
+      </div>
+
+      <el-skeleton
+        v-if="activityLoading && !activityItems.length"
+        class="workspace-info-panel__activity-skeleton"
+        :rows="3"
+        animated
+      />
+
+      <div
+        v-if="activityError || notificationError"
+        data-testid="panel-activity-error"
+        class="workspace-info-panel__activity-error"
+      >
+        <span>{{ activityError ? '动态加载失败' : '提醒状态加载失败' }}</span>
+        <button
+          data-testid="panel-activity-retry"
+          class="workspace-info-panel__link"
+          type="button"
+          @click="emit('retry-activity')"
+        >
+          重试
+        </button>
+      </div>
+
+      <ul v-if="visibleActivity.length" class="workspace-activity-list">
+        <li
+          v-for="item in visibleActivity"
+          :key="item.id"
+          data-testid="panel-activity-row"
+          class="workspace-activity"
+        >
+          <span class="workspace-activity__text">{{ activityDescription(item) }}</span>
+          <time class="workspace-activity__time" :datetime="item.occurredAt">{{ item.time }}</time>
+        </li>
+      </ul>
+
+      <p
+        v-else-if="!activityLoading && !activityError && !notificationError"
+        data-testid="panel-activity-empty"
+        class="workspace-info-panel__empty"
+      >
+        暂无团队动态
+      </p>
     </section>
 
     <div v-if="workspace.type === 'team' && currentUserRole === 'owner'" class="workspace-info-panel__settings">
@@ -505,6 +667,69 @@ function canStartAgentConversation(agent: WorkspaceAgentMemberInfo) {
 
 .workspace-info-panel__empty {
   margin: 10px 0 0;
+  color: #9ba09c;
+  font-size: var(--dsh-font-size-micro);
+}
+
+/* 最近动态：未读徽标、已读／静音入口与摘要列表（design §2.9）。 */
+.workspace-info-panel__section-heading .workspace-info-panel__unread {
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: #1c5c49;
+  background: #e8f4ef;
+  font-weight: 650;
+}
+
+.workspace-info-panel__activity-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.workspace-info-panel__activity-skeleton {
+  margin-top: 8px;
+  padding: 2px;
+}
+
+.workspace-info-panel__activity-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 9px 10px;
+  border-radius: 9px;
+  color: #a04b52;
+  background: #fdf1f2;
+  font-size: var(--dsh-font-size-micro);
+}
+
+.workspace-activity-list {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workspace-activity {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.workspace-activity__text {
+  color: #454a46;
+  font-size: var(--dsh-font-size-micro);
+  line-height: 1.55;
+  /* 文件名来自服务端数据，可能极长；必须就地折行，不能撑破右栏。 */
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.workspace-activity__time {
   color: #9ba09c;
   font-size: var(--dsh-font-size-micro);
 }
