@@ -356,6 +356,7 @@
 - **F5（记录，服务端，超出本任务）**：与质量评审同一项（`content-routes.ts` 的 `slice(0,500)` 仍可能截出孤立代理半区），客户端修复后员工端已无法触发；本任务禁改后端，留给后续。
 - **针对「父代理声称的每项修复削弱即变红」**：规格评审明确说明它没有重做逐条反证，只用自有探针独立证明 R1 行为；本记录中标注为「反证」的条目均由父代理在提交前实跑过（削弱→变红→还原），未跑到的（F4）已如实写明。
 - **本轮回归**：`pnpm test:m5:frontend` workbench **21 files / 232 passed**、admin 6 files / 18 passed；`pnpm typecheck`、`pnpm lint`、`pnpm verify` 通过。
+- **提交与 CI（2026-09-12）**：`6b7ee4b`（`feat(workbench-web),docs: TW-07 前端版本 UI（3-T9）`）已推送 `main`，CI `M6 quality gate`（run `34670359884`）通过。
 
 ## 3. 顺序与依赖
 
