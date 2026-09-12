@@ -126,3 +126,11 @@
 - **OIDC 真模式的非破坏性验证**：在备用端口起一份 `.env` OIDC 后端（用完即杀，未动共享进程）——`Host: localhost:4174` 调 `/auth/workbench/login` → **302** 到 AI Hub authorize 且回调 `http://localhost:4190/auth/workbench/callback` 被接受；`Host: 127.0.0.1:4174` → 失败（内部 421 `unknown_request_origin`）。**结论：回调白名单本身正确、无需新增外部登记；真 OIDC 模式下 headless e2e 仍卡在「需要已登录的 AI Hub 身份」，属环境依赖而非代码缺陷**，未为绕过鉴权改任何配置。
 - **前端测试超时/抖动**：两个前端 `vitest.config.ts` 各加 `testTimeout: 20_000`、`hookTimeout: 20_000`（只放宽墙钟预算，不放宽断言、不用 bail/重试）；`WorkspaceMemberDialog.test.ts` 的三处固定 `setTimeout(…, 350)` 改为 `vi.waitFor(…, { timeout: 5_000 })`（对应组件 300ms 防抖），断言一个未删。**实测**：该文件改造后为 **21 个用例**（5-T2 又加一条），负载下单用例 4–13s，直接解释了此前的 `Test timed out in 5000ms`；workbench-web **24 files / 269 tests 全过**（两位评审复测一致：24/269；admin-web 10 files/33）。
 - **脏树噪声（非本任务）**：`pnpm lint`/`typecheck`/`verify` 与 admin-web 套件的失败点全部在并行工作流的在途文件（`main.ts`、`manifest-compiler.ts`、`skill-package*.ts`、`admin-assistant-plan.md` 断链、`AdminAssistantView.test.ts`/`App.test.ts`）。只 lint/typecheck 本任务文件为 0 错。
+
+## 8. 提交、最终验收与仍开放项（2026-09-12）
+
+- **提交 `8af73f9`**（`feat(server),feat(workbench-web),test(scripts),docs: 遗留清理与工程卫生（5-T1…5-T5）`）已推送 `main`，CI `M6 quality gate`（run `34681996343`）**通过**。
+- **干净工作树最终验收**（`git worktree` 于该提交，排除并行工作流在途文件）：`pnpm verify` 5 组通过、`pnpm typecheck` 三工程通过、**28 个服务端集成套件全绿**（含 `workspace:upgrade` **4/4**、`usage` 16/16、`activity` 22/22、`members` 37/37、`agent-members` 20/20、`revocation` 29/29）、前端 **workbench 24 files/269 + admin 6 files/18**、eslint 全量 0 错、架构与两端 UI 契约通过。
+- **提交卫生**：`docs/README.md` 与 `postgres-conversation-repository.ts` 与并行工作流交织，用 **hunk 级 patch** 只纳入本包的行（对方的 `sessions.audience` 改动与其 0027/0029 迁移**不在本提交内**，工作树里原样保留）。
+- **仍开放（不在本包）**：归档空间 pending 撤权事件无归宿、清扫器关闭竞态；授权服务允许清单之外仍有裸 Error 依赖文案分类（含 `postgres-authorization-service.ts:661` 的「工具不存在、未发布…」语义上是拒绝却落 404）；TW-09 其余四项（产品决定不做）；发布与部署；A/B/C/D 四账户人工验收；TW-07 的 AC-29 规模基线重测。
+- **并行工作流需要自行处理的两件事（会挂共享门禁）**：① `0027_admin_skill_installation.sql` 与 `0029_admin_session_workspace_constraint.sql` 都**不可重放**（`add column audience` 缺 `if not exists`），且都会 `alter column workspace_id drop not null`（破坏 0013 基线检查与 AC-27 断言），两者还互相依赖（只隔离 0027 会 `column "audience" does not exist`）——他们若这样提交，`team-workspace-upgrade.integration.test.ts` 会红。② 他们的 WIP 前端用例（`AdminAssistantView.test.ts`/`App.test.ts`）当前有断言失败。
