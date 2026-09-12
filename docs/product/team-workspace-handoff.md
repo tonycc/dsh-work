@@ -1,8 +1,8 @@
 # 团队工作空间实施交接文档
 
 **交接时间：** 2026-09-11  
-**分支：** `main`（1A 已合并推送至 `ffed4f4`；`feat/team-workspace` 已删除）  
-**目的：** 供接手的其他 agent/会话从此状态继续批次 1B 工作。本文是当前进度的事实快照；产品语义以 `team-workspace-plan.md` 为准（该方案已于 2026-09-11 按产品决定收敛范围，见 §6.1）。
+**分支：** `main`（已推送至 `5058f73`；1A、1B 与批次 3 的 TW-06 均已合入）  
+**目的：** 供接手的其他 agent/会话从此状态继续批次 3 剩余工作（TW-07 文件更新与版本、TW-08 团队动态与通知）。本文是当前进度的事实快照；产品语义以 `team-workspace-plan.md` 为准（该方案已于 2026-09-11 按产品决定收敛范围，见 §6.1；归档语义见 §7）。
 
 ## 1. 文档地图（必读顺序）
 
@@ -29,7 +29,8 @@
 | 测试基础设施 | ✅ 全部 **24 个**集成套件改为一次性库（`test-database.ts` 的 `createThrowawayDatabase()`），消除共享库污染 | `c97db7b` |
 | **1B 团队资料与本人对话** | 🚧 **进行中**：T1、T3 已交付；T2 已取消；剩余 T4（结果读取收权）、T5（可见统计性能基线）。范围＝TW-03 本人历史列表、TW-05、团队 Session 分页、文件／SSE 收权、可见统计性能基线 | `dfeb1f1`、`c196c82` 等 |
 | 2A / 2B | ❌ **已放弃** | 产品确认取消，不再交付 |
-| 3 持续使用完善 | 🚧 **进行中**（TW-06 优先；3-T1 归档读/执行双轨已交付，见 §6.4） | 任务拆分见 `team-workspace-batch-3-tasks.md` |
+| **TW-06 归档语义与生命周期（批次 3 第一部分）** | ✅ **已交付并合入 main**：3-T1 授权双轨 → 3-T2 归档/恢复 API → 3-T3 前端归档体验 → 3-T4 集成验证与真实 DSH e2e → 3-T5 文档收尾 | `58514a2`、`46fecb0`、`befb7c9`、`5058f73` |
+| TW-07 文件更新与版本 / TW-08 团队动态与通知 | ⬜ 未拆分（批次 3 剩余范围） | 见 `team-workspace-batch-3-tasks.md` |
 | TW-09 | ⬜ 未开始 | — |
 
 **T6/T7 评审结论与关键技术结论（2026-09-10）：**
@@ -207,7 +208,24 @@ WIP 首次运行是 **16 个用例 8 失败**，修复分两类：
 - **符合性评审修复（2026-09-11）**：① `GET /workspaces/:id/files` 路由闸门原在执行轨，归档现任成员被 403、服务层读轨不可达——已改为同轨，并补 HTTP 级用例（服务层直调测试曾给假绿）；② `POST /sessions/:sessionId/files` 不校验 workspace 状态，归档空间上传返回 201——已补 `requireActiveWorkspace`；③ 团队会话接口对「不存在空间」返回 422、存在空间 403，可枚举——已统一为同一 typed 拒绝，并把不变量（活跃/归档/不存在三者同状态码）固化进测试；④ 身份校验与空间访问拒绝改为 `authorizationDenied(...)`，消除「含『不存在』被归 404」的错分。
 - **契约**：`docs/contracts/openapi-workbench.json` 为运行详情、SSE、团队会话列表、共享文件列表补充 3-T1 读取轨说明；`pnpm verify` 通过。
 
-## 7. 工程约定
+## 7. TW-06 归档语义与生命周期（批次 3 第一部分，已合入 main）
+
+**交付记录（2026-09-11）**：4 个提交 —— `58514a2`（3-T1 授权双轨）、`46fecb0`（3-T2 归档/恢复 API）、`befb7c9`（3-T3 前端归档体验）、`5058f73`（3-T4 集成验证与真实 DSH e2e + 文档）。3-T5 文档收尾即本节与方案/设计/任务文档的同步。
+
+**归档语义（产品确认：只读保留）**：归档后现任成员仍可按各自权限查看会话、文件、成果与历史运行并下载；新对话、续写、重试、上传、成员与 Agent 变更、设置修改一律拒绝；失权成员仍拒绝；归档空间仍允许紧急撤权与负责人转交（治理例外）。
+
+**交付内容**：
+- **授权双轨（3-T1）**：原先同时管读与执行的 `w.status='active'` 拆成执行轨（active-only）与读取轨（active+archived，现任成员）；放宽一律按调用点 opt-in，默认仍执行语义。
+- **归档/恢复 API（3-T2）**：`POST /workspaces/:id/archive|restore`（仅负责人、事务内、审计事实、运行中 409 提示等待或取消）；`GET /workspaces` 补 `status`/`archivedAt`、`owner` 改为当前负责人、`?status=active|archived|all`（默认 all）。空间设置补 `PATCH /workspaces/:id`（1A 遗留）。
+- **并发保护**：归档与开跑/重试/领取共用同一把 `workspaces` 行锁（锁序 workspaces → sessions/run_attempts/runs/runtimes）；**并修正一处既有死锁**（成员增删/改角色与转交锁序相反，实测 39/40 次 40P01 → HTTP 500）。
+- **前端归档体验（3-T3）**：列表「全部/活动/已归档」筛选（含键盘与深链）、归档卡片与空态、归档详情只读提示条 + 负责人「恢复空间」、隐藏全部写入口（详情页 + 成员/Agent 弹窗 + 全局新对话空间选择器 + 侧栏会话删除）。
+- **验证（3-T4）**：`test:m5:lifecycle:integration`（20 用例，含 5 条判别性并发用例）已在 `server/package.json`、根 `package.json`、`.github/workflows/ci.yml` 三处登记；真实 DSH e2e 追加归档环节，实测读取轨可用、执行轨被拒且不落库。
+
+**评审轮次**：每个任务都走「实现 → 规格符合性评审 → 对抗性质量评审 → 修复 → 复审」。抓出的实质问题包括路由闸门错档导致归档读轨不可达、会话附件上传在归档空间返回 201、空间存在性可枚举、授权缓存状态轨洞、**并发用例不具鉴别力（删掉行锁仍全绿）**、成员变更 TOCTOU、排队期间归档的调度器不收敛、写入口审计遗漏（成员/Agent 弹窗、composer、侧栏删除）。关键回归断言均做过反证。
+
+**AC-23 例外（产品已确认接受）**：团队会话分页在个人空间上的状态码由 422 改为 403，与「空间不存在/非成员」一致，以消除用状态码枚举空间是否存在的差异；个人空间功能行为不变，其余团队专用接口仍 422。
+
+## 8. 工程约定
 
 - **测试数据库**：本机 docker 容器 `dsh-work-postgres-local`，端口 15433，`postgres://dsh_work:change-me@127.0.0.1:15433/postgres`。`DSH_WORK_TEST_DATABASE_URL` 必须显式传入（`.env` 只配了 `DSH_WORK_DATABASE_URL`，未配它时集成套件会以「DSH_WORK_TEST_DATABASE_URL 未配置」直接失败）：`DSH_WORK_TEST_DATABASE_URL='postgres://dsh_work:change-me@127.0.0.1:15433/postgres'`，只需指向该实例的 `postgres` 维护库；**全部 24 个集成套件**（`server/src/**/*integration.test.ts`，含 `modules/identity/identity.integration.test.ts`）统一通过 `server/src/infrastructure/postgres/test-database.ts` 的 `createThrowawayDatabase()` 各自创建、迁移、销毁一次性库，因此不再有共享库历史污染问题——此前「**不要**对共享 dev 库 `dsh_work` 跑 T2 套件（历史污染导致误失败）」的警告已随该迁移失效。**新增集成套件请直接用该 helper，不要再直连共享库。**
 - **验证命令**：`pnpm verify`（文档/契约静态检查，改 OpenAPI 后必跑）、`pnpm lint`（含 architecture 与 UI 校验）、`pnpm --filter @dsh-work/server typecheck`。测试脚本已并入 server/package.json 与根 package.json（`test:m4:team-auth:integration`、`test:m5:workspace:integration`、`test:m5:members:integration`、`test:m5:agent-members:integration` 等）。
@@ -215,10 +233,10 @@ WIP 首次运行是 **16 个用例 8 失败**，修复分两类：
 - **工作流**：subagent-driven-development——实现子代理（TDD，先红后绿）→ 规格符合性评审（独立验证、重跑测试）→ 代码质量评审（对抗性验证，前序任务靠它抓到 6 个并发类缺陷）→ 修复 → 复审。评审不可跳过；本批次每个任务的修复轮都来自评审发现。
 - **个人空间零改动**是贯穿所有任务的验收红线（AC-23）。
 
-## 8. 1A 退出条件（已达成）
+## 9. 1A 退出条件（已达成）
 
 - 两名员工和一个 Agent 可协作 ✅：员工成员 API（T3）+ Agent 成员 API（T4）+ 名册接口 + 员工端成员管理与 Agent 发起入口（T6）。
 - 多 Agent 共享授权不误删（AC-26）✅：`workspace_grant_sources` 多来源、撤销单来源不误删（`workspace-agent-member-api` 用例）、legacy 对账后保留共享工具授权（T7）。
 - Agent 或员工收权能阻止新增、排队和后续交付（AC-09）✅：撤权清扫 + 执行前复核 + 系统取消 + SSE 逐批拦截 + REST 详情/列表/取消读取拦截（T5 及其评审修复）。
 
-以上三条由 `pnpm verify` 的 `team-workspace-1a` 检查组锁定证据锚点（契约路径、迁移、关键用例），任一处被删或改名即失败。`team-workspace-plan.md` 第 10 节已同步交付状态；下一批为 1B（见 §6）。
+以上三条由 `pnpm verify` 的 `team-workspace-1a` 检查组锁定证据锚点（契约路径、迁移、关键用例），任一处被删或改名即失败。`team-workspace-plan.md` 第 10 节已同步交付状态。后续进度：1B 已交付（见 §6）；批次 3 的 TW-06 已交付（见 §7），TW-07／TW-08 待拆分。
