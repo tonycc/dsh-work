@@ -1,0 +1,26 @@
+name: Review batch01 source validation
+on:
+  push:
+    branches:
+      - codex/review-batch01-validation-20260918
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout reviewed baseline
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 3015d24161cbb30ef6591db1a6ee4a54c9546223
+          persist-credentials: false
+      - name: Archive tracked source only
+        run: git archive --format=tar --output=reviewed-source.tar HEAD
+      - name: Upload reviewed source
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: reviewed-source-3015d241
+          path: reviewed-source.tar
+          retention-days: 1
+          if-no-files-found: error
