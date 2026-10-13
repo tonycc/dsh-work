@@ -39,3 +39,11 @@ E2E 证据按层级区分，不相互替代：
 - DSH 不可用时明确报告不可用，禁止自动降级为直接调用模型的 Agent 路线。测试替身仅用于测试和原型，不得成为生产备用执行引擎。
 
 详细职责及评审要求以架构总览的“Agent 执行引擎统一”章节为准；新增方案、代码与文档必须遵守该约束。
+
+## Cursor Cloud specific instructions
+
+- 登录 shell 里的 `node` 与 `pnpm` 应分别为 22.19.0 与 11.7.0，与 CI 的 Node 版本和根目录 `packageManager` 一致。若 `node -v` 低于 22.19，改用 `$HOME/.local/node-v22.19.0/bin` 下的二进制。
+- 依赖、Playwright Chromium 与 PostgreSQL 17 已在环境安装阶段准备好。每次开机由 `start` 启动数据库，并以原型模式拉起后端、员工端和管理端：`NODE_ENV=development`、`DSH_WORK_AUTH_MODE=prototype`、空的 `DSH_WORK_DATABASE_URL`、`DSH_WORK_SERVER_HOST=127.0.0.1`。
+- 员工端是 `http://localhost:4174/workbench`，管理端是 `http://localhost:4180/overview`，健康检查是 `http://localhost:4190/health`。原型模式使用内存数据和受控身份，创建对话会返回「当前对话服务不可用」；这是未配置对话执行服务时的预期结果。
+- 隔离集成测试使用 `DSH_WORK_TEST_DATABASE_URL=postgres://dsh_work:ci_only_password@127.0.0.1:5432/postgres`。该口令与 CI 工作流相同，只用于本机可丢弃库，各套件会自建一次性库。
+- 此环境不包含真实 DSH 或 AI Hub OIDC。原型模式不能当作生产执行链路。
