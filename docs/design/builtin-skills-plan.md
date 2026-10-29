@@ -1,7 +1,7 @@
 # 平台内置 Skill 方案
 
-**状态：** 待评审，尚未实施。本文所述能力在实施并通过第 9 节验收前均不可用；当前平台没有内置 Skill，所有 Skill 都由管理员安装发布，经 Agent 版本固定或员工在 Skill 广场选择后才进入运行。<br>
-**更新日期：** 2026-10-29<br>
+**状态：** 已实施（代码级）。P0 浏览器冒烟与 P1 集成测试已覆盖第 9 节的管理端与装配旅程；真实 DSH 下的产出质量（P2，验收目录 `BSK-P2`）与第 7 节的对比评测尚未执行，不能据此宣称内置 Skill 已提升真实产出。现行规则以[功能规则 5.5](../development/feature-rules.md#55-平台内置-skill)为准。<br>
+**更新日期：** 2026-10-29（实施时将交付方式由“同步进 Skill 表”改为“内联装配”，见 5.1）<br>
 **依据：** 当前 Skill 安装与运行代码（`skill-package.ts`、`postgres-skill-service.ts`）、Agent 运行快照（`postgres-agent-service.ts` 的 `getRuntimeSnapshot`）、员工侧派发（`attempt-dispatcher.ts`）、Manifest 编译（`manifest-compiler.ts`）、Runtime Adapter 的 Skill 目录注入（`dsh-acp-runtime-adapter.ts`）与执行容器工具链（`execution-toolchain.ts`）。
 
 ## 1. 背景与目标
@@ -27,6 +27,7 @@
 | BS1 | 内置 Skill 更新后，Agent 已有验证结果是否作废 | **不作废，随代码发布生效**，与内置工具注册表一致；每个 Attempt 记录实际使用的 `id@version`，可追溯；每次发布前跑内置 Skill 评测（第 7 节） |
 | BS2 | 用户 Skill 怎样覆盖内置 Skill | **按声明确定性覆盖**：管理员在 Skill 上标记“覆盖内置场景”，运行中有该 Skill 时去掉对应内置 Skill；未标记时两者并存，由目录说明引导模型优先使用专门 Skill |
 | BS3 | 首批范围 | **文件分析、HTML 页面、Office 文档**三个 |
+| BS4 | 交付方式（实施时调整） | **内联装配**：不写入 Skill 表，从代码注册表以内联 Skill 写入 Manifest。原方案“启动同步进 Skill 表”需要为十余处 inner join 用户表、带发布/回滚/停用逻辑的 Skill 查询逐一放行或拦截，回归面大；内联 Skill 是 Manifest 已有的正式形式（[Agent 设计规范第 2 节](../development/agent-design-standard.md)“内联与外置 Skill … 同一契约下的两种显式形式”），激活、文件落盘与激活记录均已支持 |
 
 ## 3. 边界
 
@@ -42,21 +43,22 @@
 | --- | --- | --- |
 | Skill 以渐进式目录进入系统提示，每个只占一行，调用 `activate_skill` 才加载正文 | `dsh-acp-runtime-adapter.ts` 中“可用 Skill 目录”段落 | 为所有员工侧运行增加三个内置 Skill，平时只多三行目录 |
 | `activate_skill` 仅在本次有 Skill 时装配 | `attempt-dispatcher.ts` 的 `toolNames` | 内置 Skill 生效后，员工侧运行基本都会装配 `activate_skill` |
-| Agent 固定 Skill 与会话选择 Skill 在 `mergeSkillReferences` 合并，再校验已发布并解析为运行快照 | `postgres-agent-service.ts` 的 `getRuntimeSnapshot` | 内置 Skill 在同一处合并，复用发布校验、工具闭包检查和正文解析 |
+| Agent 固定 Skill 与会话选择 Skill 在 `mergeSkillReferences` 合并，再校验已发布并解析为运行快照 | `postgres-agent-service.ts` 的 `getRuntimeSnapshot` | 快照额外返回这些 Skill 的“覆盖内置场景”；内置 Skill 不经发布校验，在派发时合并 |
 | Manifest 编译时目录名称（`name ?? id`）重复直接抛错 | `manifest-compiler.ts` | 内置 Skill 必须使用保留名称，安装时拒绝同名，否则相关 Agent 的所有运行都会失败 |
 | 严格激活证据只在 `admin-skill-test` 中要求；Agent 发布验证不检查每个 Skill 是否激活 | `admin-skill-installation-service.ts`、功能规则 5.3、第 9 节 | 内置 Skill 没被用到不会让 Agent 验证失败 |
-| `skills.owner_user_id` 非空且外键到 `users`；表中没有来源字段 | 迁移 `0001_m2_platform.sql` | 需要迁移增加来源，并允许内置 Skill 不挂具体用户 |
+| Manifest 支持内联 Skill（正文与文件内容随 Manifest 写入并持久化在 `run_attempts.manifest`），激活记录表 `skill_runtime_activations` 不外键到 Skill 表 | `manifest-compiler.ts`、`dsh-acp-runtime-adapter.ts`、迁移 `0030` | 内置 Skill 无需写入 Skill 表即可装配、激活、留证（BS4） |
 | SKILL.md frontmatter 中未识别的键被忽略 | `skill-package.ts` 的 `parseEntry` | 覆盖声明不放进第三方包，改为平台侧配置（5.4） |
 | 执行容器探测 pandoc、LibreOffice、python3 及 pandas、openpyxl、python-docx、python-pptx，均为可选，结果写入 Runtime 说明 | `execution-toolchain.ts` | Office 与 HTML 基线可行，但 Skill 正文须先看 Runtime 说明再选工具，缺失时降级 |
 
 ## 5. 方案
 
-### 5.1 交付与同步
+### 5.1 交付与加载
 
-- 内置 Skill 放在仓库 `server/builtin-skills/<key>/` 下，每个目录是一个符合[功能规则 5.2](../development/feature-rules.md#52-包规则)的 Skill 包（`SKILL.md` 及可选参考文件），随代码发布。代码中另有一份内置 Skill 注册表，声明 `key`、覆盖场景和目录名称；注册表是唯一来源，与内置工具注册表同一治理方式。
-- 服务启动时按租户同步：用现有包解析与校验逻辑读取每个目录，写入现有内容寻址存储（`skills/packages/<name>/<sha256>/`），在 `skills` / `skill_versions` 中创建或复用对应记录，状态直接为 `published`。版本号取 frontmatter 的 `version`；同一版本号对应的内容摘要变化时启动失败（防止原地改写已发布内容），内容变化必须升版本号。旧版本保留，供历史 Attempt 追溯。
-- 同步失败（包不合法、版本冲突、存储不可写）属于发布缺陷，服务启动检查失败并说明原因，不静默跳过；CI 中对每个内置 Skill 跑包解析测试，提前发现问题。
-- 迁移：`skills` 增加 `source`（`installed` | `builtin`，既有数据为 `installed`）；`source = 'builtin'` 时 `owner_user_id` 可为空。内置 Skill 的 `key` 使用保留前缀 `dsh-work-`，目录名称使用保留名称（如“文件分析（平台内置）”）；三个安装入口在解析阶段拒绝保留前缀与保留名称。
+- 内置 Skill 放在仓库 `server/config/builtin-skills/<id>/` 下，每个目录是一个符合[功能规则 5.2](../development/feature-rules.md#52-包规则)的 Skill 包（`SKILL.md` 及可选参考文件），随代码与发布包（`scripts/release/build-release.sh`）发布。代码注册表（`server/src/modules/skill/builtin-skills.ts`）声明 ID、场景与加载规则，是唯一来源，与内置工具注册表同一治理方式。
+- 不写入 `skills` / `skill_versions`（BS4）。服务启动时加载并校验：用现有包解析逻辑读取 `SKILL.md`，要求 `version` 为 `x.y.z`、名称以“（平台内置）”结尾、只声明读工具；`versions.lock.json` 固定每个版本的内容摘要，同一版本号内容变化或缺少摘要时加载失败、服务不启动，内容变化必须升版本号并追加摘要。单元测试在 CI 中先行发现这类问题。
+- 每次运行把正文与文件以内联 Skill 写入 Manifest，Manifest 持久化在 Attempt 上，历史版本因此可追溯，无需保留旧版本文件。
+- 保留值：ID 前缀 `dsh-work-`（已安装 Skill 的 ID 由平台生成为 `skill-…`，不会冲突）与名称后缀“（平台内置）”；三个安装入口与旧文本创建接口拒绝以该后缀结尾的名称。历史数据中若已有与内置 Skill 同名的已安装 Skill，运行时视为覆盖，避免 Manifest 目录重名。
+- 迁移 `0104` 只新增两项平台配置：`skills.covered_builtin_scenarios`（5.4）与 `runtime_configurations.disabled_builtin_skills`（5.3）。
 - 内置 Skill 在管理端只读：不能编辑、上传新版本、发布、回滚或删除；唯一的运维动作是 Runtime 紧急停用（5.3）。
 
 ### 5.2 包内容约定
@@ -69,8 +71,8 @@
 
 - **装配位置：** 只在员工侧派发（`AttemptDispatcher.dispatch`，覆盖对话、定时任务和 `agent-release-trial`）合并内置 Skill；系统与管理运行另行编译 Manifest，不装配。发布试运行也装配，保持“验证与生产一致”（[功能规则第 9 节](../development/feature-rules.md#9-agent-验证与发布)）。
 - **解析顺序：** 本次内置 Skill 集合 = 注册表中的内置 Skill − Runtime 紧急停用的 − 被本次 Skill 覆盖的（5.4）。结果在 Agent 固定 Skill 与会话选择 Skill 之后合并，目录中排在最后。
-- **固定与追溯：** 内置 Skill 与其他 Skill 一样写入 Manifest 的 `skills` 与 `agent_configuration.skill_instructions`（`id@version`），激活时照常写入 `skill_runtime_activations`。被覆盖而去掉的内置 Skill 记录在 Manifest 新增的可选字段中（内置 Skill 引用与覆盖它的 Skill 引用），使“为什么这次没有内置 Skill”可查；该字段同步 `runtime-manifest.schema.json`、编译器与 Adapter。
-- **授权与复核：** 内置 Skill 与内置工具一样由平台提供，不需要 Skill 授权，也不需要项目空间的能力授权（[功能规则 3.3](../development/feature-rules.md#33-agent-成员)：空间授权只包含 Agent 与 Skill，指管理员安装的 Skill），不进入、也不改变 Agent 依赖闭包与空间授权快照。现有代码中，派发时的 `authorizeRuntime` 和执行前复核（`current-execution-authorization.ts`、`postgres-authorization-service.ts` 中由 Manifest 重建 `additionalSkillReferences` 的路径）会把 `manifest.skills` 全部当作附加 Skill，经 `assertAgentDependencyClosure` 和团队空间 `requireWorkspaceCapabilities` 校验；内置 Skill 若原样进入这条路径，团队空间运行会因“工作空间未授权 Skill”被拒绝。实施时这两处先按来源分离：非内置 Skill 照常走依赖闭包与空间授权；内置 Skill 只核对仍是当前代码注册的内置版本、来源为 `builtin` 且未被紧急停用，不满足时按紧急停用语义处理，不使整次复核失败。复核其余项（身份、成员、文件、数据范围）不变，不因内置 Skill 放宽。
+- **固定与追溯：** 内置 Skill 以内联形式写入 Manifest 的 `skills` 与 `agent_configuration.skill_instructions`（`id@version`），激活时照常写入 `skill_runtime_activations`。未装配的内置 Skill 记录在 Manifest 可选字段 `builtin_skill_exclusions`（`skill`、`reason: covered | disabled`、覆盖时的 `covered_by`），使“为什么这次没有内置 Skill”可查；Schema 与编译器校验引用一致性（被覆盖者不得同时装配，`covered_by` 必须是本次装配的 Skill）。
+- **授权与复核：** 内置 Skill 与内置工具一样由平台提供，不需要 Skill 授权，也不需要项目空间的能力授权（[功能规则 3.3](../development/feature-rules.md#33-agent-成员)：空间授权只包含 Agent 与 Skill，指管理员安装的 Skill），不进入、也不改变 Agent 依赖闭包与空间授权快照。现有代码中，派发时的 `authorizeRuntime` 和执行前复核（`current-execution-authorization.ts`、`postgres-authorization-service.ts` 中由 Manifest 重建 `additionalSkillReferences` 的路径）会把 `manifest.skills` 全部当作附加 Skill，经 `assertAgentDependencyClosure` 和团队空间 `requireWorkspaceCapabilities` 校验；内置 Skill 若原样进入这条路径，团队空间运行会因“工作空间未授权 Skill”被拒绝。实施后这两处只取已安装 Skill（`installedSkillReferences`，按 ID 前缀区分）：非内置 Skill 照常走依赖闭包与空间授权；内置 Skill 不参与授权复核，其可用性由激活时的紧急停用检查控制。复核其余项（身份、成员、文件、数据范围）不变，不因内置 Skill 放宽。
 - **版本解析时机：** 与内置工具相同，在创建 Attempt 时解析当时代码中的版本；同一 Attempt 固定不变。代码发布后的新 Attempt 使用新版本，Agent 已发布版本和会话锁定的 Skill 版本不受影响（BS1）。
 - **紧急停用：** Runtime 配置在现有“紧急停用 DSH 工具”旁增加“紧急停用内置 Skill”：新 Attempt 不再装配；执行中的 Attempt 再激活该 Skill 时只拒绝这一次并告知模型，运行本身不中断（与工具紧急停用语义一致）。
 
@@ -115,11 +117,11 @@
 | 切片 | 内容 | 主要落点 |
 | --- | --- | --- |
 | BS-0 验收旅程 | 实现前在验收目录登记第 9 节的关键旅程（管理端只读展示与覆盖设置、员工侧装配与覆盖、团队空间运行、紧急停用） | `e2e/catalog/`、`e2e/TEST-CATALOG.md` |
-| BS-A 存储与同步 | 迁移（`source`、内置 Skill 无所有者）；内置 Skill 注册表；启动同步与版本冲突检查；保留前缀与名称在三个安装入口拒绝 | `server/migrations`、`modules/skill`、启动检查、`docs/design/data-model.md` |
+| BS-A 注册表与加载 | 迁移 `0104`（覆盖场景、内置 Skill 停用清单）；内置 Skill 注册表与版本锁；启动加载与校验；发布包携带内容；保留名称在安装入口拒绝 | `server/migrations`、`modules/skill/builtin-skills.ts`、`server/config/builtin-skills/`、`main.ts`、`docs/design/data-model.md` |
 | BS-B 运行装配与覆盖 | 员工侧合并内置 Skill；覆盖解析；紧急停用；派发授权与执行前复核按来源分离内置 Skill；Manifest 新字段及 Schema、编译器、Adapter；激活拒绝语义 | `postgres-agent-service.ts`、`attempt-dispatcher.ts`、`postgres-authorization-service.ts`、`current-execution-authorization.ts`、`manifest-compiler.ts`、`dsh-acp-runtime-adapter.ts`、`runtime-manifest.schema.json` |
 | BS-C 管理端 | Skill 列表标签与只读详情；“覆盖内置场景”设置与审计；Runtimes 列表与紧急停用；管理端 OpenAPI 与 DTO | `apps/admin-web`、`openapi-admin.json` |
 | BS-D 内容与评测 | 三个内置 Skill 正文；固定案例与对比评测 | `server/builtin-skills/` |
-| BS-E 规范同步 | 规范、功能规则、总览第 10 节改为已实现状态 | `docs/development/` |
+| BS-E 规范同步 | 规范、功能规则、总览第 10 节改为已实施（代码级）状态，P2 与对比评测列为未完成 | `docs/development/` |
 
 BS-0 先于全部实现；BS-A → BS-B 有依赖；BS-C 依赖 BS-A 的数据结构；BS-D 可与 BS-A 并行起草，评测需 BS-B 完成后进行。
 
@@ -136,8 +138,8 @@ BS-0 先于全部实现；BS-A → BS-B 有依赖；BS-C 依赖 BS-A 的数据�
 | Agent 发布验证 | 装配内置 Skill；未激活内置 Skill 不影响判定 |
 | 紧急停用某内置 Skill | 新 Attempt 不再装配；执行中再激活被拒绝一次，运行继续 |
 | `bash` 被紧急停用后要求生成 HTML 或 Word | 输出 Markdown 并说明原因，不报运行失败 |
-| 上传或链接安装使用保留前缀或保留名称的 Skill | 安装计划被拒绝并说明原因 |
-| 修改内置 Skill 内容但未升版本号 | 服务启动检查失败；CI 包测试先失败 |
+| 上传或链接安装名称以“（平台内置）”结尾的 Skill | 安装计划被拒绝并说明原因 |
+| 修改内置 Skill 内容但未升版本号 | 服务启动加载失败；CI 单元测试先失败 |
 | 代码发布内置 Skill 新版本 | 已发布 Agent 无需重新验证；新 Attempt 使用新版本，历史 Attempt 保留原版本 |
 | 管理端查看内置 Skill | 只读，无编辑、发布、回滚、删除入口 |
 
