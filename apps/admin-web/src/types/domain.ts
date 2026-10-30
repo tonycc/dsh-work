@@ -521,7 +521,36 @@ export interface SkillDefinition {
   coveredBuiltinScenarios?: BuiltinSkillScenario[]
   /** Skill 可见范围：null 为全员；否则只有这些角色的员工能在 Skill 广场选用（Agent 固定引用不受限）。 */
   visibleRoleIds?: string[] | null
+  /** 待发布版本来自员工提交：只能在“待审核”中审核发布。 */
+  submissionDraft?: boolean
   updatedAt: string
+}
+
+/** 员工 Skill 提交的严格试运行状态（Skill 创建专家方案 4.4）。 */
+export type SkillSubmissionTrialStatus = 'not_started' | 'running' | 'unconfirmed' | 'passed' | 'failed'
+
+export interface SkillSubmissionReviewItem {
+  id: string
+  name: string
+  description: string
+  submitter: { id: string; displayName: string }
+  source: 'conversation' | 'zip' | 'link'
+  sessionId: string | null
+  status: 'pending' | 'approved' | 'rejected'
+  versionId: string
+  versionNumber: number
+  scriptCount: number
+  publishedSkillId?: string
+  /** 修订的已发布 Skill 当前可见范围（null 为全员），通过时默认沿用。 */
+  publishedVisibleRoleIds?: string[] | null
+  trial: { status: SkillSubmissionTrialStatus; runId?: string; testedAt?: string }
+  submittedAt: string
+}
+
+export interface SkillSubmissionReviewDetail extends SkillSubmissionReviewItem {
+  files: Array<{ path: string; size: number; script: boolean }>
+  compatibility: { status: 'compatible' | 'needs_review' | 'incompatible'; issues: Array<{ code: string; severity: 'warning' | 'error'; message: string }> }
+  trial: SkillSubmissionReviewItem['trial'] & { skillId?: string; resultSummary?: string }
 }
 
 export interface SkillDependencySummary {

@@ -22,8 +22,10 @@ async function render(canManage = true, initial = '/skills') {
   useAuthStore().$patch({ permissions: canManage ? ['admin:write'] : ['admin:read'] })
   const content = useContentStore()
   vi.spyOn(content, 'load').mockResolvedValue(undefined)
+  vi.spyOn(adminApi, 'getSkillSubmissions').mockResolvedValue([])
   const router = createRouter({ history: createMemoryHistory(), routes: [
     { path: '/skills', component: CapabilityManagementView },
+    { path: '/skills/review', component: CapabilityManagementView },
     { path: '/skills/install', component: CapabilityManagementView },
     { path: '/connectors', component: CapabilityManagementView },
   ] })
@@ -88,7 +90,7 @@ function offlinePendingMcp(): import('../types/domain').ConnectorDefinition {
 describe('Skill installation sibling tab', () => {
   it('opens the dedicated tab, removes the old create dialog, and preserves inputs across tabs', async () => {
     const { wrapper, router } = await render()
-    expect(wrapper.findAll('[role="tablist"][aria-label="Skill 管理"] [role="tab"]').map(tab => tab.text())).toEqual(['Skill 列表 0', '新增 Skill'])
+    expect(wrapper.findAll('[role="tablist"][aria-label="Skill 管理"] [role="tab"]').map(tab => tab.text())).toEqual(['Skill 列表 0', '待审核 0', '新增 Skill'])
     expect(wrapper.find('[data-action="create-skills"]').exists()).toBe(false)
     await wrapper.get('#capability-tab-install').trigger('click')
     await flushPromises()
@@ -124,11 +126,11 @@ describe('Skill installation sibling tab', () => {
     const { wrapper, router } = await render()
     await wrapper.get('#capability-tab-skills').trigger('keydown', { key: 'ArrowRight' })
     await flushPromises()
-    expect(router.currentRoute.value.path).toBe('/skills/install')
-    await wrapper.get('#capability-tab-install').trigger('keydown', { key: 'End' })
+    expect(router.currentRoute.value.path).toBe('/skills/review')
+    await wrapper.get('#capability-tab-review').trigger('keydown', { key: 'End' })
     await flushPromises()
     expect(router.currentRoute.value.path).toBe('/skills/install')
-    await wrapper.get('#capability-tab-install').trigger('keydown', { key: 'ArrowLeft' })
+    await wrapper.get('#capability-tab-install').trigger('keydown', { key: 'Home' })
     await flushPromises()
     expect(router.currentRoute.value.path).toBe('/skills')
   })

@@ -16,6 +16,8 @@ import { isReservedBuiltinSkillName } from './builtin-skills.ts'
 import { parseSkillDirectoryFiles, type SkillCompatibility, type SkillPackageArtifact } from './skill-package.ts'
 import { buildSkillInstallationPlan } from './skill-installation-plan.ts'
 import type { SkillArtifactStore } from './skill-artifact-store.ts'
+import { releaseSubmissionDraft } from './skill-submission-review-service.ts'
+import { installationKey } from './skill-identity.ts'
 
 const tenantId = 'tenant-dsh-work'
 const MAX_LISTED_SKILLS = 50
@@ -41,7 +43,8 @@ interface SubmissionRow {
  * - `skill_draft_save`：读取本 Attempt 工作区中的一个 Skill 目录，按与 ZIP 安装相同的包规则与兼容性检查
  *   校验，存为不可变的草稿版本。只保存草稿；提交审核由员工在卡片上发起（SC2），不经模型。
  *
- * 平台不证明草稿“试跑通过”：专家在执行容器中的试跑与保存的包没有绑定。严格试运行在审核切片中由平台发起。
+ * 平台不证明草稿“试跑通过”：专家在执行容器中的试跑与保存的包没有绑定。严格试运行在审核时由管理员发起
+ * （skill-submission-review-service）。
  */
 export class SkillSubmissionService {
   private readonly database: DatabaseClient
@@ -109,10 +112,15 @@ export class SkillSubmissionService {
         from skill_submissions
        where tenant_id = ${tenantId} and source = 'conversation' and session_id = ${sessionId} and name = ${pkg.name}
     `
-    // 不按名称覆盖已有 Skill（功能规则 5.3）；通过审核后的修订沿用自己的 skill_id。
+    // 不按名称覆盖已有 Skill（功能规则 5.3），与安装、审核同一规范化名称（忽略首尾空白与大小写）；通过审核后的修订沿用自己的 skill_id。其他尚未通过审核的提交
+    // 在审核试运行时存下的 Skill 不占用名称（通过时再核对重名）。
     const [conflict] = await this.database<{ id: string }[]>`
-      select id from skills where tenant_id = ${tenantId} and name = ${pkg.name}
-        and id is distinct from ${existing?.skillId ?? null}
+      select s.id from skills s where s.tenant_id = ${tenantId}
+        and (s.installation_key = ${installationKey(pkg.name)} or lower(btrim(s.name)) = ${installationKey(pkg.name)})
+        and s.id is distinct from ${existing?.skillId ?? null}
+        and not (s.active_version_id is null and exists (
+          select 1 from skill_submissions other where other.tenant_id = s.tenant_id and other.skill_id = s.id
+        ))
     `
     if (conflict) throw toolPreconditionFailed(`已有同名 Skill“${pkg.name}”，请换一个名称`)
     if (existing?.status === 'pending') throw toolPreconditionFailed('这个 Skill 已提交审核；请员工先在草稿卡片上撤回，再保存修改')
@@ -185,7 +193,7 @@ export class SkillSubmissionService {
         throw stateConflict(`你已有 ${MAX_PENDING_SUBMISSIONS} 个 Skill 在等待审核，等审核完成或撤回一个后再提交`)
       }
       await transaction`
-        update skill_submissions set status = 'pending', submitted_at = now(), updated_at = now()
+        update skill_submissions set status = 'pending', submitted_at = now(), review_note = null, updated_at = now()
          where tenant_id = ${tenantId} and id = ${submissionId}
       `
     })
@@ -199,6 +207,11 @@ export class SkillSubmissionService {
       const submission = await lockOwnSubmission(transaction, userId, submissionId)
       if (submission.status === 'draft') return
       if (submission.status !== 'pending') throw stateConflict('只有等待审核的提交可以撤回')
+      const [version] = await transaction<{ skillVersionId: string | null }[]>`
+        select skill_version_id as "skillVersionId" from skill_submission_versions
+         where tenant_id = ${tenantId} and id = ${submission.currentVersionId}
+      `
+      await releaseSubmissionDraft(transaction, submission.skillId, version?.skillVersionId ?? null)
       await transaction`
         update skill_submissions set status = 'draft', submitted_at = null, updated_at = now()
          where tenant_id = ${tenantId} and id = ${submissionId}

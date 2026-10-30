@@ -100,6 +100,7 @@
     "test:e2e:project-space": "playwright test --config playwright.project-space.config.ts",
     "test:e2e:automation": "playwright test --config playwright.automation.config.ts",
     "test:e2e:mcp-admin": "playwright test --config playwright.mcp-admin.config.ts",
+    "test:e2e:skill-review": "playwright test --config playwright.skill-review.config.ts",
     "test:e2e:agent-principal": "playwright test --config playwright.agent-principal.config.ts",
     "test:e2e:agent-capabilities": "playwright test --config playwright.agent-capabilities.config.ts",
     "test:e2e:agent-routines": "playwright test --config playwright.agent-routines.config.ts",

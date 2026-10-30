@@ -415,7 +415,38 @@ export interface SkillDefinition {
   coveredBuiltinScenarios: string[]
   /** Skill 可见范围：null 为全员；否则只有这些角色的员工能在 Skill 广场选用（Agent 固定引用不受限）。 */
   visibleRoleIds: string[] | null
+  /** 待发布版本来自员工提交：只能在“待审核”中审核发布，详情页不提供发布。 */
+  submissionDraft?: boolean
   updatedAt: string
+}
+
+/** 管理员审核时看到的严格试运行状态：未开始、进行中、已结束待查看结果、通过、未通过。 */
+export type SkillSubmissionTrialStatus = 'not_started' | 'running' | 'unconfirmed' | 'passed' | 'failed'
+
+/** 管理端“待审核”列表中的一条员工 Skill 提交（Skill 创建专家方案 4.4）。 */
+export interface SkillSubmissionReviewItem {
+  id: string
+  name: string
+  description: string
+  submitter: { id: string; displayName: string }
+  source: 'conversation' | 'zip' | 'link'
+  sessionId: string | null
+  status: 'pending' | 'approved' | 'rejected'
+  versionId: string
+  versionNumber: number
+  scriptCount: number
+  /** 通过后的修订：已发布 Skill 的 ID 与当前可见范围（null 为全员），审核时默认沿用。 */
+  publishedSkillId?: string
+  publishedVisibleRoleIds?: string[] | null
+  trial: { status: SkillSubmissionTrialStatus; runId?: string; testedAt?: string }
+  submittedAt: string
+}
+
+/** 待审核详情：文件清单、包校验结论与最近一次严格试运行。 */
+export interface SkillSubmissionReviewDetail extends SkillSubmissionReviewItem {
+  files: Array<{ path: string; size: number; script: boolean }>
+  compatibility: SkillDraftView['compatibility']
+  trial: SkillSubmissionReviewItem['trial'] & { skillId?: string; resultSummary?: string }
 }
 
 /**

@@ -6,13 +6,14 @@ import { useRoute, useRouter } from 'vue-router'
 
 import { StatusTag } from '@dsh-work/ui-core'
 import SkillInstallationPanel from '@/components/SkillInstallationPanel.vue'
+import SkillSubmissionReviewPanel from '@/components/SkillSubmissionReviewPanel.vue'
 import { useListPagination } from '@/composables/use-list-pagination'
 import { useAuthStore } from '@/stores/auth'
 import { useContentStore } from '@/stores/content'
 import { adminApi } from '@/api/client'
 import type { BuiltinSkill, BuiltinSkillScenario, ConnectorDefinition, IdentityRoleSummary, McpConnectionTestResult, SkillDefinition, SkillReleaseRecord, SkillTestRunProgress, SkillVersionRecord } from '@/types/domain'
 
-type CapabilityTab = 'skills' | 'install' | 'connectors'
+type CapabilityTab = 'skills' | 'review' | 'install' | 'connectors'
 
 const authStore = useAuthStore()
 const contentStore = useContentStore()
@@ -20,15 +21,24 @@ const router = useRouter()
 const route = useRoute()
 const activeTab = computed<CapabilityTab>(() => {
   if (route.path === '/skills/install') return authStore.canManage ? 'install' : 'skills'
+  if (route.path === '/skills/review') return 'review'
   if (route.path === '/connectors') return 'connectors'
   return 'skills'
 })
 const managedSkills = computed(() => contentStore.skills.filter(skill => skill.installationRole !== 'dependency'))
 const tabs = computed<Array<{ id: CapabilityTab; label: string; count?: number }>>(() => [
   { id: 'skills', label: 'Skill 列表', count: managedSkills.value.length },
+  // 员工经 Skill 创建专家提交的 Skill（skill-creator-plan 4.4）。
+  { id: 'review', label: '待审核', ...(pendingSubmissionCount.value === undefined ? {} : { count: pendingSubmissionCount.value }) },
   ...(authStore.canManage ? [{ id: 'install' as const, label: '新增 Skill' }] : []),
 ])
-const skillSection = computed(() => activeTab.value === 'skills' || activeTab.value === 'install')
+const skillSection = computed(() => activeTab.value !== 'connectors')
+const pendingSubmissionCount = ref<number>()
+// 待审核数量在 Skill 列表与新增页签显示；“待审核”页签由面板加载后报告，连接器页不请求。
+watch(activeTab, async tab => {
+  if (tab === 'connectors' || tab === 'review' || pendingSubmissionCount.value !== undefined) return
+  try { pendingSubmissionCount.value = (await adminApi.getSkillSubmissions()).length } catch { pendingSubmissionCount.value = undefined }
+}, { immediate: true })
 const query = ref('')
 const detailOpen = ref(false)
 const detailTitle = ref('')
@@ -208,6 +218,7 @@ function switchTab(tab: CapabilityTab) {
   query.value = ''
   const paths: Record<CapabilityTab, string> = {
     skills: '/skills',
+    review: '/skills/review',
     install: '/skills/install',
     connectors: '/connectors',
   }
@@ -785,7 +796,7 @@ onUnmounted(() => clearSkillTestPoll())
       <div v-if="skillSection" class="status-tabs" role="tablist" aria-label="Skill 管理" @keydown="navigateTabs">
         <button v-for="tab in tabs" :id="`capability-tab-${tab.id}`" :key="tab.id" class="status-tab" :class="{ active: activeTab === tab.id }" type="button" role="tab" :aria-selected="activeTab === tab.id" :aria-controls="`capability-panel-${tab.id}`" :tabindex="activeTab === tab.id ? 0 : -1" @click="switchTab(tab.id)">{{ tab.label }} <span v-if="tab.count !== undefined" class="tab-count">{{ tab.count }}</span></button>
       </div>
-      <div v-if="activeTab !== 'install'" class="filter-bar capability-toolbar">
+      <div v-if="activeTab !== 'install' && activeTab !== 'review'" class="filter-bar capability-toolbar">
         <el-input v-model="query" :prefix-icon="Search" clearable :placeholder="activeTab === 'skills' ? '搜索 Skill 名称、说明或负责人' : '搜索 MCP 名称、标识或 serverName'" />
         <div v-if="activeTab === 'skills'" class="capability-toolbar__legend"><span>版本发布后不可变</span></div>
         <el-button v-if="activeTab === 'skills'" @click="router.push('/assistant?context=skills')">交给管理助手</el-button>
@@ -800,7 +811,11 @@ onUnmounted(() => clearSkillTestPoll())
       <SkillInstallationPanel @back="switchTab('skills')" @assistant="router.push('/assistant?context=skills')" @installed="refreshInstalledSkills" />
     </div>
 
-    <section v-if="activeTab !== 'install'" :id="`capability-panel-${activeTab}`" class="content-panel content-panel--flush capability-panel" role="tabpanel" :aria-labelledby="skillSection ? `capability-tab-${activeTab}` : undefined" :aria-label="activeTab === 'connectors' ? 'MCP 连接器列表' : undefined">
+    <div v-if="activeTab === 'review'" id="capability-panel-review" role="tabpanel" aria-labelledby="capability-tab-review">
+      <SkillSubmissionReviewPanel @count="pendingSubmissionCount = $event" @published="refreshInstalledSkills" />
+    </div>
+
+    <section v-if="activeTab !== 'install' && activeTab !== 'review'" :id="`capability-panel-${activeTab}`" class="content-panel content-panel--flush capability-panel" role="tabpanel" :aria-labelledby="skillSection ? `capability-tab-${activeTab}` : undefined" :aria-label="activeTab === 'connectors' ? 'MCP 连接器列表' : undefined">
       <template v-if="activeTab === 'skills'">
       <el-table class="data-table" v-loading="contentStore.loading" :data="pagedSkills" empty-text="暂无匹配的 Skill">
         <el-table-column label="Skill" min-width="360">
@@ -836,7 +851,7 @@ onUnmounted(() => clearSkillTestPoll())
         <el-table-column prop="owner" label="负责人" min-width="140" />
         <el-table-column label="状态" width="108"><template #default="scope"><StatusTag :status="scope.row.status" /></template></el-table-column>
         <el-table-column prop="updatedAt" label="更新时间" width="120" />
-        <el-table-column label="操作" width="210" fixed="right"><template #default="scope"><el-button link type="primary" :icon="View" data-action="view-skill" @click="inspectSkill(scope.row)">查看</el-button><el-button v-if="authStore.canManage" link type="primary" :loading="actionLoading === `skill:${scope.row.id}`" :data-action="scope.row.status === 'published' ? 'disable-skill' : 'publish-skill'" @click="changeSkillStatus(scope.row)">{{ scope.row.status === 'published' ? '停用' : scope.row.status === 'draft' ? (scope.row.packageSha256 ? '试运行并发布' : '校验并发布') : '启用' }}</el-button></template></el-table-column>
+        <el-table-column label="操作" width="210" fixed="right"><template #default="scope"><el-button link type="primary" :icon="View" data-action="view-skill" @click="inspectSkill(scope.row)">查看</el-button><el-button v-if="authStore.canManage && scope.row.submissionDraft" link type="primary" data-action="review-skill-submission" @click="switchTab('review')">去审核</el-button><el-button v-else-if="authStore.canManage" link type="primary" :loading="actionLoading === `skill:${scope.row.id}`" :data-action="scope.row.status === 'published' ? 'disable-skill' : 'publish-skill'" @click="changeSkillStatus(scope.row)">{{ scope.row.status === 'published' ? '停用' : scope.row.status === 'draft' ? (scope.row.packageSha256 ? '试运行并发布' : '校验并发布') : '启用' }}</el-button></template></el-table-column>
       </el-table>
       <div class="table-footer table-footer--pager"><el-pagination v-model:current-page="skillPage" background layout="prev, pager, next" :total="filteredSkills.length" :page-size="10" /></div>
       <section class="builtin-skills" aria-labelledby="builtin-skills-title">

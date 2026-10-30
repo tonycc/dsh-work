@@ -78,6 +78,24 @@ export function registerAdminRoutes(router: Router, service: AdminQueryService) 
       actor: requireRequestIdentity(context, 'admin').userId,
     }))
   })
+  // 冒烟只提供待审核的只读展示（Skill 创建专家方案 4.4）：试运行、通过与拒绝走真实服务，由 P1 覆盖。
+  router.get(`${basePath}/skill-submissions`, async () => envelope('admin', [smokeSkillSubmission()]))
+  router.get(`${basePath}/skill-submissions/:submissionId`, async (_request, context) => {
+    if (context.params['submissionId'] !== SMOKE_SUBMISSION_ID) throw notFound('提交不存在或已撤回')
+    return envelope('admin', {
+      ...smokeSkillSubmission(),
+      files: [{ path: 'SKILL.md', size: 186, script: false }, { path: 'scripts/report.py', size: 64, script: true }],
+      compatibility: { status: 'compatible', issues: [] },
+    })
+  })
+  router.get(`${basePath}/skill-submissions/:submissionId/versions/:versionId/file`, async (_request, context) => {
+    if (context.params['submissionId'] !== SMOKE_SUBMISSION_ID) throw notFound('提交不存在或已撤回')
+    const path = context.url.searchParams.get('path') ?? 'SKILL.md'
+    const content = path === 'scripts/report.py'
+      ? 'import openpyxl\n\nprint("按区域汇总销售日报")\n'
+      : '---\nname: 周报汇总\ndescription: 每周把销售日报汇总成周报。\n---\n\n按区域汇总员工上传的一周销售日报，运行 scripts/report.py 计算环比并写一段结论。\n'
+    return envelope('admin', { path, size: content.length, content })
+  })
   router.get(`${basePath}/skill-versions`, async () => envelope(
     'admin',
     (await service.getSkills()).map(prototypeSkillVersion),
@@ -218,5 +236,16 @@ function prototypeSkillRelease(
     actor,
     time: new Date().toISOString().slice(0, 16).replace('T', ' '),
     note: '版本状态已更新。',
+  }
+}
+
+const SMOKE_SUBMISSION_ID = 'skill-submission-smoke-weekly'
+
+function smokeSkillSubmission() {
+  return {
+    id: SMOKE_SUBMISSION_ID, name: '周报汇总', description: '每周把销售日报汇总成周报。',
+    submitter: { id: 'U00001', displayName: '测试员工' }, source: 'conversation', sessionId: 'session-smoke-skill-creator',
+    status: 'pending', versionId: 'skill-submission-version-smoke-weekly', versionNumber: 1, scriptCount: 1,
+    trial: { status: 'not_started' }, submittedAt: '2026-10-30T02:00:00.000Z',
   }
 }

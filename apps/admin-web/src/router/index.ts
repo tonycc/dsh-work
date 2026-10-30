@@ -99,6 +99,12 @@ const router = createRouter({
       meta: { title: 'Skill 管理', requiresAdmin: true, requiredPermission: 'adminRead' },
     },
     {
+      path: '/skills/review',
+      name: 'skill-review',
+      component: () => import('@/views/CapabilityManagementView.vue'),
+      meta: { title: 'Skill 待审核', requiresAdmin: true, requiredPermission: 'adminRead' },
+    },
+    {
       path: '/skills/install',
       name: 'skill-install',
       component: () => import('@/views/CapabilityManagementView.vue'),

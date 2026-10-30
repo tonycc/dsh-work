@@ -53,6 +53,8 @@ import type {
   UpdateRuntimeConfigurationInput,
   UpdateSkillInput,
   UsagePoint,
+  SkillSubmissionReviewDetail,
+  SkillSubmissionReviewItem,
 } from '../types/domain'
 
 interface ApiEnvelope<T> {
@@ -301,6 +303,18 @@ export const adminApi = {
   getBuiltinSkills: () => request<BuiltinSkillStatus>('/skills/builtin'),
   setSkillBuiltinCoverage: (input: { skillId: string; scenarios: BuiltinSkillScenario[] }) =>
     request<SkillDefinition>('/skills/builtin-coverage', { method: 'PATCH', body: JSON.stringify(input) }),
+  getSkillSubmissions: () => request<SkillSubmissionReviewItem[]>('/skill-submissions'),
+  getSkillSubmission: (id: string) => request<SkillSubmissionReviewDetail>(`/skill-submissions/${encodeURIComponent(id)}`),
+  getSkillSubmissionFile: (id: string, versionId: string, path: string) =>
+    request<{ path: string; size: number; content: string }>(`/skill-submissions/${encodeURIComponent(id)}/versions/${encodeURIComponent(versionId)}/file?path=${encodeURIComponent(path)}`),
+  startSkillSubmissionTestRun: (id: string, versionId: string) =>
+    request<SkillTestRunProgress>(`/skill-submissions/${encodeURIComponent(id)}/test-runs`, { method: 'POST', body: JSON.stringify({ versionId }) }),
+  getSkillSubmissionTestRun: (id: string, runId: string) =>
+    request<SkillTestRunProgress>(`/skill-submissions/${encodeURIComponent(id)}/test-runs/${encodeURIComponent(runId)}`),
+  approveSkillSubmission: (id: string, input: { versionId: string; visibleRoleIds: string[] | null }) =>
+    request<SkillSubmissionReviewDetail & { skill: SkillDefinition }>(`/skill-submissions/${encodeURIComponent(id)}/approve`, { method: 'POST', body: JSON.stringify(input) }),
+  rejectSkillSubmission: (id: string, input: { versionId: string; note: string }) =>
+    request<SkillSubmissionReviewDetail>(`/skill-submissions/${encodeURIComponent(id)}/reject`, { method: 'POST', body: JSON.stringify(input) }),
   setSkillVisibility: (skillId: string, input: { roleIds: string[] | null; reason: string }) =>
     request<SkillDefinition>(`/skills/${encodeURIComponent(skillId)}/visibility`, { method: 'PUT', body: JSON.stringify(input) }),
   getMcpInvocationAudits: (connectorId: string) =>

@@ -56,6 +56,8 @@ import { loadBuiltinSkillCatalog } from './modules/skill/builtin-skills.ts'
 import { AgentRecommendationService } from './modules/agent/agent-recommendation-service.ts'
 import { SkillSubmissionService } from './modules/skill/skill-submission-service.ts'
 import { registerSkillSubmissionRoutes } from './http/workbench/skill-submission-routes.ts'
+import { SkillSubmissionReviewService } from './modules/skill/skill-submission-review-service.ts'
+import { registerSkillSubmissionReviewRoutes } from './http/admin/skill-submission-review-routes.ts'
 import { redactSensitiveText } from './security/safe-observability.ts'
 import {
   preflightDshRuntime,
@@ -470,6 +472,9 @@ async function start() {
   })
   conversations.setSkillDraftReader(skillSubmissionsRef.current)
   registerSkillSubmissionRoutes(router, skillSubmissionsRef.current)
+  registerSkillSubmissionReviewRoutes(router, new SkillSubmissionReviewService({
+    database, skills, artifactStore: skillArtifacts, audit: operations,
+  }))
   const installationService: AdminSkillInstallationService = new AdminSkillInstallationService(database, orchestration, authorization, acquireSkillSource, Boolean(containerPythonRunner), pythonPackages, skillArtifacts, checkInstallationRuntime)
   const assistantService = new AdminAssistantService(database, orchestration, authorization, installationService, skills, agents, operations)
   skills.setPackageTester((userId, skill, prompt) => installationService.testPackage(userId, skill, prompt))
