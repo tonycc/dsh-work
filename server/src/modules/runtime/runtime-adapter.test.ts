@@ -522,8 +522,15 @@ describe('DSH ACP Runtime Adapter', () => {
     })
     const input = manifest('run-recommend', 'attempt-recommend', '这份合同该找谁看？[mock:recommend]')
     input.tools = [...input.tools, { id: 'list_colleague_agents', version: '1.0.0' }, { id: 'recommend_agents', version: '1.0.0' }]
-    assert.match(renderSystemPrompt(input), /# 推荐 AI 同事[\s\S]*list_colleague_agents[\s\S]*recommend_agents/)
+    input.timezone = 'Asia/Shanghai'
+    assert.match(renderSystemPrompt(input), /# 推荐 AI 同事（先于其他处理）[\s\S]*第一步先调用 list_colleague_agents，在查找文件、要求补充数据、调用其他工具或作答之前完成[\s\S]*recommend_agents/)
+    // 有相符的同事时优先推荐，不自己展开解答；通用问题直接回答。
+    assert.match(renderSystemPrompt(input), /有相符的同事时，优先用 recommend_agents 推荐 1～3 位[\s\S]*不要自己展开解答[\s\S]*通用问题（写作、润色、翻译、常识、一般性解释）时，不推荐，直接回答/)
+    // REC-P2 发现：推荐理由不得声称说明之外的能力（例如“能直接读取质量数据”）。
+    assert.match(renderSystemPrompt(input), /只依据 list_colleague_agents 返回的该同事说明与示例问题来写，不要声称它能读取哪些数据/)
     assert.doesNotMatch(renderSystemPrompt(manifest('run-plain', 'attempt-plain')), /# 推荐 AI 同事/)
+    // 紧跟能力边界，排在其他运行说明之前。
+    assert.ok(renderSystemPrompt(input).indexOf('# 推荐 AI 同事') < renderSystemPrompt(input).indexOf('# 当前时间'))
     const result = await (await adapter.execute(input)).done
     assert.equal(result.status, 'completed', result.errorMessage ?? undefined)
     assert.deepEqual(calls.map(call => call.name), ['list_colleague_agents', 'recommend_agents'])
