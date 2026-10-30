@@ -517,6 +517,7 @@
       "get": {
         "operationId": "listAvailableAgents",
         "summary": "按当前员工角色查询可用的已发布 Agent",
+        "description": "每项含 id、name、description、welcomeMessage、version、examplePrompts 与 canCreateSkills；canCreateSkills 为当前启用版本是否开启“可创建 Skill”，供 Skill 广场的“创建 Skill”入口找到 Skill 创建专家（Skill 创建专家方案 4.8）。",
         "responses": {
           "200": {
             "$ref": "#/components/responses/Ok"

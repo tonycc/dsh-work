@@ -255,7 +255,7 @@ function syncAgentFromRoute() {
   recommendationNotice.value = prefill ? (agent ? 'prefilled' : 'unavailable') : ''
   if (agent) {
     selectedTask.value = ''
-    presetPrompt.value = prefill || (agent.examplePrompts[0] ?? '')
+    presetPrompt.value = prefill ?? (agent.examplePrompts[0] ?? '')
     composerKey.value += 1
     focusComposer()
   }

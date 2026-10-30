@@ -123,6 +123,8 @@ export interface WorkbenchAgentDefinition {
   welcomeMessage: string
   version: string
   examplePrompts: string[]
+  /** 当前启用版本开启了“可创建 Skill”：Skill 广场的“创建 Skill”入口据此找到 Skill 创建专家（方案 4.8）。 */
+  canCreateSkills: boolean
 }
 
 export interface WorkspaceAgentCandidate {
@@ -670,7 +672,8 @@ export class PostgresAgentService {
     if (roleIds.length === 0) return []
     return this.database<WorkbenchAgentDefinition[]>`
       select a.id, av.name, av.description, av.welcome_message as "welcomeMessage",
-             av.version, av.example_prompts as "examplePrompts"
+             av.version, av.example_prompts as "examplePrompts",
+             av.skill_creation_enabled as "canCreateSkills"
         from agents a
         join agent_versions av on av.tenant_id = a.tenant_id and av.id = a.active_version_id
         join execution_principals ep on ep.tenant_id = a.tenant_id and ep.agent_id = a.id

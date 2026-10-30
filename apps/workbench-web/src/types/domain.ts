@@ -960,6 +960,8 @@ export interface WorkbenchAgent {
   welcomeMessage: string
   version: string
   examplePrompts: string[]
+  /** 当前启用版本开启了“可创建 Skill”（Skill 创建专家方案 4.8）；旧服务端缺省。 */
+  canCreateSkills?: boolean
 }
 
 export interface WorkbenchSkill {

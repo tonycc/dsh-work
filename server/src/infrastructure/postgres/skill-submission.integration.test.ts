@@ -144,6 +144,19 @@ test('只有开启开关的 Agent 在个人对话中装配两个工具', async (
   assert.equal(tools(without.manifest).some(id => id === 'list_available_skills' || id === 'skill_draft_save'), false)
 })
 
+test('员工 AI 同事列表标出开启“可创建 Skill”的 Agent（Skill 广场入口，方案 4.8）', async () => {
+  const withSwitch = await publishedAgent(true)
+  const without = await publishedAgent(false)
+  const listed = await agents.listWorkbenchAgents(EMPLOYEE)
+  const byVersion = async (versionId: string) => {
+    const [row] = await database<{ agentId: string }[]>`
+      select agent_id as "agentId" from agent_versions where tenant_id = ${tenantId} and id = ${versionId}`
+    return listed.find(agent => agent.id === row!.agentId)
+  }
+  assert.equal((await byVersion(withSwitch))?.canCreateSkills, true)
+  assert.equal((await byVersion(without))?.canCreateSkills, false)
+})
+
 test('保存草稿：按包规则校验，生成新版本，卡片只给提交人看', async () => {
   const { runId, manifest } = await runFor(await publishedAgent(true))
   const listed = await submissions.listAvailableSkills(manifest, {})

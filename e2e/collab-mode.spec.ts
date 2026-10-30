@@ -9,6 +9,12 @@ test.beforeEach(async ({ page }) => {
   await page.request.post('/api/testing/p0/reset')
 })
 
+/** SKC-04：冒烟数据中的 Skill 创建专家默认停用，经管理端接口启用（冒烟服务只有一个测试身份）。 */
+async function enableSkillCreator(page: Page) {
+  const enabled = await page.request.patch('/api/admin/v1/agents/skill-creator/status', { data: { status: 'published' } })
+  expect(enabled.ok()).toBeTruthy()
+}
+
 async function chooseMode(page: Page, label: '工作模式' | '协作模式') {
   await page.getByRole('button', { name: '切换模式' }).click()
   await page.getByRole('menuitem', { name: new RegExp(label) }).click()
@@ -116,6 +122,17 @@ test('MODE-E2E-03: collaboration shell has four entries and an avatar menu for s
     if (heading) await expect(page.getByRole('heading', { name: heading, exact: true })).toBeVisible()
     await expect(navigation).toBeVisible()
   }
+})
+
+test('SKC-04: in collaboration mode the Skill plaza opens a direct chat with the Skill creator', async ({ page }) => {
+  await enableSkillCreator(page)
+  await switchToCollab(page)
+  await page.getByRole('button', { name: '打开用户菜单' }).click()
+  await page.getByRole('menuitem', { name: 'Skill 广场' }).click()
+  await page.getByRole('button', { name: '创建 Skill' }).click()
+  await expect(page).toHaveURL(/\/c\/chats\/agent\/skill-creator$/)
+  await expect(page.getByRole('region', { name: '与 Skill 创建专家 的对话' })).toBeVisible()
+  await expect(page.getByLabel('对话输入')).toHaveValue('')
 })
 
 test('MODE-E2E-03: collaboration shell uses a bottom tab bar on narrow screens', async ({ page }) => {
