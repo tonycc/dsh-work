@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useOpenRecommendedAgent } from '@/composables/useOpenRecommendedAgent'
 import { projectTaskDetailKey } from '@/composables/project-task-detail'
 import { spaceView, useSpaceRoutes } from '@/composables/space-routes'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -38,6 +39,7 @@ import '@/styles/conversation-thread.css'
 
 const route = useRoute()
 const router = useRouter()
+const openRecommendedAgent = useOpenRecommendedAgent()
 const taskStore = useTaskStore()
 const authStore = useAuthStore()
 const contentStore = useContentStore()
@@ -1213,6 +1215,7 @@ watch(
             @copy-link="copyConversationLink()"
             @open-details="detailsOpen = true"
             @retry="retryRun"
+            @open-recommended-agent="openRecommendedAgent"
           />
 
           <div class="conversation-end" aria-hidden="true"></div>

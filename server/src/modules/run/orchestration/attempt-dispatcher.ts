@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { assertRuntimeModelRequirements } from '../../runtime/execution-capabilities.ts'
 import type { RuntimeManifest } from '../../runtime/runtime-types.ts'
 import { compileRuntimeManifest } from '../../runtime/manifest-compiler.ts'
-import { builtinToolReference, executionToolNames, projectTaskToolNames } from '../../runtime/builtin-tools.ts'
+import { agentRecommendationToolNames, builtinToolReference, executionToolNames, projectTaskToolNames } from '../../runtime/builtin-tools.ts'
 import type { PreparedRuntimeFile } from '../../workbench/application/postgres-content-service.ts'
 import type { RuntimeAuthorizationDecision } from '../../authorization/postgres-authorization-service.ts'
 import { authorizationDenied } from '../../../domain/authorization-errors.ts'
@@ -71,6 +71,11 @@ export class AttemptDispatcher {
      * 仍须 Agent 版本开启 projectTasksEnabled；有 purpose 的系统/管理运行不得装配。
      */
     projectTaskToolMode?: 'none' | 'read' | 'read-write'
+    /**
+     * 推荐方案 R3：个人空间中由员工发起的交互运行。仍须 Agent 版本开启“可推荐其他 AI 同事”；
+     * 有 purpose 的运行（发布试运行、定时与主动任务、系统与管理运行）不装配。
+     */
+    personalConversation?: boolean
   }) {
     const runtimePolicy = await this.deps.operations?.getRuntimePolicy(runtimeId)
     const disabledTools = new Set(runtimePolicy?.disabledTools ?? [])
@@ -85,6 +90,7 @@ export class AttemptDispatcher {
           coveringSkills: [],
           runtimeTools: [],
           projectTasksEnabled: false,
+          agentRecommendationEnabled: false,
           mcpConnections: [],
           approvalMode: 'risk_based' as const,
           roleIds: ['role-employee'],
@@ -164,6 +170,12 @@ export class AttemptDispatcher {
         ? projectTaskToolNames({
             enabled: agent.projectTasksEnabled,
             mode: input.projectTaskToolMode ?? 'none',
+          })
+        : []),
+      ...(!input.purpose
+        ? agentRecommendationToolNames({
+            enabled: agent.agentRecommendationEnabled,
+            personalConversation: input.personalConversation === true,
           })
         : []),
     ].filter(name => !disabledTools.has(name))

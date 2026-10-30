@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
-import type { ChatMessage, RunStep, TaskRun, TaskRunError } from '../../../domain/types.ts'
+import type { AgentRecommendationView, ChatMessage, RunStep, TaskRun, TaskRunError } from '../../../domain/types.ts'
 import { deriveTaskResult, type TaskResult, type TaskResultEvidence, type TaskResultOutcome } from '../../../domain/task-result.ts'
 import type { DatabaseClient, DatabaseTransaction } from '../../../infrastructure/postgres/database.ts'
 import type { JsonObject, RunState } from '../../../domain/run-state.ts'
@@ -181,13 +181,24 @@ interface AttachmentRow {
   name: string
 }
 
+/** 会话详情读取推荐卡片的端口（实现见 agent 模块的推荐服务）。 */
+export interface AgentRecommendationReader {
+  loadForRuns(runIds: string[], viewerUserId: string): Promise<AgentRecommendationView[]>
+}
+
 export class PostgresConversationRepository {
   private readonly database: DatabaseClient
   private readonly workspaces: PostgresWorkspaceService
+  private recommendations?: AgentRecommendationReader
 
   constructor(database: DatabaseClient, workspaces = new PostgresWorkspaceService(database)) {
     this.database = database
     this.workspaces = workspaces
+  }
+
+  /** 推荐方案 4.2：会话详情装载推荐卡片。生产组装时接入；测试替身未接时详情不含推荐。 */
+  setRecommendationReader(reader: AgentRecommendationReader) {
+    this.recommendations = reader
   }
 
   /**
@@ -980,7 +991,7 @@ export class PostgresConversationRepository {
 
   async getTask(runId: string, userId: string): Promise<TaskRun | null> {
     const row = await this.findTaskRow(runId, userId)
-    return row ? this.mapTask(row) : null
+    return row ? this.mapTask(row, userId) : null
   }
 
   /** A retry must not repeat an external action whose outcome has not been reconciled. */
@@ -1523,7 +1534,7 @@ export class PostgresConversationRepository {
     return byRun
   }
 
-  private async mapTask(row: TaskRow): Promise<TaskRun> {
+  private async mapTask(row: TaskRow, viewerUserId?: string): Promise<TaskRun> {
     // 团队 Run 详情只取该 Run 的消息（评审 M8）：共享会话里全会话加载会把
     // 几百条无关讨论一并载入。个人 Run 详情保持 AC-23 原契约——返回会话的
     // 完整多轮消息历史，不按 Run 收窄（评审中3）。
@@ -1544,6 +1555,10 @@ export class PostgresConversationRepository {
       ? (await this.loadThreadArtifactsForRuns(threadRunIds)).map(artifact => mapArtifactRow(artifact, artifact.sourceRunId))
       : evidence.artifacts.map(item => item.artifact)
     const attachmentsByRun = await this.loadRunAttachments([...new Set([row.id, ...threadRunIds])])
+    // 推荐只在个人对话中装配；列表不装载，只有查看单个会话详情时按查看者当前可用同事计算。
+    const recommendations = viewerUserId && this.recommendations && row.workspaceType === 'personal'
+      ? await this.recommendations.loadForRuns([...new Set([row.id, ...threadRunIds])], viewerUserId)
+      : []
     const prompt = runMessages.find((message) => message.role === 'user')?.content ?? row.title
     return {
       id: row.id,
@@ -1565,6 +1580,7 @@ export class PostgresConversationRepository {
       messages: withRunAttachments(messages.map(mapMessage), attachmentsByRun),
       steps: mapSteps(row.id, evidence.events, row.status),
       threadArtifacts,
+      ...(recommendations.length ? { recommendations } : {}),
       result: deriveTaskResult(evidence),
       attachments: attachmentsByRun.get(row.id) ?? [],
       skill: row.selectedSkillId && row.selectedSkillName && row.selectedSkillVersion
