@@ -1,8 +1,8 @@
 # Skill 创建专家方案
 
-**状态：** 待评审，未实施。现行规则仍以[功能规则第 5 节](../development/feature-rules.md#5-skill-安装与发布)为准：在本方案评审通过并落地前，平台只安装已有 Skill，不通过对话新建 Skill。<br>
+**状态：** 方案与原型已确认（2026-10-30），实施中。现行规则仍以[功能规则第 5 节](../development/feature-rules.md#5-skill-安装与发布)为准：在本方案落地前，平台只安装已有 Skill，不通过对话新建 Skill。<br>
 **更新日期：** 2026-10-30<br>
-**原型：** 待制作（先原型后开发）。
+**原型：** [Skill 创建专家原型](https://claude.ai/artifact/8bm5wnuhsunM3c4EjDYejP)（2026-10-30 确认）。
 
 ## 1. 背景与目标
 

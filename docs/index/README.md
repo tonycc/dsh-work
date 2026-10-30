@@ -15,7 +15,7 @@
 | 按统一阶段定义、发布、运行和退役 Agent | [通用 Agent 全生命周期模板](../development/agent-lifecycle-template.md) |
 | 移动端 H5 接入 | [移动端接入规范](../development/mobile-integration-guide.md) |
 | 待评审：钉钉工作通知、工作台免登与机器人对话 | [钉钉接入方案](../design/dingtalk-integration-plan.md) |
-| 待评审：员工经 Skill 创建专家新建 Skill、管理员审核发布 | [Skill 创建专家方案](../design/skill-creator-plan.md) |
+| 实施中：员工经 Skill 创建专家新建 Skill、管理员审核发布 | [Skill 创建专家方案](../design/skill-creator-plan.md) |
 | 平台内置 Skill（文件分析、HTML、Office 基线方法；代码级已实施，P2 待验收） | [平台内置 Skill 方案](../design/builtin-skills-plan.md) |
 | dsh-work 助手推荐 AI 同事（代码级已实施，P2 待验收） | [推荐 AI 同事方案](../design/agent-recommendation-plan.md) |
 | 平台基线真实验收（PF-07） | [PF-07 验收手册](../development/pf07-platform-acceptance.md) |
