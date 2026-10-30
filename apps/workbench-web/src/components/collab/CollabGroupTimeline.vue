@@ -586,9 +586,13 @@ onBeforeUnmount(() => {
 }
 
 .collab-task-card__summary {
+  display: -webkit-box;
+  overflow: hidden;
   color: var(--dsh-color-text);
   font-size: var(--dsh-font-size-caption);
   line-height: 1.6;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
 
 .collab-task-card__quiet {

@@ -240,6 +240,29 @@ describe('RunMessageList', () => {
     expect(wrapper.text()).toContain('该 AI 同事暂不可用')
   })
 
+  it('REC-01: prefers the question written for the colleague over the employee’s “who should I ask”', async () => {
+    const recommendation: AgentRecommendation = {
+      id: 'rec-3', runId: 'run-1', agentId: 'agent-planning', name: '计划排产', description: '排产与交期',
+      reason: '负责交期风险说明', suggestedPrompt: '请分析本月订单的交期风险，列出可能延期的订单和原因。', available: true,
+    }
+    const wrapper = mount(RunMessageList, {
+      global,
+      props: {
+        task: run({
+          id: 'run-1',
+          messages: [
+            { id: 'u1', role: 'user', content: '分析本月订单的交期风险，应该找哪个 AI 同事？', createdAt: '10:00', runId: 'run-1' },
+            { id: 'a1', role: 'assistant', content: '建议找计划排产', createdAt: '10:01', runId: 'run-1' },
+          ],
+          recommendations: [recommendation],
+        }),
+        isOwn: m => m.role === 'user',
+      },
+    })
+    await wrapper.get('[aria-label="去和计划排产聊天"]').trigger('click')
+    expect(wrapper.emitted('open-recommended-agent')).toEqual([[recommendation, '请分析本月订单的交期风险，列出可能延期的订单和原因。']])
+  })
+
   it('2b-5: every artifact opens the preview; failed or pending text is explained beside the card; images show a thumbnail', async () => {
     const sheet = artifact({ id: 'a-xlsx', name: '营收.xlsx', type: 'xlsx', textPreview: 'available' })
     const report = artifact({ id: 'a-pdf', name: '报告.pdf', type: 'pdf', textPreview: 'failed', textPreviewError: 'PDF 无法读取' })

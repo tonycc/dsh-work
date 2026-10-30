@@ -125,7 +125,7 @@ flowchart LR
 | `skill_installations` | 管理端安装计划 | 每次安装 Run 一条；完成时必须指向已保存的版本 |
 | `skill_test_bindings` | 严格试运行与精确 Attempt 的绑定 | 不可修改（触发器）；绑定配置与 Runtime 指纹 |
 | `skill_runtime_activations`、`skill_python_executions` | Attempt 内的 Skill 激活与 Python 执行记录 | 作为试运行证据，按 Attempt 隔离 |
-| `agent_recommendations` | Attempt 内推荐的 AI 同事（推荐 AI 同事方案） | 关联 Run、Attempt、发起员工与被推荐的 Agent；只保存位置与限长的推荐理由，名称与说明读取时取当前启用版本；会话详情只显示各 Run 当前 Attempt 的记录，同一 Attempt 再次推荐整组替换 |
+| `agent_recommendations` | Attempt 内推荐的 AI 同事（推荐 AI 同事方案） | 关联 Run、Attempt、发起员工与被推荐的 Agent；只保存位置、限长的推荐理由与可选的“发给该同事的问题”（`suggested_prompt`，用于预填），名称与说明读取时取当前启用版本；会话详情只显示各 Run 当前 Attempt 的记录，同一 Attempt 再次推荐整组替换 |
 | `skill_release_records` | 发布、启用、停用、回滚记录 | 只追加 |
 | `skill_test_runs` | 早期的测试记录 | 只保留历史 |
 

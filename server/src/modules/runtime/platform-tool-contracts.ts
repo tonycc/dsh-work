@@ -178,6 +178,7 @@ export const platformToolContracts = {
             properties: {
               agentId: { type: 'string', minLength: 1, maxLength: 160 },
               reason: { type: 'string', minLength: 1, maxLength: 120 },
+              suggestedPrompt: { type: 'string', minLength: 1, maxLength: 500 },
             },
             required: ['agentId', 'reason'],
           },

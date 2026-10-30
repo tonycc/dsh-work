@@ -613,6 +613,7 @@ function registerPlatformTools(ctx) {
             properties: {
               agentId: { type: 'string', minLength: 1, maxLength: 160 },
               reason: { type: 'string', minLength: 1, maxLength: 120 },
+              suggestedPrompt: { type: 'string', minLength: 1, maxLength: 500, description: 'Optional. The question to send to that colleague, written as the employee, stating the task itself (keep the objects, time and scope); never "who should I ask". Prefilled into the new conversation for the employee to confirm.' },
             },
             required: ['agentId', 'reason'],
             additionalProperties: false,
