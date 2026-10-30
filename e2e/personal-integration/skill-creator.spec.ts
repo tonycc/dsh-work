@@ -20,6 +20,22 @@ test.afterEach(async ({ page }) => {
   await page.request.put('/api/workbench/v1/me/preferences', { data: { uiMode: 'work' } })
 })
 
+test('P1: the dsh-work assistant recommends the Skill creator; “去聊天” opens it with the question prefilled (SKC-01 step 1)', async ({ page }) => {
+  const prompt = `我想把常用的周报做法做成 Skill P1-推荐同事-Skill创建-${crypto.randomUUID().slice(0, 8)}`
+  await page.goto('/workbench')
+  await page.getByLabel('对话输入').fill(prompt)
+  await page.getByRole('button', { name: '发送消息', exact: true }).click()
+  await expect(page).toHaveURL(/\/conversations\/run-/)
+  const recommendation = reply(page, prompt).getByRole('article', { name: '推荐的 AI 同事：Skill 创建专家（P1）' })
+  await expect(recommendation).toContainText('推荐理由：专门帮员工把反复做的工作写成 Skill 草稿')
+
+  await recommendation.getByRole('button', { name: '去和Skill 创建专家（P1）聊天' }).click()
+  await expect(page).toHaveURL(new RegExp(`/workbench\\?agent=${expert}$`))
+  await expect(page.getByLabel('已选择 AI 同事', { exact: true })).toContainText('Skill 创建专家（P1）')
+  await expect(page.getByLabel('对话输入')).toHaveValue('我想把每周的销售周报做成一个 Skill')
+  await expect(page.getByTestId('recommendation-prefill-notice')).toContainText('确认后再发送')
+})
+
 test('P1: A mode shows the draft card; the employee previews, submits and withdraws it, and the state survives a reload', async ({ page }) => {
   const prompt = `帮我做一个销售周报 Skill P1-创建Skill-${crypto.randomUUID().slice(0, 8)}`
   await page.goto(`/workbench?agent=${expert}`)

@@ -107,8 +107,13 @@ async function publishColleague(id: string, name: string, visibleRoleIds: string
 }
 await publishColleague('agent-p1-contract', '合同审查（P1）', ['role-employee'])
 await publishColleague('agent-p1-finance', '财务内控（P1）', ['role-platform-admin'])
+// SKC-01 第 1 步：问题带 `P1-推荐同事-Skill创建` 时推荐 Skill 创建专家（P1），并给出预填问题
+// （真实 DSH 中由 dsh-work 助手按专家的说明与示例问题判断后调用 recommend_agents）。
 runtime.hooks.recommendAgents = async manifest => {
-  await fixture.recommendations.recommend(manifest, { recommendations: [{ agentId: 'agent-p1-contract', reason: '掌握公司的合同审查规则，可以逐条审查合同。' }] })
+  const recommendation = manifest.input.message.includes('P1-推荐同事-Skill创建')
+    ? { agentId: 'agent-p1-skill-creator', reason: '专门帮员工把反复做的工作写成 Skill 草稿。', suggestedPrompt: '我想把每周的销售周报做成一个 Skill' }
+    : { agentId: 'agent-p1-contract', reason: '掌握公司的合同审查规则，可以逐条审查合同。' }
+  await fixture.recommendations.recommend(manifest, { recommendations: [recommendation] })
 }
 // SKC-01：开启“可创建 Skill”的 Skill 创建专家（P1）；`P1-创建Skill` 在临时工作区写出 Skill 目录并经草稿服务保存。
 {

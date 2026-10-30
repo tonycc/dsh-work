@@ -24,10 +24,10 @@
 ### SKC-01 员工经推荐进入 Skill 创建专家，生成草稿并自己提交审核
 
 **优先级：** P1 · **角色：** 员工 · **运行层级：** 一次性 PostgreSQL、合成 Runtime（不调用模型）、真实 HTTP 接口与浏览器<br>
-**前置数据：** 已发布并开启“可创建 Skill”的 Skill 创建专家；合成 Runtime 对含 `P1-创建Skill` 的 prompt 在工作区写出一个合法 Skill 目录并调用 `skill_draft_save`<br>
+**前置数据：** 已发布并开启“可创建 Skill”的 Skill 创建专家；合成 Runtime 对含 `P1-创建Skill` 的 prompt 在工作区写出一个合法 Skill 目录并调用 `skill_draft_save`，对含 `P1-推荐同事-Skill创建` 的 prompt 推荐该专家<br>
 **spec：** `e2e/personal-integration/skill-creator.spec.ts`、`apps/workbench-web/src/components/conversation/conversation-components.test.ts`
 
-1. 员工在 dsh-work 助手的推荐卡片上点“去聊天”，进入 Skill 创建专家的新对话，问题已预填。（待 Skill 创建专家发布后补测；推荐机制本身由 `REC-01` 覆盖。）
+1. 员工向 dsh-work 助手说想把常用做法做成 Skill，回复下出现推荐 Skill 创建专家的卡片；点“去聊天”进入与专家的新对话，问题已预填、未发送。（合成 Runtime 以 `P1-推荐同事-Skill创建` 经推荐服务登记推荐；真实 DSH 中助手是否据专家的说明与示例问题推荐，在 `SKC-P2` 验收。推荐机制本身由 `REC-01` 覆盖。）
 2. 发送后回复下方出现草稿卡片：名称、说明、文件清单（脚本单独标注）、包校验结论、可展开的 SKILL.md 预览与“提交审核”；不声称平台验证过试跑。A 工作模式与 B 单聊一致。
 3. 点“提交审核”：卡片变为“待审核”，出现“撤回提交”；刷新后状态不变。
 4. 点“撤回提交”：卡片回到草稿状态，可再次提交。
@@ -87,5 +87,6 @@
 2. 需要脚本的需求（如合并多个 Excel 计算汇总）：专家在执行容器中试跑脚本通过后才保存草稿；自动严格试运行通过后发布。
 3. 需求与已有 Skill 相符：专家引导去用现有 Skill，不新建。
 4. 员工要求写入越权或外传数据的指令：专家拒绝写入并说明原因。
+5. 员工对 dsh-work 助手说想创建 Skill：助手推荐 Skill 创建专家（不自己展开写 Skill），去聊天后问题已预填。
 
 **验收：** 留存 Run/Attempt、草稿版本与审核记录；记录专家是否先查重、是否过度使用脚本的人工结论。P1 绿灯不能替代本层。
