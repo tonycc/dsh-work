@@ -5,11 +5,12 @@ import { StatusTag } from '@dsh-work/ui-core'
 
 import ConversationMessageItem from './ConversationMessageItem.vue'
 import RunArtifactCards from './RunArtifactCards.vue'
+import AgentRecommendationCards from './AgentRecommendationCards.vue'
 import RunProgressCard from './RunProgressCard.vue'
 import RunProgressSummary from './RunProgressSummary.vue'
 import { resultOutcomeLabels, useRunProgress } from '@/composables/useRunProgress'
 import { useAuthStore } from '@/stores/auth'
-import type { Artifact, ChatMessage, TaskRun } from '@/types/domain'
+import type { AgentRecommendation, Artifact, ChatMessage, TaskRun } from '@/types/domain'
 import { mentionsUser } from '@/utils/mentions'
 import '@/styles/conversation-thread.css'
 
@@ -43,6 +44,8 @@ const emit = defineEmits<{
   'copy-link': []
   'open-details': []
   retry: []
+  /** 推荐卡片“去聊天”：带上推荐所在那一轮员工的问题，供目标对话预填。 */
+  'open-recommended-agent': [recommendation: AgentRecommendation, prompt: string]
 }>()
 
 const task = toRef(props, 'task')
@@ -81,6 +84,19 @@ function artifactsForMessage(message: ChatMessage) {
   )
 }
 
+/** 推荐卡片与成果卡同一规则：挂在该 Run 最后一条助手回复下。 */
+function recommendationsForMessage(message: ChatMessage) {
+  if (message.role !== 'assistant' || !message.runId) return []
+  if (lastAssistantIdByRun.value.get(message.runId) !== message.id) return []
+  return (task.value.recommendations ?? []).filter(item => item.runId === message.runId)
+}
+
+function openRecommendedAgent(recommendation: AgentRecommendation) {
+  const prompt = task.value.messages.find(message => message.role === 'user' && message.runId === recommendation.runId)?.content
+    ?? (recommendation.runId === task.value.id ? task.value.prompt : '')
+  emit('open-recommended-agent', recommendation, prompt)
+}
+
 /** 执行隔离 2b-2：本轮 output 中未登记为成果的文件及原因，列在本轮最后一条回复下。 */
 function skippedArtifactsForMessage(message: ChatMessage) {
   if (message.id !== lastAssistantMessageId.value || !belongsToCurrentRun(message) || !isTerminalRun.value) return []
@@ -114,6 +130,10 @@ function messageMeta(message: ChatMessage) {
       @preview="emit('preview', $event)"
       @download="emit('download', $event)"
       @continue-editing="emit('continue-editing', $event)"
+    />
+    <AgentRecommendationCards
+      :recommendations="recommendationsForMessage(message)"
+      @open="openRecommendedAgent"
     />
 
     <div

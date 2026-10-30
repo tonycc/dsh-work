@@ -510,6 +510,25 @@ describe('DSH ACP Runtime Adapter', () => {
     assert.match(prompt, /- LibreOffice（soffice） 25\.2\.3\.2：/)
     assert.match(prompt, /- pdftoppm 25\.03\.0：/)
   })
+  it('routes the agent recommendation tools through the platform bridge and explains them in the prompt', async () => {
+    const calls: Array<{ name: string; input: Record<string, unknown> }> = []
+    const adapter = await createAdapter(500, undefined, undefined, {
+      agentRecommendationTool: async (name, input) => {
+        calls.push({ name, input })
+        return name === 'list_colleague_agents'
+          ? { agents: [{ agentId: 'agent-contract', name: '合同审查', description: '审查合同', examplePrompts: [] }] }
+          : { recommended: [{ agentId: 'agent-contract', name: '合同审查' }], note: 'ok' }
+      },
+    })
+    const input = manifest('run-recommend', 'attempt-recommend', '这份合同该找谁看？[mock:recommend]')
+    input.tools = [...input.tools, { id: 'list_colleague_agents', version: '1.0.0' }, { id: 'recommend_agents', version: '1.0.0' }]
+    assert.match(renderSystemPrompt(input), /# 推荐 AI 同事[\s\S]*list_colleague_agents[\s\S]*recommend_agents/)
+    assert.doesNotMatch(renderSystemPrompt(manifest('run-plain', 'attempt-plain')), /# 推荐 AI 同事/)
+    const result = await (await adapter.execute(input)).done
+    assert.equal(result.status, 'completed', result.errorMessage ?? undefined)
+    assert.deepEqual(calls.map(call => call.name), ['list_colleague_agents', 'recommend_agents'])
+    assert.deepEqual(calls[1]?.input, { recommendations: [{ agentId: 'agent-contract', reason: '这类问题由这位同事负责。' }] })
+  })
   it('rejects activating an emergency-disabled built-in Skill once, without failing the Attempt', async () => {
     const run = async (disabled: string[]) => {
       const activations: string[] = []

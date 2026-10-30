@@ -28,7 +28,7 @@ export interface AgentSpec {
   /** 可选的包根目录工作规程；由平台显式装配，不扫描宿主目录。 */
   workProcedures?: { path: 'AGENTS.md'; body: string } | null
   /** 能力依赖：Skill 为规范化 `id@x.y.z` 精确引用；内置工具由平台装配，联网搜索与项目任务管理需显式开启。 */
-  capabilities: { skills: string[]; webSearch: boolean; projectTasks: boolean }
+  capabilities: { skills: string[]; webSearch: boolean; projectTasks: boolean; agentRecommendation?: boolean }
   input: { type: 'text' }
   output: { type: 'text' }
   context: { conversationHistory: 'recent' }
@@ -128,6 +128,7 @@ export interface AgentSpecConfiguration {
   skills: string[]
   webSearchEnabled: boolean
   projectTasksEnabled: boolean
+  agentRecommendationEnabled: boolean
   timeoutSeconds: number
   maxToolCalls: number
   maxOutputBytes: number
@@ -147,6 +148,8 @@ export function agentSpecFromConfiguration(input: AgentSpecConfiguration, versio
       skills: [...input.skills],
       webSearch: input.webSearchEnabled,
       projectTasks: input.projectTasksEnabled,
+      // 推荐开关晚于既有定义加入：只在开启时写入，关闭时定义保持原形状。
+      ...(input.agentRecommendationEnabled ? { agentRecommendation: true } : {}),
     },
     input: existing ? { ...existing.input } : { type: 'text' },
     output: existing ? { ...existing.output } : { type: 'text' },

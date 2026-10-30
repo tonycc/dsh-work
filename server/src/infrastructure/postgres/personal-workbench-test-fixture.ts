@@ -26,6 +26,7 @@ import { registerUserPreferenceRoutes } from '../../http/workbench/preference-ro
 import { PostgresConversationTargetService } from '../../modules/workbench/application/postgres-conversation-target-service.ts'
 import { PostgresUserPreferenceService } from '../../modules/workbench/application/postgres-user-preference-service.ts'
 import { Router, envelope, requireRequestIdentity } from '../../http/router.ts'
+import { AgentRecommendationService } from '../../modules/agent/agent-recommendation-service.ts'
 import { registerConversationRoutes } from '../../http/workbench/conversation-routes.ts'
 import { registerContentRoutes } from '../../http/workbench/content-routes.ts'
 import { registerAutomationRoutes } from '../../http/workbench/automation-routes.ts'
@@ -67,6 +68,8 @@ export async function personalWorkbenchFixture(prefix: string, options: {
   const conversations = new PostgresConversationRepository(db.client)
   const runs = new PostgresRunRepository(db.client)
   const agents = new PostgresAgentService(db.client)
+  const recommendations = new AgentRecommendationService(db.client, agents, auth)
+  conversations.setRecommendationReader(recommendations)
   const automationRepository = new PostgresAutomationRepository(db.client)
   const runtime = options.runtime ?? new UnavailableRuntime('runtime-local-01')
   const projectArchive = options.projectSpace ? new PostgresProjectArchiveService(db.client) : undefined
@@ -149,7 +152,7 @@ export async function personalWorkbenchFixture(prefix: string, options: {
   assert.ok(address && typeof address !== 'string')
   const origin = `http://127.0.0.1:${address.port}/api/workbench/v1`
   return {
-    db, root, auth, content, conversations, runs, orchestration, agents, automationRepository,
+    db, root, auth, content, conversations, runs, orchestration, agents, recommendations, automationRepository,
     automationService, origin, router,
     ...projectResources,
     async api(path: string, init?: RequestInit) {

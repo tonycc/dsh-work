@@ -17,6 +17,7 @@ import { useTaskStore } from '@/stores/tasks'
 import type { WorkbenchAgent, WorkbenchSkill, WorkspaceFile } from '@/types/domain'
 import { notifyActionFailure } from '@/utils/feedback'
 import { splitMentions, type MentionOption } from '@/utils/mentions'
+import { takeRecommendationPrefill } from '@/utils/recommendation-prefill'
 
 const props = withDefaults(
   defineProps<{
@@ -92,6 +93,8 @@ const composerKey = ref(0)
 const referencedWorkspaceFileIds = ref<string[]>([])
 const selectedAgentId = ref('')
 const selectedSkillId = ref('')
+/** 推荐卡片跳转（推荐方案 4.3）：预填问题时的提示；目标同事已不可用时提示且不选中。 */
+const recommendationNotice = ref<'' | 'prefilled' | 'unavailable'>('')
 
 // Global tasks are implicit personal tasks. Only an explicit locked origin
 // carries a workspace; never infer it from the order of a cached space list.
@@ -180,6 +183,7 @@ async function submitTask(payload: { prompt: string; files: File[]; workspaceId:
     ElMessage.warning(blockedReason.value)
     return
   }
+  recommendationNotice.value = ''
   try {
     // TW-10：文本中显式 @ 的 Agent 成员优先于唯一成员的自动预选。
     const presetMemberId = effectivePresetAgentMember.value?.status === 'available'
@@ -247,9 +251,11 @@ function syncAgentFromRoute() {
   const agentId = typeof route.query.agent === 'string' ? route.query.agent : ''
   selectedAgentId.value = contentStore.agents.some(agent => agent.id === agentId) ? agentId : ''
   const agent = selectedAgent.value
+  const prefill = takeRecommendationPrefill()
+  recommendationNotice.value = prefill ? (agent ? 'prefilled' : 'unavailable') : ''
   if (agent) {
     selectedTask.value = ''
-    presetPrompt.value = agent.examplePrompts[0] ?? ''
+    presetPrompt.value = prefill || (agent.examplePrompts[0] ?? '')
     composerKey.value += 1
     focusComposer()
   }
@@ -257,6 +263,7 @@ function syncAgentFromRoute() {
 
 function clearSelectedAgent() {
   selectedAgentId.value = ''
+  recommendationNotice.value = ''
   const query = { ...route.query }
   delete query.agent
   void router.replace({ query })
@@ -361,6 +368,12 @@ defineExpose({ useWorkspaceFile })
         </div>-->
         <p v-if="referenceName">已引用：{{ referenceName }} <el-button link @click="clearPersonalReference">取消引用</el-button></p>
         <p v-if="referenceError" role="alert">{{ referenceError }} <el-button link @click="clearPersonalReference">取消引用</el-button></p>
+        <p v-if="recommendationNotice === 'prefilled'" class="recommendation-notice" role="status" data-testid="recommendation-prefill-notice">
+          已带入你在 dsh-work 助手那里的问题，确认后再发送；原对话记录与附件不会带入。
+        </p>
+        <p v-else-if="recommendationNotice === 'unavailable'" class="recommendation-notice recommendation-notice--blocked" role="alert">
+          推荐的 AI 同事暂不可用：你已没有使用权限，或它已停用。
+        </p>
         <TaskComposer
           v-if="composerReady"
           :key="composerKey"
@@ -393,6 +406,8 @@ defineExpose({ useWorkspaceFile })
 </template>
 
 <style scoped>
+.recommendation-notice { width: 100%; max-width: 760px; box-sizing: border-box; margin: 0 auto 10px; padding: 8px 12px; border-radius: var(--dsh-radius-sm); background: var(--dsh-color-brand-soft); color: var(--dsh-color-brand-dark); font-size: var(--dsh-font-size-badge); line-height: 1.6; }
+.recommendation-notice--blocked { background: var(--dsh-color-warning-soft); color: var(--dsh-color-warning); }
 .personal-capability-actions { display: flex; justify-content: center; gap: 12px; margin-bottom: 10px; }
 .conversation-starter {
   min-height: 100vh;

@@ -811,6 +811,7 @@ export const mockAgents: AgentDefinition[] = [
     skills: ['企业知识问答', '订单分析', '缺料风险分析', '表格分析'],
     webSearchEnabled: false,
     projectTasksEnabled: false,
+    agentRecommendationEnabled: false,
     updatedAt: '2026-08-27 17:42',
     allowWorkspaceJoin: true,
   },
@@ -833,6 +834,7 @@ export const mockAgents: AgentDefinition[] = [
     skills: ['订单分析', '表格分析'],
     webSearchEnabled: false,
     projectTasksEnabled: false,
+    agentRecommendationEnabled: false,
     updatedAt: '2026-08-28 09:14',
     allowWorkspaceJoin: true,
   },
@@ -859,6 +861,7 @@ export const mockAgentVersions: AgentVersionRecord[] = [
     skills: ['企业知识问答', '订单分析', '缺料风险分析', '表格分析'],
     webSearchEnabled: false,
     projectTasksEnabled: false,
+    agentRecommendationEnabled: false,
   },
   {
     id: 'agent-version-assistant-110',
@@ -880,6 +883,7 @@ export const mockAgentVersions: AgentVersionRecord[] = [
     skills: ['企业知识问答', '订单分析', '表格分析'],
     webSearchEnabled: false,
     projectTasksEnabled: false,
+    agentRecommendationEnabled: false,
   },
   {
     id: 'agent-version-assistant-100',
@@ -900,6 +904,7 @@ export const mockAgentVersions: AgentVersionRecord[] = [
     skills: ['企业知识问答'],
     webSearchEnabled: false,
     projectTasksEnabled: false,
+    agentRecommendationEnabled: false,
   },
   {
     id: 'agent-version-operations-040',
@@ -919,6 +924,7 @@ export const mockAgentVersions: AgentVersionRecord[] = [
     skills: ['订单分析', '表格分析'],
     webSearchEnabled: false,
     projectTasksEnabled: false,
+    agentRecommendationEnabled: false,
   },
   {
     id: 'agent-version-operations-030',
@@ -939,6 +945,7 @@ export const mockAgentVersions: AgentVersionRecord[] = [
     skills: ['订单分析'],
     webSearchEnabled: false,
     projectTasksEnabled: false,
+    agentRecommendationEnabled: false,
   },
 ]
 

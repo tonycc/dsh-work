@@ -167,6 +167,12 @@ export interface DshAcpRuntimeAdapterConfiguration {
     manifest: RuntimeManifest,
     signal: AbortSignal,
   ) => Promise<unknown>
+  /** 推荐方案 4.1：dsh-work 助手列出并推荐 AI 同事，只在员工个人对话中装配。 */
+  agentRecommendationTool?: (
+    name: 'list_colleague_agents' | 'recommend_agents',
+    input: Record<string, unknown>,
+    manifest: RuntimeManifest,
+  ) => Promise<unknown>
   recordPythonExecution?: (manifest: RuntimeManifest, skillId: string, entry: string, succeeded: boolean) => Promise<void>
   /**
    * 执行容器（执行隔离方案 1b）：DSH 的子进程经工具桥落到本 Attempt 的执行容器。生产启动总是配置
@@ -637,6 +643,12 @@ export class DshAcpRuntimeAdapter implements AgentRuntimePort {
         const propose = this.configuration.proposeMemory
         if (!propose) throw dependencyUnavailable('Agent 经验迭代申请不可用：未配置经验迭代服务')
         registerPlatformTool('propose_memory', (input, signal) => propose(input, record.manifest, signal))
+      }
+      for (const name of ['list_colleague_agents', 'recommend_agents'] as const) {
+        if (!record.manifest.tools.some(tool => tool.id === name)) continue
+        const handle = this.configuration.agentRecommendationTool
+        if (!handle) throw dependencyUnavailable('推荐 AI 同事不可用：未配置推荐服务')
+        registerPlatformTool(name, async input => handle(name, input, record.manifest))
       }
       const projectTaskNames = ['project_tasks_list', 'project_task_get', 'project_task_create', 'project_task_update'] as const
       for (const name of projectTaskNames) {
@@ -1519,6 +1531,13 @@ export function renderSystemPrompt(manifest: RuntimeManifest, options: { executi
         '执行镜像中已安装的程序（平台启动时检查得出；清单之外的程序不要假定存在，需要时先用 command -v 确认）：',
         ...describeExecutionToolchain(options.executionToolchain),
       ] : []),
+    ].join('\n'))
+  }
+  if (manifest.tools.some(tool => tool.id === 'recommend_agents')) {
+    sections.push([
+      '# 推荐 AI 同事',
+      '除你之外，员工还可以使用其他 AI 同事。用户问某件事该找谁、或者问题明显属于某位同事的专长（例如需要该同事才能读取的业务数据或规则）时，先调用 list_colleague_agents 查看员工可用的同事，再用 recommend_agents 推荐 1～3 位最相关的同事。推荐会作为卡片显示在你的回复下方，员工可以点击与该同事开始新对话；对话不会转交，你仍要正常回答。',
+      '用户只问该找谁时，简短说明推荐原因即可；用户提出具体问题时，先尽你所能回答，再推荐更合适的同事，并在回答中说明哪些部分该同事能做得更好。通用问题（写作、润色、常识、一般性解释）不要推荐。同一次对话中已经推荐过的同事不要重复推荐。推荐理由写该同事能做而你做不好的部分，不超过 120 个字。只能推荐 list_colleague_agents 返回的同事，不要在回答中编造其他同事。',
     ].join('\n'))
   }
   if (options.executionWorkspace && manifest.tools.some(tool => tool.id === 'python_execute')) {
