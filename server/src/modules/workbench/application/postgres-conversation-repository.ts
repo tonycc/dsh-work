@@ -1307,11 +1307,15 @@ export class PostgresConversationRepository {
       creatorName: string
       lastActiveAt: Date
       createdAt: Date
+      isProjectTaskThread: boolean
     }[]>`
       select s.id, s.title, s.workspace_id as "workspaceId",
              w.workspace_type as "workspaceType", w.status as "workspaceStatus",
              s.created_by as "createdBy", u.display_name as "creatorName",
-             s.last_active_at as "lastActiveAt", s.created_at as "createdAt"
+             s.last_active_at as "lastActiveAt", s.created_at as "createdAt",
+             exists (
+               select 1 from project_tasks t where t.tenant_id = s.tenant_id and t.session_id = s.id
+             ) as "isProjectTaskThread"
         from sessions s
         join workspaces w on w.tenant_id = s.tenant_id and w.id = s.workspace_id
         join users u on u.tenant_id = s.tenant_id and u.id = s.created_by
@@ -1331,9 +1335,10 @@ export class PostgresConversationRepository {
     const pageRunIds = [...new Set(messages.map(message => message.runId).filter((id): id is string => Boolean(id)))]
     const attachmentsByRun = await this.loadRunAttachments(pageRunIds)
     // 本页各 Run 当前 Attempt 登记的成果（带 runId），供任务对话把成果卡挂在对应回复下；
-    // 与 Run 详情的成果同源，读取权限由调用方对会话的校验覆盖。
-    const artifacts = (await this.loadThreadArtifactsForRuns(pageRunIds))
-      .map(artifact => mapArtifactRow(artifact, artifact.sourceRunId))
+    // 与 Run 详情的成果同源，读取权限由调用方对会话的校验覆盖。只有任务对话展示，其余会话不查。
+    const artifacts = row.isProjectTaskThread
+      ? (await this.loadThreadArtifactsForRuns(pageRunIds)).map(artifact => mapArtifactRow(artifact, artifact.sourceRunId))
+      : []
     const runs = await this.database<{
       id: string
       status: RunState

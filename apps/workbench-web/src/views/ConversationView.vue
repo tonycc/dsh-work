@@ -26,6 +26,7 @@ import { colleagueMentionOptions, mentionsUser, splitMentions, type MentionOptio
 import { scheduleLabel, scheduleReasonLabel } from '@/utils/project-task-schedule'
 import ArtifactPreviewPanel from '@/components/conversation/ArtifactPreviewPanel.vue'
 import ConversationMessageItem from '@/components/conversation/ConversationMessageItem.vue'
+import RunApprovalNotice from '@/components/conversation/RunApprovalNotice.vue'
 import RunArtifactCards from '@/components/conversation/RunArtifactCards.vue'
 import RunComposer from '@/components/conversation/RunComposer.vue'
 import RunMessageList from '@/components/conversation/RunMessageList.vue'
@@ -508,12 +509,12 @@ function threadArtifactsFor(message: SessionThreadMessage) {
 }
 
 /**
- * D37：排队或执行中的执行与会话页同样显示进度卡片：读取 Run 详情并订阅其事件（本人刚发起的
- * 执行已在发送时订阅）；读取失败时只保留执行记录。结束后卡片消失，由回复与成果取代。
+ * D37：排队或执行中的执行与会话页同样显示进度卡片，等待权限确认的显示确认说明：读取 Run 详情并
+ * 订阅其事件（本人刚发起的执行已在发送时订阅）；读取失败时只保留执行记录。结束后卡片消失，由回复与成果取代。
  */
 const LIVE_RUN_STATUSES = ['queued', 'running']
 const threadLiveRunIds = computed(() => inTaskConversation.value
-  ? (sessionThread.value?.runs ?? []).filter(run => LIVE_RUN_STATUSES.includes(run.status)).map(run => run.runId)
+  ? (sessionThread.value?.runs ?? []).filter(run => ACTIVE_RUN_STATUSES.includes(run.status)).map(run => run.runId)
   : [])
 watch(threadLiveRunIds, (runIds) => {
   for (const runId of runIds) {
@@ -526,6 +527,11 @@ function liveRun(runId: string) {
   return run && LIVE_RUN_STATUSES.includes(run.status) ? run : undefined
 }
 
+function approvalRun(runId: string) {
+  const run = taskStore.getTask(runId)
+  return run?.status === 'awaiting_approval' ? run : undefined
+}
+
 /** 继续修改只用于下一条交给 Agent 的消息：执行中或任务已完成时只能评论，不提供。 */
 const canContinueEditingInThread = computed(() =>
   canWriteSession.value && isAgentTaskConversation.value && !threadHasActiveRun.value && !agentTaskDone.value)
@@ -534,6 +540,21 @@ function continueEditingInThread(artifact: Artifact) {
   continueEditing(artifact)
   sendMode.value = 'agent'
 }
+
+/**
+ * 任务对话里的引用只属于这个对话、且只在还能交给 Agent 时有效。useRunActions 按 Run 的会话清空，
+ * 任务对话没有当前 Run 不会触发：换到别的任务对话（视图复用）或执行开始、任务完成后在这里清空，
+ * 避免把上一个任务的成果带给另一个任务的 Agent，或留下发不出去的引用。
+ */
+let referenceSessionId: string | null = null
+watch(
+  [() => (inTaskConversation.value ? sessionThread.value?.sessionId ?? null : null), canContinueEditingInThread],
+  ([sessionId, canContinue]) => {
+    if (!sessionId) return
+    if ((referenceSessionId && sessionId !== referenceSessionId) || !canContinue) referencedArtifacts.value = []
+    referenceSessionId = sessionId
+  },
+)
 
 /** 任务对话的首条消息是任务标题与说明（创建任务时写入），不算评论。 */
 const briefMessageId = computed(() =>
@@ -1036,6 +1057,7 @@ watch(
                   :task="liveRun(item.run.runId)!"
                   @open-details="openSessionRun(item.run.runId)"
                 />
+                <RunApprovalNotice v-else-if="approvalRun(item.run.runId)" :task="approvalRun(item.run.runId)!" />
               </template>
               <div v-else class="task-conversation-event" data-testid="task-conversation-event">
                 <p class="task-conversation-record">

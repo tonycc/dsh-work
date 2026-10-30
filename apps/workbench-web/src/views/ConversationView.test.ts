@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAuthStore } from '@/stores/auth'
 import { useContentStore } from '@/stores/content'
 import { useTaskStore } from '@/stores/tasks'
-import { ref } from 'vue'
+import { ref, type Ref } from 'vue'
 import type { Artifact, ProjectTask, ProjectTaskEvent, ProjectTaskPage, SessionThread, TaskResult, TaskRun, Workspace } from '@/types/domain'
 import { projectTaskDetailKey, type ProjectTaskDetailBridge } from '@/composables/project-task-detail'
 import { TaskComposer } from '@dsh-work/workbench-components'
@@ -1015,6 +1015,43 @@ describe('ConversationView 空间内嵌套视图（TW-10 导航）', () => {
         workspaceAgentMemberId: 'wam-7', fileIds: ['file-art-1'],
       }))
       expect(wrapper.find('[data-testid="referenced-artifacts"]').exists()).toBe(false)
+    })
+
+    it('D37：任务完成或执行开始后，发不出去的成果引用随之清空', async () => {
+      const artifact: Artifact = {
+        id: 'art-1', name: '缺货原因.md', type: 'markdown', version: 2, size: '2 KB', createdAt: '09:06', runId: 'run-9',
+        workspaceId: 'ws-team', fileId: 'file-art-1', canReference: true, summary: '',
+      }
+      api.getSessionThread.mockResolvedValue(sessionThread({
+        messages: [
+          { id: 'm3', role: 'assistant', content: '前三个原因如下', createdAt: '09:06', sentAt: '2026-09-10T09:06:00.000Z', runId: 'run-9', senderId: null, senderName: null, runRequesterId: 'U00002', runRequesterName: '周航', agentName: '缺货分析助手' },
+        ],
+        runs: [{ runId: 'run-9', status: 'succeeded', requestedBy: 'U00002', requesterName: '周航', createdAt: '2026-09-10T09:05:00.000Z' }],
+        artifacts: [artifact],
+      }))
+      api.listProjectTasks.mockResolvedValue(page([projectTask()]))
+      const detail = bridge({ taskValue: projectTask({ status: 'in_progress' }) })
+      const { wrapper } = await mountView({ item: null, bridge: detail })
+      await wrapper.get('[data-testid="continue-editing-art-1"]').trigger('click')
+      expect(wrapper.find('[data-testid="referenced-artifacts"]').exists()).toBe(true)
+
+      ;(detail.task as Ref<ProjectTask>).value = projectTask({ status: 'done' })
+      await flushPromises()
+      expect(wrapper.find('[data-testid="referenced-artifacts"]').exists()).toBe(false)
+    })
+
+    it('D37：等待权限确认的执行在执行记录下显示确认说明', async () => {
+      api.getSessionThread.mockResolvedValue(sessionThread({
+        runs: [{ runId: 'run-9', status: 'awaiting_approval', requestedBy: 'U00002', requesterName: '周航', createdAt: '2026-09-10T09:05:00.000Z' }],
+      }))
+      api.getRun.mockImplementation(async (id: string) => {
+        if (id === 'run-9') return task({ id: 'run-9', sessionId: 'session-001', status: 'awaiting_approval' })
+        throw new Error('not a run')
+      })
+      const { wrapper } = await mountView({ item: null, bridge: bridge({ taskValue: projectTask({ status: 'in_progress' }) }) })
+      expect(api.getRun).toHaveBeenCalledWith('run-9')
+      expect(wrapper.get('[data-testid="run-approval-notice"]').text()).toContain('等待本轮工具权限确认')
+      expect(wrapper.find('[data-testid="run-progress-card"]').exists()).toBe(false)
     })
 
     it('执行中只能评论', async () => {

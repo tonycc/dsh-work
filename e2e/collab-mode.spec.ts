@@ -385,6 +385,7 @@ test('MODE-E2E-16: on narrow screens the task summary expands in place', async (
   const created = await page.request.post('/api/workbench/v1/workspaces/ws-supply/project-tasks', {
     data: { title: 'MODE-16 窄屏任务', assignee: { type: 'employee', id: 'U00001' } },
   })
+  expect(created.ok()).toBeTruthy()
   const taskId = (await created.json()).data.id as string
   await switchToCollab(page)
   await page.setViewportSize({ width: 1000, height: 760 })
@@ -396,6 +397,11 @@ test('MODE-E2E-16: on narrow screens the task summary expands in place', async (
   await expect(page.getByTestId('project-task-info')).toContainText('交付文件')
   await summary.getByRole('button', { name: '收起任务信息' }).click()
   await expect(page.getByTestId('project-task-info')).toHaveCount(0)
+
+  // 窄屏变宽：回到任务信息与任务对话并列的默认。
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await expect(page.getByRole('tab', { name: '任务信息' })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByTestId('task-info-pane').getByTestId('project-task-info')).toBeVisible()
 })
 
 test('MODE-E2E-11: AI colleague and group directories open the matching chats', async ({ page }) => {
