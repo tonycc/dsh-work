@@ -369,7 +369,7 @@ defineExpose({ useWorkspaceFile })
         <p v-if="referenceName">已引用：{{ referenceName }} <el-button link @click="clearPersonalReference">取消引用</el-button></p>
         <p v-if="referenceError" role="alert">{{ referenceError }} <el-button link @click="clearPersonalReference">取消引用</el-button></p>
         <p v-if="recommendationNotice === 'prefilled'" class="recommendation-notice" role="status" data-testid="recommendation-prefill-notice">
-          已带入你在 dsh-work 助手那里的问题，确认后再发送；原对话记录与附件不会带入。
+          已带入要发给这位 AI 同事的问题，可以修改，确认后再发送；原对话记录与附件不会带入。
         </p>
         <p v-else-if="recommendationNotice === 'unavailable'" class="recommendation-notice recommendation-notice--blocked" role="alert">
           推荐的 AI 同事暂不可用：你已没有使用权限，或它已停用。

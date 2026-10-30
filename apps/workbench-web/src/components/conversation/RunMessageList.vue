@@ -92,6 +92,10 @@ function recommendationsForMessage(message: ChatMessage) {
 }
 
 function openRecommendedAgent(recommendation: AgentRecommendation) {
+  if (recommendation.suggestedPrompt) {
+    emit('open-recommended-agent', recommendation, recommendation.suggestedPrompt)
+    return
+  }
   const prompt = task.value.messages.find(message => message.role === 'user' && message.runId === recommendation.runId)?.content
     ?? (recommendation.runId === task.value.id ? task.value.prompt : '')
   emit('open-recommended-agent', recommendation, prompt)

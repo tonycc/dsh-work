@@ -353,7 +353,7 @@ watch(() => [latestTask.value?.messages.length, latestTask.value?.status] as con
           >
             <template #notices>
               <p v-if="recommendationPrefill" class="collab-agent-chat__notice" role="status" data-testid="recommendation-prefill-notice">
-                已带入你在 dsh-work 助手那里的问题，确认后再发送；原对话记录与附件不会带入。
+                已带入要发给这位 AI 同事的问题，可以修改，确认后再发送；原对话记录与附件不会带入。
               </p>
               <p v-if="segments.length && !continueSessionId" class="collab-agent-chat__notice" data-testid="new-session-notice">
                 {{ agent?.name }} 已更新版本，发送后将开始新的对话。

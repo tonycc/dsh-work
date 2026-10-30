@@ -178,6 +178,8 @@ export interface AgentRecommendation {
   name: string
   description: string
   reason: string
+  /** 推荐时写给该同事的问题（员工口吻）；“去聊天”优先预填它，没有时预填该轮员工的原问题。 */
+  suggestedPrompt?: string
   available: boolean
 }
 
