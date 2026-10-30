@@ -52,7 +52,7 @@
     "test:m5:shared-files:integration": "node --env-file-if-exists=../.env --experimental-strip-types --test src/http/team-workspace-shared-files-api.integration.test.ts",
     "test:m5:file-versions:integration": "node --env-file-if-exists=../.env --experimental-strip-types --test src/http/team-workspace-file-versions-api.integration.test.ts",
     "test:m5:lifecycle:integration": "node --env-file-if-exists=../.env --experimental-strip-types --test src/http/team-workspace-lifecycle-api.integration.test.ts",
-    "test:s5:conversation-targets:integration": "node --env-file-if-exists=../.env --experimental-strip-types --test src/http/conversation-targets-api.integration.test.ts",
+    "test:s5:conversation-targets:integration": "node --env-file-if-exists=../.env --experimental-strip-types --test src/http/conversation-targets-api.integration.test.ts src/modules/workbench/application/conversation-targets.test.ts",
     "test:s5:timeline:integration": "node --env-file-if-exists=../.env --experimental-strip-types --test src/http/workspace-timeline-api.integration.test.ts",
     "test:s6:project-task-tools:integration": "node --env-file-if-exists=../.env --experimental-strip-types --test src/http/project-task-tools.integration.test.ts src/modules/runtime/project-task-tools-assembly.test.ts",
     "test:s5:preferences:integration": "node --env-file-if-exists=../.env --experimental-strip-types --test src/http/user-preferences-api.integration.test.ts",
