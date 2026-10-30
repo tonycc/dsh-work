@@ -152,6 +152,8 @@ export interface TaskRun {
   threadArtifacts?: Artifact[]
   /** 推荐方案 4.2：个人会话中各 Run 当前 Attempt 的推荐卡片，前端按 runId 挂到该 Run 的回复下。 */
   recommendations?: AgentRecommendationView[]
+  /** Skill 创建专家方案 4.3：各 Run 当前 Attempt 保存的 Skill 草稿，只给提交人本人看。 */
+  skillDrafts?: SkillDraftView[]
   attachments: string[]
   skill?: {
     id: string
@@ -315,6 +317,8 @@ export interface AgentDefinition {
   projectTasksEnabled: boolean
   /** 是否可推荐其他 AI 同事；仅个人对话的员工交互运行装配（推荐方案 R1/R3）。 */
   agentRecommendationEnabled: boolean
+  /** 是否可创建 Skill（Skill 创建专家方案 4.2）；仅个人对话的员工交互运行装配。 */
+  skillCreationEnabled: boolean
   mcpScope?: AgentMcpScope
   updatedAt: string
   /** 草稿编辑的乐观并发修订：保存时原样回传为 expectedRevision（F-05）。原型模式不提供。 */
@@ -341,6 +345,8 @@ export interface AgentDraftConfiguration {
   projectTasksEnabled?: boolean
   /** 是否可推荐其他 AI 同事；编辑时省略则保留当前设置，新建时默认关闭。 */
   agentRecommendationEnabled?: boolean
+  /** 是否可创建 Skill；编辑时省略则保留当前设置，新建时默认关闭。 */
+  skillCreationEnabled?: boolean
   mcpScope?: AgentMcpScope
   changeSummary: string
 }
@@ -385,6 +391,8 @@ export interface AgentVersionRecord {
   projectTasksEnabled: boolean
   /** 是否可推荐其他 AI 同事。 */
   agentRecommendationEnabled: boolean
+  /** 是否可创建 Skill。 */
+  skillCreationEnabled: boolean
   mcpScope?: AgentMcpScope
 }
 
@@ -408,6 +416,27 @@ export interface SkillDefinition {
   /** Skill 可见范围：null 为全员；否则只有这些角色的员工能在 Skill 广场选用（Agent 固定引用不受限）。 */
   visibleRoleIds: string[] | null
   updatedAt: string
+}
+
+/**
+ * 会话详情中的一张 Skill 草稿卡片（Skill 创建专家方案 4.3）：某个 Run 当前 Attempt 保存的草稿版本，
+ * 带所属提交的当前状态。只给提交人本人看。
+ */
+export interface SkillDraftView {
+  submissionId: string
+  versionId: string
+  versionNumber: number
+  runId: string
+  name: string
+  description: string
+  files: Array<{ path: string; size: number; script: boolean }>
+  compatibility: { status: 'compatible' | 'needs_review' | 'incompatible'; issues: Array<{ code: string; severity: 'warning' | 'error'; message: string }> }
+  status: 'draft' | 'pending' | 'approved' | 'rejected'
+  /** 是否为该提交的当前版本；被新版本替代的卡片只显示一行说明。 */
+  latest: boolean
+  reviewNote?: string
+  submittedAt?: string
+  reviewedAt?: string
 }
 
 /** 会话详情中的一张推荐卡片：名称与说明取同事当前启用版本，理由来自推荐时的模型输出。 */

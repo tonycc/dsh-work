@@ -325,6 +325,8 @@ export interface AgentDefinition {
   projectTasksEnabled: boolean
   /** 是否可推荐其他 AI 同事（只在员工个人对话中生效）。 */
   agentRecommendationEnabled?: boolean
+  /** 是否可创建 Skill（只在员工个人对话中生效，草稿由员工提交审核）。 */
+  skillCreationEnabled?: boolean
   mcpScope?: AgentMcpScope
   updatedAt: string
   /** 草稿编辑的乐观并发修订，保存时回传为 expectedRevision；原型模式不提供。 */
@@ -458,6 +460,7 @@ export interface AgentDraftConfiguration {
   projectTasksEnabled?: boolean
   /** 编辑时省略则保留当前设置，新建时默认关闭。 */
   agentRecommendationEnabled?: boolean
+  skillCreationEnabled?: boolean
   mcpScope?: AgentMcpScope
   changeSummary: string
 }
@@ -495,6 +498,7 @@ export interface AgentVersionRecord {
   webSearchEnabled: boolean
   projectTasksEnabled: boolean
   agentRecommendationEnabled?: boolean
+  skillCreationEnabled?: boolean
   mcpScope?: AgentMcpScope
 }
 

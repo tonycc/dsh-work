@@ -173,6 +173,16 @@ export interface DshAcpRuntimeAdapterConfiguration {
     input: Record<string, unknown>,
     manifest: RuntimeManifest,
   ) => Promise<unknown>
+  /**
+   * Skill 创建专家方案 4.2：查看可用 Skill 与保存 Skill 草稿，只在员工个人对话中装配。保存时读取本 Attempt
+   * 的工作区；与其他平台工具一样，调用前已确认执行容器静止，宿主读取时容器内没有命令在运行。
+   */
+  skillCreationTool?: (
+    name: 'list_available_skills' | 'skill_draft_save',
+    input: Record<string, unknown>,
+    manifest: RuntimeManifest,
+    workspaceDirectory: string,
+  ) => Promise<unknown>
   recordPythonExecution?: (manifest: RuntimeManifest, skillId: string, entry: string, succeeded: boolean) => Promise<void>
   /**
    * 执行容器（执行隔离方案 1b）：DSH 的子进程经工具桥落到本 Attempt 的执行容器。生产启动总是配置
@@ -649,6 +659,12 @@ export class DshAcpRuntimeAdapter implements AgentRuntimePort {
         const handle = this.configuration.agentRecommendationTool
         if (!handle) throw dependencyUnavailable('推荐 AI 同事不可用：未配置推荐服务')
         registerPlatformTool(name, async input => handle(name, input, record.manifest))
+      }
+      for (const name of ['list_available_skills', 'skill_draft_save'] as const) {
+        if (!record.manifest.tools.some(tool => tool.id === name)) continue
+        const handle = this.configuration.skillCreationTool
+        if (!handle) throw dependencyUnavailable('Skill 创建工具不可用：未配置 Skill 提交服务')
+        registerPlatformTool(name, async input => handle(name, input, record.manifest, workspaceDirectory))
       }
       const projectTaskNames = ['project_tasks_list', 'project_task_get', 'project_task_create', 'project_task_update'] as const
       for (const name of projectTaskNames) {
@@ -1453,6 +1469,16 @@ export function renderSystemPrompt(manifest: RuntimeManifest, options: { executi
       '除你之外，员工还可以使用其他 AI 同事。收到业务问题或“该找谁”的问题时，第一步先调用 list_colleague_agents，在查找文件、要求补充数据、调用其他工具或作答之前完成，判断有没有职责与问题相符的同事。',
       '有相符的同事时，优先用 recommend_agents 推荐 1～3 位，并为每位同事写 suggestedPrompt：以员工的口吻直接写给该同事、说明要办的事，保留原问题中的对象、时间和范围，不要写“该找谁”一类的话（员工点卡片后它会预填进与该同事的新对话，由员工确认后发送）。回复只用一两句话说明为什么建议交给该同事处理，不要自己展开解答（不给分析框架、步骤清单、长篇说明，也不要先向员工索要数据）。推荐会作为卡片显示在你的回复下方，员工点击即可与该同事开始新对话；对话不会转交。员工看了推荐后仍明确要求由你回答时，再正常回答。',
       '没有职责相符的同事，或者是通用问题（写作、润色、翻译、常识、一般性解释）时，不推荐，直接回答，也不要在回复中提及是否推荐、问题属于哪一类等判断过程。同一次对话中已经推荐过的同事不要重复推荐。推荐理由写该同事能做而你做不好的部分，不超过 120 个字；只依据 list_colleague_agents 返回的该同事说明与示例问题来写，不要声称它能读取哪些数据、连接哪些系统或具备说明之外的能力，说明里没有写的就不要说。只能推荐 list_colleague_agents 返回的同事，不要在回答中编造其他同事。',
+    ].join('\n'))
+  }
+  // Skill 创建专家方案 4.2：工具的使用方式由平台说明；问需求、查重、少用脚本等工作原则写在 Agent 的 SOUL.md。
+  if (manifest.tools.some(tool => tool.id === 'skill_draft_save')) {
+    sections.push([
+      '# 保存 Skill 草稿',
+      '动手写之前先调用 list_available_skills 查看员工已经能用的 Skill（含平台内置 Skill）；有相符的就引导员工去用，不要重复创建。',
+      'Skill 是一个目录：根目录的 SKILL.md 以 YAML frontmatter 开头，写明 name（Skill 名称）和 description（一句话说明何时使用），之后是正文指令；可以附带 references/、templates/、scripts/ 下的文本文件。只接受 md、txt、json、yaml、csv、toml、py 和 LICENSE 文件，最多 64 个文件、合计 1 MB。正文提到的 references/、templates/、scripts/ 文件必须真的在目录中。',
+      '用 bash 在工作区新建目录写这些文件，例如 drafts/weekly-report/；不要放在 output/、input/ 或 skills/ 下（write 工具只能写 output/ 中的成果，不能用来写草稿）。有 Python 脚本时，先在 bash 中用示例输入运行确认能跑通，只使用环境中已经安装的包；脚本读写文件用环境变量 DSH_INPUT_DIR、DSH_OUTPUT_DIR 和相对路径，不要写死 /skill、/input、/output。',
+      '写好后调用 skill_draft_save，directory 填该目录的相对路径。返回 compatibility.status 为 incompatible 时按 issues 修改后重新保存。保存后草稿会作为卡片显示在你的回复下方；是否提交审核由员工在卡片上决定，你不能替员工提交，也不要说已经提交或已经发布。',
     ].join('\n'))
   }
   if (manifest.timezone) {

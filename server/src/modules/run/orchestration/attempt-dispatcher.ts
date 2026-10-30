@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { assertRuntimeModelRequirements } from '../../runtime/execution-capabilities.ts'
 import type { RuntimeManifest } from '../../runtime/runtime-types.ts'
 import { compileRuntimeManifest } from '../../runtime/manifest-compiler.ts'
-import { agentRecommendationToolNames, builtinToolReference, executionToolNames, projectTaskToolNames } from '../../runtime/builtin-tools.ts'
+import { agentRecommendationToolNames, builtinToolReference, executionToolNames, projectTaskToolNames, skillCreationToolNames } from '../../runtime/builtin-tools.ts'
 import type { PreparedRuntimeFile } from '../../workbench/application/postgres-content-service.ts'
 import type { RuntimeAuthorizationDecision } from '../../authorization/postgres-authorization-service.ts'
 import { authorizationDenied } from '../../../domain/authorization-errors.ts'
@@ -91,6 +91,7 @@ export class AttemptDispatcher {
           runtimeTools: [],
           projectTasksEnabled: false,
           agentRecommendationEnabled: false,
+          skillCreationEnabled: false,
           mcpConnections: [],
           approvalMode: 'risk_based' as const,
           roleIds: ['role-employee'],
@@ -176,6 +177,13 @@ export class AttemptDispatcher {
         ? agentRecommendationToolNames({
             enabled: agent.agentRecommendationEnabled,
             personalConversation: input.personalConversation === true,
+          })
+        : []),
+      ...(!input.purpose
+        ? skillCreationToolNames({
+            enabled: agent.skillCreationEnabled,
+            personalConversation: input.personalConversation === true,
+            bashAvailable: !disabledTools.has('bash'),
           })
         : []),
     ].filter(name => !disabledTools.has(name))

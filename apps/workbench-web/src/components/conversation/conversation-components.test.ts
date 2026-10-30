@@ -3,14 +3,17 @@ import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { AgentRecommendation, Artifact, ChatMessage, SessionThread, TaskResult, TaskRun } from '@/types/domain'
+import type { AgentRecommendation, Artifact, ChatMessage, SessionThread, SkillDraft, TaskResult, TaskRun } from '@/types/domain'
 import ConversationMessageItem from './ConversationMessageItem.vue'
 import RunComposer from './RunComposer.vue'
 import RunMessageList from './RunMessageList.vue'
 import SessionDiscussionList from './SessionDiscussionList.vue'
 
-const { downloadArtifact, getArtifactText } = vi.hoisted(() => ({ downloadArtifact: vi.fn(), getArtifactText: vi.fn() }))
-vi.mock('@/api/client', () => ({ workbenchApi: { downloadArtifact, getArtifactText } }))
+const { downloadArtifact, getArtifactText, submitSkillDraft, withdrawSkillDraft, getSkillDraftFile } = vi.hoisted(() => ({
+  downloadArtifact: vi.fn(), getArtifactText: vi.fn(),
+  submitSkillDraft: vi.fn(), withdrawSkillDraft: vi.fn(), getSkillDraftFile: vi.fn(),
+}))
+vi.mock('@/api/client', () => ({ workbenchApi: { downloadArtifact, getArtifactText, submitSkillDraft, withdrawSkillDraft, getSkillDraftFile } }))
 
 // S5b：从 ConversationView 拆出的消息组件，A 的对话详情与 B 的对话页共用。
 
@@ -261,6 +264,78 @@ describe('RunMessageList', () => {
     })
     await wrapper.get('[aria-label="去和计划排产聊天"]').trigger('click')
     expect(wrapper.emitted('open-recommended-agent')).toEqual([[recommendation, '请分析本月订单的交期风险，列出可能延期的订单和原因。']])
+  })
+
+  it('SKC-01: the Skill draft card sits under the run’s last reply; the employee submits, withdraws and previews it', async () => {
+    const draft = (overrides: Partial<SkillDraft> = {}): SkillDraft => ({
+      submissionId: 'sub-1', versionId: 'ver-2', versionNumber: 2, runId: 'run-1', name: '销售周报汇总',
+      description: '每周把销售日报汇总成周报。',
+      files: [{ path: 'SKILL.md', size: 1400, script: false }, { path: 'scripts/report.py', size: 3200, script: true }],
+      compatibility: { status: 'compatible', issues: [] }, status: 'draft', latest: true, ...overrides,
+    })
+    submitSkillDraft.mockResolvedValue(draft({ status: 'pending', submittedAt: '2026-10-30T07:42:00.000Z' }))
+    withdrawSkillDraft.mockResolvedValue(draft({ status: 'draft' }))
+    getSkillDraftFile.mockResolvedValue({ path: 'SKILL.md', size: 20, content: '---\nname: 销售周报汇总\n---' })
+    const wrapper = mount(RunMessageList, {
+      global,
+      props: {
+        task: run({
+          id: 'run-1',
+          messages: [
+            { id: 'u1', role: 'user', content: '帮我做一个周报 Skill', createdAt: '10:00', runId: 'run-1' },
+            { id: 'a1', role: 'assistant', content: '先确认几件事', createdAt: '10:01', runId: 'run-1' },
+            { id: 'a2', role: 'assistant', content: '草稿如下', createdAt: '10:02', runId: 'run-1' },
+          ],
+          skillDrafts: [draft({ versionId: 'ver-1', versionNumber: 1, latest: false }), draft()],
+        }),
+        isOwn: m => m.role === 'user',
+      },
+    })
+    expect(wrapper.findAll('[data-testid="skill-drafts"]')).toHaveLength(1)
+    expect(wrapper.get('[data-testid="skill-draft-superseded"]').text()).toContain('草稿 v1 · 已由新版本替代')
+    const card = wrapper.get('[data-testid="skill-draft-card"]')
+    expect(card.text()).toContain('scripts/report.py')
+    expect(card.text()).toContain('脚本')
+    expect(card.text()).toContain('包校验：通过')
+    expect(card.text(), '不声称平台验证过试跑').not.toContain('试跑')
+
+    await card.get('.skill-draft__preview-toggle').trigger('click')
+    await flushPromises()
+    expect(getSkillDraftFile).toHaveBeenCalledWith('sub-1', 'ver-2')
+    expect(wrapper.get('[data-testid="skill-draft-preview"]').text()).toContain('name: 销售周报汇总')
+
+    await wrapper.get('[data-action="submit-skill-draft"]').trigger('click')
+    await flushPromises()
+    expect(submitSkillDraft).toHaveBeenCalledWith('sub-1', 'ver-2')
+    expect(wrapper.get('[data-testid="skill-draft-card"]').text()).toContain('已提交审核')
+    await wrapper.get('[data-action="withdraw-skill-draft"]').trigger('click')
+    await flushPromises()
+    expect(withdrawSkillDraft).toHaveBeenCalledWith('sub-1')
+    expect(wrapper.find('[data-action="submit-skill-draft"]').exists()).toBe(true)
+  })
+
+  it('SKC-01: an incompatible draft cannot be submitted; a rejected one shows the reason', () => {
+    const base: SkillDraft = {
+      submissionId: 'sub-2', versionId: 'ver-1', versionNumber: 1, runId: 'run-1', name: '客诉回复', description: '客诉首次回复。',
+      files: [{ path: 'SKILL.md', size: 900, script: false }],
+      compatibility: { status: 'incompatible', issues: [{ code: 'python_package', severity: 'error', message: '依赖 foo 不在执行环境中' }] },
+      status: 'draft', latest: true,
+    }
+    const mountWith = (drafts: SkillDraft[]) => mount(RunMessageList, {
+      global,
+      props: {
+        task: run({ id: 'run-1', messages: [{ id: 'a1', role: 'assistant', content: '草稿如下', createdAt: '10:01', runId: 'run-1' }], skillDrafts: drafts }),
+        isOwn: m => m.role === 'user',
+      },
+    })
+    const incompatible = mountWith([base])
+    expect(incompatible.text()).toContain('包校验：未通过')
+    expect(incompatible.text()).toContain('依赖 foo 不在执行环境中')
+    expect(incompatible.get('[data-action="submit-skill-draft"]').attributes('disabled')).toBeDefined()
+    const rejected = mountWith([{ ...base, compatibility: { status: 'compatible', issues: [] }, status: 'rejected', reviewNote: '文件名不要带客户名称' }])
+    expect(rejected.text()).toContain('审核未通过')
+    expect(rejected.text()).toContain('文件名不要带客户名称')
+    expect(rejected.find('[data-action="submit-skill-draft"]').exists()).toBe(false)
   })
 
   it('2b-5: every artifact opens the preview; failed or pending text is explained beside the card; images show a thumbnail', async () => {

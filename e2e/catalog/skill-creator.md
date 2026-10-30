@@ -25,14 +25,14 @@
 
 **优先级：** P1 · **角色：** 员工 · **运行层级：** 一次性 PostgreSQL、合成 Runtime（不调用模型）、真实 HTTP 接口与浏览器<br>
 **前置数据：** 已发布并开启“可创建 Skill”的 Skill 创建专家；合成 Runtime 对含 `P1-创建Skill` 的 prompt 在工作区写出一个合法 Skill 目录并调用 `skill_draft_save`<br>
-**spec：** `e2e/personal-integration/skill-creator.spec.ts`（待建）
+**spec：** `e2e/personal-integration/skill-creator.spec.ts`、`apps/workbench-web/src/components/conversation/conversation-components.test.ts`
 
-1. 员工在 dsh-work 助手的推荐卡片上点“去聊天”，进入 Skill 创建专家的新对话，问题已预填。
-2. 发送后回复下方出现草稿卡片：名称、说明、文件清单（脚本单独标注）、包校验结论、可展开的 SKILL.md 预览，以及“提交审核”“继续修改”。
+1. 员工在 dsh-work 助手的推荐卡片上点“去聊天”，进入 Skill 创建专家的新对话，问题已预填。（待 Skill 创建专家发布后补测；推荐机制本身由 `REC-01` 覆盖。）
+2. 发送后回复下方出现草稿卡片：名称、说明、文件清单（脚本单独标注）、包校验结论、可展开的 SKILL.md 预览与“提交审核”；不声称平台验证过试跑。A 工作模式与 B 单聊一致。
 3. 点“提交审核”：卡片变为“待审核”，出现“撤回提交”；刷新后状态不变。
 4. 点“撤回提交”：卡片回到草稿状态，可再次提交。
-5. 从 Skill 广场点“创建 Skill”，进入与 Skill 创建专家的新对话，没有预填。
-6. 已有 5 条待审核提交时再提交，提示已达上限，提交不成功。
+5. 从 Skill 广场点“创建 Skill”，进入与 Skill 创建专家的新对话，没有预填。（待实施：入口随 Skill 创建专家发布一起加入。）
+6. 已有 5 条待审核提交时再提交，提示已达上限，提交不成功。（由 `SKC-03` 的集成测试覆盖。）
 
 **验收：** 提交只能由员工在卡片上发起；状态在刷新后保持；上限生效。P0 冒烟不覆盖本条（冒烟服务不执行对话）。
 
@@ -54,7 +54,7 @@
 
 **优先级：** P1 · **角色：** 员工、平台管理员 · **运行层级：** 专用可丢弃 PostgreSQL、受控测试身份<br>
 **前置数据：** 开启与未开启“可创建 Skill”的 Agent 各一；一个团队空间<br>
-**spec：** `server/src/modules/runtime/builtin-tools.test.ts`、`server/src/infrastructure/postgres/skill-submission.integration.test.ts`（待建）
+**spec：** `server/src/modules/runtime/builtin-tools.test.ts`、`server/src/modules/runtime/runtime-adapter.test.ts`、`server/src/modules/skill/skill-submission-workspace.test.ts`、`server/src/infrastructure/postgres/skill-submission.integration.test.ts`
 
 1. 开启开关的 Agent 在个人空间员工对话中装配 `list_available_skills` 与 `skill_draft_save`；未开启、团队空间、定时与主动任务、发布试运行、系统与管理运行不装配；Skill 声明这两个工具时安装校验报不兼容。
 2. `list_available_skills` 只返回发起员工可选用的已发布 Skill 与平台内置 Skill。

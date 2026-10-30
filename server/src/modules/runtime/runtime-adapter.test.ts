@@ -539,6 +539,30 @@ describe('DSH ACP Runtime Adapter', () => {
     assert.deepEqual(calls.map(call => call.name), ['list_colleague_agents', 'recommend_agents'])
     assert.deepEqual(calls[1]?.input, { recommendations: [{ agentId: 'agent-contract', reason: '这类问题由这位同事负责。' }] })
   })
+  it('routes the Skill creation tools with the Attempt workspace and explains saving drafts in the prompt', async () => {
+    const calls: Array<{ name: string; input: Record<string, unknown>; skillMd?: string }> = []
+    const adapter = await createAdapter(500, undefined, undefined, {
+      skillCreationTool: async (name, input, _manifest, workspaceDirectory) => {
+        const skillMd = name === 'skill_draft_save'
+          ? await readFile(join(workspaceDirectory, String(input['directory']), 'SKILL.md'), 'utf8')
+          : undefined
+        calls.push({ name, input, ...(skillMd ? { skillMd } : {}) })
+        return name === 'list_available_skills' ? { skills: [], total: 0 } : { submissionId: 's-1', versionId: 'v-1', compatibility: { status: 'compatible', issues: [] } }
+      },
+    })
+    const input = manifest('run-skill-draft', 'attempt-skill-draft', '帮我做一个周报 Skill[mock:skill-draft]')
+    input.tools = [...input.tools, { id: 'list_available_skills', version: '1.0.0' }, { id: 'skill_draft_save', version: '1.0.0' }]
+    const prompt = renderSystemPrompt(input)
+    assert.match(prompt, /# 保存 Skill 草稿[\s\S]*先调用 list_available_skills/)
+    assert.match(prompt, /用 bash 在工作区新建目录写这些文件[\s\S]*不要放在 output\/、input\/ 或 skills\/ 下/)
+    assert.match(prompt, /你不能替员工提交，也不要说已经提交或已经发布/)
+    assert.doesNotMatch(renderSystemPrompt(manifest('run-plain', 'attempt-plain')), /# 保存 Skill 草稿/)
+    const result = await (await adapter.execute(input)).done
+    assert.equal(result.status, 'completed', result.errorMessage ?? undefined)
+    assert.deepEqual(calls.map(call => call.name), ['list_available_skills', 'skill_draft_save'])
+    assert.deepEqual(calls[1]?.input, { directory: 'drafts/weekly-report' })
+    assert.match(calls[1]?.skillMd ?? '', /^---\nname: 销售周报汇总/, 'handler reads the same workspace the worker wrote')
+  })
   it('rejects activating an emergency-disabled built-in Skill once, without failing the Attempt', async () => {
     const run = async (disabled: string[]) => {
       const activations: string[] = []

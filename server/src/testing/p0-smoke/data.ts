@@ -812,6 +812,7 @@ export const mockAgents: AgentDefinition[] = [
     webSearchEnabled: false,
     projectTasksEnabled: false,
     agentRecommendationEnabled: false,
+    skillCreationEnabled: false,
     updatedAt: '2026-08-27 17:42',
     allowWorkspaceJoin: true,
   },
@@ -835,6 +836,7 @@ export const mockAgents: AgentDefinition[] = [
     webSearchEnabled: false,
     projectTasksEnabled: false,
     agentRecommendationEnabled: false,
+    skillCreationEnabled: false,
     updatedAt: '2026-08-28 09:14',
     allowWorkspaceJoin: true,
   },
@@ -862,6 +864,7 @@ export const mockAgentVersions: AgentVersionRecord[] = [
     webSearchEnabled: false,
     projectTasksEnabled: false,
     agentRecommendationEnabled: false,
+    skillCreationEnabled: false,
   },
   {
     id: 'agent-version-assistant-110',
@@ -884,6 +887,7 @@ export const mockAgentVersions: AgentVersionRecord[] = [
     webSearchEnabled: false,
     projectTasksEnabled: false,
     agentRecommendationEnabled: false,
+    skillCreationEnabled: false,
   },
   {
     id: 'agent-version-assistant-100',
@@ -905,6 +909,7 @@ export const mockAgentVersions: AgentVersionRecord[] = [
     webSearchEnabled: false,
     projectTasksEnabled: false,
     agentRecommendationEnabled: false,
+    skillCreationEnabled: false,
   },
   {
     id: 'agent-version-operations-040',
@@ -925,6 +930,7 @@ export const mockAgentVersions: AgentVersionRecord[] = [
     webSearchEnabled: false,
     projectTasksEnabled: false,
     agentRecommendationEnabled: false,
+    skillCreationEnabled: false,
   },
   {
     id: 'agent-version-operations-030',
@@ -946,6 +952,7 @@ export const mockAgentVersions: AgentVersionRecord[] = [
     webSearchEnabled: false,
     projectTasksEnabled: false,
     agentRecommendationEnabled: false,
+    skillCreationEnabled: false,
   },
 ]
 

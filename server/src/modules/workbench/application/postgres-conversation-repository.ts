@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
-import type { AgentRecommendationView, ChatMessage, RunStep, TaskRun, TaskRunError } from '../../../domain/types.ts'
+import type { AgentRecommendationView, ChatMessage, RunStep, SkillDraftView, TaskRun, TaskRunError } from '../../../domain/types.ts'
 import { deriveTaskResult, type TaskResult, type TaskResultEvidence, type TaskResultOutcome } from '../../../domain/task-result.ts'
 import type { DatabaseClient, DatabaseTransaction } from '../../../infrastructure/postgres/database.ts'
 import type { JsonObject, RunState } from '../../../domain/run-state.ts'
@@ -182,6 +182,11 @@ interface AttachmentRow {
 }
 
 /** 会话详情读取推荐卡片的端口（实现见 agent 模块的推荐服务）。 */
+/** Skill 创建专家方案 4.3：草稿卡片只给提交人本人看。 */
+export interface SkillDraftReader {
+  loadForRuns(runIds: string[], viewerUserId: string): Promise<SkillDraftView[]>
+}
+
 export interface AgentRecommendationReader {
   loadForRuns(runIds: string[], viewerUserId: string): Promise<AgentRecommendationView[]>
 }
@@ -190,6 +195,7 @@ export class PostgresConversationRepository {
   private readonly database: DatabaseClient
   private readonly workspaces: PostgresWorkspaceService
   private recommendations?: AgentRecommendationReader
+  private skillDrafts?: SkillDraftReader
 
   constructor(database: DatabaseClient, workspaces = new PostgresWorkspaceService(database)) {
     this.database = database
@@ -197,6 +203,10 @@ export class PostgresConversationRepository {
   }
 
   /** 推荐方案 4.2：会话详情装载推荐卡片。生产组装时接入；测试替身未接时详情不含推荐。 */
+  setSkillDraftReader(reader: SkillDraftReader) {
+    this.skillDrafts = reader
+  }
+
   setRecommendationReader(reader: AgentRecommendationReader) {
     this.recommendations = reader
   }
@@ -1559,6 +1569,9 @@ export class PostgresConversationRepository {
     const recommendations = viewerUserId && this.recommendations && row.workspaceType === 'personal'
       ? await this.recommendations.loadForRuns([...new Set([row.id, ...threadRunIds])], viewerUserId)
       : []
+    const skillDrafts = viewerUserId && this.skillDrafts && row.workspaceType === 'personal'
+      ? await this.skillDrafts.loadForRuns([...new Set([row.id, ...threadRunIds])], viewerUserId)
+      : []
     const prompt = runMessages.find((message) => message.role === 'user')?.content ?? row.title
     return {
       id: row.id,
@@ -1581,6 +1594,7 @@ export class PostgresConversationRepository {
       steps: mapSteps(row.id, evidence.events, row.status),
       threadArtifacts,
       ...(recommendations.length ? { recommendations } : {}),
+      ...(skillDrafts.length ? { skillDrafts } : {}),
       result: deriveTaskResult(evidence),
       attachments: attachmentsByRun.get(row.id) ?? [],
       skill: row.selectedSkillId && row.selectedSkillName && row.selectedSkillVersion

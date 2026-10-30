@@ -70,6 +70,10 @@ function showMcpTools(connector: ConnectorDefinition) {
         <el-switch v-model="form.agentRecommendationEnabled" :disabled="readonly" active-text="可推荐其他 AI 同事" aria-label="可推荐其他 AI 同事" data-testid="agent-recommendation-switch" />
         <p class="field-help">开启后，员工在个人对话中问“该找谁”或问题更适合其他 AI 同事时，该 Agent 可在回复下推荐同事卡片，员工点击后与该同事开始新对话。只推荐员工本人可用的 AI 同事；团队空间、定时任务与发布验证不装配。</p>
       </el-form-item>
+      <el-form-item label="创建 Skill">
+        <el-switch v-model="form.skillCreationEnabled" :disabled="readonly" active-text="可创建 Skill" aria-label="可创建 Skill" data-testid="agent-skill-creation-switch" />
+        <p class="field-help">开启后，该 Agent 可在员工个人对话中查看员工已能使用的 Skill，并把写好的 Skill 保存为草稿；草稿作为卡片显示在回复下，由员工决定是否提交平台管理员审核。团队空间、定时任务与发布验证不装配。</p>
+      </el-form-item>
 
       <div class="subsection-heading"><strong>MCP 外部连接</strong><span>按整个 Connector 选择，不逐工具配置</span></div>
       <el-radio-group :model-value="form.mcpScope.mode" :disabled="readonly" aria-label="MCP 使用范围" @update:model-value="(value: string | number | boolean | undefined) => setMcpMode(value as AgentMcpScope['mode'])">

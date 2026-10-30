@@ -6,6 +6,7 @@ import { StatusTag } from '@dsh-work/ui-core'
 import ConversationMessageItem from './ConversationMessageItem.vue'
 import RunArtifactCards from './RunArtifactCards.vue'
 import AgentRecommendationCards from './AgentRecommendationCards.vue'
+import SkillDraftCards from './SkillDraftCards.vue'
 import RunProgressCard from './RunProgressCard.vue'
 import RunProgressSummary from './RunProgressSummary.vue'
 import { resultOutcomeLabels, useRunProgress } from '@/composables/useRunProgress'
@@ -91,6 +92,13 @@ function recommendationsForMessage(message: ChatMessage) {
   return (task.value.recommendations ?? []).filter(item => item.runId === message.runId)
 }
 
+/** Skill 草稿卡片同样挂在该 Run 最后一条助手回复下（Skill 创建专家方案 4.3）。 */
+function skillDraftsForMessage(message: ChatMessage) {
+  if (message.role !== 'assistant' || !message.runId) return []
+  if (lastAssistantIdByRun.value.get(message.runId) !== message.id) return []
+  return (task.value.skillDrafts ?? []).filter(item => item.runId === message.runId)
+}
+
 function openRecommendedAgent(recommendation: AgentRecommendation) {
   if (recommendation.suggestedPrompt) {
     emit('open-recommended-agent', recommendation, recommendation.suggestedPrompt)
@@ -139,6 +147,7 @@ function messageMeta(message: ChatMessage) {
       :recommendations="recommendationsForMessage(message)"
       @open="openRecommendedAgent"
     />
+    <SkillDraftCards :drafts="skillDraftsForMessage(message)" />
 
     <div
       v-if="skippedArtifactsForMessage(message).length"

@@ -49,6 +49,10 @@ import { registerWorkspaceMemberRoutes } from '../../http/workbench/workspace-me
 import { registerWorkspaceLifecycleRoutes } from '../../http/workbench/workspace-lifecycle-routes.ts'
 import { registerWorkspaceActivityRoutes } from '../../http/workbench/workspace-activity-routes.ts'
 import { registerWorkspaceUsageRoutes } from '../../http/workbench/workspace-usage-routes.ts'
+import { registerSkillSubmissionRoutes } from '../../http/workbench/skill-submission-routes.ts'
+import { SkillSubmissionService } from '../../modules/skill/skill-submission-service.ts'
+import { SkillArtifactStore } from '../../modules/skill/skill-artifact-store.ts'
+import { PostgresSkillService } from '../../modules/skill/postgres-skill-service.ts'
 
 export const testTenant = 'tenant-dsh-work'
 export async function personalWorkbenchFixture(prefix: string, options: {
@@ -70,6 +74,14 @@ export async function personalWorkbenchFixture(prefix: string, options: {
   const agents = new PostgresAgentService(db.client)
   const recommendations = new AgentRecommendationService(db.client, agents, auth)
   conversations.setRecommendationReader(recommendations)
+  // SKC-01：Skill 草稿按真实包规则保存在本次夹具的临时目录中；合成运行经服务登记草稿。
+  const skillSubmissions = new SkillSubmissionService({
+    database: db.client, skills: new PostgresSkillService(db.client), authorization: auth,
+    artifactStore: new SkillArtifactStore(new LocalObjectStorage(join(root, 'skills'))),
+    // 合成环境没有执行容器；按“沙箱可用”核对，含脚本的样例草稿才不会被判为不兼容。
+    pythonSandboxAvailable: true,
+  })
+  conversations.setSkillDraftReader(skillSubmissions)
   const automationRepository = new PostgresAutomationRepository(db.client)
   const runtime = options.runtime ?? new UnavailableRuntime('runtime-local-01')
   const projectArchive = options.projectSpace ? new PostgresProjectArchiveService(db.client) : undefined
@@ -109,6 +121,7 @@ export async function personalWorkbenchFixture(prefix: string, options: {
   } })
   registerConversationRoutes(router, conversations, orchestration, runs, agents, auth)
   registerContentRoutes(router, content, auth)
+  registerSkillSubmissionRoutes(router, skillSubmissions)
   let projectResources: {
     projectArchive: PostgresProjectArchiveService
     workspaceAgentMembers: PostgresWorkspaceAgentMemberService
@@ -152,7 +165,7 @@ export async function personalWorkbenchFixture(prefix: string, options: {
   assert.ok(address && typeof address !== 'string')
   const origin = `http://127.0.0.1:${address.port}/api/workbench/v1`
   return {
-    db, root, auth, content, conversations, runs, orchestration, agents, recommendations, automationRepository,
+    db, root, auth, content, conversations, runs, orchestration, agents, recommendations, skillSubmissions, automationRepository,
     automationService, origin, router,
     ...projectResources,
     async api(path: string, init?: RequestInit) {

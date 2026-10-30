@@ -119,6 +119,20 @@ export function parseSkillPackage(bytes: Uint8Array, selected?: string, director
   } else {
     files = { 'SKILL.md': bytes }
   }
+  return parseSkillFiles(files, specialPaths, hash(bytes), selected, directory)
+}
+
+/**
+ * Skill 创建专家（skill-creator-plan 4.2）：工作区中一个 Skill 目录的文件（相对路径 → 字节），
+ * 按与 ZIP 安装相同的包规则校验。调用方负责只收集普通文件（不含符号链接与特殊文件）。
+ */
+export function parseSkillDirectoryFiles(files: Record<string, Uint8Array>): SkillPackage {
+  if (!Object.keys(files).length) fail('目录中没有文件')
+  const pkg = parseSkillFiles(files, new Set(), '', undefined, undefined)
+  return { ...pkg, archiveSha256: pkg.sha256 }
+}
+
+function parseSkillFiles(files: Record<string, Uint8Array>, specialPaths: Set<string>, archiveSha256: string, selected?: string, directory?: string): SkillPackage {
   const entries = Object.keys(files).filter(path => !path.endsWith('/'))
   let candidates = entries.filter(path => !specialPaths.has(path) && (path === 'SKILL.md' || path.endsWith('/SKILL.md')))
   if (directory) candidates = candidates.filter(path => path.endsWith(`/${directory}/SKILL.md`))
@@ -170,7 +184,7 @@ export function parseSkillPackage(bytes: Uint8Array, selected?: string, director
     if (packaged.some(file => /(?:^|\/)pyproject\.toml$/i.test(file.path))) requirements.push({ type: 'external', name: 'pyproject-dependencies', status: 'needs_review', evidence: 'pyproject.toml 需要与固定镜像核对' })
   }
   const compatibility = compatibilityFor(requirements)
-  return { ...metadata, toolIds: [...tools], files: packaged, requirements, compatibility, archiveSha256: hash(bytes), sha256: skillPackageContentHash(packaged) }
+  return { ...metadata, toolIds: [...tools], files: packaged, requirements, compatibility, archiveSha256, sha256: skillPackageContentHash(packaged) }
 }
 
 /** Resolve same-archive Skill dependencies without executing package content. */

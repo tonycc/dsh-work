@@ -54,6 +54,8 @@ import { ExecutionContainerPythonRunner } from './modules/runtime/execution-cont
 import { normalizePythonPackageName } from './modules/skill/skill-installation-plan.ts'
 import { loadBuiltinSkillCatalog } from './modules/skill/builtin-skills.ts'
 import { AgentRecommendationService } from './modules/agent/agent-recommendation-service.ts'
+import { SkillSubmissionService } from './modules/skill/skill-submission-service.ts'
+import { registerSkillSubmissionRoutes } from './http/workbench/skill-submission-routes.ts'
 import { redactSensitiveText } from './security/safe-observability.ts'
 import {
   preflightDshRuntime,
@@ -240,6 +242,7 @@ async function start() {
   const controlledMemoryRef: { current?: PostgresControlledMemoryService } = {}
   const projectTaskToolsRef: { current?: ProjectTaskTools } = {}
   const agentRecommendationsRef: { current?: AgentRecommendationService } = {}
+  const skillSubmissionsRef: { current?: SkillSubmissionService } = {}
   const dshAdapter: AgentRuntimePort = dshInstallation ? new DshAcpRuntimeAdapter({
     runtimeId: 'runtime-local-01',
     runtimeRoot: resolve(dataRoot, 'dsh-attempts'),
@@ -292,6 +295,12 @@ async function start() {
       return name === 'list_colleague_agents'
         ? agentRecommendationsRef.current.listColleagues(manifest)
         : agentRecommendationsRef.current.recommend(manifest, input)
+    },
+    skillCreationTool: async (name, input, manifest, workspaceDirectory) => {
+      if (!skillSubmissionsRef.current) throw new Error('Skill 提交服务尚未就绪')
+      return name === 'list_available_skills'
+        ? skillSubmissionsRef.current.listAvailableSkills(manifest, input)
+        : skillSubmissionsRef.current.saveDraft(manifest, input, workspaceDirectory)
     },
     prepareSkillInstallation: (manifest, signal) => installationService.prepare(manifest, signal),
     inspectAdminState: (input, manifest, signal) => assistantService.inspectState(input, manifest, signal),
@@ -454,6 +463,13 @@ async function start() {
   orchestration.setPersistentWaitService(persistentWait)
   persistentWait.start()
   const pythonPackages = containerPythonRunner && attemptContainers ? [...attemptContainers.pythonPackages] : []
+  // Skill 创建专家：草稿用与安装相同的包规则与 Python 环境核对（skill-creator-plan 4.2）。
+  skillSubmissionsRef.current = new SkillSubmissionService({
+    database, skills, authorization, artifactStore: skillArtifacts, builtinSkills,
+    pythonSandboxAvailable: Boolean(containerPythonRunner), pythonPackages,
+  })
+  conversations.setSkillDraftReader(skillSubmissionsRef.current)
+  registerSkillSubmissionRoutes(router, skillSubmissionsRef.current)
   const installationService: AdminSkillInstallationService = new AdminSkillInstallationService(database, orchestration, authorization, acquireSkillSource, Boolean(containerPythonRunner), pythonPackages, skillArtifacts, checkInstallationRuntime)
   const assistantService = new AdminAssistantService(database, orchestration, authorization, installationService, skills, agents, operations)
   skills.setPackageTester((userId, skill, prompt) => installationService.testPackage(userId, skill, prompt))
