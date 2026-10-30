@@ -455,14 +455,14 @@ test('one confirmed plan atomically installs, tests and publishes same-source Sk
   assert.equal(rootDefinition?.installationRole, 'root')
   assert.deepEqual(rootDefinition?.dependencies?.map(item => item.name), ['grilling'])
   assert.equal(dependencyDefinition?.installationRole, 'dependency')
-  assert.deepEqual((await skills.listWorkbenchSkills()).filter(item => ['grill-me', 'grilling'].includes(item.name)).map(item => item.name), ['grill-me'])
-  await assert.rejects(skills.resolveWorkbenchSkillVersion(dependencyDefinition!.id), /不存在、未发布或已停用/)
+  assert.deepEqual((await skills.listWorkbenchSkills([])).filter(item => ['grill-me', 'grilling'].includes(item.name)).map(item => item.name), ['grill-me'])
+  await assert.rejects(skills.resolveWorkbenchSkillVersion(dependencyDefinition!.id, []), /不存在、未发布或已停用/)
 
   const directDependencyRequest = await send('npx skills@latest add fixture/delegated --skill=grilling')
   const directDependencyDetail = await wait(directDependencyRequest.sessionId)
   await service.confirm(actor, directDependencyRequest.runId, directDependencyDetail.installations[0]!.planSha256!)
   assert.equal((await skills.getSkills()).find(item => item.id === dependencyDefinition!.id)?.installationRole, 'root')
-  assert.deepEqual((await skills.listWorkbenchSkills()).filter(item => ['grill-me', 'grilling'].includes(item.name)).map(item => item.name).sort(), ['grill-me', 'grilling'])
+  assert.deepEqual((await skills.listWorkbenchSkills([])).filter(item => ['grill-me', 'grilling'].includes(item.name)).map(item => item.name).sort(), ['grill-me', 'grilling'])
 
   const updatedRequest = await send('npx skills@latest add fixture/delegated-updated --skill=grill-me')
   const updatedDetail = await wait(updatedRequest.sessionId)

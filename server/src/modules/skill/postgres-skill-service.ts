@@ -47,6 +47,7 @@ interface SkillRow {
   toolIds: string[]
   testPrompt: string
   coveredBuiltinScenarios: string[]
+  visibleRoleIds: string[] | null
   updatedAt: Date
 }
 
@@ -175,7 +176,8 @@ export class PostgresSkillService {
     return (await this.readSkillRows()).map(toSkillDefinition)
   }
 
-  async listWorkbenchSkills(): Promise<WorkbenchSkillDefinition[]> {
+  /** 员工在 Skill 广场可选用的 Skill：已发布、为安装根节点，且可见范围为全员或包含员工当前角色之一。 */
+  async listWorkbenchSkills(roleIds: string[]): Promise<WorkbenchSkillDefinition[]> {
     const rows = await this.database<WorkbenchSkillRow[]>`
       select s.id, sv.name, sv.version, sv.category, sv.description,
              owner.display_name as owner, sv.test_prompt as "testPrompt",
@@ -192,15 +194,17 @@ export class PostgresSkillService {
                 and installation.status = 'installed'
            )
          )
+         and ${this.visibleTo(roleIds)}
        order by s.updated_at desc, sv.name asc
     `
     return rows.map(row => ({ ...row, updatedAt: formatDateTime(row.updatedAt) }))
   }
 
-  async resolveWorkbenchSkillVersion(skillId: string) {
+  /** 会话选择 Skill：同 Skill 广场的口径；Skill 存在但不对员工当前角色可见时按无权限拒绝。 */
+  async resolveWorkbenchSkillVersion(skillId: string, roleIds: string[]) {
     assertSkillId(skillId)
-    const [row] = await this.database<{ id: string; skillId: string; version: string }[]>`
-      select sv.id, sv.skill_id as "skillId", sv.version
+    const [row] = await this.database<{ id: string; skillId: string; version: string; visible: boolean }[]>`
+      select sv.id, sv.skill_id as "skillId", sv.version, ${this.visibleTo(roleIds)} as visible
         from skills s
         join skill_versions sv on sv.tenant_id = s.tenant_id and sv.id = s.active_version_id
        where s.tenant_id = ${tenantId} and s.id = ${skillId}
@@ -215,7 +219,51 @@ export class PostgresSkillService {
          )
     `
     if (!row) throw skillNotFound('Skill 不存在、未发布或已停用')
+    if (!row.visible) throw authorizationDenied('当前用户角色不可使用所选 Skill')
     return { id: row.id, reference: `${row.skillId}@${row.version}` }
+  }
+
+  /**
+   * 管理员设置 Skill 可见范围（skill-creator-plan 4.5）：Skill 级配置，不随版本固定，立即作用于
+   * Skill 广场与之后的执行前复核。`roleIds` 为 null 表示全员；否则须为非空、现存且启用的角色。
+   * 只约束员工选用，Agent 固定引用不受限。
+   */
+  async setVisibleRoles(input: { skillId: string; roleIds: unknown; reason: unknown; actor: string }) {
+    const actor = await this.requireActor(input.actor)
+    assertSkillId(input.skillId)
+    const reason = typeof input.reason === 'string' ? input.reason.trim() : ''
+    if (!reason || reason.length > 500) throw skillInvalid('请填写 1～500 字的调整原因')
+    let roleIds: string[] | null = null
+    if (input.roleIds !== null) {
+      if (!Array.isArray(input.roleIds) || !input.roleIds.length
+        || input.roleIds.some(role => typeof role !== 'string' || !role.trim())) {
+        throw skillInvalid('可见角色须为非空的角色 ID 列表；全员可见时传 null')
+      }
+      roleIds = unique(input.roleIds as string[])
+      const found = await this.database<{ id: string }[]>`
+        select id from roles where tenant_id = ${tenantId} and status = 'active' and id in ${this.database(roleIds)}
+      `
+      const missing = roleIds.filter(role => !found.some(row => row.id === role))
+      if (missing.length) throw skillInvalid(`角色不存在或已停用：${missing.join('、')}`)
+    }
+    const updated = await this.database<{ id: string }[]>`
+      update skills set visible_role_ids = ${roleIds ? this.database.json(roleIds) : null}, updated_at = now()
+       where tenant_id = ${tenantId} and id = ${input.skillId}
+       returning id
+    `
+    if (!updated.length) throw skillNotFound(`Skill 不存在：${input.skillId}`)
+    await this.audit(actor.id, 'skill.visibility.update', input.skillId, 'success',
+      `可见范围：${roleIds ? roleIds.join('、') : '全员'}；原因：${reason}`)
+    return this.requireSkill(input.skillId)
+  }
+
+  /** SQL 条件：Skill（别名 s）对这些角色可见。空角色列表只能看到全员可见的 Skill。 */
+  private visibleTo(roleIds: string[]) {
+    if (!roleIds.length) return this.database`s.visible_role_ids is null`
+    return this.database`(s.visible_role_ids is null or exists (
+      select 1 from jsonb_array_elements_text(s.visible_role_ids) visible(role_id)
+       where visible.role_id in ${this.database(roleIds)}
+    ))`
   }
 
   async getSkillVersions(): Promise<SkillVersionRecord[]> {
@@ -1017,7 +1065,8 @@ export class PostgresSkillService {
                   and installation.status = 'installed'
              ) as "isInstallationRoot",
              (sv.manifest ? 'installationId') as "strictTest", sv.test_prompt as "testPrompt",
-             s.covered_builtin_scenarios as "coveredBuiltinScenarios", s.updated_at as "updatedAt"
+             s.covered_builtin_scenarios as "coveredBuiltinScenarios", s.visible_role_ids as "visibleRoleIds",
+             s.updated_at as "updatedAt"
         from skills s
         join users owner on owner.tenant_id = s.tenant_id and owner.id = s.owner_user_id
         join skill_versions sv on sv.tenant_id = s.tenant_id
@@ -1137,6 +1186,7 @@ function toSkillDefinition(row: SkillRow): SkillDefinition {
     ...(row.dependencies?.length ? { dependencies: row.dependencies } : {}),
     testPrompt: row.testPrompt,
     coveredBuiltinScenarios: row.coveredBuiltinScenarios,
+    visibleRoleIds: row.visibleRoleIds,
     updatedAt: formatDateTime(row.updatedAt),
   }
 }

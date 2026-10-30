@@ -962,6 +962,7 @@ export const mockSkills: SkillDefinition[] = [
     toolIds: ['read@1.0.0'],
     testPrompt: '差旅报销需要哪些审批材料？',
     coveredBuiltinScenarios: [],
+    visibleRoleIds: null,
     updatedAt: '2026-08-26',
   },
   {
@@ -976,6 +977,7 @@ export const mockSkills: SkillDefinition[] = [
     toolIds: ['read@1.0.0', 'grep@1.0.0'],
     testPrompt: '分析本月订单交付风险。',
     coveredBuiltinScenarios: [],
+    visibleRoleIds: null,
     updatedAt: '2026-08-27',
   },
   {
@@ -990,6 +992,7 @@ export const mockSkills: SkillDefinition[] = [
     toolIds: ['read@1.0.0'],
     testPrompt: '检查未来两周的缺料风险。',
     coveredBuiltinScenarios: [],
+    visibleRoleIds: null,
     updatedAt: '2026-08-24',
   },
   {
@@ -1004,6 +1007,7 @@ export const mockSkills: SkillDefinition[] = [
     toolIds: [],
     testPrompt: '分析上传表格中的异常订单。',
     coveredBuiltinScenarios: [],
+    visibleRoleIds: null,
     updatedAt: '2026-08-28',
   },
 ]

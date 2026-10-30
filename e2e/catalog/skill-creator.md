@@ -8,7 +8,7 @@
 
 **优先级：** P1 · **角色：** 平台管理员、两位不同角色的员工 · **运行层级：** 专用可丢弃 PostgreSQL、受控测试身份、真实 HTTP 接口与浏览器<br>
 **前置数据：** 一个已发布、可见范围为全员的 Skill；员工甲属于“销售部”，员工乙不属于；一个固定引用该 Skill、两位员工都能使用的 Agent<br>
-**spec：** `server/src/http/skill-visibility-api.integration.test.ts`（待建）、`e2e/personal-integration/skill-visibility.spec.ts`（待建）
+**spec：** `server/src/infrastructure/postgres/skill-visibility.integration.test.ts`、`e2e/personal-integration/skill-visibility.spec.ts`（待建）
 
 1. 未设置可见范围时，两位员工的 Skill 广场都能看到该 Skill（保持现有行为）。
 2. 管理员在 Skill 详情把可见范围改为“销售部”，填写原因后保存；审计记录这次修改。

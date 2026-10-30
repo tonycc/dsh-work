@@ -192,6 +192,7 @@ export class RunOrchestrationService {
         workspaceId,
         agentVersionId: input.agentVersionId,
         additionalSkillReferences: input.selectedSkillReference ? [input.selectedSkillReference] : [],
+        selectedSkillReference: input.selectedSkillReference,
         ...input.authorizationContext,
       })
     } else {
@@ -377,6 +378,7 @@ export class RunOrchestrationService {
       workspaceId: session.workspaceId,
       agentVersionId,
       additionalSkillReferences,
+      selectedSkillReference: session.selectedSkillReference,
       ...input.authorizationContext,
     })
     await this.deps.runtime.assertAvailable?.()
@@ -617,6 +619,7 @@ export class RunOrchestrationService {
           workspaceId: session.workspaceId,
           agentVersionId,
           additionalSkillReferences,
+          selectedSkillReference: session.selectedSkillReference,
           ...authorizationContext,
         })
       : await this.deps.authorization?.authorizeRuntime({
@@ -624,6 +627,7 @@ export class RunOrchestrationService {
           workspaceId: session.workspaceId,
           agentVersionId,
           additionalSkillReferences,
+          selectedSkillReference: session.selectedSkillReference,
           ...authorizationContext,
         })
     const prompt = await this.deps.conversations.getRunPrompt(run.id)

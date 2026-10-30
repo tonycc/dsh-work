@@ -15,6 +15,9 @@ const mcpToolsDialogOpen = ref(false)
 
 const publishedSkills = computed(() => contentStore.skills.filter(skill =>
   Boolean(skill.activeVersion) && skill.status !== 'disabled'))
+/** 选中的 Skill 中限定了可见角色的：固定引用不受可见范围限制，提示管理员会扩大使用范围。 */
+const restrictedSelectedSkills = computed(() => publishedSkills.value.filter(skill =>
+  skill.visibleRoleIds && form.skills.includes(`${skill.id}@${skill.activeVersion}`)).map(skill => skill.name))
 const mcpConnectors = computed(() => contentStore.connectors.filter(connector => connector.protocol === 'mcp'))
 const selectedMcpConnectors = computed(() => form.mcpScope.connectorIds.map(id =>
   mcpConnectors.value.find(connector => connector.id === id)))
@@ -51,6 +54,7 @@ function showMcpTools(connector: ConnectorDefinition) {
           <el-option v-for="skill in publishedSkills" :key="skill.id" :label="`${skill.name} · v${skill.activeVersion}`" :value="`${skill.id}@${skill.activeVersion}`" />
         </el-select>
         <p class="field-help">精确引用已发布版本；Skill 依赖的工具由平台自动装配。</p>
+        <p v-if="restrictedSelectedSkills.length" class="field-help field-help--warning" role="status" data-testid="agent-restricted-skill-hint">{{ restrictedSelectedSkills.join('、') }} 只对部分角色可见；加入后，能使用这个 Agent 的员工都能间接用到它。</p>
       </el-form-item>
 
       <el-form-item label="联网搜索">
@@ -118,6 +122,7 @@ function showMcpTools(connector: ConnectorDefinition) {
 
 <style scoped>
 .field-help { width: 100%; margin: 5px 0 0; color: var(--color-text-muted); font-size: var(--font-size-badge); line-height: 1.5; }
+.field-help--warning { color: var(--color-warning-strong); }
 .subsection-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px; margin: 6px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--color-border); }
 .subsection-heading strong { color: var(--color-text-heading); font-size: var(--font-size-body); }
 .subsection-heading span { color: var(--color-text-muted); font-size: var(--font-size-badge); }

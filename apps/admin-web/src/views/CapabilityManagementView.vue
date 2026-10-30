@@ -9,7 +9,8 @@ import SkillInstallationPanel from '@/components/SkillInstallationPanel.vue'
 import { useListPagination } from '@/composables/use-list-pagination'
 import { useAuthStore } from '@/stores/auth'
 import { useContentStore } from '@/stores/content'
-import type { BuiltinSkill, BuiltinSkillScenario, ConnectorDefinition, McpConnectionTestResult, SkillDefinition, SkillReleaseRecord, SkillTestRunProgress, SkillVersionRecord } from '@/types/domain'
+import { adminApi } from '@/api/client'
+import type { BuiltinSkill, BuiltinSkillScenario, ConnectorDefinition, IdentityRoleSummary, McpConnectionTestResult, SkillDefinition, SkillReleaseRecord, SkillTestRunProgress, SkillVersionRecord } from '@/types/domain'
 
 type CapabilityTab = 'skills' | 'install' | 'connectors'
 
@@ -136,6 +137,46 @@ async function saveSkillCoverage() {
     ElMessage.success('覆盖内置场景已保存，对新运行立即生效')
   } catch (cause) {
     ElMessage.error(cause instanceof Error ? cause.message : '覆盖内置场景保存失败，请稍后重试')
+  } finally {
+    actionLoading.value = ''
+  }
+}
+
+// Skill 可见范围（skill-creator-plan 4.5）：只限制员工在 Skill 广场选用，Agent 固定引用不受限。
+const roleOptions = ref<IdentityRoleSummary[]>([])
+const visibilityDraft = reactive({ scope: 'all' as 'all' | 'roles', roleIds: [] as string[], reason: '' })
+const visibilityChanged = computed(() => {
+  const current = selectedSkill.value?.visibleRoleIds ?? null
+  if (visibilityDraft.scope === 'all') return current !== null
+  return current === null || [...visibilityDraft.roleIds].sort().join(',') !== [...current].sort().join(',')
+})
+const visibilityInvalid = computed(() => (visibilityDraft.scope === 'roles' && !visibilityDraft.roleIds.length) || !visibilityDraft.reason.trim())
+// 切换 Skill、保存后与重新打开详情时，草稿回到已保存的范围。
+watch([selectedSkill, detailOpen], ([skill]) => {
+  const current = skill?.visibleRoleIds ?? null
+  visibilityDraft.scope = current ? 'roles' : 'all'
+  visibilityDraft.roleIds = [...(current ?? [])]
+  visibilityDraft.reason = ''
+}, { immediate: true })
+// 角色列表只在需要显示或选择角色时加载：已限定角色的 Skill，或改为“指定角色”。
+watch(() => detailType.value === 'skill' && (visibilityDraft.scope === 'roles' || Boolean(selectedSkill.value?.visibleRoleIds)), async needed => {
+  if (!needed || roleOptions.value.length) return
+  try { roleOptions.value = await adminApi.getIdentityRoles() } catch { roleOptions.value = [] }
+}, { immediate: true })
+
+function visibilityRoleName(id: string) {
+  return roleOptions.value.find(role => role.id === id)?.name ?? id
+}
+
+async function saveSkillVisibility() {
+  const skill = selectedSkill.value
+  if (!skill || visibilityInvalid.value) return
+  actionLoading.value = `skill-visibility:${skill.id}`
+  try {
+    await contentStore.setSkillVisibility(skill.id, visibilityDraft.scope === 'all' ? null : [...visibilityDraft.roleIds], visibilityDraft.reason.trim())
+    ElMessage.success('可见范围已保存，Skill 广场与之后的运行立即按新范围执行')
+  } catch (cause) {
+    ElMessage.error(cause instanceof Error ? cause.message : '可见范围保存失败，请稍后重试')
   } finally {
     actionLoading.value = ''
   }
@@ -978,6 +1019,22 @@ onUnmounted(() => clearSkillTestPoll())
         </el-checkbox-group>
         <el-button v-if="authStore.canManage" size="small" type="primary" :disabled="!coverageChanged" :loading="actionLoading === `skill-coverage:${selectedSkill.id}`" data-action="save-builtin-coverage" @click="saveSkillCoverage">保存覆盖场景</el-button>
       </section>
+      <section v-if="detailType === 'skill' && skillDetailTab === 'config' && selectedSkill" class="capability-detail__coverage" aria-labelledby="skill-visibility-title">
+        <h3 id="skill-visibility-title">可见范围</h3>
+        <p>决定哪些员工能在 Skill 广场选用这个 Skill。把它加入某个 Agent 后，能使用该 Agent 的员工都能间接用到它。</p>
+        <p v-if="!authStore.canManage">{{ selectedSkill.visibleRoleIds ? selectedSkill.visibleRoleIds.map(visibilityRoleName).join('、') : '全员' }}</p>
+        <template v-else>
+          <el-radio-group v-model="visibilityDraft.scope" aria-labelledby="skill-visibility-title">
+            <el-radio value="all">全员</el-radio>
+            <el-radio value="roles">指定角色</el-radio>
+          </el-radio-group>
+          <el-select v-if="visibilityDraft.scope === 'roles'" v-model="visibilityDraft.roleIds" multiple filterable aria-label="可见角色" placeholder="选择可以使用这个 Skill 的员工角色" class="capability-detail__visibility-roles">
+            <el-option v-for="role in roleOptions" :key="role.id" :label="role.status === 'active' ? role.name : `${role.name}（已停用）`" :value="role.id" :disabled="role.status !== 'active' && !visibilityDraft.roleIds.includes(role.id)" />
+          </el-select>
+          <el-input v-if="visibilityChanged" v-model="visibilityDraft.reason" maxlength="500" aria-label="调整原因" placeholder="调整原因（必填，写入审计）" class="capability-detail__visibility-reason" />
+          <el-button size="small" type="primary" :disabled="!visibilityChanged || visibilityInvalid" :loading="actionLoading === `skill-visibility:${selectedSkill.id}`" data-action="save-skill-visibility" @click="saveSkillVisibility">保存可见范围</el-button>
+        </template>
+      </section>
       <section v-if="detailType === 'skill' && skillDetailTab === 'versions'" class="capability-detail__table">
         <el-table class="data-table" :data="pagedSkillVersions" empty-text="暂无版本记录">
           <el-table-column label="版本" width="95"><template #default="scope"><span class="mono">v{{ scope.row.version }}</span></template></el-table-column>
@@ -1103,6 +1160,7 @@ onUnmounted(() => clearSkillTestPoll())
 .capability-detail__coverage { display: grid; justify-items: start; gap: 10px; margin-top: 20px; padding: 14px; border: 1px solid var(--color-border); border-radius: var(--radius-card); }
 .capability-detail__coverage h3 { margin: 0; color: var(--color-text-heading); font-size: var(--font-size-caption); }
 .capability-detail__coverage p { margin: 0; color: var(--color-text-secondary); font-size: var(--font-size-badge); line-height: 1.6; }
+.capability-detail__visibility-roles, .capability-detail__visibility-reason { width: min(100%, 420px); }
 .builtin-skills { padding: 18px 0 4px; border-top: 1px solid var(--color-border); }
 .builtin-skills__header { padding: 0 18px 12px; }
 .builtin-skills__header h2 { margin: 0; color: var(--color-text-heading); font-size: var(--dsh-font-size-section); }

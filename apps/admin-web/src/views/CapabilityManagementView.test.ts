@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import CapabilityManagementView from './CapabilityManagementView.vue'
 import { useAuthStore } from '../stores/auth'
 import { useContentStore } from '../stores/content'
+import { adminApi } from '../api/client'
 
 const wrappers: VueWrapper[] = []
 afterEach(() => {
@@ -186,6 +187,33 @@ describe('Skill installation sibling tab', () => {
     await coverage.get('[data-action="save-builtin-coverage"]').trigger('click')
     await flushPromises()
     expect(save).toHaveBeenCalledWith('skill-strict-test', ['html-page'])
+  })
+
+  it('restores a role-limited Skill to everyone only with a reason', async () => {
+    vi.spyOn(adminApi, 'getIdentityRoles').mockResolvedValue([
+      { id: 'role-sales', code: 'sales', name: '销售部', description: '', status: 'active', permissions: [], dataScopes: [], userCount: 3, system: false, updatedAt: '2026-10-30 10:00' },
+    ])
+    const { wrapper, content } = await render()
+    content.skills.push({ ...strictDraftSkill(), status: 'published', visibleRoleIds: ['role-sales'] })
+    const save = vi.spyOn(content, 'setSkillVisibility').mockImplementation(async (_skillId, roleIds) => {
+      const skill = { ...content.skills[0]!, visibleRoleIds: roleIds }
+      content.skills.splice(0, 1, skill)
+      return skill
+    })
+    await flushPromises()
+    await wrapper.get('[data-action="view-skill"]').trigger('click')
+    await flushPromises()
+
+    const section = wrapper.get('[aria-labelledby="skill-visibility-title"]')
+    const button = () => section.get('[data-action="save-skill-visibility"]')
+    expect(button().attributes('disabled')).toBeDefined()
+    await section.findAll('input[type="radio"]')[0]!.setValue(true)
+    await flushPromises()
+    expect(button().attributes('disabled'), '没有原因不能保存').toBeDefined()
+    await section.get('input[aria-label="调整原因"]').setValue('改为全员试用')
+    await button().trigger('click')
+    await flushPromises()
+    expect(save).toHaveBeenCalledWith('skill-strict-test', null, '改为全员试用')
   })
 
   it('keeps offline status ahead of a retained legacy MCP review state', async () => {

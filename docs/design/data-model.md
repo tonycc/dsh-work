@@ -120,7 +120,7 @@ flowchart LR
 
 | 表 | 作用 | 关键不变量 |
 | --- | --- | --- |
-| `skills`、`skill_versions` | Skill 与其版本 | 已发布版本不可修改（触发器）；文件夹正文经存储端口按内容寻址保存，数据库只存引用与文件索引；`skills.covered_builtin_scenarios` 是管理员设置的“覆盖内置场景”（Skill 级，不随版本固定）。平台内置 Skill 随代码发布，不在这两张表中 |
+| `skills`、`skill_versions` | Skill 与其版本 | 已发布版本不可修改（触发器）；文件夹正文经存储端口按内容寻址保存，数据库只存引用与文件索引；`skills.covered_builtin_scenarios` 是管理员设置的“覆盖内置场景”（Skill 级，不随版本固定）；`skills.visible_role_ids` 是 Skill 可见范围（迁移 `0107`，null 为全员，否则为非空角色 ID 数组，同样不随版本固定）。平台内置 Skill 随代码发布，不在这两张表中 |
 | `skill_version_dependencies` | Skill 依赖 | 依赖精确版本，不能依赖自身；Skill 声明的内置工具（`tool_refs`）须在注册表中且引用它的 Agent 可装配 |
 | `skill_installations` | 管理端安装计划 | 每次安装 Run 一条；完成时必须指向已保存的版本 |
 | `skill_test_bindings` | 严格试运行与精确 Attempt 的绑定 | 不可修改（触发器）；绑定配置与 Runtime 指纹 |

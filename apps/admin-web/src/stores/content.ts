@@ -262,6 +262,12 @@ export const useContentStore = defineStore('admin-content', () => {
     return skill
   }
 
+  async function setSkillVisibility(skillId: string, roleIds: string[] | null, reason: string) {
+    const skill = await adminApi.setSkillVisibility(skillId, { roleIds, reason })
+    replaceById(skills.value, skill)
+    return skill
+  }
+
   async function rollbackSkill(skillId: string, version: string) {
     const result = await adminApi.rollbackSkill({ skillId, version })
     replaceById(skills.value, result.skill)
@@ -370,6 +376,7 @@ export const useContentStore = defineStore('admin-content', () => {
     getSkillTestRun,
     rollbackSkill,
     setSkillBuiltinCoverage,
+    setSkillVisibility,
     checkConnector,
     testMcpConnection,
     registerMcpConnector,

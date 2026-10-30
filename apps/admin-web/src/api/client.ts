@@ -301,6 +301,8 @@ export const adminApi = {
   getBuiltinSkills: () => request<BuiltinSkillStatus>('/skills/builtin'),
   setSkillBuiltinCoverage: (input: { skillId: string; scenarios: BuiltinSkillScenario[] }) =>
     request<SkillDefinition>('/skills/builtin-coverage', { method: 'PATCH', body: JSON.stringify(input) }),
+  setSkillVisibility: (skillId: string, input: { roleIds: string[] | null; reason: string }) =>
+    request<SkillDefinition>(`/skills/${encodeURIComponent(skillId)}/visibility`, { method: 'PUT', body: JSON.stringify(input) }),
   getMcpInvocationAudits: (connectorId: string) =>
     request<McpInvocationAudit[]>(`/connectors/mcp/invocations?connector_id=${encodeURIComponent(connectorId)}`),
   testMcpConnection: (input: {

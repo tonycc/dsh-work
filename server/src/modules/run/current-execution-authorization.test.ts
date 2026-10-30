@@ -116,3 +116,17 @@ test('PF-03: pinned MCP Connectors require current connector availability before
     async assertPinnedConnections() { throw authorizationDenied('MCP connector unavailable') },
   }), { code: 'permission_denied' })
 })
+test('session runs re-check the Skill the employee selected, read from the session', async () => {
+  const withSession = { ...manifest, session_id: 'session-1' } as RuntimeManifest
+  const auth = ports()
+  let selected: string | null | undefined
+  await assertCurrentExecutionAuthorization(ports({
+    async sessionSelectedSkillReference(sessionId) { assert.equal(sessionId, 'session-1'); return 'selected@1.0.0' },
+    async authorizeRuntime(input) { selected = input.selectedSkillReference; return auth.authorizeRuntime(input) },
+  }), undefined, withSession)
+  assert.equal(selected, 'selected@1.0.0')
+})
+test('session runs fail closed when the selected-Skill lookup is not wired', async () => {
+  const withSession = { ...manifest, session_id: 'session-1' } as RuntimeManifest
+  await assert.rejects(assertCurrentExecutionAuthorization(ports(), undefined, withSession), AuthorizationCheckUnavailableError)
+})

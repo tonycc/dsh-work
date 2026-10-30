@@ -405,6 +405,8 @@ export interface SkillDefinition {
   testPrompt: string
   /** 管理员设置的“覆盖内置场景”：运行中有该 Skill 时去掉对应场景的平台内置 Skill。 */
   coveredBuiltinScenarios: string[]
+  /** Skill 可见范围：null 为全员；否则只有这些角色的员工能在 Skill 广场选用（Agent 固定引用不受限）。 */
+  visibleRoleIds: string[] | null
   updatedAt: string
 }
 

@@ -1246,6 +1246,34 @@
         }
       }
     },
+    "/skills/{skillId}/visibility": {
+      "put": {
+        "operationId": "setSkillVisibility",
+        "summary": "设置 Skill 可见范围：null 为全员，否则为非空、现存且启用的角色；Skill 级配置，不随版本固定。只约束员工在 Skill 广场选用、会话选择与执行前复核，Agent 固定引用不受限；须填写原因并写审计",
+        "parameters": [{ "name": "skillId", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["roleIds", "reason"],
+                "properties": {
+                  "roleIds": { "type": ["array", "null"], "items": { "type": "string" }, "minItems": 1 },
+                  "reason": { "type": "string", "minLength": 1, "maxLength": 500 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error", "description": "Skill 不存在" },
+          "422": { "$ref": "#/components/responses/Error", "description": "角色为空、不存在或已停用，或缺少原因" }
+        }
+      }
+    },
     "/runtimes/configuration": {
       "get": {
         "operationId": "getRuntimeConfiguration",

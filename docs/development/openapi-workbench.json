@@ -527,7 +527,7 @@
     "/skills": {
       "get": {
         "operationId": "listAvailableSkills",
-        "summary": "查询当前员工可查看的已发布 Skill 入口目录；依赖 Skill 仅在单独安装后展示",
+        "summary": "查询当前员工可查看的已发布 Skill 入口目录；依赖 Skill 仅在单独安装后展示；按 Skill 可见范围过滤（未设置为全员，否则须持有其中一个角色）",
         "responses": {
           "200": {
             "$ref": "#/components/responses/Ok"
@@ -1446,7 +1446,7 @@
                       "string",
                       "null"
                     ],
-                    "description": "员工从 Skill 广场选择的 Skill；服务端锁定其当前已发布版本，并在创建对话前校验固定 Agent 是否显式授权 Skill 所需的外部工具。"
+                    "description": "员工从 Skill 广场选择的 Skill；服务端锁定其当前已发布版本，并在创建对话前校验固定 Agent 是否显式授权 Skill 所需的外部工具。Skill 不对员工当前角色可见时返回 403；之后每次发送与执行前复核同样按员工当前角色复核。"
                   },
                   "workspaceAgentMemberId": {
                     "type": [

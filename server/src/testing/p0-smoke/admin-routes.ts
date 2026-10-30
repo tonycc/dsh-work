@@ -65,6 +65,19 @@ export function registerAdminRoutes(router: Router, service: AdminQueryService) 
     const input = await readJsonBody<{ skillId: string; scenarios: unknown }>(request)
     return envelope('admin', await service.setCoveredBuiltinScenarios({ ...input, actor: requireRequestIdentity(context, 'admin').userId }))
   })
+  // 冒烟只提供 Skill 可见范围选择所需的角色清单（与冒烟 Agent 的 roleIds 一致），不提供身份管理。
+  router.get(`${basePath}/identity/roles`, async () => envelope('admin', [
+    { id: 'role-employee', code: 'employee', name: '员工', description: '', status: 'active', permissions: [], dataScopes: [], userCount: 12, system: true, updatedAt: '2026-08-27 17:42' },
+    { id: 'role-supply', code: 'supply', name: '供应链', description: '', status: 'active', permissions: [], dataScopes: [], userCount: 4, system: false, updatedAt: '2026-08-27 17:42' },
+    { id: 'role-manager', code: 'manager', name: '经理', description: '', status: 'active', permissions: [], dataScopes: [], userCount: 2, system: false, updatedAt: '2026-08-27 17:42' },
+  ]))
+  router.put(`${basePath}/skills/:skillId/visibility`, async (request, context) => {
+    const input = await readJsonBody<{ roleIds: unknown; reason: unknown }>(request)
+    return envelope('admin', await service.setVisibleRoles({
+      skillId: context.params['skillId'] ?? '', roleIds: input.roleIds, reason: input.reason,
+      actor: requireRequestIdentity(context, 'admin').userId,
+    }))
+  })
   router.get(`${basePath}/skill-versions`, async () => envelope(
     'admin',
     (await service.getSkills()).map(prototypeSkillVersion),
