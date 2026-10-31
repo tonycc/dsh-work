@@ -252,7 +252,7 @@ useWorkbenchBootstrap()
 
       <div class="employee-sidebar__footer">
         <div class="employee-sidebar__notifications">
-          <NotificationCenter panel-left="236px" @navigate="mobileOpen = false" />
+          <NotificationCenter @navigate="mobileOpen = false" />
         </div>
         <el-dropdown trigger="click" placement="top-start" @command="onAccountCommand">
           <button class="profile-button" type="button" aria-label="打开用户中心">

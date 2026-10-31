@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Bell, Close } from '@element-plus/icons-vue'
 
-import { useAuthStore } from '@/stores/auth'
+import { useCollabConversationStore } from '@/stores/collab-conversations'
 import { useNotificationStore, type NotificationTab } from '@/stores/notifications'
 import { useUiModeStore } from '@/stores/ui-mode'
 import type { UserNotification } from '@/types/domain'
@@ -13,12 +13,11 @@ import { notificationGlyph, notificationLocation, notificationPlainText, notific
 
 /**
  * 站内通知入口（方案 NC-S2）：导航栏左下角头像上方的铃铛与紧贴导航栏展开的面板（NC2）。
- * 两种模式共用；`panelLeft` 为面板左缘（导航栏宽度），窄屏面板全屏。角标每分钟与页面
- * 重新可见时刷新（不新增推送通道）。点一条标为已读并跳转；不可见的通知就地提示、不跳转。
+ * 两种模式共用；面板左缘取所在导航栏的实际右缘，窄屏面板全屏。角标每分钟（页面可见时）与
+ * 页面重新可见时刷新（不新增推送通道）。点一条标为已读并跳转；不可见的通知就地提示、不跳转。
+ * 切换账号会整页重新加载（auth store），不需要在这里清理上一账号的状态。
  */
 const props = withDefaults(defineProps<{
-  /** 面板左缘，即所在导航栏的宽度（CSS 长度）。 */
-  panelLeft: string
   /** 铃铛尺寸随所在导航栏：侧栏用小号，图标栏用大号。 */
   size?: 'small' | 'large'
 }>(), { size: 'small' })
@@ -26,12 +25,13 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{ navigate: [] }>()
 
 const router = useRouter()
-const authStore = useAuthStore()
 const uiMode = useUiModeStore()
 const notifications = useNotificationStore()
+const conversations = useCollabConversationStore()
 const open = ref(false)
 const panel = ref<HTMLElement>()
 const bell = ref<HTMLButtonElement>()
+const panelLeft = ref('0px')
 
 const badge = computed(() => (notifications.unread > 99 ? '99+' : String(notifications.unread)))
 const bellLabel = computed(() => (notifications.unread > 0 ? `通知，${notifications.unread} 条未读` : '通知'))
@@ -48,13 +48,34 @@ function onKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape' && open.value) close()
 }
 
-function toggle() {
-  if (open.value) close()
-  else {
-    open.value = true
-    void notifications.load()
-    requestAnimationFrame(() => panel.value?.focus())
+/** 面板是模态的：Tab 在面板内循环，不进入遮罩后的页面。 */
+function trapFocus(event: KeyboardEvent) {
+  if (event.key !== 'Tab' || !panel.value) return
+  const focusable = [...panel.value.querySelectorAll<HTMLElement>('button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')]
+  if (!focusable.length) return
+  const first = focusable[0]!
+  const last = focusable[focusable.length - 1]!
+  if (event.shiftKey && (document.activeElement === first || document.activeElement === panel.value)) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
   }
+}
+
+async function toggle() {
+  if (open.value) {
+    close()
+    return
+  }
+  // 面板渲染在 body 下，导航栏的 CSS 变量传不过去，按铃铛所在导航栏的实际右缘定位。
+  const nav = bell.value?.closest('aside')
+  panelLeft.value = `${nav ? Math.round(nav.getBoundingClientRect().right) : 0}px`
+  open.value = true
+  void notifications.load()
+  await nextTick()
+  panel.value?.focus()
 }
 
 function close() {
@@ -66,9 +87,16 @@ function switchTab(next: NotificationTab) {
   if (next !== notifications.tab) void notifications.load(next)
 }
 
+/** 读过 @ 通知后，B 的对话列表（“[有人@我]”与导航圆点）随之更新（方案 NC4）。 */
+function syncConversationMentions() {
+  if (conversations.loaded) void conversations.refresh()
+}
+
 async function readAll() {
   try {
+    const hadMention = notifications.items.some(item => item.kind === 'mention' && !item.read)
     await notifications.markAllRead()
+    if (hadMention || conversations.hasMention) syncConversationMentions()
   } catch (cause) {
     ElMessage.error(cause instanceof Error ? cause.message : '标记已读失败，请稍后重试')
   }
@@ -76,7 +104,10 @@ async function readAll() {
 
 async function openItem(item: UserNotification) {
   const location = notificationLocation(item, uiMode.mode)
-  void notifications.markRead(item)
+  const wasUnreadMention = item.kind === 'mention' && !item.read
+  void notifications.markRead(item).then(() => {
+    if (wasUnreadMention) syncConversationMentions()
+  })
   if (!location) {
     ElMessage.warning('该内容已不可见')
     return
@@ -91,9 +122,16 @@ function itemTime(item: UserNotification) {
   return item.visible && item.workspace ? `${time} · ${item.workspace.name}` : time
 }
 
+function itemLabel(item: UserNotification) {
+  return `${item.read ? '' : '未读：'}${notificationPlainText(item)}，${itemTime(item)}`
+}
+
 onMounted(() => {
   void notifications.refreshUnread()
-  timer = setInterval(() => void notifications.refreshUnread(), pollIntervalMs)
+  // 页面在后台时不轮询，回到前台时由 visibilitychange 立即刷新。
+  timer = setInterval(() => {
+    if (document.visibilityState !== 'hidden') void notifications.refreshUnread()
+  }, pollIntervalMs)
   document.addEventListener('visibilitychange', onVisibilityChange)
   document.addEventListener('keydown', onKeydown)
 })
@@ -102,14 +140,6 @@ onBeforeUnmount(() => {
   if (timer) clearInterval(timer)
   document.removeEventListener('visibilitychange', onVisibilityChange)
   document.removeEventListener('keydown', onKeydown)
-})
-
-// 切换账号：不沿用上一账号的通知。
-watch(() => authStore.user.id, (next, previous) => {
-  if (next === previous) return
-  open.value = false
-  notifications.reset()
-  void notifications.refreshUnread()
 })
 </script>
 
@@ -130,9 +160,9 @@ watch(() => authStore.user.id, (next, previous) => {
   </button>
 
   <Teleport to="body">
-    <div v-if="open" class="notification-layer" :style="{ '--notification-panel-left': props.panelLeft }">
+    <div v-if="open" class="notification-layer" :style="{ '--notification-panel-left': panelLeft }">
       <button class="notification-layer__scrim" type="button" aria-label="关闭通知面板" tabindex="-1" @click="close"></button>
-      <section ref="panel" class="notification-panel" role="dialog" aria-label="通知" tabindex="-1">
+      <section ref="panel" class="notification-panel" role="dialog" aria-label="通知" aria-modal="true" tabindex="-1" @keydown="trapFocus">
         <header class="notification-panel__header">
           <h2>通知</h2>
           <div class="notification-panel__actions">
@@ -142,22 +172,26 @@ watch(() => authStore.user.id, (next, previous) => {
         </header>
         <div class="notification-panel__tabs" role="tablist" aria-label="通知筛选">
           <button
+            id="notification-tab-all"
             role="tab"
             type="button"
+            aria-controls="notification-tabpanel"
             :aria-selected="notifications.tab === 'all'"
             :class="{ 'is-active': notifications.tab === 'all' }"
             @click="switchTab('all')"
           >全部</button>
           <button
+            id="notification-tab-unread"
             role="tab"
             type="button"
+            aria-controls="notification-tabpanel"
             :aria-selected="notifications.tab === 'unread'"
             :class="{ 'is-active': notifications.tab === 'unread' }"
             @click="switchTab('unread')"
           >{{ notifications.unread > 0 ? `未读 ${badge}` : '未读' }}</button>
         </div>
 
-        <div class="notification-panel__body">
+        <div id="notification-tabpanel" class="notification-panel__body" role="tabpanel" :aria-labelledby="`notification-tab-${notifications.tab}`">
           <div v-if="notifications.loading && !notifications.items.length" class="notification-panel__state">正在加载…</div>
           <div v-else-if="notifications.error && !notifications.items.length" class="notification-panel__state" role="alert">
             <p>{{ notifications.error }}</p>
@@ -170,7 +204,7 @@ watch(() => authStore.user.id, (next, previous) => {
                 class="notification-item"
                 :class="{ 'notification-item--unread': !item.read, 'notification-item--hidden': !item.visible }"
                 type="button"
-                :aria-label="`${item.read ? '' : '未读：'}${notificationPlainText(item)}`"
+                :aria-label="itemLabel(item)"
                 @click="openItem(item)"
               >
                 <span class="notification-item__dot" aria-hidden="true"></span>

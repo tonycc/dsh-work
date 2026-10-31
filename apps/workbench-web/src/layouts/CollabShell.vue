@@ -101,7 +101,7 @@ onMounted(() => {
       </nav>
 
       <div class="collab-rail__account">
-        <NotificationCenter panel-left="var(--collab-rail-width, 56px)" size="large" />
+        <NotificationCenter size="large" />
         <el-dropdown trigger="click" placement="right-end" @command="onAccountCommand">
           <button class="collab-avatar" type="button" aria-label="打开用户菜单">
             {{ authStore.user.avatarText }}

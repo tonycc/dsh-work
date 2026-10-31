@@ -5,6 +5,8 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { workbenchApi } from '@/api/client'
+import { useCollabConversationStore } from '@/stores/collab-conversations'
+import { useNotificationStore } from '@/stores/notifications'
 import { useUiModeStore } from '@/stores/ui-mode'
 import type { UserNotification } from '@/types/domain'
 import NotificationCenter from './NotificationCenter.vue'
@@ -15,6 +17,8 @@ vi.mock('@/api/client', () => ({
     listNotifications: vi.fn(),
     markNotificationRead: vi.fn(),
     markAllNotificationsRead: vi.fn(),
+    listConversationTargets: vi.fn(),
+    markConversationTargetRead: vi.fn(),
   },
 }))
 
@@ -47,6 +51,8 @@ async function setup(unread = 1) {
     ({ items: (query?.status === 'unread' ? notifications.filter(item => !item.read) : notifications).map(item => ({ ...item })), nextCursor: null }))
   vi.mocked(workbenchApi.markNotificationRead).mockResolvedValue({ id: 'n', read: true })
   vi.mocked(workbenchApi.markAllNotificationsRead).mockResolvedValue({ read: 1 })
+  vi.mocked(workbenchApi.listConversationTargets).mockResolvedValue({ items: [], nextCursor: null })
+  vi.mocked(workbenchApi.markConversationTargetRead).mockResolvedValue({ type: 'group', id: 'ws-supply', lastReadAt: '' })
   const pinia = createPinia()
   setActivePinia(pinia)
   const page = { template: '<div>页面</div>' }
@@ -63,7 +69,7 @@ async function setup(unread = 1) {
   })
   await router.push('/workbench')
   await router.isReady()
-  const wrapper = mount(NotificationCenter, { props: { panelLeft: '236px' }, attachTo: document.body, global: { plugins: [pinia, router, ElementPlus] } })
+  const wrapper = mount(NotificationCenter, { attachTo: document.body, global: { plugins: [pinia, router, ElementPlus] } })
   await flushPromises()
   return { wrapper, router }
 }
@@ -148,6 +154,77 @@ describe('NotificationCenter', () => {
     unreadTab!.click()
     await flushPromises()
     expect(panel()?.textContent).toContain('暂时没有未读通知')
+    wrapper.unmount()
+  })
+
+  it('is a modal dialog whose tabs control the list, and item names include time and project', async () => {
+    const { wrapper } = await setup()
+    await wrapper.get('[data-testid="notification-bell"]').trigger('click')
+    await flushPromises()
+    expect(panel()?.getAttribute('aria-modal')).toBe('true')
+    const tabpanel = document.getElementById('notification-tabpanel')
+    expect(tabpanel?.getAttribute('role')).toBe('tabpanel')
+    expect(tabpanel?.getAttribute('aria-labelledby')).toBe('notification-tab-all')
+    expect(document.getElementById('notification-tab-all')?.getAttribute('aria-controls')).toBe('notification-tabpanel')
+    expect(itemButton('中 @ 了你')?.getAttribute('aria-label')).toMatch(/中 @ 了你，.+ · 供应链经营分析$/)
+    wrapper.unmount()
+  })
+
+  it('takes the unread count from the server after reading instead of guessing locally', async () => {
+    const { wrapper } = await setup(2)
+    await wrapper.get('[data-testid="notification-bell"]').trigger('click')
+    await flushPromises()
+    // 被读的是静音项目里的通知：服务端本来就不计它，读完未读数不变。
+    vi.mocked(workbenchApi.getNotificationUnreadCount).mockResolvedValue({ unread: 2 })
+    itemButton('中 @ 了你')!.click()
+    await flushPromises()
+    expect(useNotificationStore().unread).toBe(2)
+    wrapper.unmount()
+  })
+
+  it('refreshes the collaboration chat list after reading an @ notification', async () => {
+    const { wrapper } = await setup()
+    const conversations = useCollabConversationStore()
+    await conversations.load()
+    vi.mocked(workbenchApi.listConversationTargets).mockClear()
+    await wrapper.get('[data-testid="notification-bell"]').trigger('click')
+    await flushPromises()
+    itemButton('中 @ 了你')!.click()
+    await flushPromises()
+    expect(workbenchApi.listConversationTargets).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it('marks the group\'s @ notifications read when the group is opened in the chat list', async () => {
+    const { wrapper } = await setup(1)
+    await wrapper.get('[data-testid="notification-bell"]').trigger('click')
+    await flushPromises()
+    const conversations = useCollabConversationStore()
+    conversations.targets = [{
+      type: 'group', id: 'ws-supply', name: '供应链经营分析', description: '', avatarNames: [], lastMessage: null,
+      lastActiveAt: '', unreadCount: 1, mentioned: true,
+    } as never]
+    vi.mocked(workbenchApi.getNotificationUnreadCount).mockResolvedValue({ unread: 0 })
+    await conversations.markRead('group', 'ws-supply')
+    await flushPromises()
+    expect(useNotificationStore().items.find(item => item.id === 'n-mention')?.read).toBe(true)
+    expect(wrapper.get('[data-testid="notification-bell"]').attributes('aria-label')).toBe('通知')
+    wrapper.unmount()
+  })
+
+  it('does not let a slow list load undo mark-all-read', async () => {
+    const { wrapper } = await setup(1)
+    let finishSlowLoad: (value: { items: UserNotification[]; nextCursor: null }) => void = () => undefined
+    vi.mocked(workbenchApi.listNotifications).mockImplementationOnce(() => new Promise(resolve => { finishSlowLoad = resolve }))
+    await wrapper.get('[data-testid="notification-bell"]').trigger('click')
+    const store = useNotificationStore()
+    vi.mocked(workbenchApi.listNotifications).mockResolvedValue({ items: notifications.map(item => ({ ...item, read: true })), nextCursor: null })
+    vi.mocked(workbenchApi.getNotificationUnreadCount).mockResolvedValue({ unread: 0 })
+    await store.markAllRead()
+    finishSlowLoad({ items: notifications.map(item => ({ ...item })), nextCursor: null })
+    await flushPromises()
+    expect(store.items.every(item => item.read)).toBe(true)
+    expect(store.unread).toBe(0)
     wrapper.unmount()
   })
 })

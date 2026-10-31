@@ -138,6 +138,14 @@ test('NC-03: the rail bell above the avatar opens notifications and a mention op
   await expect(panel).toBeHidden()
   await expect(page).toHaveURL(/\/c\/chats\/group\/ws-supply$/)
   await expect(page.getByRole('button', { name: '通知，1 条未读' })).toBeVisible()
+
+  // 被加入项目进入群组；任务通知打开群组内的任务详情（A 地址经路由守卫映射）。
+  await page.getByRole('button', { name: '通知，1 条未读' }).click()
+  await panel.getByRole('button', { name: /把你加入了项目/ }).click()
+  await expect(page).toHaveURL(/\/c\/chats\/group\/ws-supply$/)
+  await page.getByRole('button', { name: '通知', exact: true }).click()
+  await panel.getByRole('button', { name: /指派给你/ }).click()
+  await expect(page).toHaveURL(/\/c\/chats\/group\/ws-supply\/tasks\/ptask-smoke-notification$/)
 })
 
 test('NC-03: on narrow screens the bell sits next to the avatar in the top bar', async ({ page }) => {

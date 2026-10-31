@@ -55,8 +55,13 @@ test('NC-03: the sidebar bell above the avatar opens notifications and jumps to 
   const panel = page.getByRole('dialog', { name: '通知' })
   await expect(panel).toBeVisible()
   const list = panel.getByRole('list', { name: '通知列表' })
-  await expect(list.getByRole('button')).toHaveCount(4)
-  await expect(list.getByRole('button', { name: '未读：周敏 在 「供应链经营分析」 中 @ 了你' })).toBeVisible()
+  // 按时间倒序：最新的 @ 我在最前，已不可见的最早一条在最后。
+  const items = list.getByRole('button')
+  await expect(items).toHaveCount(4)
+  await expect(items.nth(0)).toHaveAccessibleName(/^未读：周敏 在 「供应链经营分析」 中 @ 了你，/)
+  await expect(items.nth(1)).toHaveAccessibleName(/^未读：周敏 把你加入了项目/)
+  await expect(items.nth(2)).toHaveAccessibleName(/^周敏 把任务 「核对华东安全库存」 指派给你/)
+  await expect(items.nth(3)).toHaveAccessibleName(/^一条通知（该内容已不可见）/)
   await panel.getByRole('tab', { name: '未读 2' }).click()
   await expect(list.getByRole('button')).toHaveCount(2)
   await panel.getByRole('tab', { name: '全部' }).click()
@@ -93,8 +98,16 @@ test('NC-03: on narrow screens the bell stays in the side menu and the panel is 
   expect(box?.width ?? 0).toBeGreaterThanOrEqual(370)
   await panel.getByRole('button', { name: /把你加入了项目/ }).click()
   await expect(page).toHaveURL(/\/workspaces\/ws-supply/)
-  // 跳转后侧栏收起，回到页面。
-  await expect(page.getByRole('button', { name: '打开导航' })).toBeVisible()
+  // 跳转后侧栏收起（移出视口），回到页面。
+  await expect(page.getByRole('navigation', { name: '员工工作台主导航' })).not.toBeInViewport()
+  await expect(page.getByTestId('mobile-menu-notification-dot')).toBeVisible()
+
+  // 读完全部后，菜单按钮上的未读圆点消失。
+  await page.getByRole('button', { name: '打开导航' }).click()
+  await page.getByRole('button', { name: '通知，1 条未读' }).click()
+  await panel.getByRole('button', { name: '全部标为已读' }).click()
+  await panel.getByRole('button', { name: '关闭通知' }).click()
+  await expect(page.getByTestId('mobile-menu-notification-dot')).toHaveCount(0)
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
   expect(overflow).toBeLessThanOrEqual(0)
 })

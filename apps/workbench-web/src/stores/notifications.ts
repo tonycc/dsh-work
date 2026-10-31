@@ -19,11 +19,14 @@ export const useNotificationStore = defineStore('workbench-notifications', () =>
   const loadingMore = ref(false)
   const error = ref('')
   let generation = 0
+  let countGeneration = 0
 
-  /** 只刷新角标：轮询与页面重新可见时调用。失败不打扰用户，保留上一次的数字。 */
+  /** 只刷新角标：轮询与页面重新可见时调用。迟到的旧响应不覆盖新结果；失败保留上一次的数字。 */
   async function refreshUnread() {
+    const current = ++countGeneration
     try {
-      unread.value = (await workbenchApi.getNotificationUnreadCount()).unread
+      const { unread: count } = await workbenchApi.getNotificationUnreadCount()
+      if (current === countGeneration) unread.value = count
     } catch {
       // 角标刷新失败时保留原值，下次轮询再取。
     }
@@ -64,11 +67,13 @@ export const useNotificationStore = defineStore('workbench-notifications', () =>
     }
   }
 
-  /** 点开一条：本地先标为已读并扣减角标（只扣仍计入未读的），再写服务端。 */
+  /**
+   * 点开一条：本地先标为已读，再写服务端并以服务端的未读数为准。不在本地扣减角标：
+   * 静音项目的通知本来就不计未读，本地无从判断。
+   */
   async function markRead(item: UserNotification) {
     if (item.read) return
     item.read = true
-    if (item.visible && unread.value > 0) unread.value--
     try {
       await workbenchApi.markNotificationRead(item.id)
     } catch {
@@ -79,14 +84,31 @@ export const useNotificationStore = defineStore('workbench-notifications', () =>
 
   async function markAllRead() {
     await workbenchApi.markAllNotificationsRead()
+    // 作废进行中的列表加载与角标刷新：迟到的旧结果不能把已读的条目重新显示为未读。
+    const reloading = loading.value
+    generation++
+    countGeneration++
+    loading.value = false
     for (const item of items.value) item.read = true
     if (tab.value === 'unread') items.value = []
     nextCursor.value = tab.value === 'unread' ? null : nextCursor.value
     unread.value = 0
+    // 被作废的加载重新取一次，结果已是全部已读后的状态。
+    if (reloading) await load()
+  }
+
+  /** 打开群组时服务端已把该群的 @ 通知标为已读：本地同步，再以服务端的未读数为准（方案 NC4）。 */
+  async function markWorkspaceMentionsRead(workspaceId: string) {
+    for (const item of items.value) {
+      if (item.kind === 'mention' && item.workspace?.id === workspaceId) item.read = true
+    }
+    if (tab.value === 'unread') items.value = items.value.filter(item => !item.read)
+    await refreshUnread()
   }
 
   function reset() {
     generation++
+    countGeneration++
     unread.value = 0
     items.value = []
     nextCursor.value = null
@@ -96,5 +118,8 @@ export const useNotificationStore = defineStore('workbench-notifications', () =>
     error.value = ''
   }
 
-  return { unread, items, nextCursor, tab, loading, loadingMore, error, refreshUnread, load, loadMore, markRead, markAllRead, reset }
+  return {
+    unread, items, nextCursor, tab, loading, loadingMore, error,
+    refreshUnread, load, loadMore, markRead, markAllRead, markWorkspaceMentionsRead, reset,
+  }
 })
