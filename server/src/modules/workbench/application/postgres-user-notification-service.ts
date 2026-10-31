@@ -6,8 +6,10 @@ import type { UserNotificationKind, UserNotificationObjectType } from '../../not
 
 const tenantId = 'tenant-dsh-work'
 
-/** 方案 NC4：只保留最近 90 天的通知；更早的不再列出、不计未读（清扫随 NC-S4）。 */
+/** 方案 NC4：只保留最近 90 天的通知；更早的不再列出、不计未读，并由每日清扫删除（NC-S4）。 */
 const retentionDays = 90
+/** 每批删除条数：分批提交，避免一次长事务锁住大量行。 */
+const purgeBatchSize = 1000
 
 export interface UserNotificationItem {
   id: string
@@ -126,6 +128,29 @@ export class PostgresUserNotificationService {
     `
     if (!row) throw notFound('通知不存在')
     return { id: row.id, read: true }
+  }
+
+  /**
+   * 保留清扫（NC-S4）：删除所有员工超过保留期的通知，与已读未读无关。分批删除、可重复执行，
+   * 多个实例同时执行也只是各删各的批次（已删的行不会再被选中）。只删通知记录，不动 @ 提醒等业务数据。
+   */
+  async purgeExpired(now: Date = new Date()): Promise<{ removed: number }> {
+    let removed = 0
+    for (;;) {
+      const rows = await this.database<Array<{ id: string }>>`
+        delete from user_notifications
+         where id in (
+           select id from user_notifications
+            where created_at <= ${now}::timestamptz - make_interval(days => ${retentionDays})
+            order by created_at
+            limit ${purgeBatchSize}
+            for update skip locked
+         )
+        returning id
+      `
+      removed += rows.length
+      if (rows.length < purgeBatchSize) return { removed }
+    }
   }
 
   async markAllRead(userId: string): Promise<{ read: number }> {

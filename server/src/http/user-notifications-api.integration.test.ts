@@ -348,6 +348,33 @@ test('NC-04 定时任务与 Skill 审核通知读取时解析名称；停用或�
   assert.equal(await unread(ws.first), 0)
 })
 
+test('NC-05 清扫删除所有员工 90 天前的通知，可重复执行，90 天内的保留', async () => {
+  const ws = await seedSpace('retention')
+  const insert = (recipient: string, label: string, daysAgo: number, read: boolean) => database`
+    insert into user_notifications (id, tenant_id, recipient_user_id, kind, workspace_id, object_type, object_id, actor_user_id,
+                                    safe_metadata, dedupe_key, created_at, read_at)
+    values (${`n-ret-${ws.id}-${label}`}, ${tenantId}, ${recipient}, 'workspace_member_added', ${ws.id}, 'workspace', ${ws.id}, ${ws.owner},
+            '{}'::jsonb, ${`retention:${ws.id}:${label}`}, now() - make_interval(days => ${daysAgo}),
+            ${read ? database`now()` : null})`
+  await insert(ws.first, 'old-unread', 91, false)
+  await insert(ws.first, 'old-read', 120, true)
+  await insert(ws.second, 'old-other', 95, false)
+  await insert(ws.first, 'recent', 89, false)
+
+  // 清扫前读取侧已不列出、不计超过保留期的通知。
+  assert.deepEqual((await notifications(ws.first)).map(item => item.id), [`n-ret-${ws.id}-recent`])
+  assert.equal(await unread(ws.first), 1)
+
+  const service = new PostgresUserNotificationService(database)
+  const [first, second] = await Promise.all([service.purgeExpired(), service.purgeExpired()])
+  assert.equal(first.removed + second.removed, 3, '两个实例同时清扫，各删各的批次')
+  assert.deepEqual(await service.purgeExpired(), { removed: 0 })
+  const left = await database<{ id: string }[]>`
+    select id from user_notifications where tenant_id = ${tenantId} and dedupe_key like ${`retention:${ws.id}:%`}`
+  assert.deepEqual(left.map(row => row.id), [`n-ret-${ws.id}-recent`])
+  assert.equal(await unread(ws.first), 1)
+})
+
 async function joinAgent(ws: { id: string; owner: string }, label: string): Promise<string> {
   const agentId = `agent-nc-${label}-${randomUUID().slice(0, 8)}`
   await insertAgent(agentId)

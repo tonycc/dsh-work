@@ -1,6 +1,6 @@
 # 站内通知方案
 
-**状态：** 方案与原型已确认（2026-10-31），实施中：NC-S1（表、写入与读取 API、四类事件）已实施（代码级 P1，`NC-01`、`NC-02`）；NC-S2（员工端铃铛与通知面板）已实施（P0 浏览器冒烟 `NC-03`）；NC-S3（定时执行暂停或停止、定时任务没成功、Skill 审核结论）已实施（代码级 P1，`NC-04`）。保留清扫（NC-S4）未实施；真实环境（P2）未验收。现行规则以[功能规则 3.7](../development/feature-rules.md#37-动态通知与用量)为准。<br>
+**状态：** 方案与原型已确认（2026-10-31），实施中：NC-S1（表、写入与读取 API、四类事件）已实施（代码级 P1，`NC-01`、`NC-02`）；NC-S2（员工端铃铛与通知面板）已实施（P0 浏览器冒烟 `NC-03`）；NC-S3（定时执行暂停或停止、定时任务没成功、Skill 审核结论）已实施（代码级 P1，`NC-04`）。NC-S4（90 天保留清扫，代码级 P1 `NC-05`；钉钉方案 4.1 改以本表为投递来源）已实施；真实环境（P2）未验收。现行规则以[功能规则 3.7](../development/feature-rules.md#37-动态通知与用量)为准。<br>
 **更新日期：** 2026-10-31<br>
 **原型：** [站内通知原型](https://claude.ai/artifact/JH5cdzZi3SunCm36trBb8W)（2026-10-31 确认）。<br>
 **依据：** 现有项目空间动态与按空间通知状态（迁移 `0026`）、对话对象未读（`0096`）、@ 成员提醒（`0103`）、项目任务事件与定时执行（`0092`、`0093`）、定时任务执行记录（功能规则第 7 节）、Skill 提交审核（`0108`、`0109`）；[钉钉接入方案](dingtalk-integration-plan.md) 4.1 的首批事件。
@@ -90,8 +90,8 @@
 
 - **写入：** 与产生它的业务变更在同一事务中写入（沿用 `workspace_activity_events` 的做法），重复写入因唯一键成为空操作。写入只依据服务端事实，不取客户端提交的名称。
 - **读取：** `GET /api/workbench/v1/me/notifications?status=all|unread&cursor=&limit=` 返回本人通知，每条读取时重新解析对象名称并检查可见权限，失权的条目不返回名称与跳转目标（`visible=false`，显示“该内容已不可见”），也不计未读、不出现在“未读”筛选中；`GET /me/notifications/unread-count`；`POST /me/notifications/:id/read`；`POST /me/notifications/read-all`。
-- **保留：** 清扫器每日删除 90 天前的记录。
-- **与现有表的关系：** `message_mentions` 保留（群组“[有人@我]”标记仍用它），@ 通知是同事务另写的一行；`workspace_notification_states` 的静音状态在计未读时读取。钉钉投递记录 `external_notification_deliveries` 的来源改为 `user_notifications.id`，需同步修改钉钉方案 4.1。
+- **保留：** 服务启动后与每天清扫一次，按产生时间分批删除 90 天前的记录（迁移 0112 按时间建索引），与已读未读无关、可重复执行；只删通知，不动 @ 提醒等业务数据。
+- **与现有表的关系：** `message_mentions` 保留（群组“[有人@我]”标记仍用它），@ 通知是同事务另写的一行；`workspace_notification_states` 的静音状态在计未读时读取。钉钉投递记录 `external_notification_deliveries` 的来源为 `user_notifications.id`（钉钉方案 4.1 已于 2026-10-31 同步）。
 
 ### 6.1 移动端与外部推送：复用同一份通知
 

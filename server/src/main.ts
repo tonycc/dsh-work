@@ -160,6 +160,7 @@ async function start() {
   let executionRuntime: AgentRuntimePort | null = null
   let persistentWait: PostgresPersistentWaitService | null = null
   let memoryProposalSweep: NodeJS.Timeout | null = null
+  let notificationRetentionSweep: NodeJS.Timeout | null = null
   let dshCapability: CapabilityState = { status: 'not-configured' }
   let pythonCapability: CapabilityState = { status: 'unavailable', code: 'PYTHON_UNAVAILABLE' }
   let attemptContainers: AttemptExecutionContainers | null = null
@@ -563,7 +564,15 @@ async function start() {
   registerWorkspaceActivityRoutes(router, workspaceActivity, authorization)
   registerUserPreferenceRoutes(router, new PostgresUserPreferenceService(database))
   registerConversationTargetRoutes(router, new PostgresConversationTargetService(database, agents), authorization)
-  registerUserNotificationRoutes(router, new PostgresUserNotificationService(database), authorization)
+  const userNotifications = new PostgresUserNotificationService(database)
+  registerUserNotificationRoutes(router, userNotifications, authorization)
+  // 站内通知 NC-S4：启动后与每天清扫一次 90 天前的通知，不阻塞启动；清扫可重复执行。
+  const purgeNotifications = () => void userNotifications.purgeExpired()
+    .then(result => { if (result.removed > 0) console.warn('user notification retention sweep completed', result) })
+    .catch(error => console.error('user notification retention sweep failed', error))
+  purgeNotifications()
+  notificationRetentionSweep = setInterval(purgeNotifications, 24 * 60 * 60 * 1000)
+  notificationRetentionSweep.unref()
   registerWorkspaceTimelineRoutes(router, new PostgresWorkspaceTimelineService(database, new PostgresWorkspaceService(database)), authorization)
   registerWorkspaceUsageRoutes(router, workspaceUsage, authorization)
   registerWorkspaceAgentMemberRoutes(router, workspaceAgentMembers, authorization)
@@ -626,6 +635,7 @@ async function start() {
       void (async () => {
         if (directorySyncTimer) clearInterval(directorySyncTimer)
         if (memoryProposalSweep) clearInterval(memoryProposalSweep)
+        if (notificationRetentionSweep) clearInterval(notificationRetentionSweep)
         if (workspaceSweep) clearInterval(workspaceSweep)
         if (automationSweep) await automationSweep.close()
         if (revocationSweep) revocationSweep.close()
