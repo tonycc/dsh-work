@@ -16,6 +16,7 @@ import {
   unreadCountCap,
 } from './conversation-targets.ts'
 import { readableWorkspacePredicate } from './postgres-workspace-service.ts'
+import { markMentionNotificationsRead } from './user-notification-writer.ts'
 
 const tenantId = 'tenant-dsh-work'
 
@@ -310,7 +311,7 @@ export class PostgresConversationTargetService implements ConversationTargetStor
     // D38：打开群组即读过其中 @ 本人的消息，提醒随之已读（不晚于已读位置）。已读位置在库内比较：
     // 读回的 Date 只有毫秒精度，会丢掉上面补的微秒，使这一毫秒内最新那条 @ 永远未读。
     if (input.type === 'group') {
-      await sql`
+      const read = await sql<Array<{ messageId: string }>>`
         update message_mentions mm set read_at = now()
           from messages m, conversation_read_states rs
          where mm.tenant_id = ${tenantId} and mm.mentioned_user_id = ${input.userId}
@@ -319,7 +320,9 @@ export class PostgresConversationTargetService implements ConversationTargetStor
            and rs.tenant_id = mm.tenant_id and rs.user_id = mm.mentioned_user_id
            and rs.target_type = 'group' and rs.target_id = mm.workspace_id
            and m.created_at <= rs.last_read_at
+        returning mm.message_id as "messageId"
       `
+      await markMentionNotificationsRead(sql, input.userId, read.map(row => row.messageId))
     }
     return { type: input.type, id: input.id, lastReadAt: row!.lastReadAt.toISOString() }
   }
@@ -356,6 +359,7 @@ export class PostgresConversationTargetService implements ConversationTargetStor
          and ${input.sessionId ? sql`session_id = ${input.sessionId}` : sql`true`}
       returning message_id as "messageId"
     `
+    await markMentionNotificationsRead(sql, input.userId, rows.map(row => row.messageId))
     return { workspaceId: input.workspaceId, sessionId: input.sessionId ?? null, read: rows.length }
   }
 }

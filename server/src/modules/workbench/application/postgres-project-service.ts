@@ -15,6 +15,7 @@ import type { RuntimeManifest } from '../../runtime/runtime-types.ts'
 import type { SessionAuthorizationContext } from '../../authorization/postgres-authorization-service.ts'
 import type { PostgresProjectArchiveService } from './postgres-project-archive-service.ts'
 import { activityTransitionToken, recordWorkspaceActivity } from './workspace-activity-writer.ts'
+import { recordUserNotification } from './user-notification-writer.ts'
 import { workspaceStateConflict } from './workspace-state-conflict-error.ts'
 
 const tenantId = 'tenant-dsh-work'
@@ -371,6 +372,12 @@ export class PostgresProjectService implements ProjectTaskThreadPort {
           } : {}),
         },
       })
+      if (assignee.type === 'employee') {
+        await recordUserNotification(transaction, {
+          recipientUserId: assignee.id, kind: 'task_assigned', workspaceId, objectType: 'project_task', objectId: taskId,
+          actorUserId, dedupeKey: `task_assigned:${taskId}:created`,
+        })
+      }
     })
     } catch (error) {
       await this.discardUnstartedThread(sessionId, null)
@@ -541,6 +548,12 @@ export class PostgresProjectService implements ProjectTaskThreadPort {
           assigneeType = assignee.type
           assigneeUserId = assignee.type === 'employee' ? assignee.id : null
           assigneeAgentMemberId = assignee.type === 'agent' ? assignee.id : null
+          if (assignee.type === 'employee') {
+            await recordUserNotification(transaction, {
+              recipientUserId: assignee.id, kind: 'task_assigned', workspaceId, objectType: 'project_task', objectId: taskId,
+              actorUserId, dedupeKey: `task_assigned:${taskId}:${await activityTransitionToken(transaction)}`,
+            })
+          }
         }
       }
       briefTitle = title
@@ -708,9 +721,14 @@ export class PostgresProjectService implements ProjectTaskThreadPort {
           taskId, sessionId: task.sessionId, kind: 'completed', actorUserId,
           metadata: { note, deliverables: names.map(row => row.name), ...(via ? { via } : {}) },
         })
+        const completionToken = await activityTransitionToken(transaction)
+        await recordUserNotification(transaction, {
+          recipientUserId: task.createdBy, kind: 'task_completed', workspaceId, objectType: 'project_task', objectId: taskId,
+          actorUserId, dedupeKey: `task_completed:${taskId}:${completionToken}`,
+        })
         await recordWorkspaceActivity(transaction, {
           workspaceId, kind: 'project_task_completed', actorUserId, objectType: 'project_task', objectId: taskId,
-          dedupeKey: `project-task-completed:${taskId}:${await activityTransitionToken(transaction)}`,
+          dedupeKey: `project-task-completed:${taskId}:${completionToken}`,
           metadata: via ? {
             viaAgentMemberId: via.agentMemberId,
             viaAgentName: via.agentName,

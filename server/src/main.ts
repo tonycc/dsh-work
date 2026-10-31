@@ -23,6 +23,7 @@ import { registerProjectRoutes } from './http/workbench/project-routes.ts'
 import { registerWorkbenchAgentRoutes } from './http/workbench/agent-routes.ts'
 import { registerUserPreferenceRoutes } from './http/workbench/preference-routes.ts'
 import { registerConversationTargetRoutes } from './http/workbench/conversation-target-routes.ts'
+import { registerUserNotificationRoutes } from './http/workbench/user-notification-routes.ts'
 import { registerWorkspaceTimelineRoutes } from './http/workbench/workspace-timeline-routes.ts'
 import { registerOidcRoutes } from './http/auth-routes.ts'
 import { registerLocalAuthRoutes } from './http/local-auth-routes.ts'
@@ -75,6 +76,7 @@ import { mapProjectTaskToolError, ProjectTaskTools } from './modules/workbench/a
 import { PostgresWorkspaceActivityService } from './modules/workbench/application/postgres-workspace-activity-service.ts'
 import { PostgresUserPreferenceService } from './modules/workbench/application/postgres-user-preference-service.ts'
 import { PostgresConversationTargetService } from './modules/workbench/application/postgres-conversation-target-service.ts'
+import { PostgresUserNotificationService } from './modules/workbench/application/postgres-user-notification-service.ts'
 import { PostgresWorkspaceTimelineService } from './modules/workbench/application/postgres-workspace-timeline-service.ts'
 import { PostgresWorkspaceUsageService } from './modules/workbench/application/postgres-workspace-usage-service.ts'
 import { PostgresWorkspaceService } from './modules/workbench/application/postgres-workspace-service.ts'
@@ -561,6 +563,7 @@ async function start() {
   registerWorkspaceActivityRoutes(router, workspaceActivity, authorization)
   registerUserPreferenceRoutes(router, new PostgresUserPreferenceService(database))
   registerConversationTargetRoutes(router, new PostgresConversationTargetService(database, agents), authorization)
+  registerUserNotificationRoutes(router, new PostgresUserNotificationService(database), authorization)
   registerWorkspaceTimelineRoutes(router, new PostgresWorkspaceTimelineService(database, new PostgresWorkspaceService(database)), authorization)
   registerWorkspaceUsageRoutes(router, workspaceUsage, authorization)
   registerWorkspaceAgentMemberRoutes(router, workspaceAgentMembers, authorization)
