@@ -162,6 +162,9 @@ jobs:
       - name: Run MCP administration P1 browser journey
         run: pnpm test:e2e:mcp-admin
 
+      - name: Run Skill submission review P1 browser journey
+        run: pnpm test:e2e:skill-review
+
       - name: Run automation P1 browser journeys
         run: pnpm test:e2e:automation
 
