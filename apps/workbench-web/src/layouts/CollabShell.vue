@@ -16,6 +16,7 @@ import {
 
 import { AppLogo } from '@dsh-work/ui-core'
 import ModeSwitchMenu from '@/components/ModeSwitchMenu.vue'
+import NotificationCenter from '@/components/NotificationCenter.vue'
 import { useWorkbenchBootstrap } from '@/composables/useWorkbenchBootstrap'
 import { roleLabels, useAuthStore } from '@/stores/auth'
 import { useCollabConversationStore } from '@/stores/collab-conversations'
@@ -100,6 +101,7 @@ onMounted(() => {
       </nav>
 
       <div class="collab-rail__account">
+        <NotificationCenter panel-left="var(--collab-rail-width, 56px)" size="large" />
         <el-dropdown trigger="click" placement="right-end" @command="onAccountCommand">
           <button class="collab-avatar" type="button" aria-label="打开用户菜单">
             {{ authStore.user.avatarText }}
@@ -182,6 +184,9 @@ onMounted(() => {
 }
 
 .collab-rail__logo { display: flex; justify-content: center; min-height: 44px; }
+
+/* 站内通知（方案 NC2）：铃铛在头像上方；窄屏顶栏中排在头像左侧。 */
+.collab-rail__account { display: flex; flex-direction: column; align-items: center; gap: 10px; }
 
 .collab-rail__nav {
   display: flex;
@@ -271,6 +276,7 @@ onMounted(() => {
   }
 
   .collab-rail__logo { min-height: 0; }
+  .collab-rail__account { flex-direction: row; gap: 6px; }
 
   .collab-rail__nav {
     position: fixed;

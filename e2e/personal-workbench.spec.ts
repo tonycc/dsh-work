@@ -41,6 +41,64 @@ test('P0: personal Workspace is implicit, navigation exposes work entries', asyn
   await expect(page.getByLabel('选择工作空间')).toHaveCount(0)
 })
 
+test('NC-03: the sidebar bell above the avatar opens notifications and jumps to the project', async ({ page }) => {
+  await page.goto('/workbench')
+  // 通知入口不进入主导航（仍是五个入口），位于侧栏底部头像上方。
+  await expect(page.getByRole('navigation', { name: '员工工作台主导航' }).getByRole('button')).toHaveCount(5)
+  const bell = page.getByRole('button', { name: '通知，2 条未读' })
+  const avatar = page.getByRole('button', { name: '打开用户中心' })
+  await expect(bell).toBeVisible()
+  const [bellBox, avatarBox] = [await bell.boundingBox(), await avatar.boundingBox()]
+  expect((bellBox?.y ?? 0) + (bellBox?.height ?? 0)).toBeLessThanOrEqual(avatarBox?.y ?? 0)
+
+  await bell.click()
+  const panel = page.getByRole('dialog', { name: '通知' })
+  await expect(panel).toBeVisible()
+  const list = panel.getByRole('list', { name: '通知列表' })
+  await expect(list.getByRole('button')).toHaveCount(4)
+  await expect(list.getByRole('button', { name: '未读：周敏 在 「供应链经营分析」 中 @ 了你' })).toBeVisible()
+  await panel.getByRole('tab', { name: '未读 2' }).click()
+  await expect(list.getByRole('button')).toHaveCount(2)
+  await panel.getByRole('tab', { name: '全部' }).click()
+
+  // 已不可见的通知点了不跳转，就地提示。
+  await list.getByRole('button', { name: '一条通知（该内容已不可见）' }).click()
+  await expect(page.getByText('该内容已不可见', { exact: true })).toBeVisible()
+  await expect(page).toHaveURL(/\/workbench$/)
+
+  await list.getByRole('button', { name: /把你加入了项目/ }).click()
+  await expect(panel).toBeHidden()
+  await expect(page).toHaveURL(/\/workspaces\/ws-supply/)
+  await expect(page.getByRole('button', { name: '通知，1 条未读' })).toBeVisible()
+
+  await page.getByRole('button', { name: '通知，1 条未读' }).click()
+  await panel.getByRole('button', { name: '全部标为已读' }).click()
+  await expect(page.getByRole('button', { name: '通知', exact: true })).toBeVisible()
+  await panel.getByRole('tab', { name: '未读' }).click()
+  await expect(panel.getByText('暂时没有未读通知')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(panel).toBeHidden()
+})
+
+test('NC-03: on narrow screens the bell stays in the side menu and the panel is full screen', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 760 })
+  await page.goto('/workbench')
+  await expect(page.getByTestId('mobile-menu-notification-dot')).toBeVisible()
+  await page.getByRole('button', { name: '打开导航' }).click()
+  await page.getByRole('button', { name: '通知，2 条未读' }).click()
+  const panel = page.getByRole('dialog', { name: '通知' })
+  await expect(panel).toBeVisible()
+  const box = await panel.boundingBox()
+  expect(box?.x ?? -1).toBe(0)
+  expect(box?.width ?? 0).toBeGreaterThanOrEqual(370)
+  await panel.getByRole('button', { name: /把你加入了项目/ }).click()
+  await expect(page).toHaveURL(/\/workspaces\/ws-supply/)
+  // 跳转后侧栏收起，回到页面。
+  await expect(page.getByRole('button', { name: '打开导航' })).toBeVisible()
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
+  expect(overflow).toBeLessThanOrEqual(0)
+})
+
 test('SKC-04: Skill plaza opens a new chat with the Skill creator, nothing prefilled', async ({ page }) => {
   await enableSkillCreator(page)
   await page.goto('/skills')
