@@ -373,6 +373,8 @@
 }
 
 .run-progress-steps {
+  /* 每步的读屏状态文字同理，步骤列表也出现在执行详情、群组时间线等 .run-progress 之外的位置。 */
+  position: relative;
   margin: 0;
   padding: 0;
   list-style: none;

@@ -107,6 +107,11 @@ const notice = computed(() => {
   gap: 10px;
 }
 
+.collab-run-entry__body {
+  /* 读屏播报区（.run-progress-sr）的定位祖先，避免它逃出群组时间线滚动区把整页撑高。 */
+  position: relative;
+}
+
 .collab-run-entry__notice {
   margin: 0;
   color: var(--dsh-color-muted);
