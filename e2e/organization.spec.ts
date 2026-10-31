@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test'
 
 // ORG-P0-01（e2e/catalog/organization.md）：管理端组织架构页直接进入部门树维护，
 // 可新建部门、批量添加未分配员工、移出主部门时指定新主部门、删除被拦截。
+// ORG-P0-02：部门授权页签（继承、添加、删除）与员工角色来源。
 test.beforeEach(async ({ page }) => {
   await page.request.post('/api/testing/p0/reset')
 })
@@ -87,3 +88,38 @@ test('the root department cannot be moved or deleted and the page works at phone
   const overflow = await page.evaluate(() => document.querySelector('.organization-layout')!.scrollWidth - document.querySelector('.organization-layout')!.clientWidth)
   expect(overflow).toBeLessThanOrEqual(1)
 })
+
+test('administrator grants a role to a department and sees where each role comes from', async ({ page }) => {
+  await openOrganization(page)
+  await selectDepartment(page, '采购部')
+  await page.getByRole('tab', { name: /^部门授权/ }).click()
+  const inherited = page.getByRole('row', { name: /供应链分析员/ })
+  await expect(inherited.getByText('上级“供应链中心”')).toBeVisible()
+  await expect(inherited.getByRole('button', { name: '到上级部门修改' })).toBeVisible()
+
+  await page.getByRole('tab', { name: /^成员/ }).click()
+  await page.getByRole('row', { name: /李娜/ }).getByRole('button', { name: '查看权限' }).click()
+  const drawer = page.getByRole('dialog', { name: '员工部门与角色' })
+  await expect(drawer.getByText('来自“示例企业 / 供应链中心”（下级继承）')).toBeVisible()
+  await expect(drawer.getByText('直接授予', { exact: true })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(drawer).toBeHidden()
+
+  await selectDepartment(page, '财务部')
+  await page.getByRole('tab', { name: /^部门授权/ }).click()
+  await expect(page.getByText('本部门还没有授权，也没有从上级部门继承的授权')).toBeVisible()
+  await page.getByRole('button', { name: '添加部门授权' }).click()
+  const dialog = page.getByRole('dialog', { name: '添加部门授权' })
+  await expect(dialog.getByRole('checkbox', { name: '包含所有下级部门' })).toBeChecked()
+  await expect(dialog.getByText('将覆盖 1 名员工')).toBeVisible()
+  await dialog.getByRole('button', { name: '授权' }).click()
+  await expect(page.getByText('已授权，1 名员工的权限已重新计算')).toBeVisible()
+  const granted = page.getByRole('row', { name: /员工/ }).filter({ hasText: '本部门及下级' })
+  await expect(granted).toBeVisible()
+
+  await granted.getByRole('button', { name: '删除' }).click()
+  await page.getByRole('dialog', { name: '删除部门授权' }).getByRole('button', { name: '删除' }).click()
+  await expect(page.getByText('已删除部门授权')).toBeVisible()
+  await expect(page.getByText('本部门还没有授权，也没有从上级部门继承的授权')).toBeVisible()
+})
+

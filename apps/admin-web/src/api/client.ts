@@ -461,6 +461,10 @@ export const adminApi = {
     `/organization/departments/${encodeURIComponent(departmentId)}/members/${encodeURIComponent(userId)}${newPrimaryDepartmentId ? `?new_primary_department_id=${encodeURIComponent(newPrimaryDepartmentId)}` : ''}`,
     { method: 'DELETE' },
   ),
+  grantDepartmentRole: (departmentId: string, roleId: string, includeDescendants: boolean) =>
+    request<OrganizationSnapshot>(`/organization/departments/${encodeURIComponent(departmentId)}/grants`, { method: 'POST', body: JSON.stringify({ roleId, includeDescendants }) }),
+  revokeDepartmentGrant: (grantId: string) =>
+    request<OrganizationSnapshot>(`/organization/grants/${encodeURIComponent(grantId)}`, { method: 'DELETE' }),
   setPrimaryDepartment: (departmentId: string, userId: string) => request<OrganizationSnapshot>(
     `/organization/departments/${encodeURIComponent(departmentId)}/members/${encodeURIComponent(userId)}/primary`,
     { method: 'PUT' },

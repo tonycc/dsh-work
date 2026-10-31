@@ -136,11 +136,37 @@ export interface OrganizationEmployee {
   status: 'active' | 'disabled'
 }
 
+export interface OrganizationGrant {
+  id: string
+  departmentId: string
+  departmentName: string
+  roleId: string
+  includeDescendants: boolean
+  status: 'active' | 'invalid'
+}
+
+export interface OrganizationRole {
+  id: string
+  code: string
+  name: string
+  status: 'active' | 'disabled'
+  assignable: boolean
+}
+
+export interface OrganizationRoleAssignment {
+  userId: string
+  roleId: string
+  source: 'direct' | { grantId: string }
+}
+
 export interface OrganizationSnapshot {
   available: boolean
   departments: OrganizationDepartment[]
   members: OrganizationMember[]
   employees: OrganizationEmployee[]
+  grants: OrganizationGrant[]
+  roles: OrganizationRole[]
+  roleAssignments: OrganizationRoleAssignment[]
 }
 
 export interface IdentityUserSummary {
@@ -156,6 +182,8 @@ export interface IdentityUserSummary {
   directorySyncedAt: string | null
   authorizationVersion: number
   roles: Array<Pick<IdentityRoleSummary, 'id' | 'code' | 'name' | 'status'>>
+  /** 来自部门授权的角色，只能在“组织架构”中修改。 */
+  departmentRoles?: Array<Pick<IdentityRoleSummary, 'id' | 'code' | 'name' | 'status'> & { departmentName: string; grantId: string }>
   dataScopes: string[]
   activeSessionCount: number
   lastSeenAt: string | null

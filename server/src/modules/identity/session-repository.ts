@@ -421,7 +421,7 @@ export class IdentitySessionRepository {
         from users u
         join tenants t on t.id = u.tenant_id and t.status = 'active'
         left join user_roles ur on ur.tenant_id = u.tenant_id and ur.user_id = u.id
-          and ur.source_key = 'local'
+          and (ur.source_key = 'local' or ur.source_key like 'department:%')
           and (ur.valid_until is null or ur.valid_until > now())
         left join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id
           and r.status = 'active'

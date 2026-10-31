@@ -5,6 +5,8 @@ import { after, before, test } from 'node:test'
 import type { ApiAudience, RequestIdentity } from '../modules/identity/types.ts'
 import { loadIdentityConfiguration } from '../modules/identity/config.ts'
 import { LocalAuthService } from '../modules/identity/local-auth-service.ts'
+import { IdentityAdministrationService } from '../modules/identity/administration-service.ts'
+import { PostgresAuthorizationService } from '../modules/authorization/postgres-authorization-service.ts'
 import { PostgresOrganizationService, type OrganizationSnapshot } from '../modules/organization/postgres-organization-service.ts'
 import { createThrowawayDatabase, type ThrowawayDatabase } from '../infrastructure/postgres/test-database.ts'
 import { registerOrganizationRoutes } from './admin/organization-routes.ts'
@@ -12,6 +14,7 @@ import { Router } from './router.ts'
 
 // ORG-01～ORG-04（e2e/catalog/organization.md，企业组织架构方案 ORG-S1）：部门树维护与约束、
 // 成员与主部门、新建账号选择部门、上线清空历史部门文本、AI Hub 登录模式下不可用。
+// ORG-05～ORG-07（ORG-S2）：按部门授予角色、展开与重算、管理类角色限制、来源显示。
 
 const tenantId = 'tenant-dsh-work'
 const base = '/api/admin/v1/organization'
@@ -317,7 +320,7 @@ test('ORG-04 AI Hub 登录模式下组织架构不可用，写操作不落库', 
   assert.equal(created, undefined, 'AI Hub 模式下带部门建号被拒绝，不创建账号')
 
   const view = (await api('GET', base, { url: unavailableBaseUrl })).body.data!
-  assert.deepEqual(view, { available: false, departments: [], members: [], employees: [] })
+  assert.deepEqual(view, { available: false, departments: [], members: [], employees: [], grants: [], roles: [], roleAssignments: [] })
   const rootId = root(await snapshot()).id
   const [before] = await database.client<{ count: number }[]>`select count(*)::integer as count from org_departments`
   const rejected = await api('POST', `${base}/departments`, { url: unavailableBaseUrl, body: { parentId: rootId, name: '不可用模式部门' } })
@@ -325,3 +328,130 @@ test('ORG-04 AI Hub 登录模式下组织架构不可用，写操作不落库', 
   const [afterwards] = await database.client<{ count: number }[]>`select count(*)::integer as count from org_departments`
   assert.equal(afterwards!.count, before!.count)
 })
+
+async function departmentRoleRows(userId: string) {
+  const rows = await database.client<{ roleId: string; sourceKey: string }[]>`
+    select role_id as "roleId", source_key as "sourceKey" from user_roles
+     where tenant_id = ${tenantId} and user_id = ${userId} order by role_id, source_key
+  `
+  return rows.map(row => ({ roleId: row.roleId, sourceKey: row.sourceKey }))
+}
+
+async function authorizationVersion(userId: string) {
+  const [row] = await database.client<{ version: number }[]>`
+    select local_authorization_version::integer as version from users where tenant_id = ${tenantId} and id = ${userId}
+  `
+  return row!.version
+}
+
+async function canUseWorkbench(userId: string) {
+  return new PostgresAuthorizationService(database.client).authorizeWorkbench({ userId }).then(() => true, () => false)
+}
+
+test('ORG-05 部门授予角色：覆盖下级、随成员与部门变化重算、删除部门后授权失效', async () => {
+  const rootId = root(await snapshot()).id
+  const sales = await createDepartment(rootId, '授权销售部')
+  const east = await createDepartment(sales.id, '授权华东')
+  const other = await createDepartment(rootId, '授权其他部门')
+  const direct = await createEmployee('直属员工')
+  const child = await createEmployee('下级员工')
+  await ok('POST', `${base}/departments/${sales.id}/members`, { userIds: [direct] })
+  await ok('POST', `${base}/departments/${east.id}/members`, { userIds: [child] })
+  assert.equal(await canUseWorkbench(direct), false, '新账号没有角色时不能使用员工端')
+
+  const versionBefore = await authorizationVersion(child)
+  let view = await ok('POST', `${base}/departments/${sales.id}/grants`, { roleId: 'role-employee' })
+  const grant = view.grants.find(item => item.departmentId === sales.id && item.roleId === 'role-employee')!
+  assert.equal(grant.includeDescendants, true, '默认包含下级部门')
+  for (const userId of [direct, child]) {
+    assert.deepEqual(await departmentRoleRows(userId), [{ roleId: 'role-employee', sourceKey: `department:${grant.id}` }])
+    assert.equal(await canUseWorkbench(userId), true, '部门授予的角色在授权判定中生效')
+    assert.ok(view.roleAssignments.some(item => item.userId === userId && typeof item.source === 'object' && item.source.grantId === grant.id))
+  }
+  assert.ok(await authorizationVersion(child) > versionBefore, '权限变化时授权版本递增')
+
+  await ok('PATCH', `${base}/departments/${east.id}`, { parentId: other.id })
+  assert.deepEqual(await departmentRoleRows(child), [], '部门移出授权范围后收回角色')
+  assert.equal(await canUseWorkbench(child), false)
+  await ok('PATCH', `${base}/departments/${east.id}`, { parentId: sales.id })
+  assert.equal(await canUseWorkbench(child), true)
+
+  await ok('DELETE', `${base}/grants/${grant.id}`)
+  view = await ok('POST', `${base}/departments/${sales.id}/grants`, { roleId: 'role-employee', includeDescendants: false })
+  const directOnly = view.grants.find(item => item.departmentId === sales.id && item.status === 'active')!
+  assert.equal(directOnly.includeDescendants, false)
+  assert.equal(await canUseWorkbench(direct), true)
+  assert.equal(await canUseWorkbench(child), false, '不含下级时下级部门成员不获得角色')
+
+  await ok('DELETE', `${base}/departments/${sales.id}/members/${direct}`)
+  assert.equal(await canUseWorkbench(direct), false, '移出部门后收回来自部门的角色')
+  await ok('DELETE', `${base}/departments/${east.id}/members/${child}`)
+  await ok('DELETE', `${base}/departments/${east.id}`)
+  view = await ok('DELETE', `${base}/departments/${sales.id}`)
+  const invalid = view.grants.find(item => item.id === directOnly.id)!
+  assert.deepEqual([invalid.status, invalid.departmentName], ['invalid', '授权销售部'], '删除部门后授权失效并保留原部门名称')
+  view = await ok('DELETE', `${base}/grants/${directOnly.id}`)
+  assert.equal(view.grants.some(item => item.id === directOnly.id), false, '失效授权可以清除')
+})
+
+test('ORG-06 管理类角色不能授给部门；已授给部门的角色不能加入管理权限', async () => {
+  const rootId = root(await snapshot()).id
+  const team = await createDepartment(rootId, '限制测试部')
+  const forbidden = await api('POST', `${base}/departments/${team.id}/grants`, { body: { roleId: 'role-platform-admin' } })
+  assert.equal(forbidden.status, 409)
+  assert.match(forbidden.body.error!.message, /管理类权限/)
+  const view = await snapshot()
+  assert.equal(view.roles.find(role => role.id === 'role-platform-admin')!.assignable, false)
+  assert.equal(view.roles.find(role => role.id === 'role-employee')!.assignable, true)
+
+  const administration = new IdentityAdministrationService(database.client, true)
+  const role = await administration.createRole({ code: 'org_grant_probe', name: '部门授权探针', permissions: ['workbench:use'], actorId: adminId })
+  const roleId = (role as { id: string }).id
+  await ok('POST', `${base}/departments/${team.id}/grants`, { roleId })
+  assert.equal((await api('POST', `${base}/departments/${team.id}/grants`, { body: { roleId } })).status, 409, '同一部门不能重复授予同一角色')
+  await assert.rejects(
+    administration.updateRole({ roleId, name: '部门授权探针', status: 'active', permissions: ['workbench:use', 'admin:write'], dataScopes: [], actorId: adminId }),
+    (error: { message?: string }) => /已授给部门/.test(error.message ?? ''),
+  )
+  await administration.updateRole({ roleId, name: '部门授权探针', status: 'disabled', permissions: ['workbench:use'], dataScopes: [], actorId: adminId })
+  const disabled = await createDepartment(rootId, '停用角色测试部')
+  assert.equal((await api('POST', `${base}/departments/${disabled.id}/grants`, { body: { roleId } })).status, 409, '停用的角色不能授给部门')
+  assert.equal((await api('POST', `${base}/departments/${team.id}/grants`, { body: { roleId: 'role-missing' } })).status, 404)
+  assert.equal((await api('POST', `${base}/departments/${team.id}/grants`, { readonly: true, body: { roleId: 'role-employee' } })).status, 403)
+
+  // 并发：同时“给角色加管理权限”和“把角色授给部门”，最多一个成功，不能出现授给部门的管理类角色。
+  for (let round = 0; round < 5; round += 1) {
+    const race = await administration.createRole({ code: `org_grant_race_${round}`, name: `并发探针${round}`, permissions: ['workbench:use'], actorId: adminId })
+    const raceRoleId = (race as { id: string }).id
+    const raceDepartment = await createDepartment(rootId, `并发授权部${round}`)
+    await Promise.allSettled([
+      administration.updateRole({ roleId: raceRoleId, name: `并发探针${round}`, status: 'active', permissions: ['workbench:use', 'admin:write'], dataScopes: [], actorId: adminId }),
+      api('POST', `${base}/departments/${raceDepartment.id}/grants`, { body: { roleId: raceRoleId } }),
+    ])
+    const [violation] = await database.client`
+      select 1 from org_department_grants g join roles r on r.tenant_id = g.tenant_id and r.id = g.role_id
+       where g.status = 'active' and g.role_id = ${raceRoleId} and r.permissions ? 'admin:write'
+    `
+    assert.equal(violation, undefined, '并发下也不会出现授给部门的管理类角色')
+  }
+})
+
+test('ORG-07 员工列表区分直接授予与来自部门的角色；撤销直接授予不影响部门来源', async () => {
+  const rootId = root(await snapshot()).id
+  const ops = await createDepartment(rootId, '来源测试部')
+  const employee = await createEmployee('来源测试员工')
+  await ok('POST', `${base}/departments/${ops.id}/members`, { userIds: [employee] })
+  await ok('POST', `${base}/departments/${ops.id}/grants`, { roleId: 'role-employee' })
+  const administration = new IdentityAdministrationService(database.client, true)
+  await administration.grantRole({ userId: employee, roleId: 'role-employee', actorId: adminId })
+
+  const page = await administration.listUsers({ query: '来源测试员工' })
+  const summary = (page as { items: Array<{ id: string; roles: Array<{ id: string }>; departmentRoles: Array<{ id: string; departmentName: string }> }> }).items.find(item => item.id === employee)!
+  assert.deepEqual(summary.roles.map(role => role.id), ['role-employee'])
+  assert.deepEqual(summary.departmentRoles.map(role => [role.id, role.departmentName]), [['role-employee', '来源测试部']])
+
+  await administration.revokeRole({ userId: employee, roleId: 'role-employee', actorId: adminId })
+  assert.deepEqual((await departmentRoleRows(employee)).map(row => row.sourceKey.startsWith('department:')), [true], '撤销直接授予只删除直接来源')
+  assert.equal(await canUseWorkbench(employee), true, '仍通过部门获得员工角色')
+})
+

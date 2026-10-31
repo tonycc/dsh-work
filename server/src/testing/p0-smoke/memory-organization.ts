@@ -2,7 +2,10 @@ import { invalidRequest, notFound, stateConflict } from '../../domain/request-er
 import type {
   OrganizationDepartment,
   OrganizationEmployee,
+  OrganizationGrant,
   OrganizationMember,
+  OrganizationRole,
+  OrganizationRoleAssignment,
   OrganizationSnapshot,
 } from '../../modules/organization/postgres-organization-service.ts'
 
@@ -46,6 +49,18 @@ export class MemoryOrganizationStore {
     id: id!, name: name!, email: `${account}@example.invalid`, loginAccount: `${account}@example.invalid`, status: 'active' as const,
   }))
 
+  private readonly roles: OrganizationRole[] = [
+    { id: 'role-employee', code: 'employee', name: '员工', status: 'active', assignable: true },
+    { id: 'role-department-manager', code: 'department_manager', name: '部门负责人', status: 'active', assignable: true },
+    { id: 'role-supply-analyst', code: 'supply_analyst', name: '供应链分析员', status: 'active', assignable: true },
+    { id: 'role-platform-admin', code: 'platform_admin', name: '平台管理员', status: 'active', assignable: false },
+    { id: 'role-auditor', code: 'auditor', name: '审计员', status: 'active', assignable: false },
+  ]
+
+  private grants: OrganizationGrant[] = [
+    { id: 'grant-smoke-scm', departmentId: 'dept-scm', departmentName: '供应链中心', roleId: 'role-supply-analyst', includeDescendants: true, status: 'active' },
+  ]
+
   private sequence = 0
 
   async snapshot(): Promise<OrganizationSnapshot> {
@@ -54,7 +69,45 @@ export class MemoryOrganizationStore {
       departments: this.departments.map(department => ({ ...department })),
       members: this.members.map(member => ({ ...member })),
       employees: this.employees.map(employee => ({ ...employee })),
+      grants: this.grants.map(grant => ({ ...grant })),
+      roles: this.roles.map(role => ({ ...role })),
+      roleAssignments: this.roleAssignments(),
     }
+  }
+
+  async grantRole(input: { departmentId: string; roleId: unknown; includeDescendants?: unknown; actorId: string }) {
+    if (typeof input.roleId !== 'string' || !input.roleId) throw invalidRequest('请选择要授予的角色')
+    if (input.includeDescendants !== undefined && typeof input.includeDescendants !== 'boolean') throw invalidRequest('includeDescendants 必须为布尔值')
+    const department = this.require(input.departmentId)
+    const role = this.roles.find(item => item.id === input.roleId)
+    if (!role) throw notFound('角色不存在')
+    if (role.status !== 'active') throw stateConflict(`角色“${role.name}”已停用，不能授给部门`)
+    if (!role.assignable) throw stateConflict(`角色“${role.name}”含管理类权限，只能在“员工与权限”中单独授给个人`)
+    if (this.grants.some(grant => grant.status === 'active' && grant.departmentId === department.id && grant.roleId === role.id)) {
+      throw stateConflict('本部门已授予这个角色')
+    }
+    this.grants.push({
+      id: `grant-smoke-${++this.sequence}`, departmentId: department.id, departmentName: department.name,
+      roleId: role.id, includeDescendants: input.includeDescendants !== false, status: 'active',
+    })
+    return this.snapshot()
+  }
+
+  async revokeGrant(input: { grantId: string; actorId: string }) {
+    if (!this.grants.some(grant => grant.id === input.grantId)) throw notFound('部门授权不存在')
+    this.grants = this.grants.filter(grant => grant.id !== input.grantId)
+    return this.snapshot()
+  }
+
+  /** 冒烟员工都直接持有“员工”角色；部门授权按当前成员关系展开，与 PostgreSQL 的展开口径一致。 */
+  private roleAssignments(): OrganizationRoleAssignment[] {
+    const direct = this.employees.map(employee => ({ userId: employee.id, roleId: 'role-employee', source: 'direct' as const }))
+    const derived = this.grants.filter(grant => grant.status === 'active').flatMap(grant => {
+      const covered = grant.includeDescendants ? this.descendants(grant.departmentId) : [grant.departmentId]
+      const userIds = [...new Set(this.members.filter(member => covered.includes(member.departmentId)).map(member => member.userId))]
+      return userIds.map(userId => ({ userId, roleId: grant.roleId, source: { grantId: grant.id } }))
+    })
+    return [...direct, ...derived]
   }
 
   async createDepartment(input: { parentId: unknown; name: unknown; actorId: string }) {
@@ -105,6 +158,7 @@ export class MemoryOrganizationStore {
     const reasons = [children ? `还有 ${children} 个下级部门` : '', members ? `还有 ${members} 名成员` : ''].filter(Boolean)
     if (reasons.length) throw stateConflict(`不能删除“${department.name}”：${reasons.join('，')}`)
     this.departments = this.departments.filter(item => item.id !== department.id)
+    for (const grant of this.grants) if (grant.departmentId === department.id) grant.status = 'invalid'
     return this.snapshot()
   }
 

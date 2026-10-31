@@ -6,11 +6,11 @@ const basePath = '/api/admin/v1/organization'
 type OrganizationStore = Pick<
   PostgresOrganizationService,
   'snapshot' | 'createDepartment' | 'updateDepartment' | 'reorderDepartment' | 'removeDepartment'
-  | 'addMembers' | 'removeMember' | 'setPrimaryDepartment'
+  | 'addMembers' | 'removeMember' | 'setPrimaryDepartment' | 'grantRole' | 'revokeGrant'
 >
 
 /**
- * 组织架构 ORG-S1：部门树、成员与主部门。读取返回整棵树与员工清单（企业内部门与员工规模小），
+ * 组织架构 ORG-S1/S2：部门树、成员与主部门，按部门授予角色。读取返回整棵树与员工清单（企业内部门与员工规模小），
  * 写操作返回更新后的同一结构，页面直接替换。只有平台管理员可以写；AI Hub 登录模式下不可用。
  */
 export function registerOrganizationRoutes(
@@ -64,5 +64,16 @@ export function registerOrganizationRoutes(
 
   router.put(`${basePath}/departments/:departmentId/members/:userId/primary`, async (_request, context) => envelope('admin', await organization.setPrimaryDepartment({
     departmentId: context.params.departmentId ?? '', userId: context.params.userId ?? '', actorId: actor(context),
+  }), adapter))
+
+  router.post(`${basePath}/departments/:departmentId/grants`, async (request, context) => {
+    const input = await readJsonBody<{ roleId?: unknown; includeDescendants?: unknown }>(request)
+    return envelope('admin', await organization.grantRole({
+      departmentId: context.params.departmentId ?? '', roleId: input.roleId, includeDescendants: input.includeDescendants, actorId: actor(context),
+    }), adapter)
+  })
+
+  router.delete(`${basePath}/grants/:grantId`, async (_request, context) => envelope('admin', await organization.revokeGrant({
+    grantId: context.params.grantId ?? '', actorId: actor(context),
   }), adapter))
 }

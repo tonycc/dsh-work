@@ -556,7 +556,7 @@ export class PostgresAuthorizationService {
                  from user_roles ur
                  join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id and r.status = 'active'
                 where ur.tenant_id = ${tenantId} and ur.user_id = ${userId}
-                  and ur.source_key = 'local'
+                  and (ur.source_key = 'local' or ur.source_key like 'department:%')
                   and (ur.valid_until is null or ur.valid_until > now())
              ), '')) as "authFingerprint"
         from workspaces w
@@ -910,7 +910,7 @@ export class PostgresAuthorizationService {
           join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id
           left join lateral jsonb_array_elements_text(coalesce(r.permissions, '[]')) permission(value) on true
          where ur.tenant_id = ${tenantId} and ur.user_id = ${userId}
-           and ur.source_key = 'local'
+           and (ur.source_key = 'local' or ur.source_key like 'department:%')
            and (ur.valid_until is null or ur.valid_until > now())
            and r.status = 'active' and r.id in ${this.database(requestedRoleIds)}
          group by r.id
@@ -928,7 +928,7 @@ export class PostgresAuthorizationService {
         from users u
         left join user_roles ur on ur.tenant_id = u.tenant_id and ur.user_id = u.id
           and (ur.valid_until is null or ur.valid_until > now())
-          and ur.source_key = 'local'
+          and (ur.source_key = 'local' or ur.source_key like 'department:%')
         left join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id
           and r.status = 'active'
         left join lateral jsonb_array_elements_text(coalesce(r.permissions, '[]')) permission(value) on true
@@ -1013,7 +1013,7 @@ export class PostgresAuthorizationService {
         union
         select m.user_id, g.scope_value from members m
           join user_roles ur on ur.tenant_id = ${tenantId} and ur.user_id = m.user_id
-           and ur.source_key = 'local' and (ur.valid_until is null or ur.valid_until > now())
+           and (ur.source_key = 'local' or ur.source_key like 'department:%') and (ur.valid_until is null or ur.valid_until > now())
           join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id and r.status = 'active'
           join data_scope_grants g on g.tenant_id = ${tenantId}
            and g.subject_type = 'role' and g.subject_id = ur.role_id
@@ -1047,7 +1047,7 @@ export class PostgresAuthorizationService {
         union
         select m.user_id, g.scope_value from members m
           join user_roles ur on ur.tenant_id = ${tenantId} and ur.user_id = m.user_id
-           and ur.source_key = 'local' and (ur.valid_until is null or ur.valid_until > now())
+           and (ur.source_key = 'local' or ur.source_key like 'department:%') and (ur.valid_until is null or ur.valid_until > now())
           join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id and r.status = 'active'
           join data_scope_grants g on g.tenant_id = ${tenantId}
            and g.subject_type = 'role' and g.subject_id = ur.role_id
