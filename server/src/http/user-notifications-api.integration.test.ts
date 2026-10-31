@@ -361,18 +361,39 @@ test('NC-05 清扫删除所有员工 90 天前的通知，可重复执行，90 �
   await insert(ws.second, 'old-other', 95, false)
   await insert(ws.first, 'recent', 89, false)
 
-  // 清扫前读取侧已不列出、不计超过保留期的通知。
+  // 超过一批（1000 条）的过期通知，验证分批删除能删完。
+  await database`
+    insert into user_notifications (id, tenant_id, recipient_user_id, kind, workspace_id, object_type, object_id, actor_user_id,
+                                    safe_metadata, dedupe_key, created_at)
+    select ${`n-ret-${ws.id}-bulk-`} || i, ${tenantId}, ${ws.second}, 'workspace_member_added', ${ws.id}, 'workspace', ${ws.id}, ${ws.owner},
+           '{}'::jsonb, ${`retention:${ws.id}:bulk-`} || i, now() - interval '100 days'
+      from generate_series(1, 1500) as i`
+
+  // 清扫前读取侧已不列出、不计超过保留期的通知；“全部标为已读”也只标保留期内的。
   assert.deepEqual((await notifications(ws.first)).map(item => item.id), [`n-ret-${ws.id}-recent`])
   assert.equal(await unread(ws.first), 1)
+  assert.deepEqual((await api('POST', `${base}/me/notifications/read-all`, { as: ws.first })).body.data, { read: 1 })
+  const [expiredUnread] = await database<{ readAt: Date | null }[]>`
+    select read_at as "readAt" from user_notifications where id = ${`n-ret-${ws.id}-old-unread`}`
+  assert.equal(expiredUnread?.readAt, null, '看不到的过期通知不被标为已读')
+
+  const business = async () => {
+    const [row] = await database<{ mentions: number; activity: number }[]>`
+      select (select count(*) from message_mentions)::integer as mentions,
+             (select count(*) from workspace_activity_events)::integer as activity`
+    return { ...row }
+  }
+  const before = await business()
 
   const service = new PostgresUserNotificationService(database)
   const [first, second] = await Promise.all([service.purgeExpired(), service.purgeExpired()])
-  assert.equal(first.removed + second.removed, 3, '两个实例同时清扫，各删各的批次')
+  assert.equal(first.removed + second.removed, 1503, '两个实例同时清扫，各删各的批次，合计删完')
   assert.deepEqual(await service.purgeExpired(), { removed: 0 })
+  assert.deepEqual(await business(), before, '只删通知，不动 @ 提醒与项目动态')
   const left = await database<{ id: string }[]>`
     select id from user_notifications where tenant_id = ${tenantId} and dedupe_key like ${`retention:${ws.id}:%`}`
   assert.deepEqual(left.map(row => row.id), [`n-ret-${ws.id}-recent`])
-  assert.equal(await unread(ws.first), 1)
+  assert.deepEqual((await notifications(ws.first)).map(item => item.id), [`n-ret-${ws.id}-recent`])
 })
 
 async function joinAgent(ws: { id: string; owner: string }, label: string): Promise<string> {

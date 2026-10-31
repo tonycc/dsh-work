@@ -131,17 +131,22 @@ export class PostgresUserNotificationService {
   }
 
   /**
-   * 保留清扫（NC-S4）：删除所有员工超过保留期的通知，与已读未读无关。分批删除、可重复执行，
-   * 多个实例同时执行也只是各删各的批次（已删的行不会再被选中）。只删通知记录，不动 @ 提醒等业务数据。
+   * 保留清扫（NC-S4）：删除超过保留期的通知，与已读未读无关。分批删除、可重复执行；多个实例同时执行
+   * 时跳过对方锁住的行，各删各的批次。一直删到某一批没有可删的为止（被锁的行留到下次）。只删通知记录，
+   * 不动 @ 提醒等业务数据。默认用数据库时间，与读取侧的保留期判断同一时钟；测试可传入时间。
    */
-  async purgeExpired(now: Date = new Date()): Promise<{ removed: number }> {
+  async purgeExpired(now?: Date): Promise<{ removed: number }> {
+    const sql = this.database
+    const cutoff = now
+      ? sql`${now}::timestamptz - make_interval(days => ${retentionDays})`
+      : sql`now() - make_interval(days => ${retentionDays})`
     let removed = 0
     for (;;) {
-      const rows = await this.database<Array<{ id: string }>>`
+      const rows = await sql<Array<{ id: string }>>`
         delete from user_notifications
          where id in (
            select id from user_notifications
-            where created_at <= ${now}::timestamptz - make_interval(days => ${retentionDays})
+            where tenant_id = ${tenantId} and created_at <= ${cutoff}
             order by created_at
             limit ${purgeBatchSize}
             for update skip locked
@@ -149,16 +154,18 @@ export class PostgresUserNotificationService {
         returning id
       `
       removed += rows.length
-      if (rows.length < purgeBatchSize) return { removed }
+      if (rows.length === 0) return { removed }
     }
   }
 
+  /** 全部标为已读：只标保留期内的通知（看不到的过期通知不计入，也不与清扫争锁）。 */
   async markAllRead(userId: string): Promise<{ read: number }> {
     const sql = this.database
     const rows = await sql<Array<{ id: string }>>`
       with marked as (
         update user_notifications set read_at = now()
          where tenant_id = ${tenantId} and recipient_user_id = ${userId} and read_at is null
+           and created_at > now() - make_interval(days => ${retentionDays})
         returning id, kind, object_id
       ), ${mentionsReadWith(sql, userId)}
       select id from marked

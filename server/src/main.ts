@@ -161,6 +161,7 @@ async function start() {
   let persistentWait: PostgresPersistentWaitService | null = null
   let memoryProposalSweep: NodeJS.Timeout | null = null
   let notificationRetentionSweep: NodeJS.Timeout | null = null
+  let notificationRetentionRun: Promise<void> | null = null
   let dshCapability: CapabilityState = { status: 'not-configured' }
   let pythonCapability: CapabilityState = { status: 'unavailable', code: 'PYTHON_UNAVAILABLE' }
   let attemptContainers: AttemptExecutionContainers | null = null
@@ -567,9 +568,14 @@ async function start() {
   const userNotifications = new PostgresUserNotificationService(database)
   registerUserNotificationRoutes(router, userNotifications, authorization)
   // 站内通知 NC-S4：启动后与每天清扫一次 90 天前的通知，不阻塞启动；清扫可重复执行。
-  const purgeNotifications = () => void userNotifications.purgeExpired()
-    .then(result => { if (result.removed > 0) console.warn('user notification retention sweep completed', result) })
-    .catch(error => console.error('user notification retention sweep failed', error))
+  const purgeNotifications = () => {
+    // 上一轮还没结束时不重叠；关闭服务时等进行中的一轮结束再关数据库。
+    if (notificationRetentionRun) return
+    notificationRetentionRun = userNotifications.purgeExpired()
+      .then(result => { if (result.removed > 0) console.warn('user notification retention sweep completed', result) })
+      .catch(error => console.error('user notification retention sweep failed', error))
+      .finally(() => { notificationRetentionRun = null })
+  }
   purgeNotifications()
   notificationRetentionSweep = setInterval(purgeNotifications, 24 * 60 * 60 * 1000)
   notificationRetentionSweep.unref()
@@ -636,6 +642,7 @@ async function start() {
         if (directorySyncTimer) clearInterval(directorySyncTimer)
         if (memoryProposalSweep) clearInterval(memoryProposalSweep)
         if (notificationRetentionSweep) clearInterval(notificationRetentionSweep)
+        await notificationRetentionRun
         if (workspaceSweep) clearInterval(workspaceSweep)
         if (automationSweep) await automationSweep.close()
         if (revocationSweep) revocationSweep.close()
