@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { DatabaseClient } from '../../infrastructure/postgres/database.ts'
 import type { AgentRecommendationView } from '../../domain/types.ts'
 import type { RuntimeManifest } from '../runtime/runtime-types.ts'
-import { toolPreconditionFailed } from '../runtime/platform-tool-contract.ts'
+import { PlatformToolError, toolPreconditionFailed } from '../runtime/platform-tool-contract.ts'
 import { isAuthorizationDenial } from '../../domain/authorization-errors.ts'
 import type { PostgresAuthorizationService } from '../authorization/postgres-authorization-service.ts'
 import type { PostgresAgentService, WorkbenchAgentDefinition } from './postgres-agent-service.ts'
@@ -37,7 +37,8 @@ export class AgentRecommendationService {
   }
 
   /** `list_colleague_agents`：发起员工当前可用、且不是本 Agent 的 AI 同事。 */
-  async listColleagues(manifest: RuntimeManifest) {
+  async listColleagues(manifest: RuntimeManifest, signal?: AbortSignal) {
+    assertAlive(signal)
     const colleagues = await this.colleaguesFor(manifest)
     return {
       agents: colleagues.slice(0, MAX_COLLEAGUES).map(agent => ({
@@ -49,8 +50,12 @@ export class AgentRecommendationService {
     }
   }
 
-  /** `recommend_agents`：校验后记录 1～3 位推荐；同一 Attempt 再次调用替换上一组。 */
-  async recommend(manifest: RuntimeManifest, input: Record<string, unknown>) {
+  /**
+   * `recommend_agents`：校验后记录 1～3 位推荐；同一 Attempt 再次调用替换上一组。
+   * Attempt 已取消时不写入：提交前再查一次，取消发生在写入途中则整组回滚。
+   */
+  async recommend(manifest: RuntimeManifest, input: Record<string, unknown>, signal?: AbortSignal) {
+    assertAlive(signal)
     const items = Array.isArray(input['recommendations']) ? input['recommendations'] as Array<Record<string, unknown>> : []
     if (items.length < 1 || items.length > 3) throw toolPreconditionFailed('每次推荐 1～3 位 AI 同事')
     const colleagues = new Map((await this.colleaguesFor(manifest)).map(agent => [agent.id, agent]))
@@ -68,6 +73,7 @@ export class AgentRecommendationService {
       return { agent, reason, suggestedPrompt: suggestedPrompt || null }
     })
     const userId = manifest.user_context.user_id
+    assertAlive(signal)
     await this.database.begin(async transaction => {
       await transaction`delete from agent_recommendations where tenant_id = ${tenantId} and attempt_id = ${manifest.attempt_id}`
       for (const [index, { agent, reason, suggestedPrompt }] of recommendations.entries()) {
@@ -81,6 +87,7 @@ export class AgentRecommendationService {
           )
         `
       }
+      assertAlive(signal)
     })
     return {
       recommended: recommendations.map(({ agent }) => ({ agentId: agent.id, name: agent.name })),
@@ -143,4 +150,8 @@ export class AgentRecommendationService {
       throw error
     }
   }
+}
+
+function assertAlive(signal: AbortSignal | undefined) {
+  if (signal?.aborted) throw new PlatformToolError({ status: 409, code: 'TOOL_CANCELLED', message: '工具调用已取消' })
 }

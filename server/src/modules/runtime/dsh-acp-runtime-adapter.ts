@@ -172,6 +172,7 @@ export interface DshAcpRuntimeAdapterConfiguration {
     name: 'list_colleague_agents' | 'recommend_agents',
     input: Record<string, unknown>,
     manifest: RuntimeManifest,
+    signal: AbortSignal,
   ) => Promise<unknown>
   /**
    * Skill 创建专家方案 4.2：查看可用 Skill 与保存 Skill 草稿，只在员工个人对话中装配。保存时读取本 Attempt
@@ -658,7 +659,7 @@ export class DshAcpRuntimeAdapter implements AgentRuntimePort {
         if (!record.manifest.tools.some(tool => tool.id === name)) continue
         const handle = this.configuration.agentRecommendationTool
         if (!handle) throw dependencyUnavailable('推荐 AI 同事不可用：未配置推荐服务')
-        registerPlatformTool(name, async input => handle(name, input, record.manifest))
+        registerPlatformTool(name, async (input, signal) => handle(name, input, record.manifest, signal))
       }
       for (const name of ['list_available_skills', 'skill_draft_save'] as const) {
         if (!record.manifest.tools.some(tool => tool.id === name)) continue
