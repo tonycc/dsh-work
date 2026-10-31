@@ -580,12 +580,19 @@ export class PostgresRunRepository implements RunRepository {
     runId: string,
     to: 'failed' | 'cancelled',
   ): Promise<boolean> {
-    const updated = await this.database`
-      update runs set status = ${to}, updated_at = now()
-       where tenant_id = ${tenantId} and id = ${runId}
-         and status = 'queued' and current_attempt_id is null
-    `
-    return updated.count > 0
+    return this.database.begin(async (transaction) => {
+      const updated = await transaction`
+        update runs set status = ${to}, updated_at = now()
+         where tenant_id = ${tenantId} and id = ${runId}
+           and status = 'queued' and current_attempt_id is null
+      `
+      // 站内通知 NC-S3：受理中断（派发失败、重启后收敛）与 Run 落为失败同一事务通知所有者，
+      // 之后进程退出也不会丢；随后的执行记录收敛（markAdmission）只会合并到这一条。
+      if (updated.count > 0 && to === 'failed') {
+        await recordAutomationOutcomeNotification(transaction, { runId }, 'interrupted')
+      }
+      return updated.count > 0
+    })
   }
 
   /**

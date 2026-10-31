@@ -269,14 +269,43 @@ test('NC-04 项目 Agent 任务的定时执行被暂停或停止时通知规则�
   assert.deepEqual(paused?.detail, { state: 'paused', reason: 'consecutive_failures' })
   assert.deepEqual(paused?.target, { type: 'project_task', id: failing.id, sessionId: null })
   assert.equal(paused?.actor, null, '系统动作没有触发人')
+  // 暂停后再失败不再重复通知。
+  await projects.noteTaskRunTerminal(failing.sessionId, 'failed')
+  assert.equal((await notifications(ws.owner)).filter(item => item.kind === 'task_schedule_stopped').length, 1)
 
-  // 到点时项目已归档：定时执行停止。
+  const dueNow = (taskId: string) => database`
+    update project_tasks set next_slot_utc = now() - interval '1 minute' where tenant_id = ${tenantId} and id = ${taskId}`
+  const stoppedReason = async (title: string) =>
+    (await notifications(ws.owner)).find(item => item.kind === 'task_schedule_stopped' && item.objectName === title)?.detail
+
+  // 到点时已过截止日期：停止；任务已完成：停止但不另发（创建人已有“任务完成”通知）。
+  const overdue = await createTask('季度盘点')
+  await database`update project_tasks set due_date = current_date - 2 where tenant_id = ${tenantId} and id = ${overdue.id}`
+  const finished = await createTask('已完成的汇总')
+  await database`update project_tasks set status = 'done' where tenant_id = ${tenantId} and id = ${finished.id}`
+  await dueNow(overdue.id)
+  await dueNow(finished.id)
+  await projects.processDueSchedules(new Date())
+  assert.deepEqual(await stoppedReason('季度盘点'), { state: 'stopped', reason: 'due_passed' })
+  assert.equal(await stoppedReason('已完成的汇总'), undefined)
+  const [finishedState] = await database<{ state: string; reason: string }[]>`
+    select schedule_state as state, schedule_reason as reason from project_tasks where tenant_id = ${tenantId} and id = ${finished.id}`
+  assert.deepEqual({ ...finishedState }, { state: 'stopped', reason: 'completed' })
+
+  // 负责的 Agent 已不可用：停止。
+  const orphaned = await createTask('每日库存预警')
+  await database`update workspace_agent_members set status = 'disabled' where tenant_id = ${tenantId} and id = ${agentMemberId}`
+  await dueNow(orphaned.id)
+  await projects.processDueSchedules(new Date())
+  assert.deepEqual(await stoppedReason('每日库存预警'), { state: 'stopped', reason: 'agent_unavailable' })
+  await database`update workspace_agent_members set status = 'available' where tenant_id = ${tenantId} and id = ${agentMemberId}`
+
+  // 到点时项目已归档：停止。
   const archived = await createTask('每周复盘')
-  await database`update project_tasks set next_slot_utc = now() - interval '1 minute' where tenant_id = ${tenantId} and id = ${archived.id}`
+  await dueNow(archived.id)
   await database`update workspaces set status = 'archived' where tenant_id = ${tenantId} and id = ${ws.id}`
   await projects.processDueSchedules(new Date())
-  const stopped = (await notifications(ws.owner)).find(item => item.kind === 'task_schedule_stopped' && item.objectName === '每周复盘')
-  assert.deepEqual(stopped?.detail, { state: 'stopped', reason: 'workspace_archived' })
+  assert.deepEqual(await stoppedReason('每周复盘'), { state: 'stopped', reason: 'workspace_archived' })
   assert.equal((await notifications(ws.first)).some(item => item.kind === 'task_schedule_stopped'), false, '只通知规则设置人')
 })
 

@@ -503,6 +503,8 @@ test('NC-04 定时执行失败、被跳过或错过时通知所有者；本人�
 
   await insert({ kind: 'missed', reasonCode: 'slot_expired' })
   await insert({ kind: 'scheduled', reasonCode: 'overlap' })
+  // 同一结果已有未读通知时合并为一条（长时间重叠不刷屏）。
+  await insert({ kind: 'scheduled', reasonCode: 'overlap' })
   // 所有者自己暂停或改了计划而作废的时间点不通知。
   await insert({ kind: 'scheduled', reasonCode: 'task_paused' })
   await insert({ kind: 'scheduled', reasonCode: 'schedule_changed' })
@@ -526,6 +528,11 @@ test('NC-04 定时执行失败、被跳过或错过时通知所有者；本人�
 
   assert.deepEqual((await automationNotifications(userId)).map(item => item.outcome).sort(), ['failed', 'missed', 'skipped'])
   assert.equal((await automationNotifications(userId)).find(item => item.outcome === 'failed')?.sessionId, session.id)
+
+  // 所有者读过之后再被跳过，另起一条。
+  await database`update user_notifications set read_at = now() where tenant_id = ${tenantId} and recipient_user_id = ${userId}`
+  await insert({ kind: 'scheduled', reasonCode: 'overlap' })
+  assert.equal((await automationNotifications(userId)).filter(item => item.outcome === 'skipped').length, 2)
 })
 
 /** 本人的定时任务通知（站内通知 NC-S3），按产生顺序。 */
@@ -738,4 +745,46 @@ test('sweep close 完整释放 advisory lock（无重入计数残留）', async 
   if (row?.ok) {
     await database`select pg_advisory_unlock(hashtext('dsh-work-automation-trigger-sweep'))`
   }
+})
+
+test('NC-04 服务重启后丢失的定时任务执行记为失败并通知所有者', async () => {
+  const { userId, workspaceId, agentId, versionId } = await seedOwner('restart')
+  const created = await service.create(userId, {
+    name: '重启任务',
+    agentId,
+    workspaceId,
+    schedule: { kind: 'manual', timezone: 'UTC' },
+    inputTemplate: { prompt: '执行' },
+  })
+  await service.enable(userId, created.id)
+  const session = await conversations.createSession({ userId, title: '重启现场', workspaceId, agentVersionId: versionId })
+  const run = await runs.createRun({ tenantId, sessionId: session.id, requestedBy: userId, idempotencyKey: randomUUID() })
+  const attempt = await runs.createAttempt({
+    attemptId: `attempt-${randomUUID()}`,
+    tenantId,
+    runId: run.id,
+    runtimeId: 'runtime-local-01',
+    manifest: testAttemptManifest(run.taskId, run.id, { purpose: 'automation' }),
+    manifestSha256: 'test-manifest-sha',
+    modelRouteSnapshot: {},
+  })
+  await database.begin(async (tx) => {
+    await automations.insertExecution(tx, {
+      automationId: created.id,
+      triggerId: `scheduled|${created.id}|${randomUUID()}`,
+      kind: 'scheduled',
+      plannedSlotUtc: new Date().toISOString(),
+      taskRevision: 1,
+      scheduleRevision: 1,
+      sessionId: session.id,
+      runId: run.id,
+      admissionStatus: 'accepted',
+    })
+    await tx`update run_attempts set status = 'running' where tenant_id = ${tenantId} and id = ${attempt.id}`
+    await tx`update runs set status = 'running' where tenant_id = ${tenantId} and id = ${run.id}`
+  })
+
+  const recovered = await runs.recoverAfterRestart(tenantId, 'runtime-local-01')
+  assert.ok(recovered.failed.some(item => item.runId === run.id))
+  assert.deepEqual(await automationNotifications(userId), [{ outcome: 'failed', sessionId: session.id }])
 })

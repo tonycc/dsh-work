@@ -36,7 +36,8 @@ export function notificationText(item: UserNotification): NotificationTextPart[]
     case 'skill_review_result':
       return [
         { text: '你提交的 Skill ' }, { text: `「${object}」`, strong: true },
-        { text: item.detail?.result === 'approved' ? ' 已发布到 Skill 广场' : ' 未通过审核，原因见草稿卡片' },
+        // 不写“原因见草稿卡片”：之后修改再提交、通过后，卡片已显示新结论，旧通知不能指向找不到的原因。
+        { text: item.detail?.result === 'approved' ? ' 已发布到 Skill 广场' : ' 未通过审核' },
       ]
   }
 }

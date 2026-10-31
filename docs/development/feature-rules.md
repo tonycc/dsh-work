@@ -344,7 +344,7 @@
 | 准备中断 | 已受理但没有 Attempt 的 Run 收敛为失败，不续办 |
 | 执行失败 | 不自动重试；用户“再次立即运行”产生新触发、新 Session 和新 Run |
 | 已提交 Attempt | 复用 Run 恢复：queued 的 Attempt 重新领取并鉴权，Worker 丢失的活动 Attempt 失败 |
-| 结果 | 进入该次 Session 的消息与成果，不新增投递状态机或外部通知。执行失败、被跳过（重叠、主体或授权无效、待处理数超限）、停机错过或受理后未能开始时，以站内通知告知所有者（NC-S3）；成功、所有者本人造成的跳过（暂停、停用、改计划）与“立即运行”当场被拒不通知 |
+| 结果 | 进入该次 Session 的消息与成果，不新增投递状态机或外部通知。执行失败、被跳过（重叠、主体或授权无效、待处理数超限）、停机错过或受理后未能开始时，以站内通知告知所有者（NC-S3）；成功、所有者本人造成的跳过（暂停、停用、改计划）与“立即运行”当场被拒不通知；同一定时任务同一结果已有未读通知时合并为一条 |
 
 - **日历：** `manual`、`daily`（`HH:mm`）、`weekly`（`HH:mm` 加去重非空的 0–6，周日为 0）。预览和调度共用 `nextSlot()`：创建/编辑弹窗经无状态的 `POST /automations/schedule-preview` 取接下来几次运行时间，前端不另算日历；不存在的本地时刻跳过，重复时刻取第一次。启用、改规则或重新启用都从确认之后的下一个槽开始。
 - **去重：** 定时 `trigger_id` 由 `(automation_id, schedule_revision, planned_slot_utc)` 摘要生成；手动由 `(automation_id, manual, request_idempotency_key)` 生成，并保存配置 revision 与请求指纹，同键异请求拒绝、同键重放返回原记录。唯一键为 `(tenant_id, automation_id, trigger_id)`。

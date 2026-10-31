@@ -90,7 +90,11 @@ export async function markMentionNotificationsRead(
 /**
  * 定时任务的一次执行没有成功（NC-S3）：通知所有者。按执行记录取所有者与所在空间，与执行状态的
  * 写入同一事务；`executionId` 或 `runId` 二选一（Run 失败时只知道 Run）。手动执行没有 Run 就被拒绝时
- * 所有者当场看到，调用方不应调用。去重键按“执行 + 结果”。
+ * 所有者当场看到，调用方不应调用。
+ *
+ * 同一定时任务同一结果已有未读通知时不再新增，只把那一条更新为最新一次（移到最前、指向最新的对话）：
+ * 长时间重叠、权限失效或待处理数超限会让每个时间点都被跳过，逐条通知会刷屏。所有者读过之后再发生才
+ * 另起一条。新增的去重键按“执行 + 结果”，重放不重复。
  */
 export async function recordAutomationOutcomeNotification(
   transaction: DatabaseTransaction,
@@ -100,18 +104,28 @@ export async function recordAutomationOutcomeNotification(
   const match = 'executionId' in target
     ? transaction`e.id = ${target.executionId}`
     : transaction`e.run_id = ${target.runId}`
-  await transaction`
-    insert into user_notifications (
-      id, tenant_id, recipient_user_id, kind, workspace_id, object_type, object_id,
-      actor_user_id, safe_metadata, dedupe_key
-    )
-    select 'unotif-' || gen_random_uuid()::text, a.tenant_id, a.owner_user_id, 'automation_failed', a.workspace_id,
-           'automation', a.id, null,
-           jsonb_build_object('outcome', ${outcome}::text, 'executionId', e.id, 'sessionId', e.session_id),
-           'automation:' || e.id || ':' || ${outcome}::text
+  const [execution] = await transaction<Array<{
+    executionId: string; sessionId: string | null; automationId: string; ownerUserId: string; workspaceId: string
+  }>>`
+    select e.id as "executionId", e.session_id as "sessionId", a.id as "automationId",
+           a.owner_user_id as "ownerUserId", a.workspace_id as "workspaceId"
       from automation_executions e
       join agent_automations a on a.tenant_id = e.tenant_id and a.id = e.automation_id
      where e.tenant_id = ${tenantId} and ${match}
-    on conflict (tenant_id, recipient_user_id, dedupe_key) do nothing
   `
+  if (!execution) return
+  const metadata = { outcome, executionId: execution.executionId, sessionId: execution.sessionId }
+  const bumped = await transaction`
+    update user_notifications
+       set created_at = now(), safe_metadata = ${transaction.json(metadata)}
+     where tenant_id = ${tenantId} and recipient_user_id = ${execution.ownerUserId}
+       and kind = 'automation_failed' and object_id = ${execution.automationId}
+       and read_at is null and safe_metadata ->> 'outcome' = ${outcome}
+  `
+  if (bumped.count > 0) return
+  await recordUserNotification(transaction, {
+    recipientUserId: execution.ownerUserId, kind: 'automation_failed', workspaceId: execution.workspaceId,
+    objectType: 'automation', objectId: execution.automationId, actorUserId: null,
+    dedupeKey: `automation:${execution.executionId}:${outcome}`, metadata,
+  })
 }

@@ -42,7 +42,7 @@ describe('notification text and destination (NC-S3)', () => {
       detail: { result: 'approved' }, target: { type: 'skill_submission', id: 'sub-1', sessionId: 'session-3' },
     })
     expect(notificationPlainText(approved)).toBe('你提交的 Skill 「销售周报整理」 已发布到 Skill 广场')
-    expect(notificationPlainText({ ...approved, detail: { result: 'rejected' } })).toBe('你提交的 Skill 「销售周报整理」 未通过审核，原因见草稿卡片')
+    expect(notificationPlainText({ ...approved, detail: { result: 'rejected' } })).toBe('你提交的 Skill 「销售周报整理」 未通过审核')
     expect(notificationLocation(approved, 'work')).toEqual({ name: 'session-detail', params: { id: 'session-3' } })
   })
 
