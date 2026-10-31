@@ -5,6 +5,7 @@
  */
 import { registerAssistantRoutes } from '../../http/admin/assistant-routes.ts'
 import { registerModelGovernanceRoutes } from '../../http/admin/model-routes.ts'
+import { registerOrganizationRoutes } from '../../http/admin/organization-routes.ts'
 import { registerSkillInstallationRoutes } from '../../http/admin/skill-installation-routes.ts'
 import { registerUserPreferenceRoutes } from '../../http/workbench/preference-routes.ts'
 import { registerConversationTargetRoutes } from '../../http/workbench/conversation-target-routes.ts'
@@ -17,6 +18,7 @@ import { testApiAuthenticator } from '../test-identity.ts'
 import { AdminQueryService } from './admin-query-service.ts'
 import { MemoryUserPreferenceStore } from './memory-user-preferences.ts'
 import { MemoryConversationTargetStore } from './memory-conversation-targets.ts'
+import { MemoryOrganizationStore } from './memory-organization.ts'
 import { MemoryUserNotificationStore } from './memory-user-notifications.ts'
 import { MemoryWorkspaceTimeline } from './memory-workspace-timeline.ts'
 import { registerAdminRoutes } from './admin-routes.ts'
@@ -48,6 +50,7 @@ export function createSmokeRouter() {
   registerWorkspaceTimelineRoutes(router, new MemoryWorkspaceTimeline(repository), { authorizeWorkbench: async () => undefined as never }, 'prototype-memory')
   registerAdminRoutes(router, new AdminQueryService(repository))
   registerModelGovernanceRoutes(router, new ModelGovernanceService(new MemoryModelGovernanceRepository()))
+  registerOrganizationRoutes(router, new MemoryOrganizationStore(), 'prototype-memory')
   router.get('/health/live', () => ({ status: 'ok', service: 'dsh-work-p0-smoke' }))
   router.get('/health/ready', () => ({ status: 'ready', core: true, testOnly: true }))
   router.get('/health', () => envelope('system', {

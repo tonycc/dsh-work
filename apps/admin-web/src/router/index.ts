@@ -147,6 +147,17 @@ const router = createRouter({
       meta: { title: '工作空间', requiresAdmin: true, requiredPermission: 'adminRead' },
     },
     {
+      path: '/organization',
+      name: 'organization',
+      component: () => import('@/views/OrganizationView.vue'),
+      meta: {
+        title: '组织架构',
+        subtitle: '维护部门树和员工的部门归属；员工的“部门”显示为其主部门。',
+        requiresAdmin: true,
+        requiredPermission: 'adminRead',
+      },
+    },
+    {
       path: '/identity',
       name: 'identity',
       component: () => import('@/views/IdentityAccessView.vue'),

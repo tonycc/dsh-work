@@ -12,7 +12,14 @@ import type {
   IdentityUserPage,
   IdentityUserSummary,
   LocalPermissionDefinition,
+  OrganizationDepartment,
 } from '@/types/domain'
+
+interface DepartmentOption {
+  value: string
+  label: string
+  children: DepartmentOption[]
+}
 
 const authStore = useAuthStore()
 const localAccountsEnabled = ref(false)
@@ -20,7 +27,10 @@ const directoryEnabled = ref(false)
 const accountDialogOpen = ref(false)
 const accountTarget = ref<IdentityUserSummary>()
 const resettingPassword = ref(false)
-const accountForm = reactive({ username: '', password: '', name: '', department: '', email: '' })
+const accountForm = reactive({ username: '', password: '', name: '', departmentId: '', email: '' })
+// 新建账号时从组织架构部门树选择部门（成为主部门）；AI Hub 登录模式下组织架构不可用，不显示该字段。
+const departmentOptions = ref<DepartmentOption[]>([])
+const departmentLoadError = ref('')
 const accountPasswordError = ref('')
 const accountUsernameError = ref('')
 const accountNameError = ref('')
@@ -105,8 +115,27 @@ function openAccount(user?: IdentityUserSummary, reset = false) {
   accountNameError.value = ''
   accountError.value = ''
   clearAccountUsernameError()
-  Object.assign(accountForm, { username: user?.username ?? '', password: '', name: user?.name ?? '', department: user?.department ?? '', email: user?.email ?? '' })
+  Object.assign(accountForm, { username: user?.username ?? '', password: '', name: user?.name ?? '', departmentId: '', email: user?.email ?? '' })
   accountDialogOpen.value = true
+  if (!user) void loadDepartmentOptions()
+}
+
+async function loadDepartmentOptions() {
+  departmentLoadError.value = ''
+  try {
+    const organization = await adminApi.getOrganization()
+    const children = new Map<string | null, OrganizationDepartment[]>()
+    for (const department of organization.departments) {
+      children.set(department.parentId, [...(children.get(department.parentId) ?? []), department])
+    }
+    const build = (parentId: string | null): DepartmentOption[] => (children.get(parentId) ?? [])
+      .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, 'zh-CN'))
+      .map(department => ({ value: department.id, label: department.name, children: build(department.id) }))
+    departmentOptions.value = organization.available ? build(null) : []
+  } catch (cause) {
+    departmentOptions.value = []
+    departmentLoadError.value = cause instanceof Error ? cause.message : '部门列表加载失败'
+  }
 }
 
 function clearAccountUsernameError() {
@@ -168,7 +197,8 @@ async function saveAccount() {
     if (resettingPassword.value && accountTarget.value) {
       await adminApi.resetLocalPassword(accountTarget.value.id, accountForm.password)
     } else {
-      await adminApi.createLocalAccount({ ...accountForm })
+      const { departmentId, ...account } = accountForm
+      await adminApi.createLocalAccount({ ...account, ...(departmentId ? { departmentId } : {}) })
     }
     accountDialogOpen.value = false
     accountForm.password = ''
@@ -588,7 +618,11 @@ onMounted(() => void load())
           <el-form-item label="登录账号" for="account-username" required :error="accountUsernameError"><el-input id="account-username" v-model="accountForm.username" placeholder="请输入手机号或邮箱" autocomplete="off" autocapitalize="none" :maxlength="254" :disabled="saving" required @input="clearAccountUsernameError" @blur="checkAccountUsername" /><span v-if="checkingAccount" role="status">正在检查账号…</span></el-form-item>
           <template v-if="!accountTarget">
             <el-form-item label="姓名" for="account-name" required :error="accountNameError"><el-input id="account-name" v-model="accountForm.name" :maxlength="80" :disabled="saving" required @input="accountNameError = ''" /></el-form-item>
-            <el-form-item label="部门" for="account-department"><el-input id="account-department" v-model="accountForm.department" :maxlength="100" /></el-form-item>
+            <el-alert v-if="departmentLoadError" type="warning" :closable="false" show-icon :title="`部门列表加载失败，可先不选部门，之后在“组织架构”中分配：${departmentLoadError}`" />
+            <el-form-item v-if="departmentOptions.length" label="部门" for="account-department">
+              <el-tree-select id="account-department" v-model="accountForm.departmentId" :data="departmentOptions" node-key="value" check-strictly default-expand-all clearable filterable placeholder="从组织架构选择（可不选）" :disabled="saving" />
+              <p>选中的部门即为该员工的主部门；之后可在“组织架构”中调整。</p>
+            </el-form-item>
             <el-form-item label="邮箱" for="account-email"><el-input id="account-email" v-model="accountForm.email" type="email" :maxlength="254" /></el-form-item>
           </template>
         </template>

@@ -296,6 +296,7 @@ flowchart LR
 - **项目空间：** S0～S6 已实现（含双模式与 Agent 项目任务工具）；服务端/组件/P0 与部分 P1、本地真实 DSH 证据见验收目录与发布/PR 留证。OIDC/生产 P2 与部分 P1 旅程仍开放，决策背景见 [项目空间方案](../design/project-space-plan.md)。项目档案员是 `project-archive` 系统运行，经 Run/Attempt → Runtime Adapter → DSH 执行。
 - **平台内置 Skill：** 文件分析、HTML 页面、Office 文档三个内置 Skill 已达到代码级（P0 管理端冒烟与 P1 装配、覆盖、停用、团队空间复核）；真实 DSH 下的产出质量（验收目录 `BSK-P2`）与有无内置 Skill 的对比评测尚未执行。规则见[功能规则 5.5](feature-rules.md#55-平台内置-skill)，设计见[平台内置 Skill 方案](../design/builtin-skills-plan.md)。
 - **Skill 创建专家：** 可创建 Skill 开关、草稿保存与员工提交、管理员审核与发布、经 dsh-work 助手推荐进入与 Skill 广场“创建 Skill”入口已达到代码级（`SKC-01`～`SKC-04`，P0/P1）；专家定义（SOUL.md、说明与验证问题）已写在方案 5.1、5.2。尚未完成：平台管理员在管理端创建、验证并发布该专家（不随代码预置），以及真实 DSH 验收（`SKC-P2`，含助手是否据说明推荐、工作区能否新建 `drafts/`）；审核结论不推送提醒。规则见[功能规则 5.6](feature-rules.md#56-员工经-skill-创建专家新建-skill)，设计见 [Skill 创建专家方案](../design/skill-creator-plan.md)。
+- **组织架构：** 第一期 ORG-S1（本地维护的部门树、成员与主部门、新建账号选择部门）已达到代码级（`ORG-P0-01`、`ORG-01`～`ORG-04`，P0/P1）；按部门授权（ORG-S2）未实施，钉钉通讯录同步为后续阶段。规则见[功能规则第 10 节](feature-rules.md#10-组织架构org-s1)，设计见[组织架构方案](../design/org-structure-plan.md)。
 - **已交付功能的遗留项：** 团队空间、管理助手、Skill 安装、Python 执行和自动任务的未完成部分列在[功能规则](feature-rules.md)各节末尾。
 
 开发模式、自动化和上线前验证入口见 [开发与测试](development.md)；身份协议与生命周期见 [独立登录](../release/local-authentication.md) 或 [AI Hub 接入](../release/ai-hub-sso-integration.md)。

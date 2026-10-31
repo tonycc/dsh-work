@@ -32,6 +32,7 @@ import type {
   IdentityUserSummary,
   ListPage,
   LocalPermissionDefinition,
+  OrganizationSnapshot,
   ModelUsagePage,
   ManagedWorkspaceDefinition,
   ModelProvider,
@@ -437,7 +438,7 @@ export const adminApi = {
       `/identity/users/${encodeURIComponent(userId)}/sessions/revoke`,
       { method: 'POST' },
     ),
-  createLocalAccount: (input: { username: string; password: string; name: string; department?: string; email?: string }) =>
+  createLocalAccount: (input: { username: string; password: string; name: string; departmentId?: string; email?: string }) =>
     request<{ userId: string; username: string }>('/identity/users', { method: 'POST', body: JSON.stringify(input) }),
   checkLocalLoginAccount: (username: string) =>
     request<{ username: string; available: boolean }>('/identity/login-account/check', { method: 'POST', body: JSON.stringify({ username }) }),
@@ -445,6 +446,25 @@ export const adminApi = {
     request<{ userId: string }>(`/identity/users/${encodeURIComponent(userId)}/password`, { method: 'POST', body: JSON.stringify({ password }) }),
   setLocalAccountStatus: (userId: string, status: 'active' | 'disabled') =>
     request<{ userId: string; status: string }>(`/identity/users/${encodeURIComponent(userId)}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+  getOrganization: () => request<OrganizationSnapshot>('/organization'),
+  createDepartment: (parentId: string, name: string) =>
+    request<OrganizationSnapshot>('/organization/departments', { method: 'POST', body: JSON.stringify({ parentId, name }) }),
+  updateDepartment: (departmentId: string, input: { name?: string; parentId?: string }) =>
+    request<OrganizationSnapshot>(`/organization/departments/${encodeURIComponent(departmentId)}`, { method: 'PATCH', body: JSON.stringify(input) }),
+  reorderDepartment: (departmentId: string, direction: 'up' | 'down') =>
+    request<OrganizationSnapshot>(`/organization/departments/${encodeURIComponent(departmentId)}/reorder`, { method: 'POST', body: JSON.stringify({ direction }) }),
+  removeDepartment: (departmentId: string) =>
+    request<OrganizationSnapshot>(`/organization/departments/${encodeURIComponent(departmentId)}`, { method: 'DELETE' }),
+  addDepartmentMembers: (departmentId: string, userIds: string[]) =>
+    request<OrganizationSnapshot>(`/organization/departments/${encodeURIComponent(departmentId)}/members`, { method: 'POST', body: JSON.stringify({ userIds }) }),
+  removeDepartmentMember: (departmentId: string, userId: string, newPrimaryDepartmentId?: string) => request<OrganizationSnapshot>(
+    `/organization/departments/${encodeURIComponent(departmentId)}/members/${encodeURIComponent(userId)}${newPrimaryDepartmentId ? `?new_primary_department_id=${encodeURIComponent(newPrimaryDepartmentId)}` : ''}`,
+    { method: 'DELETE' },
+  ),
+  setPrimaryDepartment: (departmentId: string, userId: string) => request<OrganizationSnapshot>(
+    `/organization/departments/${encodeURIComponent(departmentId)}/members/${encodeURIComponent(userId)}/primary`,
+    { method: 'PUT' },
+  ),
   getDirectorySyncState: () => request<DirectorySyncState>('/identity/directory-sync'),
   synchronizeDirectory: (full = false) => request<DirectorySyncState>(
     `/identity/directory-sync${full ? '?full=true' : ''}`,
