@@ -87,11 +87,14 @@ export class PostgresOrganizationService {
     return this.write(input.actorId, async (transaction) => {
       const department = await requireDepartment(transaction, input.departmentId)
       const changed: string[] = []
+      // 同时移动和改名时，按改名后的名称检查新上级下是否重名。
+      const finalName = input.name !== undefined ? departmentName(input.name) : department.name
+      const renamed = finalName !== department.name
       if (input.parentId !== undefined && input.parentId !== department.parentId) {
         if (!department.parentId) throw stateConflict('根部门不能移动')
         const target = await requireDepartment(transaction, text(input.parentId, '上级部门'))
         if (target.path.startsWith(department.path)) throw stateConflict('不能移动到本部门自己或它的下级部门之下')
-        await assertSiblingNameFree(transaction, target.id, department.name, department.id)
+        await assertSiblingNameFree(transaction, target.id, finalName, department.id)
         const newPath = `${target.path}${department.id}/`
         await transaction`
           update org_departments
@@ -100,30 +103,28 @@ export class PostgresOrganizationService {
         `
         await transaction`
           update org_departments
-             set parent_id = ${target.id}, updated_by = ${input.actorId},
+             set parent_id = ${target.id}, name = ${finalName}, updated_by = ${input.actorId},
                  sort_order = (select coalesce(max(sort_order) + 1, 0) from org_departments
                                 where tenant_id = ${tenantId} and parent_id = ${target.id} and status = 'active')
            where tenant_id = ${tenantId} and id = ${department.id}
         `
-        department.parentId = target.id
         changed.push('parent')
+      } else if (renamed) {
+        if (department.parentId) await assertSiblingNameFree(transaction, department.parentId, finalName, department.id)
+        await transaction`
+          update org_departments set name = ${finalName}, updated_at = now(), updated_by = ${input.actorId}
+           where tenant_id = ${tenantId} and id = ${department.id}
+        `
       }
-      if (input.name !== undefined) {
-        const name = departmentName(input.name)
-        if (name !== department.name) {
-          if (department.parentId) await assertSiblingNameFree(transaction, department.parentId, name, department.id)
-          await transaction`
-            update org_departments set name = ${name}, updated_at = now(), updated_by = ${input.actorId}
-             where tenant_id = ${tenantId} and id = ${department.id}
-          `
-          await transaction`
-            update users u set department_id = ${name}, updated_at = now()
-              from org_department_members m
-             where m.tenant_id = ${tenantId} and m.department_id = ${department.id} and m.is_primary
-               and u.tenant_id = m.tenant_id and u.id = m.user_id
-          `
-          changed.push('name')
-        }
+      // 移动时名称与上级在同一条语句中写入，避免先以旧名挂到新上级下触发同级重名约束。
+      if (renamed) {
+        await transaction`
+          update users u set department_id = ${finalName}, updated_at = now()
+            from org_department_members m
+           where m.tenant_id = ${tenantId} and m.department_id = ${department.id} and m.is_primary
+             and u.tenant_id = m.tenant_id and u.id = m.user_id
+        `
+        changed.push('name')
       }
       return { action: 'organization.department.update', objectId: department.id, context: { changed } }
     })

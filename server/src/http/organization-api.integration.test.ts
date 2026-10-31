@@ -179,6 +179,13 @@ test('ORG-01 部门树：新建、重名、改名、排序、移动子树与删�
   assert.equal((await api('DELETE', `${base}/departments/${rootId}`)).status, 409, '根部门不能删除')
   await ok('PATCH', `${base}/departments/${rootId}`, { name: '示例企业（改名）' })
 
+  const renamedMove = await createDepartment(rootId, '财务部（待合并）')
+  await createDepartment(finance.id, '财务部（待合并）')
+  view = await ok('PATCH', `${base}/departments/${renamedMove.id}`, { parentId: finance.id, name: '资金组' })
+  const moved = view.departments.find(department => department.id === renamedMove.id)!
+  assert.deepEqual([moved.parentId, moved.name], [finance.id, '资金组'], '同时移动和改名时按新名称检查重名')
+  assert.equal((await api('PATCH', `${base}/departments/${renamedMove.id}`, { body: { parentId: rootId, name: '销售中心' } })).status, 409)
+
   const blocked = await api('DELETE', `${base}/departments/${east.id}`)
   assert.equal(blocked.status, 409)
   assert.match(blocked.body.error!.message, /下级部门/)
@@ -293,6 +300,22 @@ test('ORG-03 新建账号从部门树选择部门；不接受自由填写的部�
 })
 
 test('ORG-04 AI Hub 登录模式下组织架构不可用，写操作不落库', async () => {
+  const oidcConfig = loadIdentityConfiguration({
+    DSH_WORK_AUTH_MODE: 'local', DSH_WORK_SESSION_SECRET: 'organization-integration-secret-32-characters',
+    DSH_WORK_WORKBENCH_ORIGINS: 'http://localhost:4174', DSH_WORK_ADMIN_ORIGINS: 'http://localhost:4180',
+  })
+  assert.equal(oidcConfig.mode, 'local')
+  const oidcAuth = new LocalAuthService(oidcConfig, database.client, { organizationAvailable: false })
+  const department = root(await snapshot())
+  await assert.rejects(
+    oidcAuth.createAccount({ username: 'org.oidc.dept@example.invalid', password, name: 'AI Hub 模式员工', departmentId: department.id }, adminId),
+    (error: { code?: string }) => error.code === 'organization_unavailable',
+  )
+  const [created] = await database.client`
+    select 1 from local_user_credentials where tenant_id = ${tenantId} and username = 'org.oidc.dept@example.invalid'
+  `
+  assert.equal(created, undefined, 'AI Hub 模式下带部门建号被拒绝，不创建账号')
+
   const view = (await api('GET', base, { url: unavailableBaseUrl })).body.data!
   assert.deepEqual(view, { available: false, departments: [], members: [], employees: [] })
   const rootId = root(await snapshot()).id

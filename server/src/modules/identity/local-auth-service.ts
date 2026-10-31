@@ -37,10 +37,14 @@ export class LocalAuthService {
   private readonly database: DatabaseClient
   private readonly repository: IdentitySessionRepository
 
-  constructor(configuration: LocalIdentityConfiguration, database: DatabaseClient) {
+  /** AI Hub 登录模式下组织架构不可用（组织架构方案 OD1），新建账号不能选择部门。 */
+  private readonly organizationAvailable: boolean
+
+  constructor(configuration: LocalIdentityConfiguration, database: DatabaseClient, options: { organizationAvailable?: boolean } = {}) {
     this.configuration = configuration
     this.database = database
     this.repository = new IdentitySessionRepository(database)
+    this.organizationAvailable = options.organizationAvailable ?? true
   }
 
   loginPage(request: IncomingMessage, audience: ApiAudience, returnTo: string | null) {
@@ -254,6 +258,9 @@ export class LocalAuthService {
 
   async createAccount(input: LocalAccountInput, actorId: string) {
     const username = normalizeLoginAccount(input.username)
+    if (input.departmentId && !this.organizationAvailable) {
+      throw new IdentityAccessError(409, 'organization_unavailable', '当前为 AI Hub 登录模式，组织架构不可用，不能为账号选择部门')
+    }
     const passwordHash = await hashPassword(input.password)
     return this.database.begin(async transaction => {
       await assertPlatformAdmin(transaction, actorId)

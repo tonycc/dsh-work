@@ -43,7 +43,7 @@
 | `org_departments` | `tenant_id`、`id`、`parent_id`、`name`、`path`（从根到本部门的 ID 路径，用于查询子树）、`sort_order`、`status`（active / removed）、`created_at`、`updated_at`、`updated_by`。每个企业有且只有一个根部门，以企业名称命名，由数据库迁移为每个企业创建（新建企业时同时创建），打开页面不写入数据；唯一约束保证一个企业只有一个根部门。 |
 | `org_department_members` | `tenant_id`、`department_id`、`user_id`、`is_primary`、`added_by`、`added_at`。员工可以属于多个部门，每个部门一行；员工属于任何部门时，必须恰好有一个主部门。 |
 | `org_department_grants` | 部门授权：`department_id`、`include_descendants`、`grant_type`（role / data_scope）、`role_id` 或 `scope_code` + `scope_value`、`status`（active / invalid）、`granted_by`、`created_at`。 |
-| `users.department_id` | 继续作为显示文本，由平台写入主部门名称；没有主部门时为空，沿用现有“未分配部门”的显示。不考虑历史数据：上线迁移清空所有员工现有的部门文本。现有按该字段显示、搜索和统计的代码可以继续使用。 |
+| `users.department_id` | 继续作为显示文本，由平台写入主部门名称；没有主部门时为空，沿用现有“未分配部门”的显示。不考虑历史数据：上线迁移清空所有独立账号员工现有的部门文本（AI Hub 账号由目录同步维护，不清空）。现有按该字段显示、搜索和统计的代码可以继续使用。 |
 | `user_roles.source_key` | 迁移 0016 的约束 `source_key = 'local'` 放宽为 `'local'` 或 `'department:%'`。 |
 | `data_scope_grants.source_key` | 新增，默认 `local`；唯一约束加上 `source_key`。 |
 

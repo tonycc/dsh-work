@@ -1645,7 +1645,7 @@
             "description": "所选部门不存在或已删除"
           },
           "409": {
-            "description": "账号已存在或最后一位管理员保护"
+            "description": "账号已存在、最后一位管理员保护，或 AI Hub 登录模式下组织架构不可用时传入了 departmentId"
           },
           "422": {
             "description": "输入无效"

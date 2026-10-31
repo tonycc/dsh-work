@@ -32,6 +32,7 @@ beforeEach(() => {
   vi.spyOn(adminApi, 'getIdentityRoles').mockResolvedValue([])
   vi.spyOn(adminApi, 'getLocalPermissions').mockResolvedValue([])
   vi.spyOn(adminApi, 'createLocalAccount').mockResolvedValue({ userId: 'created-user', username: 'created@example.invalid' })
+  vi.spyOn(adminApi, 'getOrganization').mockResolvedValue({ available: false, departments: [], members: [], employees: [] })
 })
 
 afterEach(() => {
@@ -128,5 +129,13 @@ describe('new account validation', () => {
     const dialog = await openAccount()
     await flushPromises()
     expect(dialog.find('#account-department').exists()).toBe(false)
+  })
+
+  it('explains a failed department load instead of silently hiding the field', async () => {
+    vi.spyOn(adminApi, 'getOrganization').mockRejectedValue(new Error('网络错误'))
+    const dialog = await openAccount()
+    await flushPromises()
+    expect(dialog.find('#account-department').exists()).toBe(false)
+    expect(dialog.text()).toContain('部门列表加载失败')
   })
 })

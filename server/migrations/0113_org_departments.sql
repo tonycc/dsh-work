@@ -6,7 +6,7 @@
 -- 第二期的部门授权需要保留指向已删除部门的记录。
 --
 -- 员工可以属于多个部门，至多一个主部门；users.department_id 只作显示文本，由平台写入主部门
--- 名称。不考虑历史数据：上线时清空员工现有的部门文本，不转为部门。
+-- 名称。不考虑历史数据：上线时清空独立账号现有的部门文本，不转为部门。
 
 create table if not exists org_departments (
   id text primary key,
@@ -47,8 +47,10 @@ create index if not exists org_department_members_by_user
   on org_department_members (tenant_id, user_id);
 
 insert into org_departments (id, tenant_id, parent_id, name, path)
-select 'dept-root-' || t.id, t.id, null, left(t.name, 60), '/dept-root-' || t.id || '/'
+select 'dept-root-' || t.id, t.id, null, coalesce(nullif(left(btrim(t.name), 60), ''), '企业'), '/dept-root-' || t.id || '/'
   from tenants t
  where not exists (select 1 from org_departments d where d.tenant_id = t.id and d.parent_id is null);
 
-update users set department_id = null, updated_at = now() where department_id is not null;
+-- AI Hub 账号的部门文本由目录同步维护（组织架构在该模式下不可用），不在这里清空。
+update users set department_id = null, updated_at = now()
+ where department_id is not null and identity_provider <> 'ai-hub';

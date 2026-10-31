@@ -61,25 +61,24 @@ export class MemoryOrganizationStore {
     const parent = this.require(String(input.parentId ?? ''))
     const name = this.name(input.name)
     this.assertNameFree(parent.id, name)
-    this.departments.push({ id: `dept-smoke-${++this.sequence}`, parentId: parent.id, name, sortOrder: this.childrenOf(parent.id).length })
+    this.departments.push({ id: `dept-smoke-${++this.sequence}`, parentId: parent.id, name, sortOrder: this.nextOrder(parent.id) })
     return this.snapshot()
   }
 
   async updateDepartment(input: { departmentId: string; name?: unknown; parentId?: unknown; actorId: string }) {
     const department = this.require(input.departmentId)
+    const name = input.name !== undefined ? this.name(input.name) : department.name
     if (input.parentId !== undefined && input.parentId !== department.parentId) {
       if (!department.parentId) throw stateConflict('根部门不能移动')
       const target = this.require(String(input.parentId))
       if (this.descendants(department.id).includes(target.id)) throw stateConflict('不能移动到本部门自己或它的下级部门之下')
-      this.assertNameFree(target.id, department.name, department.id)
-      department.sortOrder = this.childrenOf(target.id).length
+      this.assertNameFree(target.id, name, department.id)
+      department.sortOrder = this.nextOrder(target.id)
       department.parentId = target.id
+    } else if (department.parentId) {
+      this.assertNameFree(department.parentId, name, department.id)
     }
-    if (input.name !== undefined) {
-      const name = this.name(input.name)
-      if (department.parentId) this.assertNameFree(department.parentId, name, department.id)
-      department.name = name
-    }
+    department.name = name
     return this.snapshot()
   }
 
@@ -87,10 +86,14 @@ export class MemoryOrganizationStore {
     if (input.direction !== 'up' && input.direction !== 'down') throw invalidRequest('direction 必须为 up 或 down')
     const department = this.require(input.departmentId)
     if (!department.parentId) throw stateConflict('根部门不能调整顺序')
+    // 与 PostgreSQL 一致：交换后把同级重新编号，删除部门后留下的空号不会让调整失效。
     const siblings = this.childrenOf(department.parentId)
     const index = siblings.indexOf(department)
-    const other = siblings[input.direction === 'up' ? index - 1 : index + 1]
-    if (other) [department.sortOrder, other.sortOrder] = [other.sortOrder, department.sortOrder]
+    const swapWith = input.direction === 'up' ? index - 1 : index + 1
+    if (swapWith >= 0 && swapWith < siblings.length) {
+      ;[siblings[index], siblings[swapWith]] = [siblings[swapWith]!, siblings[index]!]
+      siblings.forEach((sibling, position) => { sibling.sortOrder = position })
+    }
     return this.snapshot()
   }
 
@@ -107,9 +110,16 @@ export class MemoryOrganizationStore {
 
   async addMembers(input: { departmentId: string; userIds: unknown; actorId: string }) {
     const department = this.require(input.departmentId)
-    if (!Array.isArray(input.userIds) || input.userIds.length === 0) throw invalidRequest('userIds 必须为 1–200 个员工 ID')
-    for (const userId of new Set(input.userIds as string[])) {
-      if (!this.employees.some(employee => employee.id === userId && employee.status === 'active')) throw invalidRequest('包含不存在或已停用的员工')
+    if (!Array.isArray(input.userIds) || input.userIds.length === 0 || input.userIds.length > 200
+      || input.userIds.some(id => typeof id !== 'string' || !id)) {
+      throw invalidRequest('userIds 必须为 1–200 个员工 ID')
+    }
+    const userIds = [...new Set(input.userIds as string[])]
+    // 与 PostgreSQL 一致：先整体校验，任何一个无效都不加入任何人。
+    if (!userIds.every(userId => this.employees.some(employee => employee.id === userId && employee.status === 'active'))) {
+      throw invalidRequest('包含不存在或已停用的员工')
+    }
+    for (const userId of userIds) {
       if (this.members.some(member => member.departmentId === department.id && member.userId === userId)) continue
       const hasPrimary = this.members.some(member => member.userId === userId && member.primary)
       this.members.push({ departmentId: department.id, userId, primary: !hasPrimary })
@@ -145,6 +155,10 @@ export class MemoryOrganizationStore {
 
   private childrenOf(id: string) {
     return this.departments.filter(item => item.parentId === id).sort((a, b) => a.sortOrder - b.sortOrder)
+  }
+
+  private nextOrder(parentId: string) {
+    return Math.max(-1, ...this.childrenOf(parentId).map(child => child.sortOrder)) + 1
   }
 
   private descendants(id: string): string[] {
