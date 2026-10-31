@@ -560,7 +560,7 @@ onMounted(() => void load())
               <template #default="scope">
                 <div v-if="scope.row.roles.length || scope.row.departmentRoles?.length" class="tag-list">
                   <el-tag v-for="role in scope.row.roles" :key="role.id" effect="plain" :type="role.status === 'active' ? 'primary' : 'info'">{{ role.name }}</el-tag>
-                  <el-tag v-for="role in scope.row.departmentRoles ?? []" :key="`${role.id}-${role.departmentName}`" effect="plain" type="info" :title="`来自部门“${role.departmentName}”`">{{ role.name }}（部门）</el-tag>
+                  <el-tag v-for="role in scope.row.departmentRoles ?? []" :key="role.grantId" effect="plain" type="info" :title="`来自部门“${role.departmentName}”`">{{ role.name }}（部门）</el-tag>
                 </div>
                 <span v-else class="empty-value">尚未授权</span>
               </template>
@@ -672,7 +672,7 @@ onMounted(() => void load())
               <span><strong>{{ role.name }}</strong><code>{{ role.code }}</code></span>
               <el-button v-if="authStore.canManageIdentity" link type="danger" :disabled="saving" @click="revokeRole(role)">移除</el-button>
             </div>
-            <div v-for="role in selectedUser.departmentRoles ?? []" :key="`${role.id}-${role.departmentName}`" class="assigned-role">
+            <div v-for="role in selectedUser.departmentRoles ?? []" :key="role.grantId" class="assigned-role">
               <span><strong>{{ role.name }}</strong><code>{{ role.code }}</code></span>
               <el-tag effect="plain" type="info">来自部门“{{ role.departmentName }}”，在组织架构中修改</el-tag>
             </div>

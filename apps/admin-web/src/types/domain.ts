@@ -183,7 +183,7 @@ export interface IdentityUserSummary {
   authorizationVersion: number
   roles: Array<Pick<IdentityRoleSummary, 'id' | 'code' | 'name' | 'status'>>
   /** 来自部门授权的角色，只能在“组织架构”中修改。 */
-  departmentRoles?: Array<Pick<IdentityRoleSummary, 'id' | 'code' | 'name' | 'status'> & { departmentName: string }>
+  departmentRoles?: Array<Pick<IdentityRoleSummary, 'id' | 'code' | 'name' | 'status'> & { departmentName: string; grantId: string }>
   dataScopes: string[]
   activeSessionCount: number
   lastSeenAt: string | null

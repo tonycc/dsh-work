@@ -159,7 +159,7 @@ describe('OrganizationView', () => {
     await flushPromises()
     const drawer = wrapper.findAll('[role="dialog"]').find(item => item.text().includes('员工部门与角色'))!
     expect(drawer.text()).toContain('示例企业 / 供应链中心 / 采购部')
-    expect(drawer.text()).toContain('来自“供应链中心”（下级继承）')
+    expect(drawer.text()).toContain('来自“示例企业 / 供应链中心”（下级继承）')
   })
 
   it('hides write actions from read-only administrators', async () => {

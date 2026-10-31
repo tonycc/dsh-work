@@ -31,7 +31,7 @@ interface UserListRow {
   authorizationVersion: number
   roles: Array<{ id: string; code: string; name: string; status: string }>
   /** 来自部门授权的角色（组织架构 ORG-S2），只能在“组织架构”中修改。 */
-  departmentRoles: Array<{ id: string; code: string; name: string; status: string; departmentName: string }>
+  departmentRoles: Array<{ id: string; code: string; name: string; status: string; departmentName: string; grantId: string }>
   dataScopes: string[]
   activeSessionCount: number
   lastSeenAt: Date | null
@@ -112,7 +112,7 @@ export class IdentityAdministrationService {
                ), '[]'::jsonb) as roles,
                coalesce((
                  select jsonb_agg(jsonb_build_object(
-                   'id', r.id, 'code', r.code, 'name', r.name, 'status', r.status, 'departmentName', d.name
+                   'id', r.id, 'code', r.code, 'name', r.name, 'status', r.status, 'departmentName', d.name, 'grantId', g.id
                  ) order by r.name, d.name)
                    from user_roles ur
                    join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id
@@ -249,6 +249,9 @@ export class IdentityAdministrationService {
       }
     }
     await this.database.begin(async (transaction) => {
+      // 先锁住角色行：与组织架构的 grantRole（对角色加 for share）互斥，避免检查之后、
+      // 更新之前有人把这个角色授给部门，绕过“管理类角色不能授给部门”（OD8）。
+      await transaction`select 1 from roles where tenant_id = ${tenantId} and id = ${input.roleId} for update`
       await assertRoleDepartmentGrantable(transaction, input.roleId, permissions)
       const [role] = await transaction<{ id: string }[]>`
         update roles set name = ${name}, description = ${description}, status = ${input.status},
@@ -423,7 +426,7 @@ export class IdentityAdministrationService {
                 and (ur.valid_until is null or ur.valid_until > now())), '[]'::jsonb) as roles,
              coalesce((
                  select jsonb_agg(jsonb_build_object(
-                   'id', r.id, 'code', r.code, 'name', r.name, 'status', r.status, 'departmentName', d.name
+                   'id', r.id, 'code', r.code, 'name', r.name, 'status', r.status, 'departmentName', d.name, 'grantId', g.id
                  ) order by r.name, d.name)
                    from user_roles ur
                    join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id

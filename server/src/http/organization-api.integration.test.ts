@@ -418,6 +418,22 @@ test('ORG-06 管理类角色不能授给部门；已授给部门的角色不能�
   assert.equal((await api('POST', `${base}/departments/${disabled.id}/grants`, { body: { roleId } })).status, 409, '停用的角色不能授给部门')
   assert.equal((await api('POST', `${base}/departments/${team.id}/grants`, { body: { roleId: 'role-missing' } })).status, 404)
   assert.equal((await api('POST', `${base}/departments/${team.id}/grants`, { readonly: true, body: { roleId: 'role-employee' } })).status, 403)
+
+  // 并发：同时“给角色加管理权限”和“把角色授给部门”，最多一个成功，不能出现授给部门的管理类角色。
+  for (let round = 0; round < 5; round += 1) {
+    const race = await administration.createRole({ code: `org_grant_race_${round}`, name: `并发探针${round}`, permissions: ['workbench:use'], actorId: adminId })
+    const raceRoleId = (race as { id: string }).id
+    const raceDepartment = await createDepartment(rootId, `并发授权部${round}`)
+    await Promise.allSettled([
+      administration.updateRole({ roleId: raceRoleId, name: `并发探针${round}`, status: 'active', permissions: ['workbench:use', 'admin:write'], dataScopes: [], actorId: adminId }),
+      api('POST', `${base}/departments/${raceDepartment.id}/grants`, { body: { roleId: raceRoleId } }),
+    ])
+    const [violation] = await database.client`
+      select 1 from org_department_grants g join roles r on r.tenant_id = g.tenant_id and r.id = g.role_id
+       where g.status = 'active' and g.role_id = ${raceRoleId} and r.permissions ? 'admin:write'
+    `
+    assert.equal(violation, undefined, '并发下也不会出现授给部门的管理类角色')
+  }
 })
 
 test('ORG-07 员工列表区分直接授予与来自部门的角色；撤销直接授予不影响部门来源', async () => {

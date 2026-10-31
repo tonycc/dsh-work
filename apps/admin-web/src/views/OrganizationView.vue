@@ -182,7 +182,7 @@ const grantRows = computed(() => {
   const inherited = activeGrants.value.filter(grant => grant.includeDescendants && above.has(grant.departmentId))
   return [
     ...own.map(grant => ({ grant, inherited: false, range: grant.includeDescendants ? '本部门及下级' : '仅本部门', count: coverage(grant), source: '本部门' })),
-    ...inherited.map(grant => ({ grant, inherited: true, range: '继承', count: subtreeMemberIds.value.size, source: `上级“${grant.departmentName}”` })),
+    ...inherited.map(grant => ({ grant, inherited: true, range: '继承', count: coverage(grant), source: `上级“${grant.departmentName}”` })),
   ]
 })
 const grantImpact = computed(() => selected.value
@@ -197,9 +197,11 @@ const drawerRoles = computed(() => {
   const byRole = new Map<string, Array<{ text: string; direct: boolean }>>()
   for (const assignment of snapshot.value.roleAssignments.filter(item => item.userId === user.id)) {
     const grant = assignment.source === 'direct' ? undefined : grantsById.get(assignment.source.grantId)
+    // 用部门路径而不是名称，不同上级下的同名部门也能区分。
+    const where = grant ? (departmentById.value.has(grant.departmentId) ? path(grant.departmentId) : grant.departmentName) : '部门'
     const text = assignment.source === 'direct'
       ? '直接授予'
-      : `来自“${grant?.departmentName ?? '部门'}”${grant && !memberships.has(grant.departmentId) ? '（下级继承）' : ''}`
+      : `来自“${where}”${grant && !memberships.has(grant.departmentId) ? '（下级继承）' : ''}`
     byRole.set(assignment.roleId, [...(byRole.get(assignment.roleId) ?? []), { text, direct: assignment.source === 'direct' }])
   }
   return [...byRole.entries()].map(([roleId, sources]) => {
@@ -592,7 +594,7 @@ onMounted(load)
             <div v-for="role in drawerRoles" :key="role.id" class="assigned-role">
               <span><strong>{{ role.name }}{{ role.disabled ? '（已停用）' : '' }}</strong><code>{{ role.code }}</code></span>
               <div class="tag-list">
-                <el-tag v-for="source in role.sources" :key="source.text" effect="plain" :type="source.direct ? 'info' : 'primary'">{{ source.text }}</el-tag>
+                <el-tag v-for="(source, index) in role.sources" :key="index" effect="plain" :type="source.direct ? 'info' : 'primary'">{{ source.text }}</el-tag>
               </div>
             </div>
             <el-empty v-if="!drawerRoles.length" :image-size="56" description="没有角色" />

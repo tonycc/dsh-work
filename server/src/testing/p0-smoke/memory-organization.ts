@@ -76,9 +76,12 @@ export class MemoryOrganizationStore {
   }
 
   async grantRole(input: { departmentId: string; roleId: unknown; includeDescendants?: unknown; actorId: string }) {
+    if (typeof input.roleId !== 'string' || !input.roleId) throw invalidRequest('请选择要授予的角色')
+    if (input.includeDescendants !== undefined && typeof input.includeDescendants !== 'boolean') throw invalidRequest('includeDescendants 必须为布尔值')
     const department = this.require(input.departmentId)
     const role = this.roles.find(item => item.id === input.roleId)
     if (!role) throw notFound('角色不存在')
+    if (role.status !== 'active') throw stateConflict(`角色“${role.name}”已停用，不能授给部门`)
     if (!role.assignable) throw stateConflict(`角色“${role.name}”含管理类权限，只能在“员工与权限”中单独授给个人`)
     if (this.grants.some(grant => grant.status === 'active' && grant.departmentId === department.id && grant.roleId === role.id)) {
       throw stateConflict('本部门已授予这个角色')

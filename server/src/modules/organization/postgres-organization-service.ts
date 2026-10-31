@@ -159,7 +159,7 @@ export class PostgresOrganizationService {
         changed.push('name')
       }
       return { action: 'organization.department.update', objectId: department.id, context: { changed } }
-    })
+    }, { syncRoles: input.parentId !== undefined })
   }
 
   async reorderDepartment(input: { departmentId: string; direction: unknown; actorId: string }) {
@@ -183,7 +183,7 @@ export class PostgresOrganizationService {
         }
       }
       return { action: 'organization.department.reorder', objectId: department.id, context: { direction } }
-    })
+    }, { syncRoles: false })
   }
 
   async removeDepartment(input: { departmentId: string; actorId: string }) {
@@ -283,7 +283,7 @@ export class PostgresOrganizationService {
       `
       await syncDisplayDepartment(transaction, input.userId)
       return { action: 'organization.member.primary', objectId: input.departmentId, context: { userId: input.userId } }
-    })
+    }, { syncRoles: false })
   }
 
   async grantRole(input: { departmentId: string; roleId: unknown; includeDescendants?: unknown; actorId: string }) {
@@ -329,16 +329,18 @@ export class PostgresOrganizationService {
     })
   }
 
+  /** syncRoles=false 用于不改变部门覆盖范围的写操作（改名、排序、设主部门），省去重算部门角色。 */
   private async write(
     actorId: string,
     change: (transaction: DatabaseTransaction) => Promise<{ action: string; objectId: string; context: Record<string, unknown> }>,
+    options: { syncRoles?: boolean } = {},
   ): Promise<OrganizationSnapshot> {
     if (!this.available) throw stateConflict('当前为 AI Hub 登录模式，组织架构不可用')
     return this.database.begin(async (transaction) => {
       await requirePlatformAdminActor(transaction, actorId)
       await lockOrganization(transaction)
       const audit = await change(transaction)
-      await syncDepartmentRoles(transaction)
+      if (options.syncRoles !== false) await syncDepartmentRoles(transaction)
       await appendOrganizationAudit(transaction, { actorId, ...audit })
       return readSnapshot(transaction)
     })

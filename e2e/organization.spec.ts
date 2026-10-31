@@ -100,7 +100,7 @@ test('administrator grants a role to a department and sees where each role comes
   await page.getByRole('tab', { name: /^成员/ }).click()
   await page.getByRole('row', { name: /李娜/ }).getByRole('button', { name: '查看权限' }).click()
   const drawer = page.getByRole('dialog', { name: '员工部门与角色' })
-  await expect(drawer.getByText('来自“供应链中心”（下级继承）')).toBeVisible()
+  await expect(drawer.getByText('来自“示例企业 / 供应链中心”（下级继承）')).toBeVisible()
   await expect(drawer.getByText('直接授予', { exact: true })).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(drawer).toBeHidden()
