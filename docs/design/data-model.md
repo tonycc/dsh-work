@@ -44,6 +44,8 @@ flowchart LR
 | `oidc_login_transactions` | OIDC 登录事务 | state、nonce 与入口绑定，一次性使用 |
 | `application_admin_bootstrap_claims` | AI Hub 初始管理员认领 | 按应用/环境幂等消费 |
 | `identity_directory_sync_state` | AI Hub 员工目录同步游标 | 持久化 opaque cursor；员工停用即撤销其 Session，保留本地角色历史 |
+| `org_departments` | 部门树（迁移 0113，[组织架构方案](org-structure-plan.md) ORG-S1） | 每租户一个根部门（迁移创建）；`path` 为根到本部门的 ID 路径，不能移到自己下级之下；同一上级下有效部门不重名；删除置为 `removed`；写操作按租户串行 |
+| `org_department_members` | 员工所属部门（迁移 0113） | 员工可属于多个部门、至多一个主部门；`users.department_id` 只作显示，等于主部门名称，没有主部门时为空；迁移 0113 清空了历史部门文本 |
 | `roles`、`user_roles`、`data_scope_grants` | 本地角色、用户角色、数据范围授权 | 独立于 AI Hub；过期角色不生效；任何变更由触发器递增本地授权版本，请求按当前版本重新计算 |
 | `system_settings` | 早期的租户级设置 | 当前代码未读写 |
 | `user_preferences` | 员工端界面偏好（迁移 0094） | 每个账号一行；`ui_mode` 为 `work` 或 `collab`，无记录时为工作模式；只影响界面，不改变权限 |

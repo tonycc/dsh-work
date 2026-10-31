@@ -114,6 +114,35 @@ export interface AgentAccessRoleOption {
   privileged?: boolean
 }
 
+/** 组织架构 ORG-S1：部门树、成员与员工清单；写操作返回同一结构。 */
+export interface OrganizationDepartment {
+  id: string
+  parentId: string | null
+  name: string
+  sortOrder: number
+}
+
+export interface OrganizationMember {
+  departmentId: string
+  userId: string
+  primary: boolean
+}
+
+export interface OrganizationEmployee {
+  id: string
+  name: string
+  email: string | null
+  loginAccount: string | null
+  status: 'active' | 'disabled'
+}
+
+export interface OrganizationSnapshot {
+  available: boolean
+  departments: OrganizationDepartment[]
+  members: OrganizationMember[]
+  employees: OrganizationEmployee[]
+}
+
 export interface IdentityUserSummary {
   id: string
   externalUserId: string | null

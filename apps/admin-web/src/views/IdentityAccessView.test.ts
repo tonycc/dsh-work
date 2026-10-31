@@ -16,7 +16,7 @@ async function openAccount() {
   const wrapper = mount(IdentityAccessView, {
     global: {
       plugins: [ElementPlus],
-      stubs: { teleport: true, ElSelect: { template: '<div><slot /></div>' }, ElOption: true },
+      stubs: { teleport: true, ElSelect: { template: '<div><slot /></div>' }, ElOption: true, ElTreeSelect: { template: '<div />' } },
     },
   })
   wrappers.push(wrapper)
@@ -100,5 +100,33 @@ describe('new account validation', () => {
     await flushPromises()
     expect(adminApi.createLocalAccount).toHaveBeenLastCalledWith(expect.objectContaining({ username: 'corrected@example.invalid', name: '测试员工', password: 'Initial1' }))
     expect(adminApi.createLocalAccount).toHaveBeenCalledTimes(2)
+  })
+
+  it('offers the organization tree for the department and never sends free-text department', async () => {
+    vi.spyOn(adminApi, 'checkLocalLoginAccount').mockResolvedValue({ username: 'tree@example.invalid', available: true })
+    vi.spyOn(adminApi, 'getOrganization').mockResolvedValue({
+      available: true,
+      departments: [{ id: 'root', parentId: null, name: '示例企业', sortOrder: 0 }, { id: 'hr', parentId: 'root', name: '人力资源部', sortOrder: 0 }],
+      members: [],
+      employees: [],
+    })
+    const dialog = await openAccount()
+    await flushPromises()
+    expect(dialog.find('#account-department').exists()).toBe(true)
+    await dialog.get('#account-username').setValue('tree@example.invalid')
+    await dialog.get('#account-name').setValue('树形员工')
+    await dialog.get('#account-password').setValue('Initial1')
+    await dialog.findAll('button').find(item => item.text() === '开通账号')!.trigger('click')
+    await flushPromises()
+    const payload = vi.mocked(adminApi.createLocalAccount).mock.calls.at(-1)![0]
+    expect(payload).not.toHaveProperty('department')
+    expect(payload).not.toHaveProperty('departmentId')
+  })
+
+  it('hides the department field when organization is unavailable', async () => {
+    vi.spyOn(adminApi, 'getOrganization').mockResolvedValue({ available: false, departments: [], members: [], employees: [] })
+    const dialog = await openAccount()
+    await flushPromises()
+    expect(dialog.find('#account-department').exists()).toBe(false)
   })
 })

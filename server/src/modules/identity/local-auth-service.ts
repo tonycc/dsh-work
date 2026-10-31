@@ -6,6 +6,7 @@ import {
   assertAudienceAccess, clearCookie, IdentityAccessError, normalizeReturnTo,
   parseCookies, resolveRequestOrigin, serializeCookie, validateRequestOrigin,
 } from './auth-service.ts'
+import { assignNewAccountDepartment } from '../organization/postgres-organization-service.ts'
 import { lockPlatformAdminInvariant, requireAnotherPlatformAdmin } from './administration-service.ts'
 import { hashPassword, normalizeUsername, verifyPassword } from './password.ts'
 import { loginAccountCandidates, normalizeLoginAccount } from './login-account.ts'
@@ -26,7 +27,8 @@ export interface LocalAccountInput {
   username: string
   password: string
   name: string
-  department?: string | null
+  /** 新建账号时从部门树选择的部门，成为该员工的主部门；不再接受自由填写的部门文字。 */
+  departmentId?: string | null
   email?: string | null
 }
 
@@ -256,6 +258,7 @@ export class LocalAuthService {
     return this.database.begin(async transaction => {
       await assertPlatformAdmin(transaction, actorId)
       const userId = await insertAccount(transaction, input, username, passwordHash, true)
+      if (input.departmentId) await assignNewAccountDepartment(transaction, { userId, departmentId: input.departmentId, actorId })
       await revokeUserSessions(transaction, userId)
       await localAudit(transaction, actorId, 'identity.local.create', 'success', { userId })
       return { userId, username }
@@ -349,11 +352,10 @@ async function insertAccount(transaction: DatabaseTransaction, input: LocalAccou
   if (await loginAccountExists(transaction, username)) throw new IdentityAccessError(409, 'local_account_exists', '登录账号已存在，请使用其他手机号或邮箱')
   const userId = `user-${randomUUID()}`
   const name = requiredText(input.name, '姓名', 80)
-  const department = optionalText(input.department, '部门', 100)
   const email = optionalText(input.email, '邮箱', 254)
   await transaction`
-    insert into users (id, tenant_id, external_subject, display_name, department_id, status, identity_provider, business_user, email)
-    values (${userId}, ${tenantId}, ${`local:${randomUUID()}`}, ${name}, ${department}, 'active', 'local', true, ${email})
+    insert into users (id, tenant_id, external_subject, display_name, status, identity_provider, business_user, email)
+    values (${userId}, ${tenantId}, ${`local:${randomUUID()}`}, ${name}, 'active', 'local', true, ${email})
   `
   const [created] = await transaction`
     insert into local_user_credentials (tenant_id, user_id, username, password_hash, must_change_password)

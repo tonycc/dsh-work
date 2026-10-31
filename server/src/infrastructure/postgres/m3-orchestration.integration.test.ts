@@ -145,7 +145,8 @@ test('real PostgreSQL orchestration persists the assistant result without publis
   assert.ok(usageRecord && usageRecord.totalTokens > 0)
   assert.equal(usageRecord.employeeId, 'U00001')
   assert.equal(usageRecord.employeeName, '林岚')
-  assert.equal(usageRecord.department, '供应链中心')
+  // 组织架构 ORG-S1 迁移清空了种子员工的历史部门文本，未分配部门时显示“未归属部门”。
+  assert.equal(usageRecord.department, '未归属部门')
 })
 
 test('PF-01 API Task executes through the governed Runtime without creating a Session', async () => {

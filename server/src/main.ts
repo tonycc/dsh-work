@@ -10,6 +10,8 @@ import { registerSkillRoutes } from './http/admin/skill-routes.ts'
 import { registerToolRoutes } from './http/admin/tool-routes.ts'
 import { registerModelGovernanceRoutes } from './http/admin/model-routes.ts'
 import { registerOperationsRoutes } from './http/admin/operations-routes.ts'
+import { registerOrganizationRoutes } from './http/admin/organization-routes.ts'
+import { PostgresOrganizationService } from './modules/organization/postgres-organization-service.ts'
 import { registerIdentityAdministrationRoutes } from './http/admin/identity-routes.ts'
 import { Router, envelope, httpResult } from './http/router.ts'
 import { registerConversationRoutes } from './http/workbench/conversation-routes.ts'
@@ -150,6 +152,7 @@ async function start() {
     new IdentityAdministrationService(database, true),
     directorySync,
   )
+  registerOrganizationRoutes(router, new PostgresOrganizationService(database, { available: identityConfiguration.mode !== 'oidc' }))
   const directorySyncTimer = directorySync?.startScheduler() ?? null
   const modelRepository = new PostgresModelGovernanceRepository(database)
 
