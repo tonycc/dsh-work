@@ -216,6 +216,7 @@ async function start() {
   }
   const conversations = new PostgresConversationRepository(database)
   const authorization = new PostgresAuthorizationService(database, {
+    knownBuiltinSkill: builtinSkills.isKnown,
     // AI Hub 身份的后台任务必须复核目录；配置降级为 local 时传 null，
     // 授权服务仍按用户来源拒绝 AI Hub 后台执行，独立账号不受影响。
     // 信任窗口 = 同步间隔 ×2（interval=0 即关闭同步 → 兜底 60s 后 fail-closed）。

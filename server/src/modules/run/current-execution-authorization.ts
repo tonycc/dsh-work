@@ -32,7 +32,7 @@ export interface ExecutionToolCheckPort {
 
 type AuthorizationPort = Pick<PostgresAuthorizationService,
   'workspaceTypeOf' | 'authorizeRuntime' | 'authorizeTeamRunExecution' | 'requireAdminReader' | 'requirePlatformAdmin' | 'requireActiveAgentPrincipal' | 'assertAgentPrincipalSnapshot'>
-  & Partial<Pick<PostgresAuthorizationService, 'assertAgentRoutineRun' | 'sessionSelectedSkillReference'>>
+  & Partial<Pick<PostgresAuthorizationService, 'assertAgentRoutineRun' | 'sessionSelectedSkillReference' | 'installedSkillReferences'>>
 
 /** All checks use live grants and pinned versions. This never rewrites the Manifest. */
 export async function assertCurrentExecutionAuthorization(
@@ -81,7 +81,8 @@ export async function assertCurrentExecutionAuthorization(
       userId: manifest.user_context.user_id,
       workspaceId: manifest.workspace_id,
       agentVersionId: manifest.agent_version_id,
-      additionalSkillReferences: installedSkillReferences(manifest.skills),
+      // 未接线内置 Skill 注册表时不认任何内置 Skill：全部按附加 Skill 复核（fail-closed）。
+      additionalSkillReferences: authorization.installedSkillReferences?.(manifest.skills) ?? installedSkillReferences(manifest.skills),
       selectedSkillReference,
     }
     const current = type === 'team'
