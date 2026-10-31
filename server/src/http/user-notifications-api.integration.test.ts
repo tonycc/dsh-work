@@ -159,6 +159,7 @@ test('NC-01 失权后旧通知不再返回名称：任务被删除、被移出�
     { visible: false, workspace: null, objectName: null, actor: null, target: null })
   assert.equal(afterDelete[1]?.objectName, '敏感任务')
   assert.equal(await unread(ws.first), 1, '不可见的通知不计未读')
+  assert.deepEqual((await notifications(ws.first, '?status=unread')).map(item => item.objectName), ['敏感任务'], '未读筛选与未读数同一口径')
 
   assert.equal((await api('DELETE', `${base}/workspaces/${ws.id}/members/${ws.first}`, { as: ws.owner })).status, 200)
   const afterRemoval = await notifications(ws.first)

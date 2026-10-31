@@ -76,7 +76,7 @@ export class PostgresUserNotificationService {
         ${visibilityJoins(sql, input.userId)}
        where n.tenant_id = ${tenantId} and n.recipient_user_id = ${input.userId}
          and n.created_at > now() - make_interval(days => ${retentionDays})
-         and ${status === 'unread' ? sql`n.read_at is null` : sql`true`}
+         and ${status === 'unread' ? sql`n.read_at is null and v.visible` : sql`true`}
          and ${cursor === null ? sql`true` : sql`(n.created_at, n.id) < ((${cursor.at}::text)::timestamptz, ${cursor.id})`}
        order by n.created_at desc, n.id desc
        limit ${limit + 1}

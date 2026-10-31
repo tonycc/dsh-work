@@ -83,7 +83,7 @@
 | `created_at`、`read_at` | 产生时间、本人已读时间 |
 
 - **写入：** 与产生它的业务变更在同一事务中写入（沿用 `workspace_activity_events` 的做法），重复写入因唯一键成为空操作。写入只依据服务端事实，不取客户端提交的名称。
-- **读取：** `GET /api/workbench/v1/notifications?status=all|unread&cursor=` 返回本人通知，每条读取时重新解析对象名称并检查可见权限，失权的条目不返回名称（显示“该内容已不可见”）；`GET /notifications/unread-count`；`POST /notifications/:id/read`；`POST /notifications/read-all`。
+- **读取：** `GET /api/workbench/v1/me/notifications?status=all|unread&cursor=&limit=` 返回本人通知，每条读取时重新解析对象名称并检查可见权限，失权的条目不返回名称与跳转目标（`visible=false`，显示“该内容已不可见”），也不计未读、不出现在“未读”筛选中；`GET /me/notifications/unread-count`；`POST /me/notifications/:id/read`；`POST /me/notifications/read-all`。
 - **保留：** 清扫器每日删除 90 天前的记录。
 - **与现有表的关系：** `message_mentions` 保留（群组“[有人@我]”标记仍用它），@ 通知是同事务另写的一行；`workspace_notification_states` 的静音状态在计未读时读取。钉钉投递记录 `external_notification_deliveries` 的来源改为 `user_notifications.id`，需同步修改钉钉方案 4.1。
 
