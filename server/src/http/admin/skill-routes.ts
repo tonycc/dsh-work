@@ -17,6 +17,15 @@ export function registerSkillRoutes(router: Router, service: PostgresSkillServic
       actor: requireRequestIdentity(context, 'admin').userId,
     }), 'postgres')
   })
+  router.put(`${basePath}/skills/:skillId/visibility`, async (request, context) => {
+    const input = await readJsonBody<{ roleIds: unknown; reason: unknown }>(request)
+    return envelope('admin', await service.setVisibleRoles({
+      skillId: context.params['skillId'] ?? '',
+      roleIds: input.roleIds,
+      reason: input.reason,
+      actor: requireRequestIdentity(context, 'admin').userId,
+    }), 'postgres')
+  })
   router.get(`${basePath}/skill-versions`, async () => envelope('admin', await service.getSkillVersions(), 'postgres'))
   router.get(`${basePath}/skill-release-records`, async () => envelope('admin', await service.getReleaseRecords(), 'postgres'))
   router.post(`${basePath}/skills`, async (request, context) => {

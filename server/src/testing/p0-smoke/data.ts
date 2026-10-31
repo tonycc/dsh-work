@@ -812,6 +812,7 @@ export const mockAgents: AgentDefinition[] = [
     webSearchEnabled: false,
     projectTasksEnabled: false,
     agentRecommendationEnabled: false,
+    skillCreationEnabled: false,
     updatedAt: '2026-08-27 17:42',
     allowWorkspaceJoin: true,
   },
@@ -835,8 +836,35 @@ export const mockAgents: AgentDefinition[] = [
     webSearchEnabled: false,
     projectTasksEnabled: false,
     agentRecommendationEnabled: false,
+    skillCreationEnabled: false,
     updatedAt: '2026-08-28 09:14',
     allowWorkspaceJoin: true,
+  },
+  {
+    // Skill 创建专家（方案 5.1）：开启“可创建 Skill”，供 Skill 广场“创建 Skill”入口的冒烟（SKC-04）。
+    // 默认停用，以免改变其他用例“只有一位 AI 同事”的前提；SKC-04 经管理端接口启用。
+    id: 'skill-creator',
+    name: 'Skill 创建专家',
+    description: '帮你把反复使用的工作方法写成 Skill：问清需求、写出 SKILL.md，保存为草稿，由你提交审核。想创建 Skill 时找我。',
+    owner: '陈默',
+    department: '数字化中心',
+    visibility: '全体试点员工',
+    roleIds: ['role-employee', 'role-supply', 'role-manager'],
+    status: 'disabled',
+    version: '1.0.0',
+    welcomeMessage: '你好，我可以帮你把常用的工作方法做成 Skill。说说你想让它帮你做什么、平时怎么做，最好附一个示例。',
+    examplePrompts: ['我想创建一个 Skill，把每周的销售数据整理成固定格式的周报'],
+    systemPrompt: '你是 Skill 创建专家，帮员工把可复用的工作方法写成 Skill 草稿，由员工自己提交审核。',
+    maxOutputBytes: 65536,
+    maxToolCalls: 20,
+    timeoutSeconds: 300,
+    skills: [],
+    webSearchEnabled: false,
+    projectTasksEnabled: false,
+    agentRecommendationEnabled: false,
+    skillCreationEnabled: true,
+    updatedAt: '2026-10-31 10:00',
+    allowWorkspaceJoin: false,
   },
 ]
 
@@ -862,6 +890,7 @@ export const mockAgentVersions: AgentVersionRecord[] = [
     webSearchEnabled: false,
     projectTasksEnabled: false,
     agentRecommendationEnabled: false,
+    skillCreationEnabled: false,
   },
   {
     id: 'agent-version-assistant-110',
@@ -884,6 +913,7 @@ export const mockAgentVersions: AgentVersionRecord[] = [
     webSearchEnabled: false,
     projectTasksEnabled: false,
     agentRecommendationEnabled: false,
+    skillCreationEnabled: false,
   },
   {
     id: 'agent-version-assistant-100',
@@ -905,6 +935,7 @@ export const mockAgentVersions: AgentVersionRecord[] = [
     webSearchEnabled: false,
     projectTasksEnabled: false,
     agentRecommendationEnabled: false,
+    skillCreationEnabled: false,
   },
   {
     id: 'agent-version-operations-040',
@@ -925,6 +956,7 @@ export const mockAgentVersions: AgentVersionRecord[] = [
     webSearchEnabled: false,
     projectTasksEnabled: false,
     agentRecommendationEnabled: false,
+    skillCreationEnabled: false,
   },
   {
     id: 'agent-version-operations-030',
@@ -946,6 +978,29 @@ export const mockAgentVersions: AgentVersionRecord[] = [
     webSearchEnabled: false,
     projectTasksEnabled: false,
     agentRecommendationEnabled: false,
+    skillCreationEnabled: false,
+  },
+  {
+    id: 'agent-version-skill-creator-100',
+    agentId: 'skill-creator',
+    version: '1.0.0',
+    status: 'disabled',
+    createdAt: '2026-10-31 09:30',
+    createdBy: '陈默',
+    publishedAt: '2026-10-31 10:00',
+    publishedBy: '陈默',
+    summary: 'Skill 创建专家首个版本。',
+    welcomeMessage: '你好，我可以帮你把常用的工作方法做成 Skill。说说你想让它帮你做什么、平时怎么做，最好附一个示例。',
+    examplePrompts: ['我想创建一个 Skill，把每周的销售数据整理成固定格式的周报'],
+    systemPrompt: '你是 Skill 创建专家，帮员工把可复用的工作方法写成 Skill 草稿，由员工自己提交审核。',
+    maxOutputBytes: 65536,
+    maxToolCalls: 20,
+    timeoutSeconds: 300,
+    skills: [],
+    webSearchEnabled: false,
+    projectTasksEnabled: false,
+    agentRecommendationEnabled: false,
+    skillCreationEnabled: true,
   },
 ]
 
@@ -962,6 +1017,7 @@ export const mockSkills: SkillDefinition[] = [
     toolIds: ['read@1.0.0'],
     testPrompt: '差旅报销需要哪些审批材料？',
     coveredBuiltinScenarios: [],
+    visibleRoleIds: null,
     updatedAt: '2026-08-26',
   },
   {
@@ -976,6 +1032,7 @@ export const mockSkills: SkillDefinition[] = [
     toolIds: ['read@1.0.0', 'grep@1.0.0'],
     testPrompt: '分析本月订单交付风险。',
     coveredBuiltinScenarios: [],
+    visibleRoleIds: null,
     updatedAt: '2026-08-27',
   },
   {
@@ -990,6 +1047,7 @@ export const mockSkills: SkillDefinition[] = [
     toolIds: ['read@1.0.0'],
     testPrompt: '检查未来两周的缺料风险。',
     coveredBuiltinScenarios: [],
+    visibleRoleIds: null,
     updatedAt: '2026-08-24',
   },
   {
@@ -1004,6 +1062,7 @@ export const mockSkills: SkillDefinition[] = [
     toolIds: [],
     testPrompt: '分析上传表格中的异常订单。',
     coveredBuiltinScenarios: [],
+    visibleRoleIds: null,
     updatedAt: '2026-08-28',
   },
 ]

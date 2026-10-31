@@ -43,6 +43,7 @@ export class WorkbenchQueryService {
         welcomeMessage: agent.welcomeMessage,
         version: agent.version,
         examplePrompts: [...agent.examplePrompts],
+        canCreateSkills: agent.skillCreationEnabled,
       }))
   }
 

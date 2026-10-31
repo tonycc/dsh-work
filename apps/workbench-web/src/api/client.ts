@@ -2,6 +2,7 @@ import type {
   NewSpaceDisclosureImpact,
   PersonalFile,
   PersonalFileQuery,
+  SkillDraft,
   UserSessionSummary,
   UserSessionQuery,
   AgentCandidatePage,
@@ -195,6 +196,14 @@ export const workbenchApi = {
   getTasks: () => request<TaskRun[]>('/tasks'),
   getAgents: () => request<WorkbenchAgent[]>('/agents'),
   getSkills: () => request<WorkbenchSkill[]>('/skills'),
+  submitSkillDraft: (submissionId: string, versionId: string) =>
+    request<SkillDraft>(`/skill-submissions/${encodeURIComponent(submissionId)}/submit`, { method: 'POST', body: JSON.stringify({ versionId }) }),
+  withdrawSkillDraft: (submissionId: string) =>
+    request<SkillDraft>(`/skill-submissions/${encodeURIComponent(submissionId)}/withdraw`, { method: 'POST' }),
+  getSkillDraftFile: (submissionId: string, versionId: string, path = 'SKILL.md') =>
+    request<{ path: string; size: number; content: string }>(
+      `/skill-submissions/${encodeURIComponent(submissionId)}/versions/${encodeURIComponent(versionId)}/file?path=${encodeURIComponent(path)}`,
+    ),
   getRun: (runId: string) => request<TaskRun>(`/runs/${encodeURIComponent(runId)}`),
   /** I-06：Run 的版本化任务结果投影（task-result/v1），与 Run 详情同一授权边界。 */
   getRunResult: (runId: string) => request<TaskResult>(`/runs/${encodeURIComponent(runId)}/result`),

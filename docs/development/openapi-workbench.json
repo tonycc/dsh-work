@@ -517,6 +517,7 @@
       "get": {
         "operationId": "listAvailableAgents",
         "summary": "按当前员工角色查询可用的已发布 Agent",
+        "description": "每项含 id、name、description、welcomeMessage、version、examplePrompts 与 canCreateSkills；canCreateSkills 为当前启用版本是否开启“可创建 Skill”，供 Skill 广场的“创建 Skill”入口找到 Skill 创建专家（Skill 创建专家方案 4.8）。",
         "responses": {
           "200": {
             "$ref": "#/components/responses/Ok"
@@ -527,7 +528,7 @@
     "/skills": {
       "get": {
         "operationId": "listAvailableSkills",
-        "summary": "查询当前员工可查看的已发布 Skill 入口目录；依赖 Skill 仅在单独安装后展示",
+        "summary": "查询当前员工可查看的已发布 Skill 入口目录；依赖 Skill 仅在单独安装后展示；按 Skill 可见范围过滤（未设置为全员，否则须持有其中一个角色）",
         "responses": {
           "200": {
             "$ref": "#/components/responses/Ok"
@@ -535,6 +536,50 @@
           "401": {
             "$ref": "#/components/responses/Error"
           }
+        }
+      }
+    },
+    "/skill-submissions/{submissionId}/submit": {
+      "parameters": [{ "name": "submissionId", "in": "path", "required": true, "schema": { "type": "string" } }],
+      "post": {
+        "operationId": "submitSkillDraft",
+        "summary": "员工在草稿卡片上把本人的 Skill 草稿提交平台管理员审核（Skill 创建专家方案 4.3）",
+        "description": "只能提交本人的、当前版本的、非不兼容的草稿；已待审核时重复提交不改变状态。同一员工同时待审核不超过 5 条，超出返回 409。模型没有对应工具，提交只能由员工发起。",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["versionId"], "properties": { "versionId": { "type": "string" } } } } }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" },
+          "404": { "$ref": "#/components/responses/Error", "description": "草稿不存在或不是本人的" },
+          "409": { "$ref": "#/components/responses/Error", "description": "不是当前版本、版本不兼容、已审核或待审核已达上限" }
+        }
+      }
+    },
+    "/skill-submissions/{submissionId}/withdraw": {
+      "parameters": [{ "name": "submissionId", "in": "path", "required": true, "schema": { "type": "string" } }],
+      "post": {
+        "operationId": "withdrawSkillDraft",
+        "summary": "员工撤回本人尚未审核的 Skill 提交，回到草稿",
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" },
+          "404": { "$ref": "#/components/responses/Error", "description": "草稿不存在或不是本人的" },
+          "409": { "$ref": "#/components/responses/Error", "description": "只有等待审核的提交可以撤回" }
+        }
+      }
+    },
+    "/skill-submissions/{submissionId}/versions/{versionId}/file": {
+      "parameters": [
+        { "name": "submissionId", "in": "path", "required": true, "schema": { "type": "string" } },
+        { "name": "versionId", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "get": {
+        "operationId": "getSkillDraftFile",
+        "summary": "草稿卡片预览：读取本人某个草稿版本中的一个文本文件（默认 SKILL.md）",
+        "parameters": [{ "name": "path", "in": "query", "schema": { "type": "string", "default": "SKILL.md" } }],
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" },
+          "404": { "$ref": "#/components/responses/Error", "description": "草稿或文件不存在，或不是本人的" }
         }
       }
     },
@@ -1446,7 +1491,7 @@
                       "string",
                       "null"
                     ],
-                    "description": "员工从 Skill 广场选择的 Skill；服务端锁定其当前已发布版本，并在创建对话前校验固定 Agent 是否显式授权 Skill 所需的外部工具。"
+                    "description": "员工从 Skill 广场选择的 Skill；服务端锁定其当前已发布版本，并在创建对话前校验固定 Agent 是否显式授权 Skill 所需的外部工具。Skill 不对员工当前角色可见时返回 403；之后每次发送与执行前复核同样按员工当前角色复核。"
                   },
                   "workspaceAgentMemberId": {
                     "type": [
@@ -1751,7 +1796,7 @@
       ],
       "get": {
         "operationId": "getRun",
-        "description": "团队空间历史运行读取走读取轨（3-T1）：空间归档后现任成员仍可读取历史运行；非成员与不存在的空间一律按不可枚举的“不可访问”处理。响应内嵌 task-result/v1 结果投影（result 字段）：业务核验状态 outcome 独立于执行状态 status，模型自述或执行完成不直接构成业务达成；完整字段语义见 TaskResult schema 与 /runs/{runId}/result。已停止的 Run 返回 stoppedBy（请求停止的员工姓名，系统撤权取消为 null）。个人对话详情可含 recommendations：各 Run 当前 Attempt 的推荐 AI 同事卡片（id、runId、agentId、name、description、reason、可选 suggestedPrompt、available），suggestedPrompt 为推荐时写给该同事的问题，用于“去聊天”预填，名称与说明取同事当前启用版本，available 为查看时该同事是否仍对本人可用。",
+        "description": "团队空间历史运行读取走读取轨（3-T1）：空间归档后现任成员仍可读取历史运行；非成员与不存在的空间一律按不可枚举的“不可访问”处理。响应内嵌 task-result/v1 结果投影（result 字段）：业务核验状态 outcome 独立于执行状态 status，模型自述或执行完成不直接构成业务达成；完整字段语义见 TaskResult schema 与 /runs/{runId}/result。已停止的 Run 返回 stoppedBy（请求停止的员工姓名，系统撤权取消为 null）。个人对话详情可含 recommendations：各 Run 当前 Attempt 的推荐 AI 同事卡片（id、runId、agentId、name、description、reason、可选 suggestedPrompt、available），suggestedPrompt 为推荐时写给该同事的问题，用于“去聊天”预填，名称与说明取同事当前启用版本，available 为查看时该同事是否仍对本人可用。个人对话详情还可含 skillDrafts：各 Run 当前 Attempt 保存的 Skill 草稿卡片（submissionId、versionId、versionNumber、runId、name、description、files、compatibility、status、latest、可选 reviewNote/submittedAt/reviewedAt），只返回给提交人本人；提交与撤回见 /skill-submissions。",
         "summary": "获取 Run 当前状态",
         "responses": {
           "200": {

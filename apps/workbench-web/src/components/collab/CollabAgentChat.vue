@@ -250,7 +250,7 @@ async function submit(payload: { prompt: string; files: File[]; workspaceId: str
 }
 
 watch(() => props.agentId, () => {
-  recommendationPrefill.value = takeRecommendationPrefill()
+  recommendationPrefill.value = takeRecommendationPrefill() ?? ''
   if (recommendationPrefill.value) composerKey.value += 1
   void load()
 }, { immediate: true })

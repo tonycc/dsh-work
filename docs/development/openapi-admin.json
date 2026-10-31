@@ -973,7 +973,7 @@
     "/skills/status": {
       "patch": {
         "operationId": "setSkillStatus",
-        "summary": "发布、启用或停用 Skill；发布要求当前配置测试通过",
+        "summary": "发布、启用或停用 Skill；发布要求当前配置测试通过；待发布版本来自员工提交时返回 409 skill_submission_review_required，须经“待审核”通过发布",
         "responses": {
           "200": {
             "$ref": "#/components/responses/Ok"
@@ -1243,6 +1243,34 @@
           "403": { "$ref": "#/components/responses/Error" },
           "404": { "$ref": "#/components/responses/Error", "description": "Skill 不存在（平台内置 Skill 不能设置覆盖）" },
           "422": { "$ref": "#/components/responses/Error", "description": "场景不在固定清单中" }
+        }
+      }
+    },
+    "/skills/{skillId}/visibility": {
+      "put": {
+        "operationId": "setSkillVisibility",
+        "summary": "设置 Skill 可见范围：null 为全员，否则为非空、现存且启用的角色；Skill 级配置，不随版本固定。只约束员工在 Skill 广场选用、会话选择与执行前复核，Agent 固定引用不受限；须填写原因并写审计",
+        "parameters": [{ "name": "skillId", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["roleIds", "reason"],
+                "properties": {
+                  "roleIds": { "type": ["array", "null"], "items": { "type": "string" }, "minItems": 1 },
+                  "reason": { "type": "string", "minLength": 1, "maxLength": 500 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/Ok" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error", "description": "Skill 不存在" },
+          "422": { "$ref": "#/components/responses/Error", "description": "角色为空、不存在或已停用，或缺少原因" }
         }
       }
     },
@@ -1889,6 +1917,311 @@
         "responses": {
           "200": {
             "$ref": "#/components/responses/Ok"
+          }
+        }
+      }
+    },
+    "/skill-submissions": {
+      "get": {
+        "operationId": "listSkillSubmissions",
+        "summary": "待审核的员工 Skill 提交（Skill 创建专家方案 4.4）：提交人、来源、当前版本、脚本数量与最近一次严格试运行状态（not_started / running / unconfirmed / passed / failed），按提交时间先后",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/skill-submissions/{submissionId}": {
+      "get": {
+        "operationId": "getSkillSubmission",
+        "summary": "员工 Skill 提交详情：文件清单（标出脚本）、包校验结论与最近一次严格试运行（含 skillId 与结果摘要）。已撤回回到草稿的提交按不存在处理",
+        "parameters": [
+          {
+            "name": "submissionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "提交不存在或已撤回"
+          }
+        }
+      }
+    },
+    "/skill-submissions/{submissionId}/versions/{versionId}/file": {
+      "get": {
+        "operationId": "getSkillSubmissionFile",
+        "summary": "读取提交版本中的一个文件（SKILL.md、脚本源码等），按纯文本返回",
+        "parameters": [
+          {
+            "name": "submissionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "versionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "SKILL.md"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "提交或文件不存在"
+          }
+        }
+      }
+    },
+    "/skill-submissions/{submissionId}/test-runs": {
+      "post": {
+        "operationId": "startSkillSubmissionTestRun",
+        "summary": "开始严格试运行：须为平台管理员，提交仍待审核且 versionId 为当前版本；以该管理员身份把提交版本存为 Skill 待发布版本（安装来源 submission；已存过则沿用），再按现有严格试运行启动，运行与证据记在该管理员名下",
+        "parameters": [
+          {
+            "name": "submissionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "versionId"
+                ],
+                "properties": {
+                  "versionId": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "提交不存在"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "提交已撤回或已审核、版本已变化、包不兼容、重名或该 Skill 已有其他待发布版本"
+          }
+        }
+      }
+    },
+    "/skill-submissions/{submissionId}/test-runs/{runId}": {
+      "get": {
+        "operationId": "getSkillSubmissionTestRun",
+        "summary": "查询严格试运行进度；只能查询本人发起的试运行，结束后记录结果",
+        "parameters": [
+          {
+            "name": "submissionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "提交尚未开始试运行"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "试运行快照已变化"
+          }
+        }
+      }
+    },
+    "/skill-submissions/{submissionId}/approve": {
+      "post": {
+        "operationId": "approveSkillSubmission",
+        "summary": "通过并发布：沿用现有发布门禁（当前版本须有严格试运行通过证据并复用发布确认与审计），在同一发布事务中写入可见范围与审核结论；visibleRoleIds 为 null 表示全员。写审计 skill.submission.approve",
+        "parameters": [
+          {
+            "name": "submissionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "versionId",
+                  "visibleRoleIds"
+                ],
+                "properties": {
+                  "versionId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "visibleRoleIds": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "提交不存在"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "未通过严格试运行、提交已撤回或已审核、版本已变化或重名"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error",
+            "description": "可见角色为空、不存在或已停用"
+          }
+        }
+      }
+    },
+    "/skill-submissions/{submissionId}/reject": {
+      "post": {
+        "operationId": "rejectSkillSubmission",
+        "summary": "拒绝：必须填写 1～500 字原因（提交人在草稿卡片上看到）；释放该提交占用的 Skill 待发布版本指针。写审计 skill.submission.reject",
+        "parameters": [
+          {
+            "name": "submissionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "versionId",
+                  "note"
+                ],
+                "properties": {
+                  "versionId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "note": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "提交不存在"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "提交已撤回或已审核、版本已变化"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error",
+            "description": "缺少拒绝原因"
           }
         }
       }
@@ -2802,6 +3135,10 @@
           "agentRecommendationEnabled": {
             "type": "boolean",
             "description": "是否可推荐其他 AI 同事（list_colleague_agents、recommend_agents）；仅个人对话中由员工发起的交互运行装配，只推荐员工本人可用的同事。编辑时省略则保留当前设置，新建时默认 false。"
+          },
+          "skillCreationEnabled": {
+            "type": "boolean",
+            "description": "是否可创建 Skill（list_available_skills、skill_draft_save）；仅个人对话中由员工发起的交互运行装配，只保存草稿，提交审核由员工在卡片上决定。编辑时省略则保留当前设置，新建时默认 false。"
           },
           "maxOutputBytes": {
             "type": "integer",

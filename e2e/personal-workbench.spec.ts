@@ -1,9 +1,15 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 
 // P2-28：每个 P0 用例从同一份内存夹具开始，避免可变状态跨用例泄漏。
 test.beforeEach(async ({ page }) => {
   await page.request.post('/api/testing/p0/reset')
 })
+
+/** SKC-04：冒烟数据中的 Skill 创建专家默认停用，经管理端接口启用（冒烟服务只有一个测试身份）。 */
+async function enableSkillCreator(page: Page) {
+  const enabled = await page.request.patch('/api/admin/v1/agents/skill-creator/status', { data: { status: 'published' } })
+  expect(enabled.ok()).toBeTruthy()
+}
 
 test('P0: personal Workspace is implicit, navigation exposes work entries', async ({ page }) => {
   await page.goto('/workbench')
@@ -33,6 +39,16 @@ test('P0: personal Workspace is implicit, navigation exposes work entries', asyn
   await expect(page.getByRole('button').filter({ hasText: '我的空间' })).toHaveCount(0)
   await navigation.getByRole('button', { name: '新对话', exact: true }).click()
   await expect(page.getByLabel('选择工作空间')).toHaveCount(0)
+})
+
+test('SKC-04: Skill plaza opens a new chat with the Skill creator, nothing prefilled', async ({ page }) => {
+  await enableSkillCreator(page)
+  await page.goto('/skills')
+  await expect(page.getByRole('navigation', { name: 'Skill 分类筛选' })).toBeVisible()
+  await page.getByRole('button', { name: '创建 Skill' }).click()
+  await expect(page).toHaveURL(/\/workbench\?agent=skill-creator$/)
+  await expect(page.getByLabel('已选择 AI 同事', { exact: true })).toContainText('Skill 创建专家')
+  await expect(page.getByLabel('对话输入')).toHaveValue('')
 })
 
 test('P0: legacy personal links redirect after the server authorizes the workspace', async ({ page }) => {

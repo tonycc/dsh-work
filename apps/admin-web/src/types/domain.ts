@@ -325,6 +325,8 @@ export interface AgentDefinition {
   projectTasksEnabled: boolean
   /** 是否可推荐其他 AI 同事（只在员工个人对话中生效）。 */
   agentRecommendationEnabled?: boolean
+  /** 是否可创建 Skill（只在员工个人对话中生效，草稿由员工提交审核）。 */
+  skillCreationEnabled?: boolean
   mcpScope?: AgentMcpScope
   updatedAt: string
   /** 草稿编辑的乐观并发修订，保存时回传为 expectedRevision；原型模式不提供。 */
@@ -458,6 +460,7 @@ export interface AgentDraftConfiguration {
   projectTasksEnabled?: boolean
   /** 编辑时省略则保留当前设置，新建时默认关闭。 */
   agentRecommendationEnabled?: boolean
+  skillCreationEnabled?: boolean
   mcpScope?: AgentMcpScope
   changeSummary: string
 }
@@ -495,6 +498,7 @@ export interface AgentVersionRecord {
   webSearchEnabled: boolean
   projectTasksEnabled: boolean
   agentRecommendationEnabled?: boolean
+  skillCreationEnabled?: boolean
   mcpScope?: AgentMcpScope
 }
 
@@ -515,7 +519,38 @@ export interface SkillDefinition {
   testPrompt: string
   /** 管理员设置的“覆盖内置场景”：运行中有该 Skill 时去掉对应场景的平台内置 Skill。 */
   coveredBuiltinScenarios?: BuiltinSkillScenario[]
+  /** Skill 可见范围：null 为全员；否则只有这些角色的员工能在 Skill 广场选用（Agent 固定引用不受限）。 */
+  visibleRoleIds?: string[] | null
+  /** 待发布版本来自员工提交：只能在“待审核”中审核发布。 */
+  submissionDraft?: boolean
   updatedAt: string
+}
+
+/** 员工 Skill 提交的严格试运行状态（Skill 创建专家方案 4.4）。 */
+export type SkillSubmissionTrialStatus = 'not_started' | 'running' | 'unconfirmed' | 'passed' | 'failed'
+
+export interface SkillSubmissionReviewItem {
+  id: string
+  name: string
+  description: string
+  submitter: { id: string; displayName: string }
+  source: 'conversation' | 'zip' | 'link'
+  sessionId: string | null
+  status: 'pending' | 'approved' | 'rejected'
+  versionId: string
+  versionNumber: number
+  scriptCount: number
+  publishedSkillId?: string
+  /** 修订的已发布 Skill 当前可见范围（null 为全员），通过时默认沿用。 */
+  publishedVisibleRoleIds?: string[] | null
+  trial: { status: SkillSubmissionTrialStatus; runId?: string; testedAt?: string }
+  submittedAt: string
+}
+
+export interface SkillSubmissionReviewDetail extends SkillSubmissionReviewItem {
+  files: Array<{ path: string; size: number; script: boolean }>
+  compatibility: { status: 'compatible' | 'needs_review' | 'incompatible'; issues: Array<{ code: string; severity: 'warning' | 'error'; message: string }> }
+  trial: SkillSubmissionReviewItem['trial'] & { skillId?: string; resultSummary?: string }
 }
 
 export interface SkillDependencySummary {

@@ -183,6 +183,27 @@ export interface AgentRecommendation {
   available: boolean
 }
 
+/**
+ * Skill 草稿卡片（Skill 创建专家方案 4.3）：某个 Run 当前 Attempt 保存的草稿版本，带所属提交的当前状态。
+ * 只给提交人本人看；提交审核只能由员工在卡片上发起。
+ */
+export interface SkillDraft {
+  submissionId: string
+  versionId: string
+  versionNumber: number
+  runId: string
+  name: string
+  description: string
+  files: Array<{ path: string; size: number; script: boolean }>
+  compatibility: { status: 'compatible' | 'needs_review' | 'incompatible'; issues: Array<{ code: string; severity: 'warning' | 'error'; message: string }> }
+  status: 'draft' | 'pending' | 'approved' | 'rejected'
+  /** 是否为该提交的当前版本；被新版本替代的卡片只显示一行说明。 */
+  latest: boolean
+  reviewNote?: string
+  submittedAt?: string
+  reviewedAt?: string
+}
+
 export interface TaskRunError {
   code: string
   message: string
@@ -297,6 +318,7 @@ export interface TaskRun {
   threadArtifacts?: Artifact[]
   /** 推荐 AI 同事：个人会话中各 Run 当前 Attempt 的推荐卡片，按 runId 挂到该 Run 的回复下。 */
   recommendations?: AgentRecommendation[]
+  skillDrafts?: SkillDraft[]
   /**
    * EX-PROGRESS-01：客户端时钟减服务端事件时间（毫秒），收到实时事件时更新。进行中步骤的
    * 计时据此把服务端时间换算到本机，避免两边时钟不一致；只有快照时缺省，按 0 计。
@@ -938,6 +960,8 @@ export interface WorkbenchAgent {
   welcomeMessage: string
   version: string
   examplePrompts: string[]
+  /** 当前启用版本开启了“可创建 Skill”（Skill 创建专家方案 4.8）；旧服务端缺省。 */
+  canCreateSkills?: boolean
 }
 
 export interface WorkbenchSkill {

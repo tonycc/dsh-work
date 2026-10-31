@@ -47,6 +47,9 @@ interface SkillRow {
   toolIds: string[]
   testPrompt: string
   coveredBuiltinScenarios: string[]
+  visibleRoleIds: string[] | null
+  /** 待发布版本来自员工提交（skill-creator-plan 4.4）：只能经“待审核”通过发布。 */
+  submissionDraft: boolean
   updatedAt: Date
 }
 
@@ -175,7 +178,8 @@ export class PostgresSkillService {
     return (await this.readSkillRows()).map(toSkillDefinition)
   }
 
-  async listWorkbenchSkills(): Promise<WorkbenchSkillDefinition[]> {
+  /** 员工在 Skill 广场可选用的 Skill：已发布、为安装根节点，且可见范围为全员或包含员工当前角色之一。 */
+  async listWorkbenchSkills(roleIds: string[]): Promise<WorkbenchSkillDefinition[]> {
     const rows = await this.database<WorkbenchSkillRow[]>`
       select s.id, sv.name, sv.version, sv.category, sv.description,
              owner.display_name as owner, sv.test_prompt as "testPrompt",
@@ -192,15 +196,17 @@ export class PostgresSkillService {
                 and installation.status = 'installed'
            )
          )
+         and ${this.visibleTo(roleIds)}
        order by s.updated_at desc, sv.name asc
     `
     return rows.map(row => ({ ...row, updatedAt: formatDateTime(row.updatedAt) }))
   }
 
-  async resolveWorkbenchSkillVersion(skillId: string) {
+  /** 会话选择 Skill：同 Skill 广场的口径；Skill 存在但不对员工当前角色可见时按无权限拒绝。 */
+  async resolveWorkbenchSkillVersion(skillId: string, roleIds: string[]) {
     assertSkillId(skillId)
-    const [row] = await this.database<{ id: string; skillId: string; version: string }[]>`
-      select sv.id, sv.skill_id as "skillId", sv.version
+    const [row] = await this.database<{ id: string; skillId: string; version: string; visible: boolean }[]>`
+      select sv.id, sv.skill_id as "skillId", sv.version, ${this.visibleTo(roleIds)} as visible
         from skills s
         join skill_versions sv on sv.tenant_id = s.tenant_id and sv.id = s.active_version_id
        where s.tenant_id = ${tenantId} and s.id = ${skillId}
@@ -215,7 +221,54 @@ export class PostgresSkillService {
          )
     `
     if (!row) throw skillNotFound('Skill 不存在、未发布或已停用')
+    if (!row.visible) throw authorizationDenied('当前用户角色不可使用所选 Skill')
     return { id: row.id, reference: `${row.skillId}@${row.version}` }
+  }
+
+  /**
+   * 管理员设置 Skill 可见范围（skill-creator-plan 4.5）：Skill 级配置，不随版本固定，立即作用于
+   * Skill 广场与之后的执行前复核。`roleIds` 为 null 表示全员；否则须为非空、现存且启用的角色。
+   * 只约束员工选用，Agent 固定引用不受限。
+   */
+  async setVisibleRoles(input: { skillId: string; roleIds: unknown; reason: unknown; actor: string }) {
+    const actor = await this.requireActor(input.actor)
+    assertSkillId(input.skillId)
+    const reason = typeof input.reason === 'string' ? input.reason.trim() : ''
+    if (!reason || reason.length > 500) throw skillInvalid('请填写 1～500 字的调整原因')
+    const roleIds = await this.normalizeVisibleRoles(input.roleIds)
+    const updated = await this.database<{ id: string }[]>`
+      update skills set visible_role_ids = ${roleIds ? this.database.json(roleIds) : null}, updated_at = now()
+       where tenant_id = ${tenantId} and id = ${input.skillId}
+       returning id
+    `
+    if (!updated.length) throw skillNotFound(`Skill 不存在：${input.skillId}`)
+    await this.audit(actor.id, 'skill.visibility.update', input.skillId, 'success',
+      `可见范围：${roleIds ? roleIds.join('、') : '全员'}；原因：${reason}`)
+    return this.requireSkill(input.skillId)
+  }
+
+  /** 可见角色：null 为全员；否则须为非空、现存且启用的角色 ID 列表。 */
+  async normalizeVisibleRoles(value: unknown): Promise<string[] | null> {
+    if (value === null) return null
+    if (!Array.isArray(value) || !value.length || value.some(role => typeof role !== 'string' || !role.trim())) {
+      throw skillInvalid('可见角色须为非空的角色 ID 列表；全员可见时传 null')
+    }
+    const roleIds = unique(value as string[])
+    const found = await this.database<{ id: string }[]>`
+      select id from roles where tenant_id = ${tenantId} and status = 'active' and id in ${this.database(roleIds)}
+    `
+    const missing = roleIds.filter(role => !found.some(row => row.id === role))
+    if (missing.length) throw skillInvalid(`角色不存在或已停用：${missing.join('、')}`)
+    return roleIds
+  }
+
+  /** SQL 条件：Skill（别名 s）对这些角色可见。空角色列表只能看到全员可见的 Skill。 */
+  private visibleTo(roleIds: string[]) {
+    if (!roleIds.length) return this.database`s.visible_role_ids is null`
+    return this.database`(s.visible_role_ids is null or exists (
+      select 1 from jsonb_array_elements_text(s.visible_role_ids) visible(role_id)
+       where visible.role_id in ${this.database(roleIds)}
+    ))`
   }
 
   async getSkillVersions(): Promise<SkillVersionRecord[]> {
@@ -628,7 +681,10 @@ export class PostgresSkillService {
       return { skill: await this.requireSkill(input.skillId), release }
     }
 
-    if (current.draftVersionId) return this.publishDraft(current, actor.id)
+    if (current.draftVersionId) {
+      if (current.submissionDraft) throw skillConflict('待发布版本来自员工提交，请在“待审核”中审核后发布', 'skill_submission_review_required')
+      return this.publishDraft(current, actor.id)
+    }
     if (!current.activeVersionId || current.persistedStatus !== 'disabled') {
       throw skillConflict('当前 Skill 没有可发布草稿，也不处于停用状态')
     }
@@ -855,10 +911,36 @@ export class PostgresSkillService {
     return selected
   }
 
-  private async publishDraft(current: SkillRow, actorId: string) {
+  /**
+   * 审核通过员工提交（skill-creator-plan 4.4）：沿用发布门禁，`apply` 在同一发布事务中、激活版本前执行，
+   * 用于锁定提交、写入可见范围与审核结论，避免先以全员可见发布再收窄。
+   */
+  async publishSubmissionDraft(input: {
+    skillId: string
+    skillVersionId: string
+    actor: string
+    /** 发布事务开始时、锁定 Skill 之前执行，用于先锁定提交，与撤回、拒绝的加锁顺序一致。 */
+    lock: (transaction: DatabaseTransaction) => Promise<void>
+    apply: (transaction: DatabaseTransaction, actorId: string) => Promise<void>
+  }) {
+    const actor = await this.requireActor(input.actor)
+    const [current] = await this.readSkillRows(input.skillId)
+    if (!current || current.draftVersionId !== input.skillVersionId || !current.submissionDraft) {
+      throw skillConflict('提交的待发布版本已变化，请刷新后重试', 'skill_test_snapshot_changed')
+    }
+    return this.publishDraft(current, actor.id, { lock: input.lock, apply: input.apply, note: '员工提交审核通过，严格试运行通过，发布当前 Skill 版本。' })
+  }
+
+  private async publishDraft(current: SkillRow, actorId: string,
+    submission?: {
+      lock: (transaction: DatabaseTransaction) => Promise<void>
+      apply: (transaction: DatabaseTransaction, actorId: string) => Promise<void>
+      note: string
+    }) {
     const dependencyTools = current.draftVersionId ? await this.readDependencyToolReferences(current.draftVersionId) : []
     assertSkillToolReferences([...current.toolIds, ...dependencyTools])
     const release = await this.database.begin(async transaction => {
+      if (submission) await submission.lock(transaction)
       const [locked] = await transaction<LockedSkillDraft[]>`
         select s.id, sv.id as "versionId", sv.name, sv.category, sv.description,
                sv.instructions, sv.tool_refs as "toolIds", sv.test_prompt as "testPrompt",
@@ -935,6 +1017,8 @@ export class PostgresSkillService {
           runtimeFingerprint: runtimeSkillFingerprint(runtimeSkill) }, binding)
       }
 
+      if (submission) await submission.apply(transaction, actorId)
+
       const dependencyVersions = await transaction<{ versionId: string; skillId: string }[]>`
         with recursive dependency_graph as (
           select d.dependency_skill_version_id as version_id
@@ -972,7 +1056,7 @@ export class PostgresSkillService {
          returning id
       `
       if (!activated.length) throw skillConflict('Skill 草稿指针已发生变化，请刷新后重试')
-      return this.appendRelease(transaction, locked.versionId, current.id, 'published', actorId, '服务端配置测试通过，发布当前 Skill 版本。')
+      return this.appendRelease(transaction, locked.versionId, current.id, 'published', actorId, submission?.note ?? '服务端配置测试通过，发布当前 Skill 版本。')
     })
     await this.audit(actorId, 'skill.publish', current.id, 'success', release.note)
     return { skill: await this.requireSkill(current.id), release }
@@ -1017,13 +1101,18 @@ export class PostgresSkillService {
                   and installation.status = 'installed'
              ) as "isInstallationRoot",
              (sv.manifest ? 'installationId') as "strictTest", sv.test_prompt as "testPrompt",
-             s.covered_builtin_scenarios as "coveredBuiltinScenarios", s.updated_at as "updatedAt"
+             s.covered_builtin_scenarios as "coveredBuiltinScenarios", s.visible_role_ids as "visibleRoleIds",
+             (sv.id = s.draft_version_id and sv.manifest ? 'submissionVersionId') as "submissionDraft",
+             s.updated_at as "updatedAt"
         from skills s
         join users owner on owner.tenant_id = s.tenant_id and owner.id = s.owner_user_id
         join skill_versions sv on sv.tenant_id = s.tenant_id
          and sv.id = coalesce(s.draft_version_id, s.active_version_id)
         left join skill_versions active on active.tenant_id = s.tenant_id and active.id = s.active_version_id
-       where s.tenant_id = ${tenantId} ${skillId ? this.database`and s.id = ${skillId}` : this.database``}
+       where s.tenant_id = ${tenantId} ${skillId ? this.database`and s.id = ${skillId}` : this.database`
+         and not (s.active_version_id is null and exists (
+           select 1 from skill_submissions submission where submission.tenant_id = s.tenant_id and submission.skill_id = s.id
+         ))`}
        order by s.updated_at desc
     `
     for (const row of rows) if (row.artifact) row.instructions = (await this.requireArtifactStore().read(row.artifact)).instructions
@@ -1050,6 +1139,11 @@ export class PostgresSkillService {
   private requireArtifactStore() {
     if (!this.artifactStore) throw skillUnavailable('Skill 文件夹存储未配置')
     return this.artifactStore
+  }
+
+  /** 平台管理员（管理写权限）校验，供审核员工提交复用同一口径。 */
+  requirePlatformAdmin(userId: string) {
+    return this.requireActor(userId)
   }
 
   private async requireActor(userId: string) {
@@ -1137,6 +1231,8 @@ function toSkillDefinition(row: SkillRow): SkillDefinition {
     ...(row.dependencies?.length ? { dependencies: row.dependencies } : {}),
     testPrompt: row.testPrompt,
     coveredBuiltinScenarios: row.coveredBuiltinScenarios,
+    visibleRoleIds: row.visibleRoleIds,
+    ...(row.submissionDraft ? { submissionDraft: true } : {}),
     updatedAt: formatDateTime(row.updatedAt),
   }
 }

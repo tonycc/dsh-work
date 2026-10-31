@@ -32,7 +32,7 @@ export interface ExecutionToolCheckPort {
 
 type AuthorizationPort = Pick<PostgresAuthorizationService,
   'workspaceTypeOf' | 'authorizeRuntime' | 'authorizeTeamRunExecution' | 'requireAdminReader' | 'requirePlatformAdmin' | 'requireActiveAgentPrincipal' | 'assertAgentPrincipalSnapshot'>
-  & Partial<Pick<PostgresAuthorizationService, 'assertAgentRoutineRun'>>
+  & Partial<Pick<PostgresAuthorizationService, 'assertAgentRoutineRun' | 'sessionSelectedSkillReference'>>
 
 /** All checks use live grants and pinned versions. This never rewrites the Manifest. */
 export async function assertCurrentExecutionAuthorization(
@@ -72,11 +72,17 @@ export async function assertCurrentExecutionAuthorization(
     }
     const type = await authorization.workspaceTypeOf(manifest.workspace_id)
     if (type === null) throw authorizationDenied('工作空间不存在或已归档')
+    // Manifest 不区分员工选择的 Skill 与 Agent 固定引用；按会话记录取选择的根 Skill 复核可见范围。
+    if (manifest.session_id && !authorization.sessionSelectedSkillReference) throw new AuthorizationCheckUnavailableError()
+    const selectedSkillReference = manifest.session_id
+      ? await authorization.sessionSelectedSkillReference!(manifest.session_id)
+      : null
     const input = {
       userId: manifest.user_context.user_id,
       workspaceId: manifest.workspace_id,
       agentVersionId: manifest.agent_version_id,
       additionalSkillReferences: installedSkillReferences(manifest.skills),
+      selectedSkillReference,
     }
     const current = type === 'team'
       ? await authorization.authorizeTeamRunExecution(input)

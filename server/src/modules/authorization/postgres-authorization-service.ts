@@ -178,6 +178,8 @@ export class PostgresAuthorizationService {
     roleIds?: string[]
     dataScopes?: string[]
     additionalSkillReferences?: string[]
+    /** 员工在会话中选择的根 Skill（`id@version`）：按员工当前角色复核 Skill 可见范围。 */
+    selectedSkillReference?: string | null
     /**
      * 自动任务与主动任务的授权上限：与当前授权求交后生效。交集后的角色与数据
      * 范围同时参与可见性、必需 Scope、工具授权检查，并写入返回的
@@ -300,6 +302,7 @@ export class PostgresAuthorizationService {
     roleIds?: string[]
     dataScopes?: string[]
     additionalSkillReferences?: string[]
+    selectedSkillReference?: string | null
     scopeCeiling?: RuntimeScopeCeiling
   }): Promise<RuntimeAuthorizationDecision> {
     const workspaceId = normalizeWorkspaceId(input.workspaceId)
@@ -337,6 +340,11 @@ export class PostgresAuthorizationService {
       // 因此此前经 HTTP 暴露会落 500 operation_failed——那是误分类。现改为类型化 403。
       throw authorizationDenied('当前用户角色不可使用所选 Agent')
     }
+    // Skill 可见范围同样属于发起的人：只复核员工选择的根 Skill，按其本人当前角色（团队空间里
+    // audienceRoleIds 是 Agent 角色，不能用）。Agent 固定引用与依赖 Skill 不受可见范围限制。
+    if (input.selectedSkillReference) {
+      await this.assertSelectedSkillVisible(input.selectedSkillReference, context.roleIds)
+    }
     // Data collections enforce the scopes they actually require; built-in tools only touch
     // the Run workspace and are not role-gated.
     if (workspaceId && context.workspaceType === 'team') {
@@ -373,6 +381,7 @@ export class PostgresAuthorizationService {
     roleIds?: string[]
     dataScopes?: string[]
     additionalSkillReferences?: string[]
+    selectedSkillReference?: string | null
     scopeCeiling?: RuntimeScopeCeiling
     /** AG-03：自动任务必须显式绑定该空间的 Agent 成员；历史交互会话保留无成员行的兼容路径。 */
     requireAgentMember?: boolean
@@ -618,6 +627,28 @@ export class PostgresAuthorizationService {
    * the loaded agent version and the resolved skill versions so callers can
    * build capability grant sources without duplicating the resolution logic.
    */
+  /** 执行前复核用：会话创建时选择的根 Skill（创建后不再改变）；没有选择时为 null。 */
+  async sessionSelectedSkillReference(sessionId: string): Promise<string | null> {
+    const [row] = await this.database<{ reference: string | null }[]>`
+      select sv.skill_id || '@' || sv.version as reference
+        from sessions s
+        join skill_versions sv on sv.tenant_id = s.tenant_id and sv.id = s.selected_skill_version_id
+       where s.tenant_id = ${tenantId} and s.id = ${sessionId}
+    `
+    return row?.reference ?? null
+  }
+
+  private async assertSelectedSkillVisible(reference: string, roleIds: string[]): Promise<void> {
+    const { id } = parseReference(reference, 'Skill ')
+    const [row] = await this.database<{ visibleRoleIds: string[] | null }[]>`
+      select visible_role_ids as "visibleRoleIds" from skills where tenant_id = ${tenantId} and id = ${id}
+    `
+    if (!row) throw authorizationDenied(`所选 Skill 不存在：${id}`)
+    if (row.visibleRoleIds && !intersects(roleIds, row.visibleRoleIds)) {
+      throw authorizationDenied('当前用户角色不可使用所选 Skill')
+    }
+  }
+
   async assertAgentDependencyClosure(
     agentVersionId: string,
     additionalSkillReferences: string[] = [],

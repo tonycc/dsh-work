@@ -120,11 +120,12 @@ flowchart LR
 
 | 表 | 作用 | 关键不变量 |
 | --- | --- | --- |
-| `skills`、`skill_versions` | Skill 与其版本 | 已发布版本不可修改（触发器）；文件夹正文经存储端口按内容寻址保存，数据库只存引用与文件索引；`skills.covered_builtin_scenarios` 是管理员设置的“覆盖内置场景”（Skill 级，不随版本固定）。平台内置 Skill 随代码发布，不在这两张表中 |
+| `skills`、`skill_versions` | Skill 与其版本 | 已发布版本不可修改（触发器）；文件夹正文经存储端口按内容寻址保存，数据库只存引用与文件索引；`skills.covered_builtin_scenarios` 是管理员设置的“覆盖内置场景”（Skill 级，不随版本固定）；`skills.visible_role_ids` 是 Skill 可见范围（迁移 `0107`，null 为全员，否则为非空角色 ID 数组，同样不随版本固定）。平台内置 Skill 随代码发布，不在这两张表中 |
 | `skill_version_dependencies` | Skill 依赖 | 依赖精确版本，不能依赖自身；Skill 声明的内置工具（`tool_refs`）须在注册表中且引用它的 Agent 可装配 |
 | `skill_installations` | 管理端安装计划 | 每次安装 Run 一条；完成时必须指向已保存的版本 |
 | `skill_test_bindings` | 严格试运行与精确 Attempt 的绑定 | 不可修改（触发器）；绑定配置与 Runtime 指纹 |
 | `skill_runtime_activations`、`skill_python_executions` | Attempt 内的 Skill 激活与 Python 执行记录 | 作为试运行证据，按 Attempt 隔离 |
+| `skill_submissions`、`skill_submission_versions` | 员工 Skill 提交与其不可变版本（Skill 创建专家方案，迁移 `0108`） | 提交归属提交员工，来源字段第一期只有“对话创建”（`conversation`，须带会话）；同一会话同名草稿归为一个提交（部分唯一索引）。状态 draft / pending / approved / rejected；`skill_id` 指向审核试运行时存下的 Skill（通过前不进入 Skill 列表、`installation_key` 为空，通过时写入），`reviewed_version_id` 为审核结论针对的版本（迁移 `0109`）。版本的 `skill_version_id` 为管理员开始试运行时存下的 Skill 待发布版本（一对一；`skill_installations.channel` 新增 `submission`）。版本只保存 Skill 文件夹引用与文件索引（`artifact`）、包摘要、兼容性与脚本数，并记录保存它的 Run 与 Attempt，会话详情据此挂草稿卡片。`agent_versions.skill_creation_enabled` 为“可创建 Skill”开关 |
 | `agent_recommendations` | Attempt 内推荐的 AI 同事（推荐 AI 同事方案） | 关联 Run、Attempt、发起员工与被推荐的 Agent；只保存位置、限长的推荐理由与可选的“发给该同事的问题”（`suggested_prompt`，用于预填），名称与说明读取时取当前启用版本；会话详情只显示各 Run 当前 Attempt 的记录，同一 Attempt 再次推荐整组替换 |
 | `skill_release_records` | 发布、启用、停用、回滚记录 | 只追加 |
 | `skill_test_runs` | 早期的测试记录 | 只保留历史 |
