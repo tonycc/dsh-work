@@ -367,6 +367,8 @@
 }
 
 .run-progress {
+  /* 作为读屏播报区的定位祖先：否则它以文档为包含块、逃出对话滚动区，执行期间把整页撑高。 */
+  position: relative;
   margin: 10px 0 0 34px;
 }
 
@@ -481,6 +483,8 @@
 
 .run-progress-sr {
   position: absolute;
+  top: 0;
+  left: 0;
   width: 1px;
   height: 1px;
   overflow: hidden;
