@@ -8,6 +8,7 @@ import { registerModelGovernanceRoutes } from '../../http/admin/model-routes.ts'
 import { registerSkillInstallationRoutes } from '../../http/admin/skill-installation-routes.ts'
 import { registerUserPreferenceRoutes } from '../../http/workbench/preference-routes.ts'
 import { registerConversationTargetRoutes } from '../../http/workbench/conversation-target-routes.ts'
+import { registerUserNotificationRoutes } from '../../http/workbench/user-notification-routes.ts'
 import { registerWorkspaceTimelineRoutes } from '../../http/workbench/workspace-timeline-routes.ts'
 import { Router, envelope } from '../../http/router.ts'
 import { MemoryModelGovernanceRepository } from '../../modules/model/memory-model-governance-repository.ts'
@@ -16,6 +17,7 @@ import { testApiAuthenticator } from '../test-identity.ts'
 import { AdminQueryService } from './admin-query-service.ts'
 import { MemoryUserPreferenceStore } from './memory-user-preferences.ts'
 import { MemoryConversationTargetStore } from './memory-conversation-targets.ts'
+import { MemoryUserNotificationStore } from './memory-user-notifications.ts'
 import { MemoryWorkspaceTimeline } from './memory-workspace-timeline.ts'
 import { registerAdminRoutes } from './admin-routes.ts'
 import { registerSmokeProjectRoutes } from './project-routes.ts'
@@ -41,6 +43,7 @@ export function createSmokeRouter() {
   registerSmokeProjectRoutes(router)
   registerUserPreferenceRoutes(router, new MemoryUserPreferenceStore(), 'prototype-memory')
   registerConversationTargetRoutes(router, new MemoryConversationTargetStore(repository), undefined, 'prototype-memory')
+  registerUserNotificationRoutes(router, new MemoryUserNotificationStore(), undefined, 'prototype-memory')
   // 冒烟只有一个测试身份：授权直接通过，成员与归档口径由 PostgreSQL 集成测试覆盖。
   registerWorkspaceTimelineRoutes(router, new MemoryWorkspaceTimeline(repository), { authorizeWorkbench: async () => undefined as never }, 'prototype-memory')
   registerAdminRoutes(router, new AdminQueryService(repository))

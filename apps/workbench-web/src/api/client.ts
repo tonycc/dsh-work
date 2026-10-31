@@ -24,6 +24,7 @@ import type {
   ConversationLocation,
   ConversationTarget,
   MentionSummary,
+  UserNotification,
   WorkspaceTimelineItem,
   UserPreferences,
   WorkbenchAgent,
@@ -191,6 +192,16 @@ export const workbenchApi = {
       method: 'POST',
       body: JSON.stringify({ workspaceId, ...(sessionId ? { sessionId } : {}) }),
     }),
+  /** 站内通知（方案 NC-S1）：本人的通知分页，`status=unread` 只含计入未读的通知。 */
+  listNotifications: (query: { status?: 'all' | 'unread'; cursor?: string; limit?: number } = {}) => {
+    const params = new URLSearchParams()
+    for (const [key, value] of Object.entries(query)) if (value !== undefined && value !== '') params.set(key, String(value))
+    return request<{ items: UserNotification[]; nextCursor: string | null }>(`/me/notifications?${params}`)
+  },
+  getNotificationUnreadCount: () => request<{ unread: number }>('/me/notifications/unread-count'),
+  markNotificationRead: (notificationId: string) =>
+    request<{ id: string; read: true }>(`/me/notifications/${encodeURIComponent(notificationId)}/read`, { method: 'POST' }),
+  markAllNotificationsRead: () => request<{ read: number }>('/me/notifications/read-all', { method: 'POST' }),
   resolveConversation: (conversationId: string) =>
     request<ConversationLocation>(`/me/conversation-targets/resolve?conversation=${encodeURIComponent(conversationId)}`),
   getTasks: () => request<TaskRun[]>('/tasks'),

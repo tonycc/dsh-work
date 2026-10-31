@@ -50,6 +50,8 @@ import { registerWorkspaceLifecycleRoutes } from '../../http/workbench/workspace
 import { registerWorkspaceActivityRoutes } from '../../http/workbench/workspace-activity-routes.ts'
 import { registerWorkspaceUsageRoutes } from '../../http/workbench/workspace-usage-routes.ts'
 import { registerSkillSubmissionRoutes } from '../../http/workbench/skill-submission-routes.ts'
+import { registerUserNotificationRoutes } from '../../http/workbench/user-notification-routes.ts'
+import { PostgresUserNotificationService } from '../../modules/workbench/application/postgres-user-notification-service.ts'
 import { SkillSubmissionService } from '../../modules/skill/skill-submission-service.ts'
 import { SkillArtifactStore } from '../../modules/skill/skill-artifact-store.ts'
 import { PostgresSkillService } from '../../modules/skill/postgres-skill-service.ts'
@@ -122,6 +124,8 @@ export async function personalWorkbenchFixture(prefix: string, options: {
   registerConversationRoutes(router, conversations, orchestration, runs, agents, auth)
   registerContentRoutes(router, content, auth)
   registerSkillSubmissionRoutes(router, skillSubmissions)
+  // 站内通知（NC-S1/S2）：两种模式的铃铛都会请求，与 main.ts 一致挂上。
+  registerUserNotificationRoutes(router, new PostgresUserNotificationService(db.client), auth)
   let projectResources: {
     projectArchive: PostgresProjectArchiveService
     workspaceAgentMembers: PostgresWorkspaceAgentMemberService

@@ -1120,6 +1120,19 @@ export interface PersonalFileQuery {
 }
 
 /** D38：本人未读 @ 提醒，按项目空间与讨论汇总。 */
+/** 站内通知（方案 NC-S1）：与本人相关的事件；`visible` 为 false 时名称与跳转目标均为 null。 */
+export interface UserNotification {
+  id: string
+  kind: 'mention' | 'task_assigned' | 'task_completed' | 'workspace_member_added'
+  createdAt: string
+  read: boolean
+  visible: boolean
+  actor: { id: string; name: string } | null
+  workspace: { id: string; name: string } | null
+  objectName: string | null
+  target: { type: 'message' | 'project_task' | 'workspace'; id: string; sessionId: string | null } | null
+}
+
 export interface MentionSummary {
   workspaceId: string
   sessionId: string

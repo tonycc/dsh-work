@@ -124,6 +124,45 @@ test('MODE-E2E-03: collaboration shell has four entries and an avatar menu for s
   }
 })
 
+test('NC-03: the rail bell above the avatar opens notifications and a mention opens the group', async ({ page }) => {
+  await switchToCollab(page)
+  await expect(page.getByRole('navigation', { name: '协作模式主导航' }).getByRole('button')).toHaveCount(4)
+  const bell = page.getByRole('button', { name: '通知，2 条未读' })
+  const avatar = page.getByRole('button', { name: '打开用户菜单' })
+  const [bellBox, avatarBox] = [await bell.boundingBox(), await avatar.boundingBox()]
+  expect((bellBox?.y ?? 0) + (bellBox?.height ?? 0)).toBeLessThanOrEqual(avatarBox?.y ?? 0)
+
+  await bell.click()
+  const panel = page.getByRole('dialog', { name: '通知' })
+  await panel.getByRole('button', { name: /中 @ 了你/ }).click()
+  await expect(panel).toBeHidden()
+  await expect(page).toHaveURL(/\/c\/chats\/group\/ws-supply$/)
+  await expect(page.getByRole('button', { name: '通知，1 条未读' })).toBeVisible()
+
+  // 被加入项目进入群组；任务通知打开群组内的任务详情（A 地址经路由守卫映射）。
+  await page.getByRole('button', { name: '通知，1 条未读' }).click()
+  await panel.getByRole('button', { name: /把你加入了项目/ }).click()
+  await expect(page).toHaveURL(/\/c\/chats\/group\/ws-supply$/)
+  await page.getByRole('button', { name: '通知', exact: true }).click()
+  await panel.getByRole('button', { name: /指派给你/ }).click()
+  await expect(page).toHaveURL(/\/c\/chats\/group\/ws-supply\/tasks\/ptask-smoke-notification$/)
+})
+
+test('NC-03: on narrow screens the bell sits next to the avatar in the top bar', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 760 })
+  await switchToCollab(page, { narrow: true })
+  const bell = page.getByRole('button', { name: '通知，2 条未读' })
+  const avatar = page.getByRole('button', { name: '打开用户菜单' })
+  const [bellBox, avatarBox] = [await bell.boundingBox(), await avatar.boundingBox()]
+  expect(bellBox?.y ?? 99).toBeLessThan(52)
+  expect((bellBox?.x ?? 0) + (bellBox?.width ?? 0)).toBeLessThanOrEqual(avatarBox?.x ?? 0)
+  await bell.click()
+  const panel = page.getByRole('dialog', { name: '通知' })
+  expect((await panel.boundingBox())?.width ?? 0).toBeGreaterThanOrEqual(370)
+  await panel.getByRole('button', { name: '关闭通知' }).click()
+  await expect(panel).toBeHidden()
+})
+
 test('SKC-04: in collaboration mode the Skill plaza opens a direct chat with the Skill creator', async ({ page }) => {
   await enableSkillCreator(page)
   await switchToCollab(page)
