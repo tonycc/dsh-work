@@ -12,6 +12,7 @@ import type { PostgresSkillService, SkillTestRunProgress } from './postgres-skil
 import type { SkillCompatibility, SkillPackageArtifact } from './skill-package.ts'
 import type { SkillArtifactStore } from './skill-artifact-store.ts'
 import { skillConflict, skillInvalid } from './skill-errors.ts'
+import { recordUserNotification } from '../notification/user-notification-writer.ts'
 import { DEFAULT_SKILL_TEST_PROMPT, installationKey, lockInstallationKey, nextInstalledVersion } from './skill-identity.ts'
 
 const tenantId = 'tenant-dsh-work'
@@ -133,6 +134,7 @@ export class SkillSubmissionReviewService {
     if (!row.skillId || !row.skillVersionId) throw skillConflict('这个提交还没有通过严格试运行，不能发布', 'skill_test_required')
     const skillVersionId = row.skillVersionId
     let lockedName = ''
+    let submitterUserId = ''
     // 员工撤回后原样再次提交时，待发布版本指针已释放：先指回已存的版本，沿用其试运行证据。
     await this.database.begin(async transaction => {
       const submission = await lockPending(transaction, submissionId, versionId)
@@ -148,6 +150,7 @@ export class SkillSubmissionReviewService {
         const submission = await lockPending(transaction, submissionId, versionId)
         if (submission.skillVersionId !== skillVersionId) throw stateConflict('提交的版本已变化，请刷新后重新审核')
         lockedName = submission.name
+        submitterUserId = submission.submitterUserId
         await lockInstallationKey(transaction, tenantId, installationKey(submission.name))
       },
       apply: async transaction => {
@@ -167,6 +170,7 @@ export class SkillSubmissionReviewService {
                  review_note = null, updated_at = now()
            where tenant_id = ${tenantId} and id = ${submissionId}
         `
+        await notifyReviewResult(transaction, { submissionId, versionId, submitterUserId, reviewerId: actor.id, result: 'approved' })
       },
     })
     await this.audit?.appendAudit(actor.id, 'skill.submission.approve', submissionId, 'success', `trace-skill-${randomUUID()}`,
@@ -192,6 +196,9 @@ export class SkillSubmissionReviewService {
                review_note = ${note}, updated_at = now()
          where tenant_id = ${tenantId} and id = ${submissionId}
       `
+      await notifyReviewResult(transaction, {
+        submissionId, versionId, submitterUserId: submission.submitterUserId, reviewerId: actor.id, result: 'rejected',
+      })
     })
     await this.audit?.appendAudit(actor.id, 'skill.submission.reject', submissionId, 'success', `trace-skill-${randomUUID()}`,
       `拒绝原因：${note}`, 'skill_submission')
@@ -405,3 +412,17 @@ function toItem(row: ReviewRow): SkillSubmissionReviewItem {
   }
 }
 
+
+/**
+ * 审核结论通知提交人（站内通知 NC-S3），与审核同一事务。只带结论代码，不带拒绝原因
+ * （原因在草稿卡片上）；跳转所需的对话由读取时从提交记录解析。管理员审核自己的提交不通知。
+ */
+async function notifyReviewResult(transaction: DatabaseTransaction, input: {
+  submissionId: string; versionId: string; submitterUserId: string; reviewerId: string; result: 'approved' | 'rejected'
+}) {
+  await recordUserNotification(transaction, {
+    recipientUserId: input.submitterUserId, kind: 'skill_review_result', workspaceId: null,
+    objectType: 'skill_submission', objectId: input.submissionId, actorUserId: input.reviewerId,
+    dedupeKey: `skill_review:${input.submissionId}:${input.versionId}`, metadata: { result: input.result },
+  })
+}

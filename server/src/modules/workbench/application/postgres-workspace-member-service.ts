@@ -9,7 +9,7 @@ import {
   currentTeamAuthRevision,
   recordWorkspaceActivity,
 } from './workspace-activity-writer.ts'
-import { recordUserNotification } from './user-notification-writer.ts'
+import { recordUserNotification } from '../../notification/user-notification-writer.ts'
 import { RequestError, invalidRequest } from '../../../domain/request-errors.ts'
 
 const tenantId = 'tenant-dsh-work'

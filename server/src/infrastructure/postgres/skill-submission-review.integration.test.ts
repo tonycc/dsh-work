@@ -228,6 +228,8 @@ test('待审核列表与详情：未试运行不能发布；试运行通过后�
   const [audit] = await database<{ count: number }[]>`
     select count(*)::integer as count from audit_events where tenant_id = ${tenantId} and action = 'skill.submission.approve' and object_id = ${submitted.submissionId}`
   assert.equal(audit?.count, 1)
+  // NC-04：审核结论通知提交人，跳转到提交时的对话。
+  assert.deepEqual(await reviewNotifications(submitted.submissionId), [{ recipient: EMPLOYEE, result: 'approved', actor: ADMIN }])
 })
 
 test('拒绝必须填写原因；只能审核管理员看到的版本；卡片显示拒绝原因并释放待发布版本', async () => {
@@ -240,6 +242,11 @@ test('拒绝必须填写原因；只能审核管理员看到的版本；卡片�
   const rejectedCard = await card(submitted.runId)
   assert.equal(rejectedCard.status, 'rejected')
   assert.equal(rejectedCard.reviewNote, '请写清每个区域的数据来源。')
+  // NC-04：拒绝也通知提交人；通知只带结论代码，拒绝原因留在草稿卡片上。
+  assert.deepEqual(await reviewNotifications(submitted.submissionId), [{ recipient: EMPLOYEE, result: 'rejected', actor: ADMIN }])
+  const [stored] = await database<{ metadata: string }[]>`
+    select safe_metadata::text as metadata from user_notifications where tenant_id = ${tenantId} and object_id = ${submitted.submissionId}`
+  assert.equal(stored?.metadata.includes('数据来源'), false)
   const [skill] = await database<{ draft: string | null }[]>`
     select draft_version_id as draft from skills where tenant_id = ${tenantId} and id = ${rejected.trial.skillId ?? ''}`
   assert.equal(skill?.draft ?? null, null)
@@ -349,3 +356,13 @@ test('草稿重名检查与安装同一规范化：忽略大小写与首尾空�
   const { manifest } = await runFor(await publishedAgent(true))
   await assert.rejects(submissions.saveDraft(manifest, { directory: 'drafts/weekly' }, await workspaceWith('weekly summary')), /已有同名 Skill/)
 })
+
+/** 站内通知 NC-S3：某个提交的审核结论通知。 */
+async function reviewNotifications(submissionId: string) {
+  const rows = await database<{ recipient: string; result: string; actor: string | null }[]>`
+    select recipient_user_id as recipient, safe_metadata ->> 'result' as result, actor_user_id as actor
+      from user_notifications
+     where tenant_id = ${tenantId} and kind = 'skill_review_result' and object_id = ${submissionId}
+     order by created_at`
+  return rows.map(row => ({ recipient: row.recipient, result: row.result, actor: row.actor }))
+}

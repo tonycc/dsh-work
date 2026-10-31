@@ -337,6 +337,9 @@ onBeforeUnmount(() => {
 .notification-item__glyph--task_assigned,
 .notification-item__glyph--task_completed { color: #16825d; background: #eaf8f2; }
 .notification-item__glyph--workspace_member_added { color: #344054; background: #eef0f3; }
+.notification-item__glyph--task_schedule_stopped,
+.notification-item__glyph--automation_failed { color: var(--dsh-color-warning); background: var(--dsh-color-warning-soft); }
+.notification-item__glyph--skill_review_result { color: #5b3fc4; background: #f1edff; }
 .notification-item__glyph--hidden { color: #6b6c68; background: #f2f2f0; }
 .notification-item__copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 4px; }
 .notification-item__text { font-size: var(--dsh-font-size-body); line-height: 1.5; overflow-wrap: anywhere; }

@@ -26,17 +26,17 @@ const supply = { id: 'ws-supply', name: '供应链经营分析' }
 const notifications: UserNotification[] = [
   {
     id: 'n-mention', kind: 'mention', createdAt: new Date().toISOString(), read: false, visible: true,
-    actor: { id: 'U2', name: '周敏' }, workspace: supply, objectName: null,
+    actor: { id: 'U2', name: '周敏' }, workspace: supply, objectName: null, detail: null,
     target: { type: 'message', id: 'msg-1', sessionId: 'session-1' },
   },
   {
     id: 'n-task', kind: 'task_assigned', createdAt: new Date().toISOString(), read: true, visible: true,
-    actor: { id: 'U2', name: '周敏' }, workspace: supply, objectName: '核对库存',
+    actor: { id: 'U2', name: '周敏' }, workspace: supply, objectName: '核对库存', detail: null,
     target: { type: 'project_task', id: 'ptask-1', sessionId: null },
   },
   {
     id: 'n-hidden', kind: 'task_completed', createdAt: new Date().toISOString(), read: true, visible: false,
-    actor: null, workspace: null, objectName: null, target: null,
+    actor: null, workspace: null, objectName: null, detail: null, target: null,
   },
 ]
 

@@ -1,7 +1,7 @@
 import type { DatabaseTransaction } from '../../../infrastructure/postgres/database.ts'
 import { bumpTeamAuthRevision } from '../../authorization/postgres-workspace-grant-source-service.ts'
 import { recordWorkspaceActivity } from './workspace-activity-writer.ts'
-import { recordUserNotification } from './user-notification-writer.ts'
+import { recordUserNotification } from '../../notification/user-notification-writer.ts'
 
 const tenantId = 'tenant-dsh-work'
 

@@ -373,7 +373,7 @@
       "get": {
         "operationId": "listMyNotifications",
         "summary": "本人的站内通知",
-        "description": "站内通知方案 NC-S1：与本人相关的事件（@ 我、任务指派给我、我创建的任务完成、被加入项目），按时间倒序，只含最近 90 天。每条读取时按本人当前权限重新判断：不可见时 visible=false，且不返回名称与跳转目标。",
+        "description": "站内通知方案 NC-S1：与本人相关的事件（@ 我、任务指派给我、我创建的任务完成、被加入项目、定时执行暂停或停止、定时任务没成功、Skill 审核结论），按时间倒序，只含最近 90 天。每条读取时按本人当前权限重新判断：不可见时 visible=false，且不返回名称与跳转目标。",
         "parameters": [
           { "name": "status", "in": "query", "required": false, "schema": { "type": "string", "enum": ["all", "unread"], "default": "all" } },
           { "name": "cursor", "in": "query", "required": false, "schema": { "type": "string" } },
@@ -4331,17 +4331,18 @@
       },
       "UserNotification": {
         "type": "object",
-        "required": ["id", "kind", "createdAt", "read", "visible", "actor", "workspace", "objectName", "target"],
+        "required": ["id", "kind", "createdAt", "read", "visible", "actor", "workspace", "objectName", "detail", "target"],
         "properties": {
           "id": { "type": "string" },
-          "kind": { "type": "string", "enum": ["mention", "task_assigned", "task_completed", "workspace_member_added"] },
+          "kind": { "type": "string", "enum": ["mention", "task_assigned", "task_completed", "workspace_member_added", "task_schedule_stopped", "automation_failed", "skill_review_result"] },
           "createdAt": { "type": "string", "format": "date-time" },
           "read": { "type": "boolean" },
           "visible": { "type": "boolean", "description": "本人当前是否仍能看到对应内容；为 false 时以下名称与跳转目标均为 null。" },
           "actor": { "type": ["object", "null"], "required": ["id", "name"], "properties": { "id": { "type": "string" }, "name": { "type": "string" } } },
           "workspace": { "type": ["object", "null"], "required": ["id", "name"], "properties": { "id": { "type": "string" }, "name": { "type": "string" } } },
-          "objectName": { "type": ["string", "null"], "description": "任务标题；@ 我与被加入项目为 null。" },
-          "target": { "type": ["object", "null"], "required": ["type", "id", "sessionId"], "properties": { "type": { "type": "string", "enum": ["message", "project_task", "workspace"] }, "id": { "type": "string" }, "sessionId": { "type": ["string", "null"], "description": "@ 我所在的会话。" } } }
+          "objectName": { "type": ["string", "null"], "description": "任务标题、定时任务名称或提交的 Skill 名称；@ 我与被加入项目为 null。" },
+          "detail": { "type": ["object", "null"], "additionalProperties": { "type": "string" }, "description": "事件代码（NC-S3）：定时执行的 state（paused/stopped）与 reason、定时任务的 outcome（failed/skipped/missed/interrupted）、Skill 审核的 result（approved/rejected）；不含拒绝原因等正文。" },
+          "target": { "type": ["object", "null"], "required": ["type", "id", "sessionId"], "properties": { "type": { "type": "string", "enum": ["message", "project_task", "workspace", "automation", "skill_submission"] }, "id": { "type": "string" }, "sessionId": { "type": ["string", "null"], "description": "@ 我所在的会话、定时任务这次执行的会话或提交 Skill 的会话。" } } }
         }
       },
       "ConversationMessagePreview": {

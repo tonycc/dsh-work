@@ -10,7 +10,7 @@ import { workspaceStateConflict } from './workspace-state-conflict-error.ts'
 import { artifactTextPreviewColumns, withTextPreview, type ArtifactTextPreviewState } from './artifact-text-preview.ts'
 import { stateConflict } from '../../../domain/request-errors.ts'
 import type { ContextMessage, MessagePosition, StoredConversationSummary } from '../../../domain/conversation-context.ts'
-import { recordMentionNotifications } from './user-notification-writer.ts'
+import { recordMentionNotifications } from '../../notification/user-notification-writer.ts'
 
 const tenantId = 'tenant-dsh-work'
 const conversationHistoryMessageLimit = 12

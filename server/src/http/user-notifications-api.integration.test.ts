@@ -19,7 +19,7 @@ import { PostgresContentService } from '../modules/workbench/application/postgre
 import { PostgresConversationRepository } from '../modules/workbench/application/postgres-conversation-repository.ts'
 import { PostgresConversationTargetService } from '../modules/workbench/application/postgres-conversation-target-service.ts'
 import { PostgresProjectArchiveService } from '../modules/workbench/application/postgres-project-archive-service.ts'
-import { PostgresProjectService } from '../modules/workbench/application/postgres-project-service.ts'
+import { PostgresProjectService, SCHEDULE_FAILURE_LIMIT } from '../modules/workbench/application/postgres-project-service.ts'
 import { PostgresUserNotificationService } from '../modules/workbench/application/postgres-user-notification-service.ts'
 import { PostgresWorkspaceActivityService } from '../modules/workbench/application/postgres-workspace-activity-service.ts'
 import { PostgresWorkspaceAgentMemberService } from '../modules/workbench/application/postgres-workspace-agent-member-service.ts'
@@ -35,6 +35,7 @@ import { registerProjectRoutes } from './workbench/project-routes.ts'
 import { registerUserNotificationRoutes } from './workbench/user-notification-routes.ts'
 import { registerWorkspaceActivityRoutes } from './workbench/workspace-activity-routes.ts'
 import { registerWorkspaceMemberRoutes } from './workbench/workspace-member-routes.ts'
+import { registerWorkspaceAgentMemberRoutes } from './workbench/workspace-agent-member-routes.ts'
 
 // NC-01、NC-02（e2e/catalog/notifications.md，站内通知方案 NC-S1）：与本人相关的四类事件各产生一条通知，
 // 读取时按当前权限解析名称；未读、已读、静音与打开群组时 @ 通知一并已读。
@@ -48,6 +49,7 @@ let storageRoot: string
 let server: Server
 let baseUrl = ''
 let orchestration: RunOrchestrationService
+let projects: PostgresProjectService
 
 interface NotificationView {
   id: string
@@ -57,6 +59,7 @@ interface NotificationView {
   actor: { id: string; name: string } | null
   workspace: { id: string; name: string } | null
   objectName: string | null
+  detail: Record<string, string> | null
   target: { type: string; id: string; sessionId: string | null } | null
 }
 
@@ -247,6 +250,144 @@ test('NC-02 在通知中心读 @ 通知时，群组 @ 提醒一并已读', async
   assert.equal(await mentionsUnread(), 0, '全部已读同步全部 @')
 })
 
+test('NC-04 项目 Agent 任务的定时执行被暂停或停止时通知规则设置人', async () => {
+  const ws = await seedSpace('schedule')
+  const agentMemberId = await joinAgent(ws, 'schedule')
+  const createTask = async (title: string) => {
+    const created = await api('POST', `${base}/workspaces/${ws.id}/project-tasks`, {
+      as: ws.owner, body: { title, assignee: { type: 'agent', id: agentMemberId }, schedule: { kind: 'daily', timeOfDay: '09:00', timezone: 'Asia/Shanghai' } },
+    })
+    assert.equal(created.status, 201, JSON.stringify(created.body))
+    return created.body.data as { id: string; sessionId: string }
+  }
+
+  // 连续失败达到上限：定时执行自动暂停。
+  const failing = await createTask('每日舆情汇总')
+  for (let index = 0; index < SCHEDULE_FAILURE_LIMIT; index++) await projects.noteTaskRunTerminal(failing.sessionId, 'failed')
+  const [paused] = (await notifications(ws.owner)).filter(item => item.kind === 'task_schedule_stopped')
+  assert.equal(paused?.objectName, '每日舆情汇总')
+  assert.deepEqual(paused?.detail, { state: 'paused', reason: 'consecutive_failures' })
+  assert.deepEqual(paused?.target, { type: 'project_task', id: failing.id, sessionId: null })
+  assert.equal(paused?.actor, null, '系统动作没有触发人')
+  // 暂停后再失败不再重复通知。
+  await projects.noteTaskRunTerminal(failing.sessionId, 'failed')
+  assert.equal((await notifications(ws.owner)).filter(item => item.kind === 'task_schedule_stopped').length, 1)
+
+  const dueNow = (taskId: string) => database`
+    update project_tasks set next_slot_utc = now() - interval '1 minute' where tenant_id = ${tenantId} and id = ${taskId}`
+  const stoppedReason = async (title: string) =>
+    (await notifications(ws.owner)).find(item => item.kind === 'task_schedule_stopped' && item.objectName === title)?.detail
+
+  // 到点时已过截止日期：停止；任务已完成：停止但不另发（创建人已有“任务完成”通知）。
+  const overdue = await createTask('季度盘点')
+  await database`update project_tasks set due_date = current_date - 2 where tenant_id = ${tenantId} and id = ${overdue.id}`
+  const finished = await createTask('已完成的汇总')
+  await database`update project_tasks set status = 'done' where tenant_id = ${tenantId} and id = ${finished.id}`
+  await dueNow(overdue.id)
+  await dueNow(finished.id)
+  await projects.processDueSchedules(new Date())
+  assert.deepEqual(await stoppedReason('季度盘点'), { state: 'stopped', reason: 'due_passed' })
+  assert.equal(await stoppedReason('已完成的汇总'), undefined)
+  const [finishedState] = await database<{ state: string; reason: string }[]>`
+    select schedule_state as state, schedule_reason as reason from project_tasks where tenant_id = ${tenantId} and id = ${finished.id}`
+  assert.deepEqual({ ...finishedState }, { state: 'stopped', reason: 'completed' })
+
+  // 负责的 Agent 已不可用：停止。
+  const orphaned = await createTask('每日库存预警')
+  await database`update workspace_agent_members set status = 'disabled' where tenant_id = ${tenantId} and id = ${agentMemberId}`
+  await dueNow(orphaned.id)
+  await projects.processDueSchedules(new Date())
+  assert.deepEqual(await stoppedReason('每日库存预警'), { state: 'stopped', reason: 'agent_unavailable' })
+  await database`update workspace_agent_members set status = 'available' where tenant_id = ${tenantId} and id = ${agentMemberId}`
+
+  // 到点时项目已归档：停止。
+  const archived = await createTask('每周复盘')
+  await dueNow(archived.id)
+  await database`update workspaces set status = 'archived' where tenant_id = ${tenantId} and id = ${ws.id}`
+  await projects.processDueSchedules(new Date())
+  assert.deepEqual(await stoppedReason('每周复盘'), { state: 'stopped', reason: 'workspace_archived' })
+  assert.equal((await notifications(ws.first)).some(item => item.kind === 'task_schedule_stopped'), false, '只通知规则设置人')
+})
+
+test('NC-04 定时任务与 Skill 审核通知读取时解析名称；停用或不再归本人后不可见', async () => {
+  const ws = await seedSpace('owned')
+  const versionId = await publishedAgentVersion('owned')
+  const [personal] = await database<{ id: string }[]>`
+    select id from workspaces where tenant_id = ${tenantId} and workspace_type = 'personal' and created_by = ${ws.first}`
+  const automationId = `auto-nc-${randomUUID().slice(0, 8)}`
+  await database`
+    insert into agent_automations (id, tenant_id, owner_user_id, name, agent_version_id, workspace_id, schedule, input_template, status)
+    values (${automationId}, ${tenantId}, ${ws.first}, '周一销售周报', ${versionId}, ${personal!.id},
+            ${database.json({ kind: 'manual', timezone: 'UTC' })}, ${database.json({ prompt: '执行' })}, 'enabled')`
+  const submissionId = `subm-nc-${randomUUID().slice(0, 8)}`
+  await database`
+    insert into skill_submissions (id, tenant_id, submitter_user_id, source, name, status)
+    values (${submissionId}, ${tenantId}, ${ws.first}, 'zip', '销售周报整理', 'approved')`
+  await database`
+    insert into user_notifications (id, tenant_id, recipient_user_id, kind, workspace_id, object_type, object_id, actor_user_id, safe_metadata, dedupe_key)
+    values
+      (${`n-auto-${automationId}`}, ${tenantId}, ${ws.first}, 'automation_failed', ${personal!.id}, 'automation', ${automationId}, null,
+       ${database.json({ outcome: 'skipped', executionId: 'autexec-x', sessionId: null })}, ${`auto:${automationId}`}),
+      (${`n-skill-${submissionId}`}, ${tenantId}, ${ws.first}, 'skill_review_result', null, 'skill_submission', ${submissionId}, ${ws.owner},
+       ${database.json({ result: 'approved' })}, ${`skill:${submissionId}`})`
+
+  const items = await notifications(ws.first)
+  const automation = items.find(item => item.kind === 'automation_failed')
+  assert.equal(automation?.objectName, '周一销售周报')
+  assert.deepEqual(automation?.detail, { outcome: 'skipped' }, '执行 ID 等内部代码不对外')
+  assert.deepEqual(automation?.target, { type: 'automation', id: automationId, sessionId: null })
+  const review = items.find(item => item.kind === 'skill_review_result')
+  assert.equal(review?.objectName, '销售周报整理')
+  assert.deepEqual(review?.detail, { result: 'approved' })
+  assert.equal(await unread(ws.first), 2)
+
+  await database`update agent_automations set status = 'disabled' where tenant_id = ${tenantId} and id = ${automationId}`
+  await database`update skill_submissions set submitter_user_id = ${ws.second} where tenant_id = ${tenantId} and id = ${submissionId}`
+  const hidden = await notifications(ws.first)
+  assert.ok(hidden.filter(item => item.kind !== 'mention').every(item => !item.visible && item.objectName === null && item.detail === null && item.target === null))
+  assert.equal(await unread(ws.first), 0)
+})
+
+async function joinAgent(ws: { id: string; owner: string }, label: string): Promise<string> {
+  const agentId = `agent-nc-${label}-${randomUUID().slice(0, 8)}`
+  await insertAgent(agentId)
+  const joined = await api('POST', `${base}/workspaces/${ws.id}/agent-members`, { as: ws.owner, body: { agentId } })
+  assert.equal(joined.status, 201, JSON.stringify(joined.body))
+  return (joined.body.data as { id: string }).id
+}
+
+async function publishedAgentVersion(label: string): Promise<string> {
+  const agentId = `agent-nc-${label}-${randomUUID().slice(0, 8)}`
+  await insertAgent(agentId)
+  return `${agentId}-v1`
+}
+
+async function insertAgent(agentId: string) {
+  const versionId = `${agentId}-v1`
+  await database`
+    insert into agents (id, tenant_id, name, description, welcome_message, owner_user_id, created_by, status, active_version_id, allow_workspace_join)
+    values (${agentId}, ${tenantId}, '通知测试助手', '站内通知集成测试。', '', 'U00008', 'U00008', 'published', null, true)
+  `
+  await database`
+    insert into agent_versions (
+      id, tenant_id, agent_id, version, name, description, welcome_message, example_prompts, system_prompt,
+      max_output_bytes, max_tool_calls, timeout_seconds, skill_refs, status, created_by, change_summary
+    ) values (
+      ${versionId}, ${tenantId}, ${agentId}, '1.0.0', '通知测试助手', '测试。', '', ${database.json(['测试'] as string[])},
+      '你是站内通知集成测试 Agent，不会被实际执行。', 65536, 20, 300, ${database.json([] as string[])},
+      'published', 'U00008', '测试版本'
+    )
+  `
+  await database`
+    update agents set visible_role_ids = ${database.json(['role-employee'] as string[])}, active_version_id = ${versionId}
+     where tenant_id = ${tenantId} and id = ${agentId}
+  `
+  await database`
+    insert into agent_principal_role_grants (tenant_id, principal_id, role_id)
+    values (${tenantId}, ${`principal-agent-${agentId}`}, 'role-employee')
+  `
+}
+
 // ---------------------------------------------------------------------------
 
 async function seedSpace(label: string) {
@@ -340,7 +481,7 @@ before(async () => {
   const agents = new PostgresAgentService(database)
   const agentMembers = new PostgresWorkspaceAgentMemberService(database, authorization, agents)
   const projectArchive = new PostgresProjectArchiveService(database)
-  const projects = new PostgresProjectService(database, agentMembers)
+  projects = new PostgresProjectService(database, agentMembers)
   const content = new PostgresContentService(database, new LocalObjectStorage(storageRoot), authorization)
   const conversations = new PostgresConversationRepository(database)
   const runs = new PostgresRunRepository(database)
@@ -352,6 +493,7 @@ before(async () => {
   const router = new Router({ authenticateApi: testApiAuthenticator })
   registerConversationRoutes(router, conversations, orchestration, runs, agents, authorization, undefined, undefined, agentMembers)
   registerProjectRoutes(router, projects, authorization, projectArchive)
+  registerWorkspaceAgentMemberRoutes(router, agentMembers, authorization)
   registerWorkspaceMemberRoutes(router, new PostgresWorkspaceMemberService(database, authorization), authorization)
   registerWorkspaceActivityRoutes(router, new PostgresWorkspaceActivityService(database, new PostgresWorkspaceService(database)), authorization)
   registerConversationTargetRoutes(router, new PostgresConversationTargetService(database, agents), authorization)

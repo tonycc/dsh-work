@@ -1,13 +1,18 @@
 import { randomUUID } from 'node:crypto'
 
-import type { DatabaseTransaction } from '../../../infrastructure/postgres/database.ts'
+import type { DatabaseTransaction } from '../../infrastructure/postgres/database.ts'
 
 const tenantId = 'tenant-dsh-work'
 
-/** 站内通知方案 NC-S1 的通知类型；与迁移 0110 的 CHECK 约束一一对应。 */
-export type UserNotificationKind = 'mention' | 'task_assigned' | 'task_completed' | 'workspace_member_added'
+/** 站内通知的类型；与迁移 0110、0111 的 CHECK 约束一一对应。 */
+export type UserNotificationKind =
+  | 'mention' | 'task_assigned' | 'task_completed' | 'workspace_member_added'
+  | 'task_schedule_stopped' | 'automation_failed' | 'skill_review_result'
 
-export type UserNotificationObjectType = 'message' | 'project_task' | 'workspace'
+export type UserNotificationObjectType = 'message' | 'project_task' | 'workspace' | 'automation' | 'skill_submission'
+
+/** 定时任务一次执行没有成功的方式（NC-S3）：执行失败、被跳过、停机错过、受理后未能开始。 */
+export type AutomationOutcome = 'failed' | 'skipped' | 'missed' | 'interrupted'
 
 export interface UserNotificationInput {
   recipientUserId: string
@@ -80,4 +85,47 @@ export async function markMentionNotificationsRead(
      where tenant_id = ${tenantId} and recipient_user_id = ${userId} and kind = 'mention'
        and object_id in ${transaction(messageIds)} and read_at is null
   `
+}
+
+/**
+ * 定时任务的一次执行没有成功（NC-S3）：通知所有者。按执行记录取所有者与所在空间，与执行状态的
+ * 写入同一事务；`executionId` 或 `runId` 二选一（Run 失败时只知道 Run）。手动执行没有 Run 就被拒绝时
+ * 所有者当场看到，调用方不应调用。
+ *
+ * 同一定时任务同一结果已有未读通知时不再新增，只把那一条更新为最新一次（移到最前、指向最新的对话）：
+ * 长时间重叠、权限失效或待处理数超限会让每个时间点都被跳过，逐条通知会刷屏。所有者读过之后再发生才
+ * 另起一条。新增的去重键按“执行 + 结果”，重放不重复。
+ */
+export async function recordAutomationOutcomeNotification(
+  transaction: DatabaseTransaction,
+  target: { executionId: string } | { runId: string },
+  outcome: AutomationOutcome,
+): Promise<void> {
+  const match = 'executionId' in target
+    ? transaction`e.id = ${target.executionId}`
+    : transaction`e.run_id = ${target.runId}`
+  const [execution] = await transaction<Array<{
+    executionId: string; sessionId: string | null; automationId: string; ownerUserId: string; workspaceId: string
+  }>>`
+    select e.id as "executionId", e.session_id as "sessionId", a.id as "automationId",
+           a.owner_user_id as "ownerUserId", a.workspace_id as "workspaceId"
+      from automation_executions e
+      join agent_automations a on a.tenant_id = e.tenant_id and a.id = e.automation_id
+     where e.tenant_id = ${tenantId} and ${match}
+  `
+  if (!execution) return
+  const metadata = { outcome, executionId: execution.executionId, sessionId: execution.sessionId }
+  const bumped = await transaction`
+    update user_notifications
+       set created_at = now(), safe_metadata = ${transaction.json(metadata)}
+     where tenant_id = ${tenantId} and recipient_user_id = ${execution.ownerUserId}
+       and kind = 'automation_failed' and object_id = ${execution.automationId}
+       and read_at is null and safe_metadata ->> 'outcome' = ${outcome}
+  `
+  if (bumped.count > 0) return
+  await recordUserNotification(transaction, {
+    recipientUserId: execution.ownerUserId, kind: 'automation_failed', workspaceId: execution.workspaceId,
+    objectType: 'automation', objectId: execution.automationId, actorUserId: null,
+    dedupeKey: `automation:${execution.executionId}:${outcome}`, metadata,
+  })
 }

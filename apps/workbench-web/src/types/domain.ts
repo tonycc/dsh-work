@@ -1123,14 +1123,22 @@ export interface PersonalFileQuery {
 /** 站内通知（方案 NC-S1）：与本人相关的事件；`visible` 为 false 时名称与跳转目标均为 null。 */
 export interface UserNotification {
   id: string
-  kind: 'mention' | 'task_assigned' | 'task_completed' | 'workspace_member_added'
+  kind:
+    | 'mention' | 'task_assigned' | 'task_completed' | 'workspace_member_added'
+    | 'task_schedule_stopped' | 'automation_failed' | 'skill_review_result'
   createdAt: string
   read: boolean
   visible: boolean
   actor: { id: string; name: string } | null
   workspace: { id: string; name: string } | null
   objectName: string | null
-  target: { type: 'message' | 'project_task' | 'workspace'; id: string; sessionId: string | null } | null
+  /** 事件代码（NC-S3）：`state`、`reason`、`outcome`、`result`。 */
+  detail: Record<string, string> | null
+  target: {
+    type: 'message' | 'project_task' | 'workspace' | 'automation' | 'skill_submission'
+    id: string
+    sessionId: string | null
+  } | null
 }
 
 export interface MentionSummary {
