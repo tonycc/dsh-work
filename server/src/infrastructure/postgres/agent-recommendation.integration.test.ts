@@ -138,6 +138,15 @@ test('目录只列员工本人可用的同事，不含本 Agent；推荐逐项�
   await rejects([1, 2, 3, 4].map(() => ({ agentId: usable.agentId, reason: '多' })), /1～3 位/)
   await rejects([{ agentId: usable.agentId, reason: '审查合同', suggestedPrompt: '问'.repeat(501) }], /发给同事的问题/)
 
+  // Attempt 已取消（员工停止或超时）：不写入推荐。
+  const cancelled = new AbortController()
+  cancelled.abort()
+  await assert.rejects(
+    recommendations.recommend(manifest, { recommendations: [{ agentId: usable.agentId, reason: '能逐条审查合同条款' }] }, cancelled.signal),
+    /工具调用已取消/,
+  )
+  assert.equal((await recommendations.loadForRuns([runId], EMPLOYEE)).length, 0)
+
   const first = await recommendations.recommend(manifest, { recommendations: [{ agentId: usable.agentId, reason: '能逐条审查合同条款' }] })
   assert.deepEqual(first.recommended.map(item => item.agentId), [usable.agentId])
   await recommendations.recommend(manifest, { recommendations: [

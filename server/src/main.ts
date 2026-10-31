@@ -293,11 +293,11 @@ async function start() {
         mapProjectTaskToolError(error)
       }
     },
-    agentRecommendationTool: async (name, input, manifest) => {
+    agentRecommendationTool: async (name, input, manifest, signal) => {
       if (!agentRecommendationsRef.current) throw new Error('推荐服务尚未就绪')
       return name === 'list_colleague_agents'
-        ? agentRecommendationsRef.current.listColleagues(manifest)
-        : agentRecommendationsRef.current.recommend(manifest, input)
+        ? agentRecommendationsRef.current.listColleagues(manifest, signal)
+        : agentRecommendationsRef.current.recommend(manifest, input, signal)
     },
     skillCreationTool: async (name, input, manifest, workspaceDirectory) => {
       if (!skillSubmissionsRef.current) throw new Error('Skill 提交服务尚未就绪')
