@@ -558,7 +558,10 @@ onMounted(() => void load())
             <el-table-column prop="department" label="组织 / 部门" min-width="140" show-overflow-tooltip />
             <el-table-column label="本地角色" min-width="180">
               <template #default="scope">
-                <div v-if="scope.row.roles.length" class="tag-list"><el-tag v-for="role in scope.row.roles" :key="role.id" effect="plain" :type="role.status === 'active' ? 'primary' : 'info'">{{ role.name }}</el-tag></div>
+                <div v-if="scope.row.roles.length || scope.row.departmentRoles?.length" class="tag-list">
+                  <el-tag v-for="role in scope.row.roles" :key="role.id" effect="plain" :type="role.status === 'active' ? 'primary' : 'info'">{{ role.name }}</el-tag>
+                  <el-tag v-for="role in scope.row.departmentRoles ?? []" :key="`${role.id}-${role.departmentName}`" effect="plain" type="info" :title="`来自部门“${role.departmentName}”`">{{ role.name }}（部门）</el-tag>
+                </div>
                 <span v-else class="empty-value">尚未授权</span>
               </template>
             </el-table-column>
@@ -669,7 +672,11 @@ onMounted(() => void load())
               <span><strong>{{ role.name }}</strong><code>{{ role.code }}</code></span>
               <el-button v-if="authStore.canManageIdentity" link type="danger" :disabled="saving" @click="revokeRole(role)">移除</el-button>
             </div>
-            <el-empty v-if="!selectedUser.roles.length" :image-size="56" description="尚未分配本地角色" />
+            <div v-for="role in selectedUser.departmentRoles ?? []" :key="`${role.id}-${role.departmentName}`" class="assigned-role">
+              <span><strong>{{ role.name }}</strong><code>{{ role.code }}</code></span>
+              <el-tag effect="plain" type="info">来自部门“{{ role.departmentName }}”，在组织架构中修改</el-tag>
+            </div>
+            <el-empty v-if="!selectedUser.roles.length && !selectedUser.departmentRoles?.length" :image-size="56" description="尚未分配本地角色" />
           </div>
           <div v-if="authStore.canManageIdentity" class="inline-form">
             <el-select v-model="selectedRoleId" aria-label="选择要分配的角色" filterable placeholder="选择要分配的角色"><el-option v-for="role in assignableRoles" :key="role.id" :label="role.name" :value="role.id" /></el-select>

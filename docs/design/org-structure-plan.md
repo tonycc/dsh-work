@@ -15,7 +15,7 @@
 **目标（第一期）：**
 
 1. 管理员在管理端维护本企业的部门树，并把员工分配到部门；
-2. 管理员可以把角色或数据范围授给某个部门（可选包含下级部门），员工的部门变化后权限随之变化。
+2. 管理员可以把角色授给某个部门（可选包含下级部门），员工的部门变化后权限随之变化（ORG-S2 只授角色，见 OD7）。
 
 钉钉通讯录同步放到后续阶段，见附录 A。
 
@@ -26,8 +26,12 @@
 | OD1 | 不考虑 AI Hub。AI Hub 账号登录计划删除，本方案不为 AI Hub 账号和 AI Hub 目录同步做任何设计。 | 已确认（2026-10-31） |
 | OD2 | 第一期只支持本地维护的部门树和本地账号；钉钉同步作为后续阶段单独设计（附录 A）。 | 已确认（2026-10-31） |
 | OD3 | 员工可以属于多个部门，其中一个为主部门。这与钉钉的成员模型一致，以后接入钉钉时不需要修改数据模型和授权计算。 | 已确认（2026-10-31） |
-| OD4 | 部门参与授权：管理员在平台上显式把角色或数据范围授给部门，可选包含下级部门。部门本身不带任何权限。 | 已确认（2026-10-31） |
+| OD4 | 部门参与授权：管理员在平台上显式把角色授给部门，可选包含下级部门。部门本身不带任何权限。 | 已确认（2026-10-31） |
 | OD5 | 第一期不做“指定部门负责人”。现有 `role-department-manager` 角色和员工端“部门负责人”称呼保持不变；等有实际的负责人功能时再设计。 | 已确认（2026-10-31） |
+| OD7 | 部门授权只授角色，不授数据范围。现有数据范围只用于知识库检索过滤与执行中途收权复核，按部门授数据范围暂无可见效果；以后接入真实数据源时再评估。 | 已确认（2026-10-31） |
+| OD8 | 管理类角色不能授给部门：带 `admin:*`、`admin:write`、`admin:read` 或 `audit:read` 的角色（平台管理员、审计员等）只能在“员工与权限”中单独授给个人；已授给部门的角色也不能再加入这些权限。 | 已确认（2026-10-31） |
+| OD9 | “员工”角色可以按部门授予（例如授给根部门并包含下级）；“包含所有下级部门”默认勾选。 | 已确认（2026-10-31） |
+| OD10 | Agent、Skill 的可见范围仍只配置角色，不增加“可见部门”；按部门控制可见性通过“部门 → 角色 → 可见角色”实现。 | 已确认（2026-10-31） |
 
 ## 3. 边界
 
@@ -42,10 +46,9 @@
 | --- | --- |
 | `org_departments` | `tenant_id`、`id`、`parent_id`、`name`、`path`（从根到本部门的 ID 路径，用于查询子树）、`sort_order`、`status`（active / removed）、`created_at`、`updated_at`、`updated_by`。每个企业有且只有一个根部门，以企业名称命名，由数据库迁移为每个企业创建（新建企业时同时创建），打开页面不写入数据；唯一约束保证一个企业只有一个根部门。 |
 | `org_department_members` | `tenant_id`、`department_id`、`user_id`、`is_primary`、`added_by`、`added_at`。员工可以属于多个部门，每个部门一行；员工属于任何部门时，必须恰好有一个主部门。 |
-| `org_department_grants` | 部门授权：`department_id`、`include_descendants`、`grant_type`（role / data_scope）、`role_id` 或 `scope_code` + `scope_value`、`status`（active / invalid）、`granted_by`、`created_at`。 |
+| `org_department_grants` | 部门授权（迁移 0114）：`department_id`、`role_id`、`include_descendants`、`status`（active / invalid）、`granted_by`、`created_at`、`invalidated_at`；同一部门同一角色只有一条有效授权。 |
 | `users.department_id` | 继续作为显示文本，由平台写入主部门名称；没有主部门时为空，沿用现有“未分配部门”的显示。不考虑历史数据：上线迁移清空所有独立账号员工现有的部门文本（AI Hub 账号由目录同步维护，不清空）。现有按该字段显示、搜索和统计的代码可以继续使用。 |
 | `user_roles.source_key` | 迁移 0016 的约束 `source_key = 'local'` 放宽为 `'local'` 或 `'department:%'`。 |
-| `data_scope_grants.source_key` | 新增，默认 `local`；唯一约束加上 `source_key`。 |
 
 ## 5. 部门树维护
 
@@ -62,10 +65,9 @@
 
 ### 6.1 生效方式：写入现有授权表
 
-现有代码中有十多处直接读取 `user_roles` 和 `data_scope_grants`（工作台授权、Runtime 授权、项目空间公共数据范围、Agent 受众上限、管理员判断等）。部门授权按成员关系展开后，写入这两张表，这样读取点仍然只查这两张表，不需要理解部门树和继承关系；但读取点中按 `source_key` 过滤的条件需要修改（6.4）。
+现有代码中有多处直接读取 `user_roles`（工作台授权、Runtime 授权、项目空间公共数据范围、管理员判断等）。部门授权按成员关系展开后写入这张表，这样读取点仍然只查 `user_roles`，不需要理解部门树和继承关系；但读取点中按 `source_key` 过滤的条件需要修改（6.4）。
 
 - 角色：为覆盖到的每个员工写入 `user_roles`，`source_key = 'department:<grant_id>'`。
-- 数据范围：为覆盖到的每个员工写入 `data_scope_grants`，`subject_type = 'user'`、`source_key = 'department:<grant_id>'`。
 - “覆盖到的员工”指该部门的成员；授权包含下级时，还包括所有下级部门的成员。
 - 管理端显示每条授权的来源（直接授予 / 来自某部门），部门来源的授权只能在部门授权中修改。
 
@@ -73,7 +75,7 @@
 
 以下情况会触发对受影响员工的重新计算：部门授权的增删改、员工所属部门变化、部门在树中移动或被删除。重新计算在同一事务中对比计算前后的展开行，只写入差异，并写一条审计（原因：部门授权变更 / 部门调整 / 成员变化）。
 
-迁移 0016 的触发器在 `user_roles`、`data_scope_grants` 每次增、改、删行时都会把 `local_authorization_version` 加 1，本方案不修改这个触发器。因此展开行有变化、但有效权限没变时，版本也会递增。例如员工从 A 部门调到 B 部门，两个部门授的是同一个角色，版本会加两次。版本递增在现有代码中只会让会话和执行按当前权限重新校验，不会让员工退出登录，所以接受这一行为。
+迁移 0016 的触发器在 `user_roles` 每次增、改、删行时都会把 `local_authorization_version` 加 1，本方案不修改这个触发器。因此展开行有变化、但有效权限没变时，版本也会递增。例如员工从 A 部门调到 B 部门，两个部门授的是同一个角色，版本会加两次。版本递增在现有代码中只会让会话和执行按当前权限重新校验，不会让员工退出登录，所以接受这一行为。
 
 ### 6.3 风险与约束
 
@@ -85,8 +87,9 @@
 
 ### 6.4 现有代码需要修改的地方
 
-- **角色读取点的来源过滤。** 以下文件中的查询只认 `user_roles.source_key = 'local'`，会忽略部门来源的角色，需要改为同时接受 `local` 和 `department:%`：`identity/session-repository.ts`（解析会话权限）、`authorization/postgres-authorization-service.ts`、`authorization/platform-admin-actor.ts`、`workbench/application/postgres-workspace-member-service.ts`、`skill/admin-skill-installation-service.ts`、`admin/application/postgres-grant-reconciliation-service.ts`、`identity/local-auth-service.ts`、`identity/administration-service.ts`。管理员直接授予和撤销角色仍然只操作 `local` 来源的行。实施时用 `grep "source_key = 'local'"` 重新核对，不能只按本清单修改。
-- **数据范围替换。** `administration-service.ts` 中的 `replaceScopes` 按授权对象删除全部数据范围后重写，用于员工时会连带删除部门来源的行，需要改为只删除和写入 `local` 来源的行。
+- **角色读取点的来源过滤。** 计算有效权限的查询改为同时接受 `local` 和 `department:%`：`identity/session-repository.ts`（解析会话权限）、`authorization/postgres-authorization-service.ts`（身份、角色指纹与项目空间公共数据范围）、`workbench/application/postgres-workspace-member-service.ts`（员工端访问资格）、`identity/administration-service.ts`（已授权人数与角色人数）。
+- **保持只认直接授予的地方。** 平台管理员与管理写权限的判定（`authorization/platform-admin-actor.ts`、`skill/admin-skill-installation-service.ts`、`admin/application/postgres-grant-reconciliation-service.ts`、`identity/local-auth-service.ts`、`administration-service.ts` 的最后一位管理员保护）仍只认 `local`：管理类角色不能授给部门（OD8），这里保持只认直接授予作为第二道防线。管理员直接授予和撤销角色仍然只操作 `local` 来源的行。
+- **员工列表。** “员工与权限”的员工角色分为直接授予（`roles`，可移除）和来自部门（`departmentRoles`，注明部门，只能在组织架构中修改）。
 
 ## 7. 待评审确认的默认值
 
@@ -96,7 +99,7 @@
 ## 8. 验收
 
 - **P0：** 冒烟服务提供测试身份和内存中的部门树，验证管理端组织架构页（部门编辑、成员分配、部门授权）可用；首次打开时直接进入维护页，只有根部门，员工都显示“未分配部门”。
-- **P1：** 使用专用 PostgreSQL，覆盖以下场景：新建、改名、移动部门，并拒绝移动到自己的下级之下；删除有成员或下级的部门被拒绝；分配和移除成员、指定主部门后，显示字段随之变化；初始化管理员不写入部门文本；管理员新建账号时选择的部门成为主部门；上线迁移清空现有部门文本；添加成员时多选和“只看未分配”筛选正确；部门授权含与不含下级，并在会话权限、项目空间成员资格、平台管理员判定、Runtime 授权中实际生效；移动部门后整棵子树的成员权限重算；调岗后权限变化且权限版本递增；管理员替换员工数据范围不会删除部门来源的授权；删除部门后其授权失效；OIDC 模式下组织架构接口不可用。
+- **P1：** 使用专用 PostgreSQL，覆盖以下场景：新建、改名、移动部门，并拒绝移动到自己的下级之下；删除有成员或下级的部门被拒绝；分配和移除成员、指定主部门后，显示字段随之变化；初始化管理员不写入部门文本；管理员新建账号时选择的部门成为主部门；上线迁移清空现有部门文本；添加成员时多选和“只看未分配”筛选正确；部门授权含与不含下级，并在会话权限、项目空间成员资格、平台管理员判定、Runtime 授权中实际生效；移动部门后整棵子树的成员权限重算；调岗后权限变化且权限版本递增；管理类角色不能授给部门、已授给部门的角色不能加入管理权限；撤销直接授予不影响来自部门的同名角色；删除部门后其授权失效；OIDC 模式下组织架构接口不可用。
 - **P2：** 本方案不涉及外部系统；发布前在受控环境按发布流程验收部门授权在真实对话和定时任务中生效，并留证。
 
 ## 9. 实施切片
@@ -104,7 +107,7 @@
 | 切片 | 内容 | 依赖 |
 | --- | --- | --- |
 | ORG-S1 | 部门与成员关系表、迁移创建根部门；部门树维护、成员分配（多选、只看未分配）、上线迁移清空现有部门文本、主部门、显示字段写入；新建账号改为从部门树选择、初始化管理员不再写部门文本；管理端组织架构页 | 无 |
-| ORG-S2 | 部门授权、展开与重新计算、来源显示、审计；角色读取点的来源过滤和数据范围替换（6.4） | ORG-S1 |
+| ORG-S2 | 部门授予角色、展开与重新计算、管理类角色限制、来源显示、审计；角色读取点的来源过滤（6.4） | ORG-S1 |
 
 管理端组织架构页和部门授权页先做可点击原型，确认后再开发。
 

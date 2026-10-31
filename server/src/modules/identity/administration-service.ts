@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import type { DatabaseClient, DatabaseTransaction } from '../../infrastructure/postgres/database.ts'
 import { LOCAL_PERMISSIONS } from './types.ts'
 import { invalidRequest, notFound, stateConflict } from '../../domain/request-errors.ts'
+import { assertRoleDepartmentGrantable } from '../organization/postgres-organization-service.ts'
 
 const tenantId = 'tenant-dsh-work'
 const managedScopeCode = 'application'
@@ -29,6 +30,8 @@ interface UserListRow {
   directorySyncedAt: Date | null
   authorizationVersion: number
   roles: Array<{ id: string; code: string; name: string; status: string }>
+  /** 来自部门授权的角色（组织架构 ORG-S2），只能在“组织架构”中修改。 */
+  departmentRoles: Array<{ id: string; code: string; name: string; status: string; departmentName: string }>
   dataScopes: string[]
   activeSessionCount: number
   lastSeenAt: Date | null
@@ -64,7 +67,7 @@ export class IdentityAdministrationService {
                  select 1 from user_roles ur
                  join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id
                   where ur.tenant_id = u.tenant_id and ur.user_id = u.id
-                    and ur.source_key = 'local' and r.status = 'active'
+                    and (ur.source_key = 'local' or ur.source_key like 'department:%') and r.status = 'active'
                     and (ur.valid_until is null or ur.valid_until > now())
                ))::integer as authorized
           from users u
@@ -107,6 +110,16 @@ export class IdentityAdministrationService {
                     and ur.source_key = 'local'
                     and (ur.valid_until is null or ur.valid_until > now())
                ), '[]'::jsonb) as roles,
+               coalesce((
+                 select jsonb_agg(jsonb_build_object(
+                   'id', r.id, 'code', r.code, 'name', r.name, 'status', r.status, 'departmentName', d.name
+                 ) order by r.name, d.name)
+                   from user_roles ur
+                   join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id
+                   join org_department_grants g on g.tenant_id = ur.tenant_id and ur.source_key = 'department:' || g.id
+                   join org_departments d on d.tenant_id = g.tenant_id and d.id = g.department_id
+                  where ur.tenant_id = u.tenant_id and ur.user_id = u.id and ur.source_key like 'department:%'
+               ), '[]'::jsonb) as "departmentRoles",
                coalesce((
                  select jsonb_agg(dsg.scope_value order by dsg.scope_value)
                   from data_scope_grants dsg
@@ -167,7 +180,7 @@ export class IdentityAdministrationService {
              (select count(distinct ur.user_id)::integer from user_roles ur
                join users u on u.tenant_id = ur.tenant_id and u.id = ur.user_id
               where ur.tenant_id = r.tenant_id and ur.role_id = r.id
-                and ur.source_key = 'local' and u.status = 'active'
+                and (ur.source_key = 'local' or ur.source_key like 'department:%') and u.status = 'active'
                 and (u.identity_provider = 'ai-hub' or (${this.localAccounts} and exists (select 1 from local_user_credentials c where c.tenant_id = u.tenant_id and c.user_id = u.id)))
                 and u.business_user
                 and (ur.valid_until is null or ur.valid_until > now())) as "userCount",
@@ -236,6 +249,7 @@ export class IdentityAdministrationService {
       }
     }
     await this.database.begin(async (transaction) => {
+      await assertRoleDepartmentGrantable(transaction, input.roleId, permissions)
       const [role] = await transaction<{ id: string }[]>`
         update roles set name = ${name}, description = ${description}, status = ${input.status},
                          permissions = ${transaction.json(permissions)}
@@ -407,6 +421,16 @@ export class IdentityAdministrationService {
                from user_roles ur join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id
               where ur.tenant_id = u.tenant_id and ur.user_id = u.id and ur.source_key = 'local'
                 and (ur.valid_until is null or ur.valid_until > now())), '[]'::jsonb) as roles,
+             coalesce((
+                 select jsonb_agg(jsonb_build_object(
+                   'id', r.id, 'code', r.code, 'name', r.name, 'status', r.status, 'departmentName', d.name
+                 ) order by r.name, d.name)
+                   from user_roles ur
+                   join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id
+                   join org_department_grants g on g.tenant_id = ur.tenant_id and ur.source_key = 'department:' || g.id
+                   join org_departments d on d.tenant_id = g.tenant_id and d.id = g.department_id
+                  where ur.tenant_id = u.tenant_id and ur.user_id = u.id and ur.source_key like 'department:%'
+               ), '[]'::jsonb) as "departmentRoles",
              coalesce((select jsonb_agg(dsg.scope_value order by dsg.scope_value)
                from data_scope_grants dsg where dsg.tenant_id = u.tenant_id
                 and dsg.subject_type = 'user' and dsg.subject_id = u.id

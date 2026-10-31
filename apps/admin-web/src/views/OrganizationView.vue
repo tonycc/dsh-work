@@ -5,7 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { adminApi } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
-import type { OrganizationEmployee, OrganizationSnapshot } from '@/types/domain'
+import type { OrganizationEmployee, OrganizationGrant, OrganizationSnapshot } from '@/types/domain'
 
 interface TreeNode {
   id: string
@@ -15,7 +15,7 @@ interface TreeNode {
 }
 
 const authStore = useAuthStore()
-const snapshot = ref<OrganizationSnapshot>({ available: true, departments: [], members: [], employees: [] })
+const snapshot = ref<OrganizationSnapshot>({ available: true, departments: [], members: [], employees: [], grants: [], roles: [], roleAssignments: [] })
 const loading = ref(false)
 const saving = ref(false)
 const error = ref('')
@@ -27,6 +27,9 @@ const nameDialog = reactive({ open: false, mode: 'create' as 'create' | 'rename'
 const moveDialog = reactive({ open: false, targetId: '' })
 const addDialog = reactive({ open: false, query: '', onlyUnassigned: false, picked: [] as string[] })
 const removeDialog = reactive({ open: false, user: undefined as OrganizationEmployee | undefined, newPrimaryId: '' })
+const grantDialog = reactive({ open: false, roleId: '', includeDescendants: true, error: '' })
+const activeTab = ref<'members' | 'grants'>('members')
+const drawerUser = ref<OrganizationEmployee>()
 
 const canManage = computed(() => authStore.canManage)
 const departments = computed(() => snapshot.value.departments)
@@ -151,6 +154,61 @@ const removeNeedsPrimary = computed(() => {
   const here = membershipsByUser.value.get(user.id)?.find(member => member.departmentId === selected.value?.id)
   return Boolean(here?.primary) && removeOtherDepartments.value.length > 0
 })
+
+function ancestors(id: string) {
+  const ids: string[] = []
+  let current = departmentById.value.get(id)
+  while (current?.parentId) {
+    ids.push(current.parentId)
+    current = departmentById.value.get(current.parentId)
+  }
+  return ids
+}
+
+// 部门授权（ORG-S2）：只授角色；覆盖人数按当前成员关系计算，与服务端展开口径一致。
+const roleById = computed(() => new Map(snapshot.value.roles.map(role => [role.id, role])))
+const assignableRoles = computed(() => snapshot.value.roles.filter(role => role.assignable))
+const activeGrants = computed(() => snapshot.value.grants.filter(grant => grant.status === 'active'))
+const invalidGrants = computed(() => snapshot.value.grants.filter(grant => grant.status === 'invalid'))
+function coverage(grant: Pick<OrganizationGrant, 'departmentId' | 'includeDescendants'>) {
+  return usersIn(grant.includeDescendants ? descendants(grant.departmentId) : [grant.departmentId]).size
+}
+const coveredEmployeeCount = computed(() => new Set(snapshot.value.roleAssignments
+  .filter(assignment => assignment.source !== 'direct').map(assignment => assignment.userId)).size)
+const grantRows = computed(() => {
+  if (!selected.value) return []
+  const above = new Set(ancestors(selected.value.id))
+  const own = activeGrants.value.filter(grant => grant.departmentId === selected.value?.id)
+  const inherited = activeGrants.value.filter(grant => grant.includeDescendants && above.has(grant.departmentId))
+  return [
+    ...own.map(grant => ({ grant, inherited: false, range: grant.includeDescendants ? '本部门及下级' : '仅本部门', count: coverage(grant), source: '本部门' })),
+    ...inherited.map(grant => ({ grant, inherited: true, range: '继承', count: subtreeMemberIds.value.size, source: `上级“${grant.departmentName}”` })),
+  ]
+})
+const grantImpact = computed(() => selected.value
+  ? coverage({ departmentId: selected.value.id, includeDescendants: grantDialog.includeDescendants })
+  : 0)
+
+const drawerRoles = computed(() => {
+  const user = drawerUser.value
+  if (!user) return []
+  const grantsById = new Map(snapshot.value.grants.map(grant => [grant.id, grant]))
+  const memberships = new Set((membershipsByUser.value.get(user.id) ?? []).map(member => member.departmentId))
+  const byRole = new Map<string, Array<{ text: string; direct: boolean }>>()
+  for (const assignment of snapshot.value.roleAssignments.filter(item => item.userId === user.id)) {
+    const grant = assignment.source === 'direct' ? undefined : grantsById.get(assignment.source.grantId)
+    const text = assignment.source === 'direct'
+      ? '直接授予'
+      : `来自“${grant?.departmentName ?? '部门'}”${grant && !memberships.has(grant.departmentId) ? '（下级继承）' : ''}`
+    byRole.set(assignment.roleId, [...(byRole.get(assignment.roleId) ?? []), { text, direct: assignment.source === 'direct' }])
+  }
+  return [...byRole.entries()].map(([roleId, sources]) => {
+    const role = roleById.value.get(roleId)
+    return { id: roleId, name: role?.name ?? roleId, code: role?.code ?? '', disabled: role?.status === 'disabled', sources }
+  })
+})
+const drawerDepartments = computed(() => (drawerUser.value ? membershipsByUser.value.get(drawerUser.value.id) ?? [] : [])
+  .map(member => ({ id: member.departmentId, path: path(member.departmentId), primary: member.primary })))
 
 async function load() {
   loading.value = true
@@ -283,6 +341,42 @@ async function saveRemove() {
   }
 }
 
+function openGrant() {
+  Object.assign(grantDialog, { open: true, roleId: assignableRoles.value[0]?.id ?? '', includeDescendants: true, error: '' })
+}
+
+async function saveGrant() {
+  const department = selected.value
+  if (!department || !grantDialog.roleId) return
+  const count = grantImpact.value
+  const done = await run(
+    () => adminApi.grantDepartmentRole(department.id, grantDialog.roleId, grantDialog.includeDescendants),
+    `已授权，${count} 名员工的权限已重新计算`,
+    message => { grantDialog.error = message },
+  )
+  if (done) grantDialog.open = false
+}
+
+async function revokeGrant(grant: OrganizationGrant) {
+  const roleName = roleById.value.get(grant.roleId)?.name ?? grant.roleId
+  const confirmed = await ElMessageBox.confirm(
+    `删除“${grant.departmentName}”的角色“${roleName}”？${coverage(grant)} 名员工会失去这项来自部门的角色（直接授予或其他部门授予的同名角色不受影响）。`,
+    '删除部门授权',
+    { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消', confirmButtonClass: 'el-button--danger' },
+  ).then(() => true).catch(() => false)
+  if (confirmed) await run(() => adminApi.revokeDepartmentGrant(grant.id), '已删除部门授权')
+}
+
+async function clearInvalidGrants() {
+  for (const grant of invalidGrants.value) {
+    if (!await run(() => adminApi.revokeDepartmentGrant(grant.id), '已清除失效授权')) return
+  }
+}
+
+function roleName(roleId: string) {
+  return roleById.value.get(roleId)?.name ?? roleId
+}
+
 onMounted(load)
 </script>
 
@@ -301,8 +395,14 @@ onMounted(load)
         type="info"
         :closable="false"
         show-icon
-        title="部门由平台管理员维护。部门本身不带权限；员工的“部门”显示为其主部门。"
+        title="部门由平台管理员维护。部门本身不带权限；授予部门的角色会自动给到覆盖的员工，成员或部门变化时自动调整。"
       />
+      <el-alert v-if="invalidGrants.length" type="warning" :closable="false" show-icon>
+        <template #title>
+          {{ invalidGrants.length }} 条部门授权因部门被删除而失效（{{ invalidGrants.map(grant => `“${grant.departmentName}”的${roleName(grant.roleId)}`).join('、') }}），不再给任何员工权限。
+          <el-button v-if="canManage" link type="primary" :disabled="saving" @click="clearInvalidGrants">清除失效授权</el-button>
+        </template>
+      </el-alert>
 
       <section class="organization-summary">
         <article class="metric-card">
@@ -319,6 +419,11 @@ onMounted(load)
           <div class="metric-label">未分配部门的员工</div>
           <div class="metric-value">{{ unassignedCount }}</div>
           <div class="metric-detail">在“添加成员”中可只看未分配员工</div>
+        </article>
+        <article class="metric-card">
+          <div class="metric-label">部门授权</div>
+          <div class="metric-value">{{ activeGrants.length }}</div>
+          <div class="metric-detail">覆盖 {{ coveredEmployeeCount }} 名员工</div>
         </article>
       </section>
 
@@ -365,6 +470,8 @@ onMounted(load)
             </div>
           </section>
 
+          <el-tabs v-model="activeTab" class="organization-tabs">
+            <el-tab-pane :label="`成员（${directMemberIds.size}）`" name="members">
           <section class="content-panel filter-panel">
             <div class="filter-bar">
               <el-input v-model="memberQuery" :prefix-icon="Search" clearable aria-label="搜索成员" placeholder="搜索姓名或账号" />
@@ -396,20 +503,104 @@ onMounted(load)
                   </div>
                 </template>
               </el-table-column>
-              <el-table-column v-if="canManage" label="操作" width="170" fixed="right">
+              <el-table-column label="操作" :width="canManage ? 240 : 100" fixed="right">
                 <template #default="scope">
-                  <template v-if="scope.row.direct">
+                  <el-button link type="primary" @click="drawerUser = scope.row.employee">查看权限</el-button>
+                  <template v-if="canManage && scope.row.direct">
                     <el-button v-if="!scope.row.primaryHere" link type="primary" :disabled="saving" @click="setPrimary(scope.row.employee)">设为主部门</el-button>
                     <el-button link type="danger" :disabled="saving" @click="openRemove(scope.row.employee)">移出</el-button>
                   </template>
-                  <span v-else class="empty-value">在下级部门</span>
+                  <span v-else-if="canManage" class="empty-value">在下级部门</span>
                 </template>
               </el-table-column>
             </el-table>
           </section>
+            </el-tab-pane>
+            <el-tab-pane :label="`部门授权（${grantRows.length}）`" name="grants">
+              <section class="content-panel department-header grant-toolbar">
+                <div class="department-header__copy">
+                  <h3>部门授权</h3>
+                  <small>授予本部门的角色会自动给到覆盖的员工；管理类角色（平台管理员、审计员等）只能在“员工与权限”中单独授给个人。</small>
+                </div>
+                <el-button v-if="canManage" type="primary" :disabled="saving || !assignableRoles.length" @click="openGrant">添加部门授权</el-button>
+              </section>
+              <section class="content-panel content-panel--flush">
+                <el-table class="data-table" :data="grantRows" empty-text="本部门还没有授权，也没有从上级部门继承的授权">
+                  <el-table-column label="角色" min-width="200">
+                    <template #default="scope">
+                      <div class="user-cell"><span><strong>{{ roleName(scope.row.grant.roleId) }}</strong><small>{{ roleById.get(scope.row.grant.roleId)?.code }}{{ roleById.get(scope.row.grant.roleId)?.status === 'disabled' ? ' · 已停用' : '' }}</small></span></div>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="适用范围" width="140">
+                    <template #default="scope"><el-tag effect="plain" :type="scope.row.inherited ? 'warning' : scope.row.grant.includeDescendants ? 'primary' : 'info'">{{ scope.row.range }}</el-tag></template>
+                  </el-table-column>
+                  <el-table-column label="覆盖员工" width="110">
+                    <template #default="scope">{{ scope.row.count }} 人</template>
+                  </el-table-column>
+                  <el-table-column label="来源" min-width="160">
+                    <template #default="scope">{{ scope.row.source }}</template>
+                  </el-table-column>
+                  <el-table-column v-if="canManage" label="操作" width="150" fixed="right">
+                    <template #default="scope">
+                      <el-button v-if="!scope.row.inherited" link type="danger" :disabled="saving" @click="revokeGrant(scope.row.grant)">删除</el-button>
+                      <el-button v-else link type="primary" @click="selectedId = scope.row.grant.departmentId">到上级部门修改</el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </section>
+            </el-tab-pane>
+          </el-tabs>
         </div>
       </div>
     </template>
+
+    <el-dialog v-model="grantDialog.open" title="添加部门授权" width="min(520px, calc(100vw - 32px))">
+      <el-form label-position="top" @submit.prevent="saveGrant">
+        <el-form-item label="角色" for="grant-role" required :error="grantDialog.error">
+          <el-select id="grant-role" v-model="grantDialog.roleId" filterable placeholder="选择角色" @change="grantDialog.error = ''">
+            <el-option v-for="role in assignableRoles" :key="role.id" :label="`${role.name}（${role.code}）`" :value="role.id" />
+          </el-select>
+        </el-form-item>
+        <el-checkbox v-model="grantDialog.includeDescendants">包含所有下级部门</el-checkbox>
+        <el-alert class="grant-impact" type="info" :closable="false" :title="`授予“${selected?.name}”，将覆盖 ${grantImpact} 名员工（${grantDialog.includeDescendants ? '本部门及所有下级部门的成员' : '仅本部门直属成员'}）。以后成员变化时自动调整。`" />
+      </el-form>
+      <template #footer>
+        <el-button :disabled="saving" @click="grantDialog.open = false">取消</el-button>
+        <el-button type="primary" :loading="saving" :disabled="!grantDialog.roleId" @click="saveGrant">授权</el-button>
+      </template>
+    </el-dialog>
+
+    <el-drawer :model-value="Boolean(drawerUser)" size="min(560px, 100vw)" title="员工部门与角色" @update:model-value="(value: boolean) => { if (!value) drawerUser = undefined }">
+      <template v-if="drawerUser">
+        <section class="user-detail-hero">
+          <span class="user-cell__avatar user-detail-hero__avatar">{{ [...drawerUser.name][0] ?? '员' }}</span>
+          <div><h2>{{ drawerUser.name }}</h2><p>{{ drawerUser.loginAccount ?? '' }}</p></div>
+        </section>
+        <section class="drawer-section">
+          <div class="drawer-section__heading"><div><strong>所属部门</strong><span>主部门用于显示；属于任一部门都会获得该部门授予的角色</span></div></div>
+          <div class="assigned-roles">
+            <div v-for="department in drawerDepartments" :key="department.id" class="assigned-role">
+              <span>{{ department.path }}</span>
+              <el-tag v-if="department.primary" effect="plain" type="primary">主部门</el-tag>
+            </div>
+            <el-empty v-if="!drawerDepartments.length" :image-size="56" description="未分配部门" />
+          </div>
+        </section>
+        <section class="drawer-section">
+          <div class="drawer-section__heading"><div><strong>角色</strong><span>有效角色及来源</span></div></div>
+          <div class="assigned-roles">
+            <div v-for="role in drawerRoles" :key="role.id" class="assigned-role">
+              <span><strong>{{ role.name }}{{ role.disabled ? '（已停用）' : '' }}</strong><code>{{ role.code }}</code></span>
+              <div class="tag-list">
+                <el-tag v-for="source in role.sources" :key="source.text" effect="plain" :type="source.direct ? 'info' : 'primary'">{{ source.text }}</el-tag>
+              </div>
+            </div>
+            <el-empty v-if="!drawerRoles.length" :image-size="56" description="没有角色" />
+          </div>
+        </section>
+        <p class="form-hint drawer-note">“直接授予”的角色在“员工与权限”中修改；来自部门的角色只能在对应部门的“部门授权”中修改。</p>
+      </template>
+    </el-drawer>
 
     <el-dialog v-model="nameDialog.open" :title="nameDialog.mode === 'create' ? '新建部门' : '修改部门名称'" width="min(480px, calc(100vw - 32px))">
       <el-form label-position="top" @submit.prevent="saveName">
@@ -483,7 +674,25 @@ onMounted(load)
 </template>
 
 <style scoped>
-.organization-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--spacing-section); }
+.organization-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--spacing-section); }
+.organization-tabs { width: 100%; }
+.organization-tabs :deep(.el-tab-pane) { display: flex; flex-direction: column; gap: 14px; }
+.grant-toolbar h3 { margin: 0 0 4px; color: var(--color-text-heading); font-size: var(--font-size-title); }
+.grant-impact { margin-top: 12px; }
+.user-detail-hero { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 14px; padding: var(--spacing-card); border-radius: var(--radius-card); background: var(--color-bg-subtle); }
+.user-detail-hero__avatar { width: 48px; height: 48px; font-size: var(--font-size-heading); }
+.user-detail-hero h2 { margin: 0; color: var(--color-text-heading); font-size: var(--font-size-title); }
+.user-detail-hero p { margin: 5px 0 0; color: var(--color-text-secondary); font-size: var(--font-size-caption); }
+.drawer-section { margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--color-border); }
+.drawer-section__heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.drawer-section__heading > div { display: flex; flex-direction: column; }
+.drawer-section__heading strong { color: var(--color-text-heading); }
+.drawer-section__heading span { margin-top: 3px; color: var(--color-text-muted); font-size: var(--font-size-badge); }
+.assigned-roles { display: grid; gap: 8px; }
+.assigned-role { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--color-border); border-radius: var(--radius-tag); }
+.assigned-role > span { display: flex; flex-direction: column; color: var(--color-text-primary); font-size: var(--font-size-caption); }
+.assigned-role code { margin-top: 3px; color: var(--color-text-muted); font-size: var(--font-size-badge); }
+.drawer-note { margin-top: 20px; }
 .organization-layout { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--spacing-section); }
 .organization-tree { flex: 1 1 260px; max-width: 320px; }
 .organization-detail { display: flex; min-width: 0; flex: 999 1 560px; flex-direction: column; gap: 14px; }
@@ -519,5 +728,6 @@ onMounted(load)
 .candidate__name { display: flex; min-width: 0; flex-direction: column; }
 .candidate__name strong { color: var(--color-text-heading); font-size: var(--font-size-caption); }
 .candidate__name small { color: var(--color-text-muted); font-size: var(--font-size-badge); }
+@media (max-width: 1200px) { .organization-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 900px) { .organization-summary { grid-template-columns: 1fr; } .organization-tree { max-width: none; } .filter-bar .el-input { width: 100%; } }
 </style>

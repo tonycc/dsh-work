@@ -739,7 +739,7 @@ const workbenchAccessPredicate = /* sql */ `
     from user_roles ur
     join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id
    where ur.tenant_id = u.tenant_id and ur.user_id = u.id
-     and ur.source_key = 'local'
+     and (ur.source_key = 'local' or ur.source_key like 'department:%')
      and (ur.valid_until is null or ur.valid_until > now())
      and r.status = 'active'
      and r.permissions ? 'workbench:use'

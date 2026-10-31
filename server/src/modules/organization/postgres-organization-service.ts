@@ -8,6 +8,9 @@ const tenantId = 'tenant-dsh-work'
 const maxNameLength = 60
 const maxMembersPerRequest = 200
 
+/** 管理类权限：带任一权限的角色不能授给部门（方案 OD8），只能单独授给个人。 */
+export const DEPARTMENT_FORBIDDEN_PERMISSIONS = ['admin:*', 'admin:write', 'admin:read', 'audit:read'] as const
+
 export interface OrganizationDepartment {
   id: string
   parentId: string | null
@@ -29,11 +32,40 @@ export interface OrganizationEmployee {
   status: 'active' | 'disabled'
 }
 
+export interface OrganizationGrant {
+  id: string
+  departmentId: string
+  /** 部门被删除后授权失效，仍返回原部门名称供管理员识别。 */
+  departmentName: string
+  roleId: string
+  includeDescendants: boolean
+  status: 'active' | 'invalid'
+}
+
+export interface OrganizationRole {
+  id: string
+  code: string
+  name: string
+  status: 'active' | 'disabled'
+  /** 启用且不含管理类权限的角色才能授给部门。 */
+  assignable: boolean
+}
+
+export interface OrganizationRoleAssignment {
+  userId: string
+  roleId: string
+  /** direct：在“员工与权限”中直接授予；其余为授予该角色的部门授权 ID。 */
+  source: 'direct' | { grantId: string }
+}
+
 export interface OrganizationSnapshot {
   available: boolean
   departments: OrganizationDepartment[]
   members: OrganizationMember[]
   employees: OrganizationEmployee[]
+  grants: OrganizationGrant[]
+  roles: OrganizationRole[]
+  roleAssignments: OrganizationRoleAssignment[]
 }
 
 interface DepartmentRow {
@@ -60,7 +92,7 @@ export class PostgresOrganizationService {
   }
 
   async snapshot(): Promise<OrganizationSnapshot> {
-    if (!this.available) return { available: false, departments: [], members: [], employees: [] }
+    if (!this.available) return { available: false, departments: [], members: [], employees: [], grants: [], roles: [], roleAssignments: [] }
     return readSnapshot(this.database)
   }
 
@@ -173,6 +205,11 @@ export class PostgresOrganizationService {
         update org_departments set status = 'removed', updated_at = now(), updated_by = ${input.actorId}
          where tenant_id = ${tenantId} and id = ${department.id}
       `
+      // 部门授权保留但失效，不转移给上级部门（方案 6.3）。
+      await transaction`
+        update org_department_grants set status = 'invalid', invalidated_at = now()
+         where tenant_id = ${tenantId} and department_id = ${department.id} and status = 'active'
+      `
       return { action: 'organization.department.remove', objectId: department.id, context: {} }
     })
   }
@@ -249,6 +286,49 @@ export class PostgresOrganizationService {
     })
   }
 
+  async grantRole(input: { departmentId: string; roleId: unknown; includeDescendants?: unknown; actorId: string }) {
+    if (typeof input.roleId !== 'string' || !input.roleId) throw invalidRequest('请选择要授予的角色')
+    if (input.includeDescendants !== undefined && typeof input.includeDescendants !== 'boolean') {
+      throw invalidRequest('includeDescendants 必须为布尔值')
+    }
+    const roleId = input.roleId
+    const includeDescendants = input.includeDescendants ?? true
+    return this.write(input.actorId, async (transaction) => {
+      const department = await requireDepartment(transaction, input.departmentId)
+      const [role] = await transaction<{ name: string; status: string; permissions: string[] }[]>`
+        select name, status, permissions from roles where tenant_id = ${tenantId} and id = ${roleId} for share
+      `
+      if (!role) throw notFound('角色不存在')
+      if (role.status !== 'active') throw stateConflict(`角色“${role.name}”已停用，不能授给部门`)
+      if (hasForbiddenPermission(role.permissions)) {
+        throw stateConflict(`角色“${role.name}”含管理类权限，只能在“员工与权限”中单独授给个人`)
+      }
+      const [existing] = await transaction`
+        select 1 from org_department_grants
+         where tenant_id = ${tenantId} and department_id = ${department.id} and role_id = ${roleId} and status = 'active'
+      `
+      if (existing) throw stateConflict('本部门已授予这个角色')
+      const id = `dept-grant-${randomUUID()}`
+      await transaction`
+        insert into org_department_grants (id, tenant_id, department_id, role_id, include_descendants, granted_by)
+        values (${id}, ${tenantId}, ${department.id}, ${roleId}, ${includeDescendants}, ${input.actorId})
+      `
+      return { action: 'organization.grant.create', objectId: id, context: { departmentId: department.id, roleId, includeDescendants } }
+    })
+  }
+
+  /** 删除部门授权；失效授权（部门已删除）同样通过它清除。 */
+  async revokeGrant(input: { grantId: string; actorId: string }) {
+    return this.write(input.actorId, async (transaction) => {
+      const [grant] = await transaction<{ departmentId: string; roleId: string }[]>`
+        delete from org_department_grants where tenant_id = ${tenantId} and id = ${input.grantId}
+        returning department_id as "departmentId", role_id as "roleId"
+      `
+      if (!grant) throw notFound('部门授权不存在')
+      return { action: 'organization.grant.revoke', objectId: input.grantId, context: { ...grant } }
+    })
+  }
+
   private async write(
     actorId: string,
     change: (transaction: DatabaseTransaction) => Promise<{ action: string; objectId: string; context: Record<string, unknown> }>,
@@ -258,6 +338,7 @@ export class PostgresOrganizationService {
       await requirePlatformAdminActor(transaction, actorId)
       await lockOrganization(transaction)
       const audit = await change(transaction)
+      await syncDepartmentRoles(transaction)
       await appendOrganizationAudit(transaction, { actorId, ...audit })
       return readSnapshot(transaction)
     })
@@ -276,6 +357,61 @@ export async function assignNewAccountDepartment(
   await lockOrganization(transaction)
   const department = await requireDepartment(transaction, input.departmentId)
   await addMembership(transaction, department.id, input.userId, input.actorId)
+  await syncDepartmentRoles(transaction)
+}
+
+/**
+ * 角色在已授给部门时不能加入管理类权限（方案 OD8），否则调整部门成员就会间接授予管理权限。
+ * 由“员工与权限”修改角色时在同一事务中调用。
+ */
+export async function assertRoleDepartmentGrantable(transaction: DatabaseTransaction, roleId: string, permissions: string[]) {
+  if (!hasForbiddenPermission(permissions)) return
+  const [granted] = await transaction`
+    select 1 from org_department_grants where tenant_id = ${tenantId} and role_id = ${roleId} and status = 'active' limit 1
+  `
+  if (granted) throw stateConflict('该角色已授给部门，不能加入管理类权限；请先在“组织架构”中删除对应的部门授权')
+}
+
+function hasForbiddenPermission(permissions: unknown) {
+  return Array.isArray(permissions) && permissions.some(permission => (DEPARTMENT_FORBIDDEN_PERMISSIONS as readonly string[]).includes(permission))
+}
+
+/**
+ * 把有效的部门授权展开为 user_roles（source_key = 'department:<grant_id>'），与期望集合对比后
+ * 只增删差异行：授权、成员关系、部门移动或删除后都调用。权限版本由 user_roles 触发器按行递增
+ * （方案 6.2）。停用的角色仍展开，由读取端按角色状态忽略，重新启用即恢复。
+ */
+async function syncDepartmentRoles(transaction: DatabaseTransaction) {
+  await transaction`
+    with desired as (
+      select distinct m.user_id, g.role_id, 'department:' || g.id as source_key
+        from org_department_grants g
+        join org_departments granted on granted.tenant_id = g.tenant_id and granted.id = g.department_id and granted.status = 'active'
+        join org_departments covered on covered.tenant_id = g.tenant_id and covered.status = 'active'
+         and (covered.id = granted.id or (g.include_descendants and left(covered.path, length(granted.path)) = granted.path))
+        join org_department_members m on m.tenant_id = covered.tenant_id and m.department_id = covered.id
+       where g.tenant_id = ${tenantId} and g.status = 'active'
+    )
+    delete from user_roles ur
+     where ur.tenant_id = ${tenantId} and ur.source_key like 'department:%'
+       and not exists (
+         select 1 from desired d where d.user_id = ur.user_id and d.role_id = ur.role_id and d.source_key = ur.source_key
+       )
+  `
+  await transaction`
+    with desired as (
+      select distinct m.user_id, g.role_id, 'department:' || g.id as source_key, g.granted_by
+        from org_department_grants g
+        join org_departments granted on granted.tenant_id = g.tenant_id and granted.id = g.department_id and granted.status = 'active'
+        join org_departments covered on covered.tenant_id = g.tenant_id and covered.status = 'active'
+         and (covered.id = granted.id or (g.include_descendants and left(covered.path, length(granted.path)) = granted.path))
+        join org_department_members m on m.tenant_id = covered.tenant_id and m.department_id = covered.id
+       where g.tenant_id = ${tenantId} and g.status = 'active'
+    )
+    insert into user_roles (tenant_id, user_id, role_id, source_key, granted_by)
+    select ${tenantId}, d.user_id, d.role_id, d.source_key, d.granted_by from desired d
+    on conflict do nothing
+  `
 }
 
 async function readSnapshot(sql: DatabaseClient | DatabaseTransaction): Promise<OrganizationSnapshot> {
@@ -304,7 +440,34 @@ async function readSnapshot(sql: DatabaseClient | DatabaseTransaction): Promise<
             or exists (select 1 from local_user_credentials c where c.tenant_id = u.tenant_id and c.user_id = u.id))
      order by u.display_name, u.id
   `
-  return { available: true, departments, members, employees }
+  const grants = await sql<OrganizationGrant[]>`
+    select g.id, g.department_id as "departmentId", d.name as "departmentName", g.role_id as "roleId",
+           g.include_descendants as "includeDescendants", g.status
+      from org_department_grants g
+      join org_departments d on d.tenant_id = g.tenant_id and d.id = g.department_id
+     where g.tenant_id = ${tenantId}
+     order by g.created_at, g.id
+  `
+  const roleRows = await sql<(Omit<OrganizationRole, 'assignable'> & { permissions: string[] })[]>`
+    select id, code, name, status, permissions from roles where tenant_id = ${tenantId} order by name, id
+  `
+  const roles = roleRows.map(({ permissions, ...role }) => ({
+    ...role, assignable: role.status === 'active' && !hasForbiddenPermission(permissions),
+  }))
+  const assignmentRows = await sql<{ userId: string; roleId: string; sourceKey: string }[]>`
+    select ur.user_id as "userId", ur.role_id as "roleId", ur.source_key as "sourceKey"
+      from user_roles ur
+      join users u on u.tenant_id = ur.tenant_id and u.id = ur.user_id and u.business_user
+     where ur.tenant_id = ${tenantId} and (ur.valid_until is null or ur.valid_until > now())
+       and (ur.source_key = 'local' or ur.source_key like 'department:%')
+     order by ur.user_id, ur.role_id, ur.source_key
+  `
+  const roleAssignments = assignmentRows.map(row => ({
+    userId: row.userId,
+    roleId: row.roleId,
+    source: row.sourceKey === 'local' ? 'direct' as const : { grantId: row.sourceKey.slice('department:'.length) },
+  }))
+  return { available: true, departments, members, employees, grants, roles, roleAssignments }
 }
 
 /** 树的写操作按企业串行，避免两次并发移动绕过“不能移到自己下级之下”的检查而形成环。 */

@@ -34,6 +34,18 @@ function organization(): OrganizationSnapshot {
       { id: 'u5', name: '郭雪', email: null, loginAccount: 'guoxue@example.invalid', status: 'active' },
       { id: 'u6', name: '停用员工', email: null, loginAccount: 'disabled@example.invalid', status: 'disabled' },
     ],
+    grants: [{ id: 'g1', departmentId: 'scm', departmentName: '供应链中心', roleId: 'role-analyst', includeDescendants: true, status: 'active' }],
+    roles: [
+      { id: 'role-employee', code: 'employee', name: '员工', status: 'active', assignable: true },
+      { id: 'role-analyst', code: 'analyst', name: '供应链分析员', status: 'active', assignable: true },
+      { id: 'role-platform-admin', code: 'platform_admin', name: '平台管理员', status: 'active', assignable: false },
+    ],
+    roleAssignments: [
+      { userId: 'u1', roleId: 'role-employee', source: 'direct' },
+      { userId: 'u1', roleId: 'role-analyst', source: { grantId: 'g1' } },
+      { userId: 'u2', roleId: 'role-analyst', source: { grantId: 'g1' } },
+      { userId: 'u3', roleId: 'role-analyst', source: { grantId: 'g1' } },
+    ],
   }
 }
 
@@ -75,7 +87,7 @@ describe('OrganizationView', () => {
     const counts = Object.fromEntries(wrapper.findAll('.tree-node').map(node => [node.get('.tree-node__name').text(), node.get('.tree-node__count').text()]))
     expect(counts).toEqual({ 示例企业: '3', 供应链中心: '3', 采购部: '1', 财务部: '1' })
     const metrics = wrapper.findAll('.metric-value').map(item => item.text())
-    expect(metrics).toEqual(['4', '3', '3'])
+    expect(metrics).toEqual(['4', '3', '3', '1'])
 
     await selectDepartment(wrapper, '供应链中心')
     expect(wrapper.get('.department-header').text()).toContain('示例企业 / 供应链中心')
@@ -119,6 +131,37 @@ describe('OrganizationView', () => {
     expect(add).toHaveBeenCalledWith('fin', ['u4', 'u5'])
   })
 
+  it('lists own and inherited department grants and grants a role to the subtree by default', async () => {
+    const grant = vi.spyOn(adminApi, 'grantDepartmentRole').mockResolvedValue(organization())
+    const wrapper = await render()
+    await selectDepartment(wrapper, '采购部')
+    await wrapper.findAll('.el-tabs__item').find(item => item.text().startsWith('部门授权'))!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('供应链分析员')
+    expect(wrapper.text()).toContain('上级“供应链中心”')
+    expect(wrapper.text()).toContain('到上级部门修改')
+
+    await selectDepartment(wrapper, '财务部')
+    await button(wrapper, '添加部门授权').trigger('click')
+    await flushPromises()
+    const dialog = wrapper.findAll('[role="dialog"]').find(item => item.text().includes('添加部门授权'))!
+    expect(dialog.text()).toContain('将覆盖 1 名员工')
+    await dialog.findAll('button').find(item => item.text() === '授权')!.trigger('click')
+    await flushPromises()
+    expect(grant).toHaveBeenCalledWith('fin', 'role-employee', true)
+  })
+
+  it('shows each role with where it comes from in the employee drawer', async () => {
+    const wrapper = await render()
+    await selectDepartment(wrapper, '采购部')
+    const row = wrapper.findAll('.el-table__body tr').find(item => item.text().includes('李娜'))!
+    await row.findAll('button').find(item => item.text() === '查看权限')!.trigger('click')
+    await flushPromises()
+    const drawer = wrapper.findAll('[role="dialog"]').find(item => item.text().includes('员工部门与角色'))!
+    expect(drawer.text()).toContain('示例企业 / 供应链中心 / 采购部')
+    expect(drawer.text()).toContain('来自“供应链中心”（下级继承）')
+  })
+
   it('hides write actions from read-only administrators', async () => {
     auth.canManage = false
     const wrapper = await render()
@@ -126,7 +169,7 @@ describe('OrganizationView', () => {
   })
 
   it('shows an explanation instead of the tree when organization is unavailable', async () => {
-    vi.spyOn(adminApi, 'getOrganization').mockResolvedValue({ available: false, departments: [], members: [], employees: [] })
+    vi.spyOn(adminApi, 'getOrganization').mockResolvedValue({ available: false, departments: [], members: [], employees: [], grants: [], roles: [], roleAssignments: [] })
     const wrapper = await render()
     expect(wrapper.text()).toContain('组织架构不可用')
     expect(wrapper.find('.department-tree').exists()).toBe(false)
