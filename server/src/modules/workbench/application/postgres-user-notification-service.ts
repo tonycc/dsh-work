@@ -6,8 +6,10 @@ import type { UserNotificationKind, UserNotificationObjectType } from '../../not
 
 const tenantId = 'tenant-dsh-work'
 
-/** 方案 NC4：只保留最近 90 天的通知；更早的不再列出、不计未读（清扫随 NC-S4）。 */
+/** 方案 NC4：只保留最近 90 天的通知；更早的不再列出、不计未读，并由每日清扫删除（NC-S4）。 */
 const retentionDays = 90
+/** 每批删除条数：分批提交，避免一次长事务锁住大量行。 */
+const purgeBatchSize = 1000
 
 export interface UserNotificationItem {
   id: string
@@ -128,12 +130,42 @@ export class PostgresUserNotificationService {
     return { id: row.id, read: true }
   }
 
+  /**
+   * 保留清扫（NC-S4）：删除超过保留期的通知，与已读未读无关。分批删除、可重复执行；多个实例同时执行
+   * 时跳过对方锁住的行，各删各的批次。一直删到某一批没有可删的为止（被锁的行留到下次）。只删通知记录，
+   * 不动 @ 提醒等业务数据。默认用数据库时间，与读取侧的保留期判断同一时钟；测试可传入时间。
+   */
+  async purgeExpired(now?: Date): Promise<{ removed: number }> {
+    const sql = this.database
+    const cutoff = now
+      ? sql`${now}::timestamptz - make_interval(days => ${retentionDays})`
+      : sql`now() - make_interval(days => ${retentionDays})`
+    let removed = 0
+    for (;;) {
+      const rows = await sql<Array<{ id: string }>>`
+        delete from user_notifications
+         where id in (
+           select id from user_notifications
+            where tenant_id = ${tenantId} and created_at <= ${cutoff}
+            order by created_at
+            limit ${purgeBatchSize}
+            for update skip locked
+         )
+        returning id
+      `
+      removed += rows.length
+      if (rows.length === 0) return { removed }
+    }
+  }
+
+  /** 全部标为已读：只标保留期内的通知（看不到的过期通知不计入，也不与清扫争锁）。 */
   async markAllRead(userId: string): Promise<{ read: number }> {
     const sql = this.database
     const rows = await sql<Array<{ id: string }>>`
       with marked as (
         update user_notifications set read_at = now()
          where tenant_id = ${tenantId} and recipient_user_id = ${userId} and read_at is null
+           and created_at > now() - make_interval(days => ${retentionDays})
         returning id, kind, object_id
       ), ${mentionsReadWith(sql, userId)}
       select id from marked

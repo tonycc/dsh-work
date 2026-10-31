@@ -757,13 +757,18 @@ test('NC-04 服务重启后丢失的定时任务执行记为失败并通知所�
     inputTemplate: { prompt: '执行' },
   })
   await service.enable(userId, created.id)
+  // 用单独的、不接受调度的 Runtime：重启恢复按 Runtime 收敛执行，不能波及其他用例仍在运行的执行。
+  const runtimeId = `runtime-restart-${randomUUID().slice(0, 8)}`
+  await database`
+    insert into runtimes (id, tenant_id, node_name, runtime_version, health_status, scheduling_status, capacity)
+    values (${runtimeId}, ${tenantId}, 'restart-test', 'test', 'offline', 'disabled', 1)`
   const session = await conversations.createSession({ userId, title: '重启现场', workspaceId, agentVersionId: versionId })
   const run = await runs.createRun({ tenantId, sessionId: session.id, requestedBy: userId, idempotencyKey: randomUUID() })
   const attempt = await runs.createAttempt({
     attemptId: `attempt-${randomUUID()}`,
     tenantId,
     runId: run.id,
-    runtimeId: 'runtime-local-01',
+    runtimeId,
     manifest: testAttemptManifest(run.taskId, run.id, { purpose: 'automation' }),
     manifestSha256: 'test-manifest-sha',
     modelRouteSnapshot: {},
@@ -784,7 +789,7 @@ test('NC-04 服务重启后丢失的定时任务执行记为失败并通知所�
     await tx`update runs set status = 'running' where tenant_id = ${tenantId} and id = ${run.id}`
   })
 
-  const recovered = await runs.recoverAfterRestart(tenantId, 'runtime-local-01')
+  const recovered = await runs.recoverAfterRestart(tenantId, runtimeId)
   assert.ok(recovered.failed.some(item => item.runId === run.id))
   assert.deepEqual(await automationNotifications(userId), [{ outcome: 'failed', sessionId: session.id }])
 })

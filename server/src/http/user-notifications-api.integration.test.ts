@@ -348,6 +348,54 @@ test('NC-04 定时任务与 Skill 审核通知读取时解析名称；停用或�
   assert.equal(await unread(ws.first), 0)
 })
 
+test('NC-05 清扫删除所有员工 90 天前的通知，可重复执行，90 天内的保留', async () => {
+  const ws = await seedSpace('retention')
+  const insert = (recipient: string, label: string, daysAgo: number, read: boolean) => database`
+    insert into user_notifications (id, tenant_id, recipient_user_id, kind, workspace_id, object_type, object_id, actor_user_id,
+                                    safe_metadata, dedupe_key, created_at, read_at)
+    values (${`n-ret-${ws.id}-${label}`}, ${tenantId}, ${recipient}, 'workspace_member_added', ${ws.id}, 'workspace', ${ws.id}, ${ws.owner},
+            '{}'::jsonb, ${`retention:${ws.id}:${label}`}, now() - make_interval(days => ${daysAgo}),
+            ${read ? database`now()` : null})`
+  await insert(ws.first, 'old-unread', 91, false)
+  await insert(ws.first, 'old-read', 120, true)
+  await insert(ws.second, 'old-other', 95, false)
+  await insert(ws.first, 'recent', 89, false)
+
+  // 超过一批（1000 条）的过期通知，验证分批删除能删完。
+  await database`
+    insert into user_notifications (id, tenant_id, recipient_user_id, kind, workspace_id, object_type, object_id, actor_user_id,
+                                    safe_metadata, dedupe_key, created_at)
+    select ${`n-ret-${ws.id}-bulk-`} || i, ${tenantId}, ${ws.second}, 'workspace_member_added', ${ws.id}, 'workspace', ${ws.id}, ${ws.owner},
+           '{}'::jsonb, ${`retention:${ws.id}:bulk-`} || i, now() - interval '100 days'
+      from generate_series(1, 1500) as i`
+
+  // 清扫前读取侧已不列出、不计超过保留期的通知；“全部标为已读”也只标保留期内的。
+  assert.deepEqual((await notifications(ws.first)).map(item => item.id), [`n-ret-${ws.id}-recent`])
+  assert.equal(await unread(ws.first), 1)
+  assert.deepEqual((await api('POST', `${base}/me/notifications/read-all`, { as: ws.first })).body.data, { read: 1 })
+  const [expiredUnread] = await database<{ readAt: Date | null }[]>`
+    select read_at as "readAt" from user_notifications where id = ${`n-ret-${ws.id}-old-unread`}`
+  assert.equal(expiredUnread?.readAt, null, '看不到的过期通知不被标为已读')
+
+  const business = async () => {
+    const [row] = await database<{ mentions: number; activity: number }[]>`
+      select (select count(*) from message_mentions)::integer as mentions,
+             (select count(*) from workspace_activity_events)::integer as activity`
+    return { ...row }
+  }
+  const before = await business()
+
+  const service = new PostgresUserNotificationService(database)
+  const [first, second] = await Promise.all([service.purgeExpired(), service.purgeExpired()])
+  assert.equal(first.removed + second.removed, 1503, '两个实例同时清扫，各删各的批次，合计删完')
+  assert.deepEqual(await service.purgeExpired(), { removed: 0 })
+  assert.deepEqual(await business(), before, '只删通知，不动 @ 提醒与项目动态')
+  const left = await database<{ id: string }[]>`
+    select id from user_notifications where tenant_id = ${tenantId} and dedupe_key like ${`retention:${ws.id}:%`}`
+  assert.deepEqual(left.map(row => row.id), [`n-ret-${ws.id}-recent`])
+  assert.deepEqual((await notifications(ws.first)).map(item => item.id), [`n-ret-${ws.id}-recent`])
+})
+
 async function joinAgent(ws: { id: string; owner: string }, label: string): Promise<string> {
   const agentId = `agent-nc-${label}-${randomUUID().slice(0, 8)}`
   await insertAgent(agentId)
