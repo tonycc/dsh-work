@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, toRef } from 'vue'
-import { Close, CopyDocument, Lock, RefreshRight, Share, Warning } from '@element-plus/icons-vue'
+import { Close, CopyDocument, RefreshRight, Share, Warning } from '@element-plus/icons-vue'
 import { StatusTag } from '@dsh-work/ui-core'
 
 import ConversationMessageItem from './ConversationMessageItem.vue'
+import RunApprovalNotice from './RunApprovalNotice.vue'
 import RunArtifactCards from './RunArtifactCards.vue'
 import AgentRecommendationCards from './AgentRecommendationCards.vue'
 import RunProgressCard from './RunProgressCard.vue'
@@ -177,19 +178,7 @@ function messageMeta(message: ChatMessage) {
     @open-details="emit('open-details')"
   />
 
-  <section v-if="task.status === 'awaiting_approval'" class="conversation-notice approval-notice">
-    <span class="conversation-notice__icon"><el-icon><Lock /></el-icon></span>
-    <div>
-      <strong>等待本轮工具权限确认</strong>
-      <p>{{ task.approval?.reason ?? '服务端已暂停当前执行并保留审批所需的动作边界。' }}</p>
-      <dl>
-        <div><dt>对象</dt><dd class="mono">{{ task.approval?.object ?? '受控工具' }}</dd></div>
-        <div><dt>范围</dt><dd>{{ task.approval?.dataScope ?? '当前用户授权范围' }}</dd></div>
-      </dl>
-      <p>{{ task.approval?.nextStep ?? '审批完成后会从新的 Attempt 继续执行，无需重复提交。' }}</p>
-    </div>
-    <StatusTag status="awaiting_approval" label="等待确认" />
-  </section>
+  <RunApprovalNotice v-if="task.status === 'awaiting_approval'" :task="task" />
 
   <section v-if="task.result.error" class="conversation-notice error-notice">
     <span class="conversation-notice__icon"><el-icon><Close /></el-icon></span>
