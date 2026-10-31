@@ -16,7 +16,7 @@ import {
   unreadCountCap,
 } from './conversation-targets.ts'
 import { readableWorkspacePredicate } from './postgres-workspace-service.ts'
-import { markMentionNotificationsRead } from './user-notification-writer.ts'
+import { markMentionNotificationsRead } from '../../notification/user-notification-writer.ts'
 
 const tenantId = 'tenant-dsh-work'
 

@@ -1,13 +1,18 @@
 import { randomUUID } from 'node:crypto'
 
-import type { DatabaseTransaction } from '../../../infrastructure/postgres/database.ts'
+import type { DatabaseTransaction } from '../../infrastructure/postgres/database.ts'
 
 const tenantId = 'tenant-dsh-work'
 
-/** 站内通知方案 NC-S1 的通知类型；与迁移 0110 的 CHECK 约束一一对应。 */
-export type UserNotificationKind = 'mention' | 'task_assigned' | 'task_completed' | 'workspace_member_added'
+/** 站内通知的类型；与迁移 0110、0111 的 CHECK 约束一一对应。 */
+export type UserNotificationKind =
+  | 'mention' | 'task_assigned' | 'task_completed' | 'workspace_member_added'
+  | 'task_schedule_stopped' | 'automation_failed' | 'skill_review_result'
 
-export type UserNotificationObjectType = 'message' | 'project_task' | 'workspace'
+export type UserNotificationObjectType = 'message' | 'project_task' | 'workspace' | 'automation' | 'skill_submission'
+
+/** 定时任务一次执行没有成功的方式（NC-S3）：执行失败、被跳过、停机错过、受理后未能开始。 */
+export type AutomationOutcome = 'failed' | 'skipped' | 'missed' | 'interrupted'
 
 export interface UserNotificationInput {
   recipientUserId: string
@@ -79,5 +84,34 @@ export async function markMentionNotificationsRead(
     update user_notifications set read_at = now()
      where tenant_id = ${tenantId} and recipient_user_id = ${userId} and kind = 'mention'
        and object_id in ${transaction(messageIds)} and read_at is null
+  `
+}
+
+/**
+ * 定时任务的一次执行没有成功（NC-S3）：通知所有者。按执行记录取所有者与所在空间，与执行状态的
+ * 写入同一事务；`executionId` 或 `runId` 二选一（Run 失败时只知道 Run）。手动执行没有 Run 就被拒绝时
+ * 所有者当场看到，调用方不应调用。去重键按“执行 + 结果”。
+ */
+export async function recordAutomationOutcomeNotification(
+  transaction: DatabaseTransaction,
+  target: { executionId: string } | { runId: string },
+  outcome: AutomationOutcome,
+): Promise<void> {
+  const match = 'executionId' in target
+    ? transaction`e.id = ${target.executionId}`
+    : transaction`e.run_id = ${target.runId}`
+  await transaction`
+    insert into user_notifications (
+      id, tenant_id, recipient_user_id, kind, workspace_id, object_type, object_id,
+      actor_user_id, safe_metadata, dedupe_key
+    )
+    select 'unotif-' || gen_random_uuid()::text, a.tenant_id, a.owner_user_id, 'automation_failed', a.workspace_id,
+           'automation', a.id, null,
+           jsonb_build_object('outcome', ${outcome}::text, 'executionId', e.id, 'sessionId', e.session_id),
+           'automation:' || e.id || ':' || ${outcome}::text
+      from automation_executions e
+      join agent_automations a on a.tenant_id = e.tenant_id and a.id = e.automation_id
+     where e.tenant_id = ${tenantId} and ${match}
+    on conflict (tenant_id, recipient_user_id, dedupe_key) do nothing
   `
 }

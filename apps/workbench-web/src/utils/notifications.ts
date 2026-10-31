@@ -26,7 +26,36 @@ export function notificationText(item: UserNotification): NotificationTextPart[]
       return [{ text: actor, strong: true }, { text: ' 完成了你创建的任务 ' }, { text: `「${object}」`, strong: true }]
     case 'workspace_member_added':
       return [{ text: actor, strong: true }, { text: ' 把你加入了项目 ' }, { text: `「${workspace}」`, strong: true }]
+    case 'task_schedule_stopped': {
+      const state = item.detail?.state === 'stopped' ? '已停止' : '已暂停'
+      const reason = scheduleStopReasons[item.detail?.reason ?? '']
+      return [{ text: '任务 ' }, { text: `「${object}」`, strong: true }, { text: ` 的定时执行${state}${reason ? `：${reason}` : ''}` }]
+    }
+    case 'automation_failed':
+      return [{ text: '定时任务 ' }, { text: `「${object}」`, strong: true }, { text: automationOutcomes[item.detail?.outcome ?? ''] ?? ' 本次执行没有成功' }]
+    case 'skill_review_result':
+      return [
+        { text: '你提交的 Skill ' }, { text: `「${object}」`, strong: true },
+        { text: item.detail?.result === 'approved' ? ' 已发布到 Skill 广场' : ' 未通过审核，原因见草稿卡片' },
+      ]
   }
+}
+
+/** 定时执行暂停或停止的原因（与服务端 `schedule_reason` 一致）。 */
+const scheduleStopReasons: Record<string, string> = {
+  consecutive_failures: '连续多次执行失败',
+  setter_ineligible: '你已没有执行这个任务的权限',
+  agent_unavailable: '负责的 Agent 已不可用',
+  workspace_archived: '项目已归档',
+  due_passed: '已过截止日期',
+}
+
+/** 定时任务一次执行没有成功的方式。 */
+const automationOutcomes: Record<string, string> = {
+  failed: ' 本次执行失败',
+  skipped: ' 本次执行被跳过',
+  missed: ' 因服务停机错过了执行',
+  interrupted: ' 本次执行未能开始',
 }
 
 /** 无障碍名称与测试用的纯文本正文。 */
@@ -37,16 +66,24 @@ export function notificationPlainText(item: UserNotification): string {
 /** 类型图标的短标记（不用表情符号）。 */
 export function notificationGlyph(item: UserNotification): string {
   if (!item.visible) return '–'
-  return { mention: '@', task_assigned: '任', task_completed: '任', workspace_member_added: '员' }[item.kind]
+  return {
+    mention: '@', task_assigned: '任', task_completed: '任', workspace_member_added: '员',
+    task_schedule_stopped: '时', automation_failed: '时', skill_review_result: 'S',
+  }[item.kind]
 }
 
 /**
  * 点击通知去往的地址。任务与项目使用 A 工作模式的地址，B 中由路由守卫映射到群组对应页
- * （mode-routes）；@ 我在 A 中打开该讨论，在 B 中打开群聊（讨论消息在群聊中）。
+ * （mode-routes）；@ 我在 A 中打开该讨论，在 B 中打开群聊（讨论消息在群聊中）。定时任务与
+ * Skill 审核打开对应对话（`/sessions/:id` 两种模式通用），没有对话时打开所在列表页。
  * 不可见的通知没有去向。
  */
 export function notificationLocation(item: UserNotification, mode: UiMode): RouteLocationRaw | null {
-  if (!item.visible || !item.target || !item.workspace) return null
+  if (!item.visible || !item.target) return null
+  const sessionId = item.target.sessionId
+  if (item.target.type === 'automation') return sessionId ? { name: 'session-detail', params: { id: sessionId } } : { path: '/automations' }
+  if (item.target.type === 'skill_submission') return sessionId ? { name: 'session-detail', params: { id: sessionId } } : { path: '/skills' }
+  if (!item.workspace) return null
   const workspaceId = item.workspace.id
   switch (item.target.type) {
     case 'message':

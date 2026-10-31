@@ -27,5 +27,5 @@
 | [Agent](catalog/agents.md) | Agent 定义与能力、详情与发布、岗位权限、轻量自动任务、经验迭代与主动记忆。 | `AG-SOUL-P0`、`AG-CAP-P0`、`AG-DETAIL-01`、`AG-DETAIL-02`、`AG-CAP-P1`、`AG-CAP-P2`、`AE-02`、`AG-SOUL-01`、`AG-REL-01`、`AG-PROTO-02`、`AG-REL-02`、`AG-AUTO-00`、`AG-AUTO-20`、`AG-AUTO-21`、`AG-AUTO-22`、`AG-AUTO-23`、`AG-AUTO-24`、`AG-AUTO-P2`、`EXPERIENCE-ITERATION-01`、`MEMORY-EMPLOYEE-REMOVAL`、`PF-MEMORY-01`、`PF-MEMORY-P2`、`AE-MEMORY-01` |
 | [管理端与平台](catalog/admin-platform.md) | 冒烟环境、登录与身份、管理端、内置工具与操作计划、开发接入文档、MCP、持久化等待与审批、平台内置 Skill。 | `E2E-ENV-01`、`TW-E2E-02`、`ADMIN-E2E-03`、`LOCAL-AUTH-P1`、`LOGIN-ENTRY-P1`、`LOGIN-OPTIONS-P1`、`ADMIN-E2E-01`、`ADMIN-E2E-05`、`ADMIN-E2E-02`、`ADMIN-E2E-04`、`C7`、`PF-MCP-01`、`PF-MCP-P2`、`PF-WAIT-01`、`PF-WAIT-P2`、`BSK-01`、`BSK-02`、`BSK-P2` |
 | [Skill 创建专家与可见范围](catalog/skill-creator.md) | Skill 可见范围、员工经 Skill 创建专家生成草稿并提交、管理员审核发布、Skill 广场“创建 Skill”入口。 | `SKC-VIS-01`、`SKC-01`、`SKC-02`、`SKC-03`、`SKC-04`、`SKC-P2` |
-| [站内通知](catalog/notifications.md) | 与本人相关事件的通知记录、读取时权限解析、未读、已读与静音；员工端通知入口与面板。 | `NC-01`、`NC-02`、`NC-03` |
+| [站内通知](catalog/notifications.md) | 与本人相关事件的通知记录、读取时权限解析、未读、已读与静音；员工端通知入口与面板。 | `NC-01`、`NC-02`、`NC-03`、`NC-04` |
 | [验证记录](catalog/verification-log.md) | 留证约定（非验收标准）；不在工作树堆积某次跑测长文。 | — |

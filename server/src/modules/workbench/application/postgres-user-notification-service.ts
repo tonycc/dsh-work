@@ -2,7 +2,7 @@ import type { DatabaseClient } from '../../../infrastructure/postgres/database.t
 import { requestInvalid } from '../../../domain/authorization-errors.ts'
 import { notFound } from '../../../domain/request-errors.ts'
 import { readableWorkspacePredicate } from './postgres-workspace-service.ts'
-import type { UserNotificationKind, UserNotificationObjectType } from './user-notification-writer.ts'
+import type { UserNotificationKind, UserNotificationObjectType } from '../../notification/user-notification-writer.ts'
 
 const tenantId = 'tenant-dsh-work'
 
@@ -21,10 +21,18 @@ export interface UserNotificationItem {
   visible: boolean
   actor: { id: string; name: string } | null
   workspace: { id: string; name: string } | null
-  /** 对象名称：任务标题；@ 与被加入项目没有单独的对象名称。 */
+  /** 对象名称：任务标题、定时任务名称或提交的 Skill 名称；@ 与被加入项目没有单独的对象名称。 */
   objectName: string | null
+  /**
+   * 事件的代码值（NC-S3）：定时执行的 `state`（paused/stopped）与 `reason`、定时任务的
+   * `outcome`（failed/skipped/missed/interrupted）、Skill 审核的 `result`（approved/rejected）。
+   */
+  detail: Record<string, string> | null
   target: { type: UserNotificationObjectType; id: string; sessionId: string | null } | null
 }
+
+/** 允许返回给员工的事件代码；`safe_metadata` 中的其他键（如执行 ID）不对外。 */
+const detailKeys = ['state', 'reason', 'outcome', 'result'] as const
 
 export interface UserNotificationPage {
   items: UserNotificationItem[]
@@ -46,6 +54,7 @@ interface NotificationRow {
   objectId: string
   objectName: string | null
   sessionId: string | null
+  metadata: Record<string, unknown>
 }
 
 /**
@@ -70,8 +79,10 @@ export class PostgresUserNotificationService {
       select n.id, n.kind, n.created_at::text as "createdAtToken", n.created_at as "createdAt", n.read_at as "readAt",
              v.visible, n.actor_user_id as "actorUserId", actor.display_name as "actorName",
              n.workspace_id as "workspaceId", w.name as "workspaceName",
-             n.object_type as "objectType", n.object_id as "objectId", pt.title as "objectName",
-             n.safe_metadata ->> 'sessionId' as "sessionId"
+             n.object_type as "objectType", n.object_id as "objectId",
+             coalesce(pt.title, au.name, ss.name) as "objectName",
+             coalesce(n.safe_metadata ->> 'sessionId', ss.session_id) as "sessionId",
+             n.safe_metadata as metadata
         from user_notifications n
         ${visibilityJoins(sql, input.userId)}
        where n.tenant_id = ${tenantId} and n.recipient_user_id = ${input.userId}
@@ -153,8 +164,9 @@ function countsAsUnread(sql: DatabaseClient) {
 }
 
 /**
- * 读取时的可见性：所在项目空间仍对本人可读（现任成员、账号有效）；任务未被删除；
- * @ 所在的会话仍有效。别名 `n` 是通知行，产出 `w`、`pt`、`actor`、静音状态 `ns` 与布尔列 `v.visible`。
+ * 读取时的可见性：所在项目空间仍对本人可读（现任成员、账号有效）；任务未被删除；@ 所在的会话仍有效；
+ * 定时任务未停用且仍归本人；Skill 提交仍归本人。别名 `n` 是通知行，产出 `w`、`pt`、`au`、`ss`、
+ * `actor`、静音状态 `ns` 与布尔列 `v.visible`。
  */
 function visibilityJoins(sql: DatabaseClient, userId: string) {
   return sql`
@@ -165,6 +177,11 @@ function visibilityJoins(sql: DatabaseClient, userId: string) {
     left join messages m on n.object_type = 'message' and m.tenant_id = n.tenant_id and m.id = n.object_id
     left join sessions s on s.tenant_id = m.tenant_id and s.id = m.session_id
       and s.workspace_id = n.workspace_id and s.status = 'active'
+    left join agent_automations au on n.object_type = 'automation'
+      and au.tenant_id = n.tenant_id and au.id = n.object_id
+      and au.owner_user_id = n.recipient_user_id and au.status <> 'disabled'
+    left join skill_submissions ss on n.object_type = 'skill_submission'
+      and ss.tenant_id = n.tenant_id and ss.id = n.object_id and ss.submitter_user_id = n.recipient_user_id
     left join users actor on actor.tenant_id = n.tenant_id and actor.id = n.actor_user_id
     left join workspace_notification_states ns
       on ns.tenant_id = n.tenant_id and ns.workspace_id = n.workspace_id and ns.user_id = n.recipient_user_id
@@ -172,19 +189,26 @@ function visibilityJoins(sql: DatabaseClient, userId: string) {
       (n.workspace_id is null or (w.id is not null and (${readableWorkspacePredicate(sql, userId)})))
       and (n.object_type <> 'project_task' or pt.id is not null)
       and (n.object_type <> 'message' or s.id is not null)
+      and (n.object_type <> 'automation' or au.id is not null)
+      and (n.object_type <> 'skill_submission' or ss.id is not null)
     ) as visible) v
   `
 }
 
 function toItem(row: NotificationRow): UserNotificationItem {
   const base = { id: row.id, kind: row.kind, createdAt: row.createdAt.toISOString(), read: row.readAt !== null }
-  if (!row.visible) return { ...base, visible: false, actor: null, workspace: null, objectName: null, target: null }
+  if (!row.visible) return { ...base, visible: false, actor: null, workspace: null, objectName: null, detail: null, target: null }
+  const detail = Object.fromEntries(detailKeys.flatMap(key => {
+    const value = row.metadata[key]
+    return typeof value === 'string' ? [[key, value]] : []
+  }))
   return {
     ...base,
     visible: true,
     actor: row.actorUserId ? { id: row.actorUserId, name: row.actorName ?? '' } : null,
     workspace: row.workspaceId ? { id: row.workspaceId, name: row.workspaceName ?? '' } : null,
     objectName: row.objectName,
+    detail: Object.keys(detail).length ? detail : null,
     target: { type: row.objectType, id: row.objectId, sessionId: row.sessionId },
   }
 }
