@@ -9,6 +9,7 @@ import {
   currentTeamAuthRevision,
   recordWorkspaceActivity,
 } from './workspace-activity-writer.ts'
+import { recordUserNotification } from './user-notification-writer.ts'
 import { RequestError, invalidRequest } from '../../../domain/request-errors.ts'
 
 const tenantId = 'tenant-dsh-work'
@@ -269,6 +270,10 @@ export class PostgresWorkspaceMemberService {
         objectId: targetUserId,
         dedupeKey: `member_added:${targetUserId}:${inserted.joinedAt}`,
         metadata: { userId: targetUserId, role },
+      })
+      await recordUserNotification(transaction, {
+        recipientUserId: targetUserId, kind: 'workspace_member_added', workspaceId, objectType: 'workspace',
+        objectId: workspaceId, actorUserId, dedupeKey: `member_added:${workspaceId}:${inserted.joinedAt}`,
       })
       created = true
     })
