@@ -307,14 +307,18 @@ export class PostgresConversationTargetService implements ConversationTargetStor
             updated_at = case when excluded.last_read_at > rs.last_read_at then now() else rs.updated_at end
       returning last_read_at as "lastReadAt"
     `
-    // D38：打开群组即读过其中 @ 本人的消息，提醒随之已读（不晚于已读位置）。
+    // D38：打开群组即读过其中 @ 本人的消息，提醒随之已读（不晚于已读位置）。已读位置在库内比较：
+    // 读回的 Date 只有毫秒精度，会丢掉上面补的微秒，使这一毫秒内最新那条 @ 永远未读。
     if (input.type === 'group') {
       await sql`
         update message_mentions mm set read_at = now()
-          from messages m
+          from messages m, conversation_read_states rs
          where mm.tenant_id = ${tenantId} and mm.mentioned_user_id = ${input.userId}
            and mm.workspace_id = ${input.id} and mm.read_at is null
-           and m.tenant_id = mm.tenant_id and m.id = mm.message_id and m.created_at <= ${row!.lastReadAt}
+           and m.tenant_id = mm.tenant_id and m.id = mm.message_id
+           and rs.tenant_id = mm.tenant_id and rs.user_id = mm.mentioned_user_id
+           and rs.target_type = 'group' and rs.target_id = mm.workspace_id
+           and m.created_at <= rs.last_read_at
       `
     }
     return { type: input.type, id: input.id, lastReadAt: row!.lastReadAt.toISOString() }
