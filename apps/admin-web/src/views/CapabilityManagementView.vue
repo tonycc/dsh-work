@@ -127,7 +127,10 @@ const builtinDetailOpen = ref(false)
 const coverageDraft = ref<BuiltinSkillScenario[]>([])
 const coverageChanged = computed(() =>
   [...coverageDraft.value].sort().join(',') !== [...(selectedSkill.value?.coveredBuiltinScenarios ?? [])].sort().join(','))
-watch(selectedSkill, skill => { coverageDraft.value = [...(skill?.coveredBuiltinScenarios ?? [])] }, { immediate: true })
+// 只在切换 Skill 或已保存值变化时重置草稿；列表刷新替换对象不应丢掉未保存的勾选。
+watch(() => `${selectedSkill.value?.id ?? ''}|${[...(selectedSkill.value?.coveredBuiltinScenarios ?? [])].sort().join(',')}`, () => {
+  coverageDraft.value = [...(selectedSkill.value?.coveredBuiltinScenarios ?? [])]
+}, { immediate: true })
 
 function builtinScenarioLabel(scenario: string) {
   return builtinScenarioOptions.value.find(item => item.id === scenario)?.label ?? scenario

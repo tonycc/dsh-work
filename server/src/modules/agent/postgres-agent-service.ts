@@ -158,7 +158,7 @@ export interface RuntimeAgentSnapshot {
   systemPrompt: string
   skills: string[]
   skillInstructions: RuntimeSkillConfiguration[]
-  /** Agent 固定与会话选择的 Skill（不含依赖）及其“覆盖内置场景”，派发时据此去掉被覆盖的平台内置 Skill。 */
+  /** 本次全部 Skill（含依赖）及其“覆盖内置场景”（只有 Agent 固定与会话选择的 Skill 有），派发时据此去掉被覆盖或同名的平台内置 Skill。 */
   coveringSkills: CoveringSkill[]
   /** 本 Agent 装配的内置工具名称（注册表默认工具、开启的联网搜索、Skill 需要的 Python 执行）。 */
   runtimeTools: string[]
@@ -829,10 +829,11 @@ export class PostgresAgentService {
       : skills
     const rootIds = new Set(skills.map(reference => reference.slice(0, reference.lastIndexOf('@'))))
     const covered = this.skillService ? await this.skillService.readCoveredBuiltinScenarios([...rootIds]) : new Map<string, string[]>()
-    const coveringSkills: CoveringSkill[] = skillInstructions.filter(skill => rootIds.has(skill.id)).map(skill => ({
+    // 依赖 Skill 也参与同名判断（避免 Manifest 目录重名），但只有 Agent 固定与会话选择的 Skill 能按场景覆盖。
+    const coveringSkills: CoveringSkill[] = skillInstructions.map(skill => ({
       reference: `${skill.id}@${skill.version}`,
       name: skill.name ?? skill.id,
-      scenarios: covered.get(skill.id) ?? [],
+      scenarios: rootIds.has(skill.id) ? covered.get(skill.id) ?? [] : [],
       modelInvocable: !skill.disableModelInvocation,
     }))
     const systemPrompt = row.agentSpec

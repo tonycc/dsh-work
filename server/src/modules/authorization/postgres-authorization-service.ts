@@ -4,7 +4,7 @@ import type { DatabaseClient } from '../../infrastructure/postgres/database.ts'
 import { unavailableSkillTools } from '../runtime/builtin-tools.ts'
 import { redactSensitiveText } from '../../security/safe-observability.ts'
 import { authorizationDenied } from '../../domain/authorization-errors.ts'
-import { installedSkillReferences } from '../../domain/builtin-skill-ref.ts'
+import { installedSkillReferences, type KnownBuiltinSkill } from '../../domain/builtin-skill-ref.ts'
 import { requirePlatformAdminActor } from './platform-admin-actor.ts'
 import { resolveAudienceCeiling, type AudienceCeiling } from './agent-audience-ceiling.ts'
 import type { RuntimeManifest } from '../runtime/runtime-types.ts'
@@ -127,17 +127,26 @@ export class PostgresAuthorizationService {
    */
   private readonly teamReadAccessCache = new Map<string, { revision: number; authFingerprint: string; checkedAt: number }>()
   private readonly automationDirectory: AutomationDirectoryBinding | null
+  private readonly knownBuiltinSkill?: KnownBuiltinSkill
 
   constructor(
     database: DatabaseClient,
     options: {
       streamAccessTtlMs?: number
       automationDirectory?: AutomationDirectoryBinding | null
+      /** 平台内置 Skill 注册表；执行前复核只对其中登记的内置 Skill 跳过 Skill 授权。 */
+      knownBuiltinSkill?: KnownBuiltinSkill
     } = {},
   ) {
     this.database = database
     this.streamAccessTtlMs = options.streamAccessTtlMs ?? 10_000
     this.automationDirectory = options.automationDirectory ?? null
+    this.knownBuiltinSkill = options.knownBuiltinSkill
+  }
+
+  /** 执行前复核的附加 Skill：去掉注册表确认的内置 Skill，其余（含冒用前缀的引用）照常复核。 */
+  installedSkillReferences(skills: ReadonlyArray<{ id: string; version: string }> | undefined): string[] {
+    return installedSkillReferences(skills, this.knownBuiltinSkill)
   }
 
   async authorizeWorkbench(input: {
@@ -276,7 +285,7 @@ export class PostgresAuthorizationService {
       workspaceId: source.workspaceId,
       recipientUserId: source.recipientUserId,
       scopeCeiling: { roleIds: source.roleIds, dataScopes: source.dataScopes },
-      additionalSkillReferences: installedSkillReferences(manifest.skills),
+      additionalSkillReferences: this.installedSkillReferences(manifest.skills),
     })
     if (!manifest.principal_context
       || source.principalId !== decision.executorPrincipalId
