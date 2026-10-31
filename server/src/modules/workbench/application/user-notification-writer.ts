@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
-import type { DatabaseClient, DatabaseTransaction } from '../../../infrastructure/postgres/database.ts'
+import type { DatabaseTransaction } from '../../../infrastructure/postgres/database.ts'
 
 const tenantId = 'tenant-dsh-work'
 
@@ -70,7 +70,7 @@ export async function recordMentionNotifications(
 
 /** 打开群组或讨论把 @ 提醒标为已读时，同步这些消息的 `mention` 通知（方案 NC4）。 */
 export async function markMentionNotificationsRead(
-  transaction: DatabaseClient | DatabaseTransaction,
+  transaction: DatabaseTransaction,
   userId: string,
   messageIds: string[],
 ): Promise<void> {

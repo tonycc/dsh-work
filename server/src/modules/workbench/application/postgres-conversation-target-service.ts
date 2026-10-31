@@ -310,8 +310,9 @@ export class PostgresConversationTargetService implements ConversationTargetStor
     `
     // D38：打开群组即读过其中 @ 本人的消息，提醒随之已读（不晚于已读位置）。已读位置在库内比较：
     // 读回的 Date 只有毫秒精度，会丢掉上面补的微秒，使这一毫秒内最新那条 @ 永远未读。
-    if (input.type === 'group') {
-      const read = await sql<Array<{ messageId: string }>>`
+    // @ 提醒与 @ 通知在同一事务中已读：分两次提交时后一步失败，下次只取 read_at 为空的提醒，通知会永远未读。
+    if (input.type === 'group') await sql.begin(async (transaction) => {
+      const read = await transaction<Array<{ messageId: string }>>`
         update message_mentions mm set read_at = now()
           from messages m, conversation_read_states rs
          where mm.tenant_id = ${tenantId} and mm.mentioned_user_id = ${input.userId}
@@ -322,8 +323,8 @@ export class PostgresConversationTargetService implements ConversationTargetStor
            and m.created_at <= rs.last_read_at
         returning mm.message_id as "messageId"
       `
-      await markMentionNotificationsRead(sql, input.userId, read.map(row => row.messageId))
-    }
+      await markMentionNotificationsRead(transaction, input.userId, read.map(row => row.messageId))
+    })
     return { type: input.type, id: input.id, lastReadAt: row!.lastReadAt.toISOString() }
   }
 
@@ -352,14 +353,17 @@ export class PostgresConversationTargetService implements ConversationTargetStor
        where w.tenant_id = ${tenantId} and w.id = ${input.workspaceId} and w.workspace_type = 'team'
          and (${readableWorkspacePredicate(sql, input.userId)})`
     if (!workspace) throw notFound('项目空间不存在或无权访问')
-    const rows = await sql<Array<{ messageId: string }>>`
-      update message_mentions set read_at = now()
-       where tenant_id = ${tenantId} and mentioned_user_id = ${input.userId}
-         and workspace_id = ${input.workspaceId} and read_at is null
-         and ${input.sessionId ? sql`session_id = ${input.sessionId}` : sql`true`}
-      returning message_id as "messageId"
-    `
-    await markMentionNotificationsRead(sql, input.userId, rows.map(row => row.messageId))
+    const rows = await sql.begin(async (transaction) => {
+      const read = await transaction<Array<{ messageId: string }>>`
+        update message_mentions set read_at = now()
+         where tenant_id = ${tenantId} and mentioned_user_id = ${input.userId}
+           and workspace_id = ${input.workspaceId} and read_at is null
+           and ${input.sessionId ? transaction`session_id = ${input.sessionId}` : transaction`true`}
+        returning message_id as "messageId"
+      `
+      await markMentionNotificationsRead(transaction, input.userId, read.map(row => row.messageId))
+      return read
+    })
     return { workspaceId: input.workspaceId, sessionId: input.sessionId ?? null, read: rows.length }
   }
 }

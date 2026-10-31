@@ -213,11 +213,38 @@ test('NC-02 静音项目不计未读但 @ 我仍计；打开群组后该群的 @
   assert.equal((await api('POST', `${base}/workspaces/${ws.id}/notifications/mute`, { as: ws.first })).status, 200)
   assert.equal(await unread(ws.first), 1, '静音后只剩 @ 我')
   assert.equal((await notifications(ws.first)).length, 2, '静音不隐藏通知')
+  assert.deepEqual((await notifications(ws.first, '?status=unread')).map(item => item.kind), ['mention'], '未读页签与未读数同一口径')
 
   assert.equal((await api('POST', `${base}/me/conversation-targets/group/${ws.id}/read`, { as: ws.first, body: {} })).status, 200)
   const mention = (await notifications(ws.first)).find(item => item.kind === 'mention')
   assert.equal(mention?.read, true)
   assert.equal(await unread(ws.first), 0)
+})
+
+test('NC-02 在通知中心读 @ 通知时，群组 @ 提醒一并已读', async () => {
+  const ws = await seedSpace('mention-sync')
+  const session = await api('POST', `${base}/sessions`, { as: ws.owner, body: { title: '同步讨论', workspaceId: ws.id } })
+  const sessionId = (session.body.data as { id: string }).id
+  for (const key of ['one', 'two']) {
+    assert.equal((await api('POST', `${base}/sessions/${sessionId}/messages`, {
+      as: ws.owner, body: { content: '@甲 看下', idempotencyKey: `nc-sync-${key}-${ws.id}`, mentionedUserIds: [ws.first] },
+    })).status, 201)
+  }
+  const mentionsUnread = async () => {
+    const [row] = await database<Array<{ count: number }>>`
+      select count(*)::integer as count from message_mentions
+       where tenant_id = ${tenantId} and mentioned_user_id = ${ws.first} and read_at is null
+    `
+    return Number(row?.count ?? 0)
+  }
+  assert.equal(await mentionsUnread(), 2)
+
+  const [latest] = await notifications(ws.first)
+  assert.equal((await api('POST', `${base}/me/notifications/${latest!.id}/read`, { as: ws.first })).status, 200)
+  assert.equal(await mentionsUnread(), 1, '单条已读只同步这一条 @')
+
+  assert.equal((await api('POST', `${base}/me/notifications/read-all`, { as: ws.first })).status, 200)
+  assert.equal(await mentionsUnread(), 0, '全部已读同步全部 @')
 })
 
 // ---------------------------------------------------------------------------

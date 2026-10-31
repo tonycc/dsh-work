@@ -76,7 +76,7 @@ export class PostgresUserNotificationService {
         ${visibilityJoins(sql, input.userId)}
        where n.tenant_id = ${tenantId} and n.recipient_user_id = ${input.userId}
          and n.created_at > now() - make_interval(days => ${retentionDays})
-         and ${status === 'unread' ? sql`n.read_at is null and v.visible` : sql`true`}
+         and ${status === 'unread' ? countsAsUnread(sql) : sql`true`}
          and ${cursor === null ? sql`true` : sql`(n.created_at, n.id) < ((${cursor.at}::text)::timestamptz, ${cursor.id})`}
        order by n.created_at desc, n.id desc
        limit ${limit + 1}
@@ -89,49 +89,72 @@ export class PostgresUserNotificationService {
     }
   }
 
-  /**
-   * 未读数：未读、仍可见、在保留期内的通知。按空间静音时该空间的通知不计（仍会列出），
-   * @ 我不受静音影响（方案 NC5，与 D38 一致）。
-   */
+  /** 未读数：在保留期内、计入未读（见 `countsAsUnread`）的通知，与“未读”页签同一口径。 */
   async unreadCount(userId: string): Promise<{ unread: number }> {
     const sql = this.database
     const [row] = await sql<Array<{ unread: number }>>`
       select count(*)::integer as unread
         from user_notifications n
         ${visibilityJoins(sql, userId)}
-        left join workspace_notification_states ns
-          on ns.tenant_id = n.tenant_id and ns.workspace_id = n.workspace_id and ns.user_id = n.recipient_user_id
-       where n.tenant_id = ${tenantId} and n.recipient_user_id = ${userId} and n.read_at is null
+       where n.tenant_id = ${tenantId} and n.recipient_user_id = ${userId}
          and n.created_at > now() - make_interval(days => ${retentionDays})
-         and v.visible
-         and (n.kind = 'mention' or ns.muted_at is null)
+         and ${countsAsUnread(sql)}
     `
     return { unread: Number(row?.unread ?? 0) }
   }
 
   async markRead(userId: string, notificationId: string): Promise<{ id: string; read: true }> {
-    const [row] = await this.database<Array<{ id: string }>>`
-      update user_notifications set read_at = coalesce(read_at, now())
-       where tenant_id = ${tenantId} and recipient_user_id = ${userId} and id = ${notificationId}
-      returning id
+    const sql = this.database
+    const [row] = await sql<Array<{ id: string }>>`
+      with marked as (
+        update user_notifications set read_at = coalesce(read_at, now())
+         where tenant_id = ${tenantId} and recipient_user_id = ${userId} and id = ${notificationId}
+        returning id, kind, object_id
+      ), ${mentionsReadWith(sql, userId)}
+      select id from marked
     `
     if (!row) throw notFound('通知不存在')
     return { id: row.id, read: true }
   }
 
   async markAllRead(userId: string): Promise<{ read: number }> {
-    const rows = await this.database<Array<{ id: string }>>`
-      update user_notifications set read_at = now()
-       where tenant_id = ${tenantId} and recipient_user_id = ${userId} and read_at is null
-      returning id
+    const sql = this.database
+    const rows = await sql<Array<{ id: string }>>`
+      with marked as (
+        update user_notifications set read_at = now()
+         where tenant_id = ${tenantId} and recipient_user_id = ${userId} and read_at is null
+        returning id, kind, object_id
+      ), ${mentionsReadWith(sql, userId)}
+      select id from marked
     `
     return { read: rows.length }
   }
 }
 
 /**
+ * 已读的 @ 通知同步到 `message_mentions`（方案 NC4），使群组“[有人@我]”标记一并消失。接在名为
+ * `marked`（含 `kind`、`object_id`）的 CTE 之后；与通知更新同一条语句，两者一起提交。
+ */
+function mentionsReadWith(sql: DatabaseClient, userId: string) {
+  return sql`mentions_read as (
+    update message_mentions mm set read_at = now()
+      from marked
+     where marked.kind = 'mention' and mm.tenant_id = ${tenantId} and mm.mentioned_user_id = ${userId}
+       and mm.message_id = marked.object_id and mm.read_at is null
+  )`
+}
+
+/**
+ * 计入未读（未读数与“未读”页签同一口径）：未读、仍可见；静音空间的通知照常列出但不计未读，
+ * @ 我不受静音影响（方案 NC5，与 D38 一致）。依赖 `visibilityJoins` 产出的 `v` 与 `ns`。
+ */
+function countsAsUnread(sql: DatabaseClient) {
+  return sql`(n.read_at is null and v.visible and (n.kind = 'mention' or ns.muted_at is null))`
+}
+
+/**
  * 读取时的可见性：所在项目空间仍对本人可读（现任成员、账号有效）；任务未被删除；
- * @ 所在的会话仍有效。别名 `n` 是通知行，产出 `w`、`pt`、`actor` 与布尔列 `v.visible`。
+ * @ 所在的会话仍有效。别名 `n` 是通知行，产出 `w`、`pt`、`actor`、静音状态 `ns` 与布尔列 `v.visible`。
  */
 function visibilityJoins(sql: DatabaseClient, userId: string) {
   return sql`
@@ -143,6 +166,8 @@ function visibilityJoins(sql: DatabaseClient, userId: string) {
     left join sessions s on s.tenant_id = m.tenant_id and s.id = m.session_id
       and s.workspace_id = n.workspace_id and s.status = 'active'
     left join users actor on actor.tenant_id = n.tenant_id and actor.id = n.actor_user_id
+    left join workspace_notification_states ns
+      on ns.tenant_id = n.tenant_id and ns.workspace_id = n.workspace_id and ns.user_id = n.recipient_user_id
     cross join lateral (select (
       (n.workspace_id is null or (w.id is not null and (${readableWorkspacePredicate(sql, userId)})))
       and (n.object_type <> 'project_task' or pt.id is not null)
