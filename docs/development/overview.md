@@ -15,7 +15,7 @@ dsh-work 是部署在企业内网的统一 AI Agent 工作台。员工通过自�
 
 MVP 聚焦三类业务场景：
 
-1. 企业知识查询，回答带来源、版本和权限过滤；
+1. 企业知识查询（员工在对话中添加知识库后检索），回答带来源、更新日期和按部门的可见范围过滤；
 2. ERP、MES 等企业系统的只读业务查询；
 3. PDF、DOCX、XLSX、CSV、TXT、Markdown 文件的基础分析与成果交付。
 
@@ -297,6 +297,7 @@ flowchart LR
 - **平台内置 Skill：** 文件分析、HTML 页面、Office 文档三个内置 Skill 已达到代码级（P0 管理端冒烟与 P1 装配、覆盖、停用、团队空间复核）；真实 DSH 下的产出质量（验收目录 `BSK-P2`）与有无内置 Skill 的对比评测尚未执行。规则见[功能规则 5.5](feature-rules.md#55-平台内置-skill)，设计见[平台内置 Skill 方案](../design/builtin-skills-plan.md)。
 - **Skill 创建专家：** 可创建 Skill 开关、草稿保存与员工提交、管理员审核与发布、经 dsh-work 助手推荐进入与 Skill 广场“创建 Skill”入口已达到代码级（`SKC-01`～`SKC-04`，P0/P1）；专家定义（SOUL.md、说明与验证问题）已写在方案 5.1、5.2。尚未完成：平台管理员在管理端创建、验证并发布该专家（不随代码预置），以及真实 DSH 验收（`SKC-P2`，含助手是否据说明推荐、工作区能否新建 `drafts/`）；审核结论不推送提醒。规则见[功能规则 5.6](feature-rules.md#56-员工经-skill-创建专家新建-skill)，设计见 [Skill 创建专家方案](../design/skill-creator-plan.md)。
 - **组织架构：** 第一期 ORG-S1（本地维护的部门树、成员与主部门、新建账号选择部门）已达到代码级（`ORG-P0-01`、`ORG-01`～`ORG-04`，P0/P1）；ORG-S2（按部门授予角色、管理类角色限制与角色来源显示）已达到代码级（`ORG-P0-02`、`ORG-05`～`ORG-07`）；钉钉通讯录同步为后续阶段。规则见[功能规则第 10 节](feature-rules.md#10-组织架构org-s1org-s2)，设计见[组织架构方案](../design/org-structure-plan.md)。
+- **企业知识库（WeKnora）：** WK-S1 后端检索链路已达到代码级（基于 WeKnora v0.9.0 测试替身的 P1 用例），原有本地知识库已删除；员工端“知识库”页与对话中添加知识库（WK-S2）、管理端页面（WK-S3）和真实 WeKnora 验收（WK-S4）未实施，一期全部交付前生产不切换。规则见[功能规则 11](feature-rules.md#11-企业知识库weknorawk-s1-起)，设计见[接入方案](../design/weknora-knowledge-plan.md)。
 - **已交付功能的遗留项：** 团队空间、管理助手、Skill 安装、Python 执行和自动任务的未完成部分列在[功能规则](feature-rules.md)各节末尾。
 
 开发模式、自动化和上线前验证入口见 [开发与测试](development.md)；身份协议与生命周期见 [独立登录](../release/local-authentication.md) 或 [AI Hub 接入](../release/ai-hub-sso-integration.md)。
@@ -308,7 +309,7 @@ flowchart LR
 1. 先完成 AI Hub 联调、企业 Connector/知识源、目标主机、存储、备份、监控和 UAT；
 2. 容量不足时先测量瓶颈；增加 Node.js 实例或多主机 Worker 前实现并验证租约、抢占、事件归属和失联恢复；
 3. 上传文件、解析文本、成果与 Skill 文件经 `ObjectStorage` 端口（`server/src/domain/object-storage.ts`）读写，当前实现为本地目录 `LocalObjectStorage`；文件规模增长时新增 NAS/对象存储实现即可，不改变业务对象；Attempt 工作目录属于 Runtime 主机本地，不经此端口；
-4. 企业知识按句切成不超过 800 字的分段，写入时由数据库生成中文二元组与英文词检索项并建 GIN 索引（迁移 0081）；检索在同一条 SQL 里先做角色、工作空间、Data Scope 与发布状态过滤，再按关键词、标题与正文命中打分，每篇取最相关分段作为摘录。语义（向量）检索需要另行评估嵌入服务后再接入；
+4. 企业知识由外部 WeKnora 负责解析、分段、向量化与检索（[接入方案](../design/weknora-knowledge-plan.md)，WK-S1 起，原有本地知识库已由迁移 0115 删除）；平台按部门授权计算员工可见的知识库，只在员工于个人对话中添加知识库后检索，结果写入引用快照，WeKnora 的问答与 Agent 不使用；
 5. 跨应用治理复用达到门槛后，通过稳定治理端口把 Agent、Skill、Tool、Model、发布和汇总治理迁入 AI Hub；
 6. Workspace、产品 Session、Run/Attempt、审批实例、文件、成果和高频运行状态继续由 dsh-work 持有；
 7. 只有独立扩缩容、故障域、团队所有权和数据边界同时成立时，才评审拆分部署单元。

@@ -164,9 +164,11 @@ flowchart LR
 
 | 表 | 作用 | 关键不变量 |
 | --- | --- | --- |
-| `knowledge_sources`、`knowledge_documents` | 知识来源与文档版本 | 已发布文档不可修改；来源、版本、生效日期、权限与摘要可追溯；合成来源显式标记 |
-| `knowledge_chunks` | 检索分段 | 文档写入或草稿修改时由触发器按句切分（每段不超过 800 字）并生成中文二元组与英文词检索项，GIN 索引；检索先过滤权限再排序 |
-| `run_knowledge_sources` | Attempt 引用的知识 | 记录相关度与摘录，用于回答末尾的引用 |
+| `external_knowledge_connections` | 企业知识库（WeKnora）连接 | 每个企业最多一条；API Key 不入库明文（WK-S1 由部署配置提供，只存末四位）；记录统一嵌入模型与最近成功、失败时间 |
+| `external_knowledge_bases` | 经平台创建的知识库 | 同一连接下外部 ID 唯一；有且只有一个归属部门；记录建库时的嵌入模型；删除为置 `deleted`，不再检索 |
+| `external_knowledge_base_grants` | 知识库按部门的可见范围授权 | 同一知识库同一部门只有一条有效授权；可选包含下级；区分员工与管理员授予；可见范围读取时实时计算 |
+| `session_knowledge_bases` | 会话所选知识库 | 员工在个人空间对话中添加；每次执行与员工当前可见知识库取交集后检索 |
+| `run_knowledge_citations` | Attempt 注入的企业知识引用快照 | 不依赖外部文档仍存在；同一 Attempt 内按序号唯一；用于回答末尾的引用与执行详情来源 |
 | `memory_proposals` | Agent 在运行中提出的短期记忆建议 | 只有人能确认范围与保留期后提交审核；按 Attempt + 提案键幂等 |
 | `memory_consents` | 来源用户对记忆使用范围的授权 | 可撤回；撤回后不能再发布 |
 | `memory_candidates` | 待审核的记忆候选 | 按提交人 + 提交键幂等；只能被处理一次 |
@@ -205,7 +207,7 @@ flowchart LR
 
 | 触发器（表） | 作用 |
 | --- | --- |
-| `agent_versions_immutable`、`skill_versions_immutable`、`knowledge_documents_immutable`、`memory_versions_immutable`、`skill_test_bindings_immutable` | 已发布版本与证据不可修改 |
+| `agent_versions_immutable`、`skill_versions_immutable`、`memory_versions_immutable`、`skill_test_bindings_immutable` | 已发布版本与证据不可修改 |
 | `users_personal_workspace_provisioning`（users） | 为新用户创建默认个人空间 |
 | `personal_workspace_membership_guard`、`team_workspace_single_owner`（workspace_members） | 保护个人空间成员关系；团队空间必须有且只有一名负责人（`DW001`） |
 | `roles_bump_local_authorization`、`user_roles_bump_local_authorization`、`data_scope_grants_bump_local_authorization` | 授权变化递增本地授权版本 |
@@ -215,7 +217,6 @@ flowchart LR
 | `run_attempts_pin_task_executor_principal` | 把 Attempt 执行身份固定到声明的 Agent 或平台 |
 | `runs_ensure_task_identity`、`runs_sync_task_status` | 会话 Run 自动建 Task；Run 状态同步到 Task |
 | `runs_ensure_budget_account`、`run_attempts_settle_budget_fallback` | 建立预算账户；Attempt 结束时兜底结算或释放预留 |
-| `knowledge_documents_index` | 知识文档写入时生成检索分段 |
 
 ## 运行终态与恢复
 
@@ -232,12 +233,13 @@ Run 和 Attempt 的普通状态转换不能从终态回退。只有失败或取�
 - [Agent 发布治理](../../server/migrations/0039_agent_release_governance.sql)、[自动任务](../../server/migrations/0040_agent_automations.sql)、[工具绑定修订](../../server/migrations/0047_tool_binding_revisions.sql)、[MCP 治理](../../server/migrations/0053_mcp_connector_governance.sql)。
 - [PF-01 Task 与外部操作基础](../../server/migrations/0050_task_operation_foundation.sql)、[无 Session 执行与 Task Artifact](../../server/migrations/0051_session_neutral_task_execution.sql)、[累计预算](../../server/migrations/0052_task_cumulative_budgets.sql)。
 - [持久化等待与审批](../../server/migrations/0061_persistent_wait_and_approval.sql)、[受控记忆](../../server/migrations/0062_controlled_memory.sql)、[执行身份](../../server/migrations/0064_execution_principals.sql)。
-- [Agent 数据平面](../../server/migrations/0072_agent_data_plane.sql)（已由 0087 删除）、[Agent 主动任务](../../server/migrations/0074_agent_owned_routines.sql)、[负责人错误码](../../server/migrations/0080_workspace_owner_errcode.sql)、[知识分段检索](../../server/migrations/0081_knowledge_chunks.sql)。
+- [Agent 数据平面](../../server/migrations/0072_agent_data_plane.sql)（已由 0087 删除）、[Agent 主动任务](../../server/migrations/0074_agent_owned_routines.sql)、[负责人错误码](../../server/migrations/0080_workspace_owner_errcode.sql)、[知识分段检索](../../server/migrations/0081_knowledge_chunks.sql)（已由 0115 删除）。
 - [删除 Agent 委派](../../server/migrations/0083_remove_agent_delegation.sql)：移除 `task_delegations` 与版本上的委派策略；历史子任务仍保留 `delegation` 来源类型，但不能重试。
 - [Agent 级岗位权限](../../server/migrations/0084_agent_level_access.sql)：可见角色从版本迁到 Agent（取当前发布版本，未发布取草稿），删除版本上的可见角色与数据范围上限。
 - [Agent 验证与发布](../../server/migrations/0085_agent_validations.sql)：版本增加待发布状态并冻结不可变；新增自定义测试问题、验证与验证案例；发布记录转为审计事件后删除候选、试运行、版本证据、Agent 包、早期测试与发布记录六张表。
 - [Agent 运行记录索引](../../server/migrations/0086_agent_run_history_index.sql)：详情页按 Task 的执行身份读取最近 Run。
 - [删除 Agent 数据平面](../../server/migrations/0087_remove_agent_data_plane.sql)：删除工作数据（集合、记录、提案、私有状态、安装实例）共 11 张表；旧版本定义中的 `data` 声明不再读取。
+- [企业知识库接入 WeKnora](../../server/migrations/0115_weknora_knowledge.sql)：新增连接、知识库、部门授权、会话所选知识库与引用快照五张表，给带 `workbench:use` 的角色加 `knowledge:view`；删除原有本地知识库四张表、两篇合成文档与检索函数。
 
 新增变更使用新的顺序迁移，保留已应用迁移；迁移运行器以咨询锁串行执行并校验已执行迁移的 SHA-256，修改已执行迁移会拒绝启动。应用回滚不会自动降低 Schema，至少保持上一版本兼容；破坏性清理需独立安排。操作流程见 [部署手册](../release/mac-mini-deployment-runbook.md)。
 

@@ -31,7 +31,7 @@ Agent 通用设计与评审要求见 [Agent 设计规范](agent-design-standard.
 
 - [Workbench OpenAPI](openapi-workbench.json)：`/api/workbench/v1`。
 - [Admin OpenAPI](openapi-admin.json)：`/api/admin/v1`。
-- [Runtime Manifest](runtime-manifest.schema.json)：不可变输入、能力、文件、知识与权限快照。
+- [Runtime Manifest](runtime-manifest.schema.json)：不可变输入、能力、文件、知识与权限快照；企业知识的检索结果见可选字段 `knowledge_status`（缺省表示本次执行不支持检索）与 `knowledge_skipped_bases`。
 - [Run Event](run-event.schema.json)：标准可展示事件，不包含隐藏推理和凭据。
 
 接口修改必须同步消费者、Schema 和相应测试。公开 API、内部 TypeScript 类型和 DSH ACP 是不同边界，不应直接复用上游内部对象代替产品契约。
