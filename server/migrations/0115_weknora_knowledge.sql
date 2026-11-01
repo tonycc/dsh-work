@@ -34,7 +34,7 @@ create table if not exists external_knowledge_bases (
   tenant_id text not null references tenants(id),
   connection_id text not null,
   external_id text not null,
-  name text not null check (char_length(name) between 1 and 60),
+  name text not null check (char_length(name) between 1 and 60 and btrim(name) <> ''),
   description text not null default '',
   owner_department_id text not null,
   embedding_model_id text,

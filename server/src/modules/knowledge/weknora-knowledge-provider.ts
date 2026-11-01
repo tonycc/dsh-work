@@ -55,7 +55,8 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
   async ensureConnection(): Promise<void> {
     await this.database`
       insert into external_knowledge_connections (id, tenant_id, base_url, credential_hint, embedding_model_id, updated_by)
-      values (${this.connectionId}, ${tenantId}, ${this.config.baseUrl}, ${this.config.apiKey.slice(-4)},
+      values (${this.connectionId}, ${tenantId}, ${this.config.baseUrl},
+              ${this.config.apiKey.length > 8 ? this.config.apiKey.slice(-4) : null},
               ${this.config.embeddingModelId ?? null}, 'deployment-config')
       on conflict (tenant_id) do update
          set base_url = excluded.base_url,
@@ -73,8 +74,17 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
     query: string
   }): Promise<KnowledgeResolution> {
     const empty = { documents: [], citations: [], skippedBases: [] }
-    const [levels] = await this.database<{ employee: boolean; agent: boolean }[]>`
+    const [levels] = await this.database<{ connection: boolean; localIdentity: boolean; employee: boolean; agent: boolean }[]>`
       select
+        exists (
+          select 1 from external_knowledge_connections c
+           where c.tenant_id = ${tenantId} and c.id = ${this.connectionId} and c.status = 'active'
+        ) as connection,
+        -- 按部门授权只在本地身份模式下提供；AI Hub（OIDC）账号没有部门，也没有添加入口（第 3 节）。
+        exists (
+          select 1 from users u
+           where u.tenant_id = ${tenantId} and u.id = ${input.userId} and u.identity_provider <> 'ai-hub'
+        ) as "localIdentity",
         exists (
           select 1 from users u
             join user_roles ur on ur.tenant_id = u.tenant_id and ur.user_id = u.id
@@ -95,7 +105,9 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
         ) as agent
     `
     // Agent 的判断取其执行身份的全部岗位角色，不用与员工角色取交集后的权限（5.1）。
-    if (!levels?.employee || !levels.agent) return { status: 'not_applicable', ...empty }
+    if (!levels?.connection || !levels.localIdentity || !levels.employee || !levels.agent) {
+      return { status: 'not_applicable', ...empty }
+    }
 
     const selected = await this.database<SelectedBaseRow[]>`
       select kb.id, kb.external_id as "externalId", kb.name,
@@ -109,7 +121,8 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
     if (!selected.length) return { status: 'not_selected', ...empty }
     const scope = selected.filter(base => base.visible)
     // Manifest 最多记 20 个名称；会话所选知识库没有数量上限，超出的不再逐一提示。
-    const skippedBases = selected.filter(base => !base.visible).map(base => base.name).slice(0, maxSkippedBases)
+    const skippedBases = selected.filter(base => !base.visible)
+      .map(base => base.name.trim()).filter(Boolean).slice(0, maxSkippedBases)
     if (!scope.length) return { status: 'skipped', documents: [], citations: [], skippedBases }
 
     try {
@@ -157,7 +170,7 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
         join external_knowledge_base_grants g on g.tenant_id = m.tenant_id and g.status = 'active'
         join org_departments gd on gd.tenant_id = g.tenant_id and gd.id = g.department_id and gd.status = 'active'
        where m.tenant_id = ${tenantId} and m.user_id = ${userId}
-         and (gd.id = d.id or (g.include_descendants and d.path like gd.path || '%'))
+         and (gd.id = d.id or (g.include_descendants and left(d.path, length(gd.path)) = gd.path))
     `
   }
 
@@ -168,7 +181,7 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
       knowledgeBaseIds: scope.map(base => base.externalId),
       matchCount: searchMatchCount,
     })
-    // 4.4：去掉弱相关分段，每篇文档只留得分最高的分段，取前 3 篇。
+    // 4.4：去掉弱相关分段，每篇文档只留得分最高的分段；校验后取前 3 篇，被丢弃的由后面的候选补上。
     const best = new Map<string, typeof results[number]>()
     for (const result of [...results].sort((a, b) => b.score - a.score)) {
       if (result.score < minimumRelevanceScore || best.has(result.knowledge_id)) continue
@@ -177,16 +190,19 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
         continue
       }
       best.set(result.knowledge_id, result)
-      if (best.size === maxContextDocuments) break
     }
     if (!best.size) return { documents: [], citations: [] }
     const metadata = new Map((await this.client.knowledgeBatch([...best.keys()])).map(item => [item.id, item]))
     const documents: RuntimeKnowledgeDocument[] = []
     const citations: KnowledgeCitation[] = []
     for (const result of best.values()) {
+      if (documents.length === maxContextDocuments) break
       const document = metadata.get(result.knowledge_id)
-      // 元数据缺失时当作不可用处理，不注入缺少更新时间的分段（4.4 第 3 步）。
-      if (!document) throw new WeKnoraUnavailableError('protocol', 'WeKnora 文档元数据缺失')
+      // 单篇文档的元数据缺失（例如两次请求之间被删除）只丢弃这一篇；接口本身失败才算不可用（4.4 第 3 步）。
+      if (!document) {
+        console.warn('WeKnora document metadata is missing; dropped')
+        continue
+      }
       const base = byExternalId.get(document.knowledge_base_id)
       const documentId = `weknora:${result.knowledge_id}`
       if (!base || (result.knowledge_base_id !== undefined && result.knowledge_base_id !== document.knowledge_base_id)) {
@@ -200,9 +216,7 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
       const updatedAt = new Date(document.updated_at)
       const title = result.knowledge_title.trim() || document.title.trim() || result.knowledge_filename.trim()
         || document.file_name.trim() || '未命名文档'
-      const excerpt = result.content.length > maxExcerptLength
-        ? `${result.content.slice(0, maxExcerptLength - 1)}…`
-        : result.content
+      const excerpt = truncateExcerpt(result.content)
       if (!excerpt.trim()) continue
       const contentChecksum = createHash('sha256').update(result.content).digest('hex')
       documents.push({
@@ -254,4 +268,15 @@ function formatDate(value: Date) {
 function formatVersion(value: Date) {
   const iso = value.toISOString()
   return `${iso.slice(0, 4)}${iso.slice(5, 7)}${iso.slice(8, 10)}.${iso.slice(11, 13)}${iso.slice(14, 16)}`
+}
+
+/** 超过 4000 字时按码点截断并加“…”，不切开代理对，总长不超过编译校验的上限（4.5）。 */
+function truncateExcerpt(content: string) {
+  if (content.length <= maxExcerptLength) return content
+  let excerpt = ''
+  for (const character of content) {
+    if (excerpt.length + character.length > maxExcerptLength - 1) break
+    excerpt += character
+  }
+  return `${excerpt}…`
 }

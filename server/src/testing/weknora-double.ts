@@ -42,6 +42,8 @@ export class WeKnoraDouble {
   omitKnowledgeBaseId = false
   /** 忽略请求中的知识库范围（模拟返回范围之外的分段，验证平台再校验）。 */
   ignoreKnowledgeBaseScope = false
+  /** 元数据接口不返回这些文档（模拟两次请求之间被删除）。 */
+  hiddenMetadataIds: string[] = []
   private server: Server | null = null
   private nextKnowledgeBase = 1
 
@@ -77,6 +79,7 @@ export class WeKnoraDouble {
     this.delayMs = 0
     this.omitKnowledgeBaseId = false
     this.ignoreKnowledgeBaseScope = false
+    this.hiddenMetadataIds = []
   }
 
   private async handle(request: IncomingMessage): Promise<{ status: number; body: unknown }> {
@@ -125,7 +128,7 @@ export class WeKnoraDouble {
     if (request.method === 'GET' && url.pathname === '/api/v1/knowledge/batch') {
       if (this.failBatchWith) return { status: this.failBatchWith, body: { success: false, error: { code: 1007, message: 'failure' } } }
       const ids = new Set(url.searchParams.getAll('ids').flatMap(value => value.split(',')))
-      const data = this.documents.filter(document => ids.has(document.id)).map(document => ({
+      const data = this.documents.filter(document => ids.has(document.id) && !this.hiddenMetadataIds.includes(document.id)).map(document => ({
         id: document.id,
         knowledge_base_id: document.knowledgeBaseId,
         title: document.title,

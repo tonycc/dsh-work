@@ -235,12 +235,54 @@ test('WeKnora 返回范围之外的分段时丢弃（4.4 第 4 步）', async ()
   assert.deepEqual(result.manifest.knowledge_context.map(document => document.documentId), ['weknora:doc-safety'])
 })
 
-test('超长分段截断后不超过 4000 字（4.5）', async () => {
-  double.chunks = [{ id: 'long', knowledgeId: 'doc-safety', content: '库'.repeat(5000), score: 0.9 }]
+test('超长分段按码点截断后不超过 4000 字（4.5）', async () => {
+  double.chunks = [{ id: 'long', knowledgeId: 'doc-safety', content: `${'库'.repeat(3997)}😀😀`, score: 0.9 }]
   const result = await ask(await session(['kb-supply']), '库存？')
   const excerpt = result.manifest.knowledge_context[0]?.excerpt ?? ''
-  assert.equal(excerpt.length, 4000)
-  assert.ok(excerpt.endsWith('…'))
+  assert.ok(excerpt.length <= 4000)
+  // 第一个表情放得下，第二个会超出：整体截掉，不留下半个代理对。
+  assert.equal(excerpt, `${'库'.repeat(3997)}😀…`)
+})
+
+test('单篇文档元数据缺失只丢弃该篇，由后面的候选补上（4.4）', async () => {
+  double.documents.push(
+    { id: 'doc-ghost', knowledgeBaseId: 'kb-ext-supply', title: '已删除的文档', fileName: 'ghost.pdf', updatedAt: '2026-08-01T00:00:00Z' },
+    { id: 'doc-a', knowledgeBaseId: 'kb-ext-supply', title: '盘点规范', fileName: 'a.pdf', updatedAt: '2026-05-01T00:00:00Z' },
+    { id: 'doc-b', knowledgeBaseId: 'kb-ext-supply', title: '收货规范', fileName: 'b.pdf', updatedAt: '2026-04-01T00:00:00Z' },
+  )
+  double.chunks.push(
+    { id: 'g1', knowledgeId: 'doc-ghost', content: '这篇文档已被删除。', score: 0.99 },
+    { id: 'a1', knowledgeId: 'doc-a', content: '每月盘点一次。', score: 0.7 },
+    { id: 'b1', knowledgeId: 'doc-b', content: '收货当日入账。', score: 0.6 },
+  )
+  double.hiddenMetadataIds = ['doc-ghost']
+  const result = await ask(await session(['kb-supply']), '仓库制度？')
+  assert.equal(result.manifest.knowledge_status, 'ok')
+  assert.deepEqual(result.manifest.knowledge_context.map(document => document.documentId),
+    ['weknora:doc-safety', 'weknora:doc-a', 'weknora:doc-b'])
+})
+
+test('AI Hub 账号与停用的连接不检索，也不提示添加知识库（第 3 节、4.5）', async () => {
+  const sessionId = await session(['kb-supply'])
+  await database`update users set identity_provider = 'ai-hub' where tenant_id = ${tenantId} and id = ${EMPLOYEE}`
+  try {
+    const oidc = await ask(sessionId, '安全库存？')
+    assert.equal(oidc.manifest.knowledge_status, undefined)
+  } finally {
+    await database`update users set identity_provider = 'local' where tenant_id = ${tenantId} and id = ${EMPLOYEE}`
+  }
+  await database`update external_knowledge_connections set status = 'disabled' where tenant_id = ${tenantId}`
+  try {
+    const disabled = await ask(sessionId, '安全库存？')
+    assert.equal(disabled.manifest.knowledge_status, undefined)
+  } finally {
+    await database`update external_knowledge_connections set status = 'active' where tenant_id = ${tenantId}`
+  }
+  assert.equal(searches().length, 0)
+  await assert.rejects(
+    database`update external_knowledge_bases set name = '  ' where tenant_id = ${tenantId} and id = 'kb-supply'`,
+    /check constraint/,
+  )
 })
 
 test('WeKnora 不可用时执行继续，回答注明不可用并记录原因（WK2、第 7 节）', async () => {
