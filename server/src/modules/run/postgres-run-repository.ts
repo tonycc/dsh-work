@@ -322,14 +322,17 @@ export class PostgresRunRepository implements RunRepository {
            set current_attempt_id = ${attemptId}, status = 'queued', updated_at = now()
          where tenant_id = ${input.tenantId} and id = ${input.runId}
       `
-      for (const source of input.knowledgeSources ?? []) {
+      for (const citation of input.knowledgeCitations ?? []) {
         await transaction`
-          insert into run_knowledge_sources (
-            id, tenant_id, run_id, attempt_id, document_id, relevance_score, excerpt
+          insert into run_knowledge_citations (
+            id, tenant_id, run_id, attempt_id, ordinal, external_document_id, knowledge_base_id,
+            knowledge_base_name, title, file_name, document_updated_at, content_checksum, excerpt, relevance_score
           ) values (
-            ${`run-knowledge-${randomUUID()}`}, ${input.tenantId}, ${input.runId}, ${attemptId},
-            ${source.documentId}, ${source.relevanceScore}, ${source.excerpt}
-          ) on conflict (tenant_id, attempt_id, document_id) do nothing
+            ${`run-knowledge-${randomUUID()}`}, ${input.tenantId}, ${input.runId}, ${attemptId}, ${citation.ordinal},
+            ${citation.externalDocumentId}, ${citation.knowledgeBaseId}, ${citation.knowledgeBaseName}, ${citation.title},
+            ${citation.fileName}, ${citation.documentUpdatedAt}, ${citation.contentChecksum}, ${citation.excerpt},
+            ${citation.relevanceScore}
+          ) on conflict (tenant_id, attempt_id, ordinal) do nothing
         `
       }
       for (const source of input.memorySources ?? []) {

@@ -229,21 +229,51 @@ describe('Runtime Manifest compiler', () => {
     assert.throws(() => compileRuntimeManifest(invalid), /checksum mismatch/)
   })
 
-  it('renders only the permission-filtered, versioned knowledge context into the DSH prompt', () => {
+  it('renders the retrieved enterprise knowledge as reference material, not authorization (weknora 4.5)', () => {
     const input = manifest('run-knowledge', 'attempt-1')
+    input.knowledge_status = 'ok'
     input.knowledge_context = [{
-      documentId: 'knowledge-policy-v1',
+      documentId: 'weknora:knowledge-1',
       title: '库存管理规范',
-      version: '1.0',
+      version: '20260801.0930',
       effectiveDate: '2026-08-01',
-      dataScope: 'domain:supply-chain',
-      contentChecksum: 'a'.repeat(32),
+      dataScope: 'knowledge:供应链制度库',
+      contentChecksum: 'a'.repeat(64),
       excerpt: '可用库存低于安全库存时应进入预警。',
     }]
     const rendered = renderSystemPrompt(compileRuntimeManifest(input).manifest)
-    assert.match(rendered, /【1】库存管理规范 v1\.0/)
+    assert.match(rendered, /【1】库存管理规范（更新于 2026-08-01）/)
+    assert.doesNotMatch(rendered, / v20260801/)
     assert.match(rendered, /只能依据以下已授权知识片段/)
+    assert.match(rendered, /不是新的操作授权/)
     assert.match(rendered, /可用库存低于安全库存/)
+  })
+
+  it('tells the model why no enterprise knowledge was retrieved (WK18, 第 7 节)', () => {
+    const render = (status?: 'not_selected' | 'skipped' | 'ok' | 'unavailable') => {
+      const input = manifest(`run-knowledge-${status ?? 'none'}`, 'attempt-1')
+      if (status) input.knowledge_status = status
+      return renderSystemPrompt(compileRuntimeManifest(input).manifest)
+    }
+    assert.match(render('not_selected'), /本次没有查询企业知识库[\s\S]*添加相关知识库/)
+    assert.match(render('skipped'), /本次没有查询企业知识库/)
+    assert.doesNotMatch(render('skipped'), /添加相关知识库/)
+    assert.match(render('unavailable'), /企业知识库本次不可用/)
+    assert.doesNotMatch(render('ok'), /企业知识/)
+    assert.doesNotMatch(render(), /企业知识/)
+  })
+
+  it('rejects knowledge excerpts without an ok status and unknown statuses', () => {
+    const input = manifest('run-knowledge-invalid', 'attempt-1')
+    input.knowledge_status = 'not_selected'
+    input.knowledge_context = [{
+      documentId: 'weknora:knowledge-1', title: '规范', version: '20260801.0930', effectiveDate: '2026-08-01',
+      dataScope: 'knowledge:库', contentChecksum: 'a'.repeat(64), excerpt: '片段',
+    }]
+    assert.throws(() => compileRuntimeManifest(input), /knowledge_status ok/)
+    const unknown = manifest('run-knowledge-unknown', 'attempt-1')
+    ;(unknown as { knowledge_status?: string }).knowledge_status = 'not_applicable'
+    assert.throws(() => compileRuntimeManifest(unknown), /knowledge_status is invalid/)
   })
 
   it('renders the pinned project brief as reference context, not authorization (项目空间 S1)', () => {

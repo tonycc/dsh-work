@@ -113,15 +113,16 @@ export class AttemptDispatcher {
           additionalSkillReferences: input.additionalSkillReferences,
         }))
     const effectiveDataScopes = authorization?.dataScopes ?? (trial ? [] : ['enterprise:authorized'])
-    const knowledgeContext = this.deps.knowledge && input.purpose !== 'agent-routine'
+    // 企业知识（weknora-knowledge-plan 5.7）：一期只在个人空间的员工对话中检索，且只检索会话所选、
+    // 员工当前可见的知识库。团队空间、定时任务、主动任务、验证运行与系统运行都不调用（2.1）。
+    const knowledge = this.deps.knowledge && !input.purpose && input.personalConversation === true && run.sessionId
       ? await this.deps.knowledge.resolveContext({
-          query: input.prompt,
+          sessionId: run.sessionId,
           userId: input.userId,
-          workspaceId: input.workspaceId || null,
-          dataScopes: effectiveDataScopes,
-          roleIds: authorization?.roleIds,
+          agentVersionId: input.agentVersionId,
+          query: knowledgeQuery(input.prompt, input.history),
         })
-      : []
+      : null
     // Experience is retrieved per person, workspace or organization. Runs without a
     // workspace (release trials) get none by design: validation checks SOUL.md, skills,
     // tools and access, not experience that differs per employee.
@@ -238,15 +239,9 @@ export class AttemptDispatcher {
       tools: toolNames.map(name => toCapabilityReference(builtinToolReference(name))),
       ...(agent.mcpConnections?.length ? { mcp_connections: agent.mcpConnections } : {}),
       data_scopes: effectiveDataScopes,
-      knowledge_context: knowledgeContext.map(document => ({
-        documentId: document.documentId,
-        title: document.title,
-        version: document.version,
-        effectiveDate: document.effectiveDate,
-        dataScope: document.dataScope,
-        contentChecksum: document.contentChecksum,
-        excerpt: document.excerpt,
-      })),
+      knowledge_context: knowledge?.documents ?? [],
+      ...(knowledge && knowledge.status !== 'not_applicable' ? { knowledge_status: knowledge.status } : {}),
+      ...(knowledge?.skippedBases.length ? { knowledge_skipped_bases: knowledge.skippedBases } : {}),
       ...(memoryContext.length ? { memory_context: memoryContext.map(memory => ({
         memoryVersionId: memory.memoryVersionId,
         title: memory.title,
@@ -272,11 +267,7 @@ export class AttemptDispatcher {
       trace_id: `trace-${run.id}-${attemptId}`,
     }
     await this.submit(run, manifest, route, {
-      knowledgeSources: knowledgeContext.map(document => ({
-        documentId: document.documentId,
-        relevanceScore: document.relevanceScore,
-        excerpt: document.excerpt,
-      })),
+      knowledgeCitations: knowledge?.citations ?? [],
       memorySources: memoryContext.map(memory => ({
         memoryVersionId: memory.memoryVersionId,
         relevanceScore: memory.relevanceScore,
@@ -298,7 +289,7 @@ export class AttemptDispatcher {
     run: RunRecord,
     manifest: RuntimeManifest,
     route: unknown,
-    sources: Pick<Parameters<OrchestrationDependencies['runs']['createAttempt']>[0], 'knowledgeSources' | 'memorySources' | 'inputFiles'> = {},
+    sources: Pick<Parameters<OrchestrationDependencies['runs']['createAttempt']>[0], 'knowledgeCitations' | 'memorySources' | 'inputFiles'> = {},
   ): Promise<void> {
     this.assertPrincipalContextForDispatch(manifest)
     await this.deps.runtime.assertAvailable?.(manifest)
@@ -339,4 +330,23 @@ export class AttemptDispatcher {
       throw authorizationDenied('执行清单缺少独立 Principal 身份')
     }
   }
+}
+
+/** 上一条员工提问的末尾最多 500 字（4.3）。 */
+const previousQuestionChars = 500
+
+/**
+ * 检索查询词（WK4、4.3）：同一会话中员工的上一条提问加本次提问，让“那第二条呢”这类追问也能
+ * 检索到。由平台拼接，不调用模型改写。
+ */
+export function knowledgeQuery(
+  prompt: string,
+  history: RuntimeManifest['input']['conversation_history'] | undefined,
+): string {
+  const current = prompt.trim()
+  const previous = [...(history ?? [])].reverse()
+    .find(message => message.role === 'user' && message.content.trim() && message.content.trim() !== current)
+    ?.content.trim()
+  if (!previous) return current
+  return `${previous.length > previousQuestionChars ? previous.slice(-previousQuestionChars) : previous}\n${current}`
 }

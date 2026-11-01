@@ -252,6 +252,19 @@ export function compileRuntimeManifest(input: RuntimeManifest): CompiledRuntimeM
     if (!document.excerpt.trim() || document.excerpt.length > 4000) throw new TypeError('knowledge document excerpt is invalid')
   }
 
+  if (input.knowledge_status !== undefined
+    && !['not_selected', 'skipped', 'ok', 'unavailable'].includes(input.knowledge_status)) {
+    throw new TypeError('knowledge_status is invalid')
+  }
+  // 旧 Attempt 没有 knowledge_status 但可能带知识片段；新写入的非 ok 状态不得带片段。
+  if (input.knowledge_status !== undefined && input.knowledge_status !== 'ok' && input.knowledge_context.length > 0) {
+    throw new TypeError('knowledge_context requires knowledge_status ok')
+  }
+  if (input.knowledge_skipped_bases !== undefined && (
+    input.knowledge_skipped_bases.length > 20
+    || input.knowledge_skipped_bases.some(name => !name.trim() || name.length > 60)
+  )) throw new TypeError('knowledge_skipped_bases is invalid')
+
   if ((input.memory_context?.length ?? 0) > 3) throw new RangeError('memory_context must contain at most 3 memories')
   const memoryVersions = new Set<string>()
   for (const memory of input.memory_context ?? []) {

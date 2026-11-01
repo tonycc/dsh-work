@@ -53,7 +53,9 @@ export interface TaskSource {
   version?: string
   effectiveAt?: string
   dataScope?: string
-  synthetic?: boolean
+  /** 企业知识引用快照：原文件名与所属知识库名称。 */
+  fileName?: string
+  knowledgeBaseName?: string
   updatedAt?: string
 }
 

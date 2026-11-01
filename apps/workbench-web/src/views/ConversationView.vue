@@ -1357,11 +1357,15 @@ watch(
             <article v-for="source in task.result.sources" :key="source.id">
               <span>{{ sourceTypeLabels[source.type] }}</span>
               <strong>{{ source.title }}</strong>
-              <small v-if="source.version || source.effectiveAt">
+              <small v-if="source.type === 'knowledge' && (source.knowledgeBaseName || source.updatedAt)">
+                <template v-if="source.knowledgeBaseName">{{ source.knowledgeBaseName }}</template>
+                <template v-if="source.fileName"> · {{ source.fileName }}</template>
+                <template v-if="source.updatedAt"> · 更新于 {{ source.updatedAt }}</template>
+              </small>
+              <small v-else-if="source.version || source.effectiveAt">
                 <template v-if="source.version">v{{ source.version }}</template>
                 <template v-if="source.effectiveAt"> · {{ source.effectiveAt }} 生效</template>
                 <template v-if="source.dataScope"> · {{ source.dataScope }}</template>
-                <template v-if="source.synthetic"> · 合成测试数据</template>
               </small>
               <p>{{ source.description }}</p>
             </article>

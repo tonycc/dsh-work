@@ -6,7 +6,7 @@ import type { PostgresContentService } from '../../workbench/application/postgre
 import type { RunOperationsPort } from '../run-operations-port.ts'
 import type { PostgresAgentService } from '../../agent/postgres-agent-service.ts'
 import type { ExecutionToolCheckPort } from '../current-execution-authorization.ts'
-import type { PostgresKnowledgeService } from '../../knowledge/postgres-knowledge-service.ts'
+import type { KnowledgeProvider } from '../../knowledge/knowledge-provider.ts'
 import type { PostgresControlledMemoryService } from '../../memory/postgres-controlled-memory-service.ts'
 import type { PostgresAuthorizationService } from '../../authorization/postgres-authorization-service.ts'
 import type { PostgresWorkspaceAgentMemberService } from '../../workbench/application/postgres-workspace-agent-member-service.ts'
@@ -37,7 +37,8 @@ export interface OrchestrationDependencies {
   readonly content?: PostgresContentService
   readonly operations?: RunOperationsPort
   readonly agents?: PostgresAgentService
-  readonly knowledge?: PostgresKnowledgeService
+  /** 企业知识库（WeKnora）；未配置时不检索企业知识。 */
+  readonly knowledge?: KnowledgeProvider
   readonly memory?: PostgresControlledMemoryService
   readonly authorization?: PostgresAuthorizationService
   readonly agentMembers?: PostgresWorkspaceAgentMemberService

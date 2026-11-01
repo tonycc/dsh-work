@@ -13,6 +13,9 @@ export const LOCAL_PERMISSIONS = {
   adminRead: 'admin:read',
   adminWrite: 'admin:write',
   auditRead: 'audit:read',
+  knowledgeView: 'knowledge:view',
+  knowledgeDocs: 'knowledge:docs',
+  knowledgeBases: 'knowledge:bases',
 } as const
 
 export interface RequestIdentity {

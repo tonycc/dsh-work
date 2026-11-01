@@ -30,7 +30,7 @@
     "probe:pf07:mcp": "node --experimental-strip-types --env-file-if-exists=.env scripts/acceptance/pf07-mcp-runtime-probe.ts",
     "probe:pf07:mcp:platform": "node --experimental-strip-types --env-file-if-exists=.env scripts/acceptance/pf07-mcp-platform-probe.ts",
     "test:pf07:p1": "pnpm test:m2:integration && pnpm test:m3:integration && pnpm test:mcp:integration && pnpm test:pf04:integration && pnpm test:pf05:integration",
-    "test:m4:knowledge:integration": "pnpm --filter @dsh-work/server test:m4:knowledge:integration",
+    "test:knowledge:integration": "pnpm --filter @dsh-work/server test:knowledge:integration",
     "test:m4:file": "pnpm --filter @dsh-work/server test:m4:file",
     "test:m4:file:integration": "pnpm --filter @dsh-work/server test:m4:file:integration",
     "test:m4:authorization:integration": "pnpm --filter @dsh-work/server test:m4:authorization:integration",
