@@ -113,6 +113,7 @@ export const useTaskStore = defineStore('tasks', () => {
     skillId?: string,
     workspaceAgentMemberId?: string,
     mentionedUserIds: string[] = [],
+    knowledgeBaseIds: string[] = [],
   ) {
     void _workspaceName
     const current = generation
@@ -125,6 +126,11 @@ export const useTaskStore = defineStore('tasks', () => {
       ...(skillId ? { skillId } : {}),
     })
     requireGeneration(current)
+    // 企业知识库（WK-S2）：新对话中添加的知识库在首条提问执行前写入会话，首条就能检索。
+    if (knowledgeBaseIds.length) {
+      await workbenchApi.setSessionKnowledgeBases(session.id, knowledgeBaseIds)
+      requireGeneration(current)
+    }
     const task = await startRunWithSessionFiles(session.id, {
       prompt,
       attachments,
