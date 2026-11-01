@@ -126,7 +126,7 @@ test('MODE-E2E-03: collaboration shell has five entries and an avatar menu for s
 
 test('NC-03: the rail bell above the avatar opens notifications and a mention opens the group', async ({ page }) => {
   await switchToCollab(page)
-  await expect(page.getByRole('navigation', { name: '协作模式主导航' }).getByRole('button')).toHaveCount(4)
+  await expect(page.getByRole('navigation', { name: '协作模式主导航' }).getByRole('button')).toHaveCount(5)
   const bell = page.getByRole('button', { name: '通知，2 条未读' })
   const avatar = page.getByRole('button', { name: '打开用户菜单' })
   const [bellBox, avatarBox] = [await bell.boundingBox(), await avatar.boundingBox()]

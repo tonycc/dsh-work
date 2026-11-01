@@ -120,6 +120,11 @@ test('KB-P0-02: 对话中添加与移除知识库', async ({ page }) => {
   await expect(chips.getByText('计划组工作手册')).toHaveCount(0)
   await expect(chips.getByText('供应链制度库')).toBeVisible()
 
+  // 一期团队空间不提供添加入口。
+  await page.goto('/workspaces/ws-supply?tab=conversation')
+  await expect(page.getByLabel('对话输入')).toBeVisible()
+  await expect(page.getByRole('button', { name: '添加知识库' })).toHaveCount(0)
+
   // B 协作模式：主导航有“知识库”，单聊输入框同样可以添加知识库。
   await page.goto('/workbench')
   await page.getByRole('button', { name: '切换模式' }).click()
@@ -128,11 +133,4 @@ test('KB-P0-02: 对话中添加与移除知识库', async ({ page }) => {
   await expect(page.getByRole('navigation', { name: '协作模式主导航' }).getByRole('button', { name: '知识库' })).toBeVisible()
   await page.goto('/c/chats/agent/dsh-work-assistant')
   await expect(page.getByRole('button', { name: '添加知识库' })).toBeVisible()
-  await page.getByRole('button', { name: '切换模式' }).click()
-  await page.getByRole('menuitem', { name: /工作模式/ }).click()
-
-  // 一期团队空间不提供添加入口。
-  await page.goto('/workspaces/ws-supply?tab=conversation')
-  await expect(page.getByLabel('对话输入')).toBeVisible()
-  await expect(page.getByRole('button', { name: '添加知识库' })).toHaveCount(0)
 })

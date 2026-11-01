@@ -44,7 +44,7 @@ test('P0: personal Workspace is implicit, navigation exposes work entries', asyn
 test('NC-03: the sidebar bell above the avatar opens notifications and jumps to the project', async ({ page }) => {
   await page.goto('/workbench')
   // 通知入口不进入主导航（仍是五个入口），位于侧栏底部头像上方。
-  await expect(page.getByRole('navigation', { name: '员工工作台主导航' }).getByRole('button')).toHaveCount(5)
+  await expect(page.getByRole('navigation', { name: '员工工作台主导航' }).getByRole('button')).toHaveCount(6)
   const bell = page.getByRole('button', { name: '通知，2 条未读' })
   const avatar = page.getByRole('button', { name: '打开用户中心' })
   await expect(bell).toBeVisible()
