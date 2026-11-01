@@ -73,7 +73,7 @@
 ### 4.2 凭据
 
 - 运维人员在 WeKnora 中为平台的专用工作空间创建一个 API Key，能力为 `retrieve`、`ingest`、`manage_kbs`，不设知识库白名单（知识库由平台创建，白名单无法随之自动更新）。设置过期时间，到期前由管理员轮换。
-- 访问控制由平台负责：检索时只传员工可见的知识库 ID，并按 4.4 第 5 步再校验一次；管理操作前先按第 5 节校验权限。
+- 访问控制由平台负责：检索时只传员工可见的知识库 ID，并按 4.4 第 4 步再校验一次；管理操作前先按第 5 节校验权限。
 - 平台用现有的加密凭据存储（`postgres-encrypted-credential-store.ts`，与 MCP Bearer Token 相同的环境主密钥）保存 API Key。明文只在服务端调用 WeKnora 时解析，不进入 Manifest、API 响应、日志或审计详情。
 
 ### 4.3 检索请求
@@ -87,16 +87,15 @@
 | `match_count` | 10，取回后在平台侧截断 |
 | `rerank` | 不传，使用 WeKnora 工作空间默认的重排序配置 |
 
-- 超时 5 秒（可配置）。不重试，避免拖慢员工执行；超时按第 7 节处理。
+- 超时 5 秒（代码常量）。不重试，避免拖慢员工执行；超时按第 7 节处理。
 - 响应中的 `meta.rerank.outcome` 表示重排序是否失败回退。回退时结果仍然可用，只记录到事件里。
 
 ### 4.4 结果处理
 
-1. 丢弃 `score` 低于最低相关度的分段（可配置，对应现有 `minimumRelevanceScore` 的作用；默认值在 WK-S1 契约测试中按 WeKnora 实际分值校准），避免每次都注入弱相关内容。
-2. 丢弃处于“删除中”的文档（`external_knowledge_document_deletions`，第 10 节）。WeKnora 的删除是异步的，删除完成前文档仍可能被检索到。
-3. 按 `score` 从高到低，每篇文档（`knowledge_id`）只保留得分最高的一个分段，取前 3 篇，与现在的上限一致。
-4. 用 `GET /api/v1/knowledge/batch?ids=…` 一次取回这些文档的元数据，主要是 `updated_at`。检索结果本身没有更新时间和版本字段。取元数据失败时，按第 7 节当作知识库不可用处理，不注入缺少元数据的分段。
-5. 再校验一次：结果中的 `knowledge_base_id` 必须在本次传入的可见知识库 ID 里，不在的丢弃并记录告警。
+1. 丢弃 `score` 低于最低相关度的分段（代码常量，对应现有 `minimumRelevanceScore` 的作用；数值在 WK-S1 契约测试中按 WeKnora 实际分值校准），避免每次都注入弱相关内容。
+2. 按 `score` 从高到低，每篇文档（`knowledge_id`）只保留得分最高的一个分段，取前 3 篇，与现在的上限一致。
+3. 用 `GET /api/v1/knowledge/batch?ids=…` 一次取回这些文档的元数据，主要是 `updated_at`。检索结果本身没有更新时间和版本字段。取元数据失败时，按第 7 节当作知识库不可用处理，不注入缺少元数据的分段。
+4. 再校验一次：结果中的 `knowledge_base_id` 必须在本次传入的可见知识库 ID 里，不在的丢弃并记录告警。
 
 ### 4.5 映射到 Manifest
 
@@ -131,7 +130,8 @@ DSH 适配器拼装“# 企业知识上下文”（`dsh-acp-runtime-adapter.ts`�
 
 - 上传由平台服务端流式转发，不在平台落盘；WeKnora 返回 409（重复文件）时提示“该文档已存在”。
 - 解析是异步的，文档列表显示解析状态（解析中、已完成、失败），员工可以对失败的文档重新解析。
-- 删除知识库和删除文档在 WeKnora 中是异步任务。平台先记为“删除中”：知识库改 `external_knowledge_bases.status`，不再传入检索；文档写入 `external_knowledge_document_deletions`，检索结果按 4.4 第 2 步过滤，列表中隐藏。平台定期按 WeKnora 返回的任务状态确认完成，失败的删除在管理端提示并可重试。
+- 删除知识库：WeKnora 接受删除请求后，平台立即把知识库标为已删除，不再传入检索，也不在列表中显示；WeKnora 后台清理失败不影响平台侧的删除结果。
+- 删除文档：WeKnora 接受删除请求即视为完成，平台不跟踪异步任务。WeKnora 后台清理完成前的短时间内，该文档仍可能被检索到，接受这一点。
 
 ## 5. 权限
 
@@ -148,7 +148,7 @@ DSH 适配器拼装“# 企业知识上下文”（`dsh-acp-runtime-adapter.ts`�
 - 迁移给所有带 `workbench:use` 的现有角色（包括内置“普通员工”和平台管理员）加上 `knowledge:view`，现有员工默认可以查看和检索。`knowledge:docs`、`knowledge:bases` 不默认授予，由管理员授给专门的角色（例如新建“知识管理员”）。
 - 读取口径与现有一致：员工有效角色（直接授予和来自部门的都算，即 `user_roles`）的权限并集。三个权限码都不是管理类权限，可以按部门授予（组织架构方案 OD8 不受影响）。
 - 员工没有 `knowledge:view` 时，员工端不显示“知识库”入口，执行时不检索，也不显示“不可用”提示。
-- **Agent（WK14）：** 执行时还要求 Agent 的岗位角色中有 `knowledge:view`，否则不检索。岗位角色是 Agent 自己的授权，与员工无关，这使知识与其他能力一样受 Agent 岗位权限约束（功能规则第 8 节）。迁移时给现有 Agent 的岗位角色补上该权限码的方式见 5.6。
+- **Agent（WK14）：** 执行时还要求 Agent 的岗位角色中有 `knowledge:view`，否则不检索。岗位角色是 Agent 自己的授权，与员工无关，这使知识与其他能力一样受 Agent 岗位权限约束（功能规则第 8 节）。现有 Agent 不需要单独迁移：5.1 的迁移给带 `workbench:use` 的角色加 `knowledge:view`，岗位角色属于这类的 Agent 自然可用；原有知识库只有合成文档，没有 Agent 依赖它。
 
 ### 5.2 归属部门
 
@@ -178,7 +178,7 @@ DSH 适配器拼装“# 企业知识上下文”（`dsh-acp-runtime-adapter.ts`�
 ### 5.6 与现有规则的关系
 
 - **与 OD10 不同。** 组织架构方案 OD10 规定 Agent、Skill 的可见范围只按角色配置。知识库是第一个直接按部门授予可见范围的对象。原因：企业知识库数量多、通常按组织划分，并由员工自行创建，通过“部门 → 角色 → 可见角色”间接配置会为每个知识库造一个角色。这条例外写入功能规则，其他对象仍按 OD10。
-- **Data Scope 不再参与知识检索。** 现在 Data Scope 只用于本地知识检索过滤和执行中途收权复核（组织架构方案 OD7）。接入 WeKnora 后知识检索不再看 Data Scope，执行中途收权复核不变。原先 Data Scope 对 Agent 的约束（功能规则第 8 节“数据范围决定它能接触哪些数据”）改由 WK14 的岗位角色权限码承担。迁移时给所有当前在数据范围中含有本地知识 Data Scope 的 Agent 的岗位角色补上 `knowledge:view`，保持现有 Agent 的知识能力不变；具体角色在迁移设计时确定。
+- **Data Scope 不再参与知识检索。** 现在 Data Scope 只用于本地知识检索过滤和执行中途收权复核（组织架构方案 OD7）。接入 WeKnora 后知识检索不再看 Data Scope，执行中途收权复核不变。原先 Data Scope 对 Agent 的约束（功能规则第 8 节“数据范围决定它能接触哪些数据”）改由 WK14 的岗位角色权限码承担。
 - **团队空间不扩大可见范围。** 一期团队空间不检索；二期按 WK6 取全体现任成员的交集。
 - **注入知识的执行。** 一期只有员工在个人空间的对话在选择了知识库时检索（5.7，按员工本人校验）。二期增加团队空间对话（按全体现任成员交集校验，WK6）、定时任务（`automation`，按定时任务所属员工校验，WK19）和 Agent 验证运行（5.8）。主动任务（`agent-routine`）、会话摘要、项目档案员和管理助手不注入：主动任务由 `attempt-dispatcher.ts` 按 `purpose` 排除，后三类现在已经传空的 `knowledge_context`。
 
@@ -237,14 +237,14 @@ DSH 适配器拼装“# 企业知识上下文”（`dsh-acp-runtime-adapter.ts`�
   - 知识库归属自己部门且有 `knowledge:docs` 时：上传文件（可多选，显示进度）、修改标题与标签、重新解析、删除文档。上传前提示“上传的文档将对以下部门可见：…”。
   - 知识库归属自己部门且有 `knowledge:bases` 时：改名、调整部门授权（5.4，管理员授予的授权显示为只读）、删除知识库。删除前显示文档数并要求输入知识库名称确认。
 - **状态：** 加载中、空列表（区分“没有可见知识库”和“知识库中还没有文档”）、解析失败、服务不可用都有明确提示。
-- **上传人：** WeKnora 不记录平台员工身份，上传人和操作记录以平台审计为准（`knowledge_document_activities`，第 10 节）。
+- **上传人：** WeKnora 不记录平台员工身份，上传人和最近操作人从平台审计记录中取（审计按 WeKnora 文档 ID 记录操作）。
 
 ## 9. 管理端
 
 新增“企业知识库”页，只有平台管理员可以操作，页面先做可点击原型：
 
-- **连接配置：** WeKnora 地址、API Key（只写不读，显示末四位和过期时间）、启用开关、超时时间；“测试连接”调用 `GET /api/v1/knowledge-bases` 验证地址和凭据。
-- **全部知识库：** 列出所有经平台创建的知识库，包括员工看不到的“无可见部门”和“归属部门已删除”的知识库；可以新建知识库（指定归属部门）、修改归属部门、授给任意部门（含根部门）、撤销任何授权、删除知识库，以及重试失败的删除。管理端不提供文档的上传和维护，文档由归属部门的员工在员工端管理。
+- **连接配置：** WeKnora 地址、API Key（只写不读，显示末四位和过期时间）、启用开关；“测试连接”调用 `GET /api/v1/knowledge-bases` 验证地址和凭据。
+- **全部知识库：** 列出所有经平台创建的知识库，包括员工看不到的“无可见部门”和“归属部门已删除”的知识库；可以新建知识库（指定归属部门）、修改归属部门、授给任意部门（含根部门）、撤销任何授权、删除知识库。管理端不提供文档的上传和维护，文档由归属部门的员工在员工端管理。
 - **覆盖查询：** 可以查看某个知识库当前覆盖的员工，也可以在员工详情中查看其可见的知识库及来源部门。
 - **健康状态：** 最近一次成功和失败时间、失败原因分类、最近 24 小时调用次数和不可用次数。
 
@@ -252,23 +252,20 @@ DSH 适配器拼装“# 企业知识上下文”（`dsh-acp-runtime-adapter.ts`�
 
 | 表 | 说明 |
 | --- | --- |
-| `external_knowledge_connections` | `tenant_id`、`id`、`provider`（固定 `weknora`）、`base_url`、`credential_ref`（加密凭据引用）、`credential_hint`、`credential_expires_at`、`timeout_ms`、`status`（active / disabled）、`last_success_at`、`last_failure_at`、`last_failure_reason`、`updated_by`、`updated_at`。每个企业最多一条。 |
-| `external_knowledge_bases` | `tenant_id`、`id`、`connection_id`、`external_id`（WeKnora 知识库 ID）、`name`、`description`、`owner_department_id`（归属部门，WK15）、`status`（active / deleting / deleted / delete_failed / unavailable）、`delete_task_id`、`created_by`、`created_at`、`updated_by`、`updated_at`。同一连接下 `external_id` 唯一。 |
+| `external_knowledge_connections` | `tenant_id`、`id`、`provider`（固定 `weknora`）、`base_url`、`credential_ref`（加密凭据引用）、`credential_hint`、`credential_expires_at`、`status`（active / disabled）、`last_success_at`、`last_failure_at`、`last_failure_reason`、`updated_by`、`updated_at`。每个企业最多一条。 |
+| `external_knowledge_bases` | `tenant_id`、`id`、`connection_id`、`external_id`（WeKnora 知识库 ID）、`name`、`description`、`owner_department_id`（归属部门，WK15）、`status`（active / deleted / unavailable）、`created_by`、`created_at`、`updated_by`、`updated_at`。同一连接下 `external_id` 唯一。 |
 | `external_knowledge_base_grants` | `tenant_id`、`knowledge_base_id`、`department_id`、`include_descendants`、`status`（active / invalid）、`granted_by`、`granted_via`（employee / admin）、`created_at`、`invalidated_at`。同一知识库同一部门只有一条有效授权。 |
-| `knowledge_document_activities` | 文档操作记录：`tenant_id`、`id`、`knowledge_base_id`、`external_document_id`、`action`（upload / update / reparse / delete）、`actor_id`、`file_name`、`occurred_at`。用于显示上传人和最近操作人；同时写平台审计。 |
-| `external_knowledge_document_deletions` | 删除中的文档：`tenant_id`、`knowledge_base_id`、`external_document_id`、`delete_task_id`、`status`（deleting / failed）、`requested_by`、`requested_at`。检索结果和文档列表都排除这里的文档（4.4 第 2 步）；WeKnora 确认删除完成后移除该行。 |
 | `run_knowledge_citations` | `tenant_id`、`id`、`run_id`、`attempt_id`、`ordinal`、`external_document_id`、`knowledge_base_id`、`knowledge_base_name`、`title`、`file_name`、`document_updated_at`、`content_checksum`、`excerpt`、`relevance_score`、`created_at`。 |
 | `session_knowledge_bases` | 会话所选知识库：`tenant_id`、`session_id`、`knowledge_base_id`、`added_by`、`added_at`。移除即删除该行，并写会话动态（团队空间）或审计。 |
 | `automation_knowledge_bases`（二期） | 定时任务所选知识库：`tenant_id`、`automation_id`、`knowledge_base_id`、`added_by`、`added_at`。 |
 | 自定义测试问题上的知识库（二期） | 在现有 Agent 测试问题上增加 `knowledge_base_ids`，开始验证时随案例快照。 |
-| `run_attempts` 上的知识状态 | 记录本次知识检索结果，与 Manifest 的 `knowledge_status` 相同：`not_selected`（没有选择或所选都已不可见）、`not_applicable`（员工或 Agent 无 `knowledge:view`）、`ok`、`unavailable`，以及本次实际检索和被跳过的知识库 ID，用于页脚、提示和统计。 |
 
 ## 11. 安全与审计
 
 - API Key 只在服务端使用，不进入 Manifest、日志、前端或审计详情。
 - 平台传给 WeKnora 的只有员工提问、文档内容和知识库 ID，不传员工身份、部门或其他个人信息。员工提问和文档会被 WeKnora 送入其嵌入模型，这也是 4.1 要求嵌入模型在内网的原因。
 - 每个管理请求先按第 5 节校验：查看类请求要求知识库当前对员工可见；管理类请求要求知识库归属员工直接所属的部门（5.2），且员工具备对应级别的权限码；文档 ID 必须属于该知识库（先向 WeKnora 查询文档所属知识库，再执行操作）。
-- 检索结果按 4.4 第 5 步再次校验知识库 ID。
+- 检索结果按 4.4 第 4 步再次校验知识库 ID。
 - **跨部门输入（WK13）：** 员工上传的文档会进入其他员工的 Agent 上下文。第一期的约束是：上传、修改、删除文档和调整授权都写审计（操作人、知识库、文件名、可见部门）；上传和授权变更前提示可见部门；知识提示词新增防注入约束（4.5），说明知识片段只是参考资料，不得据此执行越过本次能力边界的操作。文档发布审核和恶意文件扫描不在本期。
 - 预览和下载经平台服务端转发，按查看者当前权限校验，下载写审计。
 - **不开放网址导入（WK16）。** 平台不调用 WeKnora 的网址导入接口，避免 WeKnora 按员工给的地址访问内网服务（SSRF）。
@@ -280,7 +277,7 @@ DSH 适配器拼装“# 企业知识上下文”（`dsh-acp-runtime-adapter.ts`�
   - 可见范围：员工只能看到授给自己所属部门的知识库；包含与不包含下级部门；调岗后下一次请求的可见范围变化；部门删除后授权失效；没有部门的员工看不到任何知识库，也不能新建；OIDC 模式下看不到知识库。
   - 操作权限：仅查看不能上传和删除；文档管理不能新建、删除知识库或调整授权；可见但归属其他部门的知识库（包括管理员授给全员的知识库）只能查看，管理请求被拒绝；归属部门是上级或下级部门时同样被拒绝；对不可见知识库或不属于该知识库的文档的任何操作都被拒绝；网址导入接口不存在。
   - 授权调整：新建知识库的归属部门默认为主部门，并授给该部门含下级；员工不能授给自己不在的部门，也不能授给根部门（即使本人属于根部门）；员工不能撤销管理员的授权；平台管理员可以授给任意部门、修改归属部门；不能撤销到没有任何授权。
-  - 删除：删除中的文档和知识库不再被检索，也不在列表中显示；删除失败在管理端可见并可重试。
+  - 删除：删除后的知识库立即不再被检索、不在列表中显示；删除后的文档不在列表中显示。
   - 选择：没有添加知识库时不调用 WeKnora，提示词含 WK18 说明；添加后只检索所选知识库，会话内后续提问持续生效，移除后不再检索；所选知识库对员工不可见后自动跳过并提示；一期团队空间、定时任务和验证运行没有添加入口且不调用 WeKnora。二期另覆盖：团队空间所选知识库对全体成员显示，成员变化导致的跳过有提示；定时任务按所选知识库检索，未选不检索；验证案例指定的知识库不在受众可见范围或 Agent 岗位角色不带 `knowledge:view` 时验证前检查报错。
   - 检索：所选知识库与可见知识库的交集才被检索；无权限、无部门或无授权时不调用 WeKnora；（二期）团队空间取全体现任成员的交集；Agent 岗位角色不带 `knowledge:view` 时不检索也不显示添加入口；主动任务不检索；返回不在可见列表中的知识库被丢弃；低于最低相关度的分段不注入；摘录截断后不超过 4000 字；知识提示词含防注入说明；引用页脚与员工端来源来自 `run_knowledge_citations`。
   - 不可用：WeKnora 超时、5xx、401、429 与元数据失败时执行继续且回答带不可用说明；员工端页面显示不可用提示。
@@ -291,7 +288,7 @@ DSH 适配器拼装“# 企业知识上下文”（`dsh-acp-runtime-adapter.ts`�
 
 | 切片 | 内容 | 依赖 |
 | --- | --- | --- |
-| WK-S1 | 知识端口抽象；删除原有知识库模块、旧表与旧测试（第 6 节第 6 条）；WeKnora 客户端与契约测试；引用快照表、页脚和员工端来源改读快照；不可用处理与提示词标记；三个权限码；连接、知识库、部门授权数据表；归属部门；按部门计算可见知识库；会话所选知识库数据表与检索范围（5.7）；WK18 提示词；Agent 岗位角色校验与现有 Agent 的迁移（5.6）；知识提示词增加防注入约束；Manifest `knowledge_status`。连接先用配置写入，知识库先用脚本创建，供联调使用。 | ORG-S1 |
+| WK-S1 | 知识端口抽象；删除原有知识库模块、旧表与旧测试（第 6 节第 6 条）；WeKnora 客户端与契约测试；引用快照表、页脚和员工端来源改读快照；不可用处理与提示词标记；三个权限码；连接、知识库、部门授权数据表；归属部门；按部门计算可见知识库；会话所选知识库数据表与检索范围（5.7）；WK18 提示词；Agent 岗位角色校验（WK14）；知识提示词增加防注入约束；Manifest `knowledge_status`。连接先用配置写入，知识库先用脚本创建，供联调使用。 | ORG-S1 |
 | WK-S2 | 员工端“知识库”（先原型）：主导航入口、个人空间对话框“添加知识库”与会话标签、知识库列表与新建、文档列表、文件上传、预览下载、文档维护、授权调整；服务端权限校验与审计；AGENTS.md 导航规则、验收目录与导航 E2E 同步。 | WK-S1 |
 | WK-S3 | 管理端“企业知识库”（先原型）：连接配置、全部知识库与跨部门授权、覆盖查询、健康状态。 | WK-S1 |
 | WK-S4 | 一期 P2 真实环境验收；功能规则、数据模型、架构总览同步。 | WK-S2、WK-S3 |
@@ -322,5 +319,3 @@ DSH 适配器拼装“# 企业知识上下文”（`dsh-acp-runtime-adapter.ts`�
 - 不设白名单、带 `manage_kbs` 的 API Key 能否完成 4.6 中全部接口（尤其是预览、下载这类“更严格权限”的接口）。WK-S1 中实测；不足时再评估是否需要全权限 Key。
 - WeKnora 知识 ID 的实际格式是否满足平台 ID 格式（4.5），WK-S1 中确认；不满足时改为对外部 ID 做哈希。
 - 业务接口没有全局限流，平台侧是否需要并发上限，在 P2 压测后决定。
-- WeKnora 异步删除任务的状态查询接口（4.6 中按 `task_id` 确认删除完成），WK-S1 中按源码与实测确认。
-- 现有 Agent 迁移时具体给哪个岗位角色补 `knowledge:view`（5.6）：岗位角色可能被多个 Agent 共用，WK-S1 迁移设计时逐一列出受影响的角色与 Agent，由用户确认。
