@@ -43,6 +43,7 @@ export interface WeKnoraKnowledge {
   title: string
   file_name: string
   updated_at: string
+  parse_status?: string
 }
 
 export interface WeKnoraKnowledgeBase {
@@ -138,6 +139,7 @@ export class WeKnoraClient {
         title: typeof row.title === 'string' ? row.title : '',
         file_name: typeof row.file_name === 'string' ? row.file_name : '',
         updated_at: row.updated_at,
+        ...(typeof row.parse_status === 'string' ? { parse_status: row.parse_status } : {}),
       }
     })
   }
@@ -188,11 +190,6 @@ export class WeKnoraClient {
       items: arrayData(body).map(toDocument),
       total: typeof total === 'number' ? total : 0,
     }
-  }
-
-  async getDocument(id: string): Promise<WeKnoraDocument> {
-    const body = await this.request('GET', `/api/v1/knowledge/${encodeURIComponent(id)}`, undefined, managementTimeoutMs)
-    return toDocument((body as { data?: unknown }).data)
   }
 
   /** 上传文件（WK16：只支持文件，不调用网址导入）。重复文件由 WeKnora 返回 409。 */

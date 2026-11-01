@@ -9,6 +9,7 @@ import { workbenchApi } from '@/api/client'
 import KnowledgeGrantDialog from '@/components/knowledge/KnowledgeGrantDialog.vue'
 import type { KnowledgeBase, KnowledgeDocument, KnowledgeDocumentStatus } from '@/types/knowledge'
 import { notifyActionFailure } from '@/utils/feedback'
+import { useUiModeStore } from '@/stores/ui-mode'
 import { describeKnowledgeGrants, formatKnowledgeDate, formatKnowledgeDateTime } from '@/utils/knowledge'
 
 /**
@@ -18,6 +19,8 @@ import { describeKnowledgeGrants, formatKnowledgeDate, formatKnowledgeDateTime }
 const route = useRoute()
 const router = useRouter()
 const knowledgeBaseId = computed(() => String(route.params.id ?? ''))
+// B 协作模式没有不指定 AI 同事的新对话，“用这个知识库提问”只在 A 模式显示；B 在单聊输入框中添加。
+const uiMode = useUiModeStore()
 
 const base = ref<KnowledgeBase | null>(null)
 const loadError = ref('')
@@ -284,7 +287,7 @@ onMounted(() => { void reload() })
           <span class="knowledge-crumbs__sep" aria-hidden="true">/</span>
           <strong class="knowledge-crumbs__current" aria-current="page">{{ base?.name ?? '知识库' }}</strong>
         </nav>
-        <el-button v-if="base" :icon="ChatDotRound" @click="askWithBase">用这个知识库提问</el-button>
+        <el-button v-if="base && uiMode.mode !== 'collab'" :icon="ChatDotRound" @click="askWithBase">用这个知识库提问</el-button>
       </div>
 
       <el-empty v-if="loadError" class="knowledge-detail__error" :description="loadError">

@@ -60,7 +60,16 @@ export class PostgresKnowledgeBaseService implements KnowledgeBaseService {
 
   async status(userId: string): Promise<KnowledgeStatusView> {
     const level = await knowledgeLevelOf(this.database, userId)
-    return { enabled: this.config.client !== null && level !== 'none', level }
+    return { enabled: level !== 'none' && await this.connectionActive(), level }
+  }
+
+  /** 与执行前检索同一口径：未配置或连接被停用时，员工端不显示入口、接口回答不可用。 */
+  private async connectionActive(): Promise<boolean> {
+    if (!this.config.client) return false
+    const [row] = await this.database<{ status: string }[]>`
+      select status from external_knowledge_connections where tenant_id = ${tenantId} and id = ${this.config.connectionId}
+    `
+    return row?.status === 'active'
   }
 
   async listDepartments(userId: string): Promise<KnowledgeDepartmentOption[]> {
@@ -290,7 +299,7 @@ export class PostgresKnowledgeBaseService implements KnowledgeBaseService {
   }
 
   private async requireLevel(userId: string, minimum: KnowledgeLevel): Promise<KnowledgeLevel> {
-    if (!this.config.client) throw dependencyUnavailable('企业知识库尚未配置')
+    if (!await this.connectionActive()) throw dependencyUnavailable('企业知识库尚未配置或已停用')
     const level = await knowledgeLevelOf(this.database, userId)
     if (levelRank[level] < levelRank[minimum]) {
       throw accessDenied(minimum === 'view' ? '你没有查看企业知识库的权限' : '你没有执行此操作的知识库权限')
@@ -332,17 +341,16 @@ export class PostgresKnowledgeBaseService implements KnowledgeBaseService {
     return row
   }
 
-  private async requireDocument(row: BaseRow, documentId: string): Promise<WeKnoraDocument> {
-    let document: WeKnoraDocument
-    try {
-      document = await this.call(client => client.getDocument(documentId))
-    } catch (error) {
-      if (error instanceof RequestError && error.status === 404) throw notFound('文档不存在')
-      throw error
+  /**
+   * 文档必须属于这个知识库：先向 WeKnora 查询文档所属知识库，再执行操作（第 11 节）。用文档元数据批量
+   * 接口查询：它已确认只需检索能力（retrieve），而单篇读取接口的 API Key 能力未在文档中声明。
+   */
+  private async requireDocument(row: BaseRow, documentId: string): Promise<Pick<WeKnoraDocument, 'id' | 'title' | 'fileName'>> {
+    const [document] = await this.call(client => client.knowledgeBatch([documentId]))
+    if (!document || document.id !== documentId || document.knowledge_base_id !== row.externalId || document.parse_status === 'deleting') {
+      throw notFound('文档不存在')
     }
-    // 文档必须属于这个知识库：先向 WeKnora 查询文档所属知识库，再执行操作（第 11 节）。
-    if (document.knowledgeBaseId !== row.externalId || document.parseStatus === 'deleting') throw notFound('文档不存在')
-    return document
+    return { id: document.id, title: document.title, fileName: document.file_name }
   }
 
   private async requirePersonalSession(userId: string, sessionId: string) {

@@ -144,7 +144,7 @@ export class WeKnoraDouble {
         knowledge_base_id: document.knowledgeBaseId,
         title: document.title,
         file_name: document.fileName,
-        parse_status: 'completed',
+        parse_status: document.parseStatus ?? 'completed',
         updated_at: document.updatedAt,
       }))
       return { status: 200, body: { success: true, data } }

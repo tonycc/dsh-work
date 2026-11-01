@@ -281,4 +281,14 @@ test('KB-06 WeKnora 不可用时返回明确提示，不含密钥与正文', asy
   assert.equal(result.status, 503)
   assert.match(result.error?.message ?? '', /知识库服务暂不可用/)
   assert.doesNotMatch(result.text, new RegExp(double.apiKey))
+
+  // 连接被停用时与执行前检索同一口径：员工端不显示入口，接口回答不可用。
+  double.failWith = null
+  await database`update external_knowledge_connections set status = 'disabled' where tenant_id = ${tenantId}`
+  try {
+    assert.deepEqual(await ok(users.viewer, 'GET', `${base}/knowledge/status`), { enabled: false, level: 'view' })
+    assert.equal((await api(users.viewer, 'GET', `${base}/knowledge-bases`)).status, 503)
+  } finally {
+    await database`update external_knowledge_connections set status = 'active' where tenant_id = ${tenantId}`
+  }
 })
