@@ -237,6 +237,18 @@ test('KB-03 可见部门：只能授给本人所属的非根部门，不能撤�
   const revoked = await ok(users.bases, 'DELETE', `${base}/knowledge-bases/${planBase}/grants/${procurement.id}`)
   assert.equal(revoked.grants.length, 1)
   assert.equal((await api(users.bases, 'DELETE', `${base}/knowledge-bases/${planBase}/grants/${revoked.grants[0].id}`)).status, 409)
+  // 可选部门不含根部门，即使本人属于根部门。
+  assert.deepEqual((await ok(users.bases, 'GET', `${base}/knowledge/departments`)).map((item: any) => item.name), ['计划组', '采购组'])
+  // 并发撤销两条授权：只能成功一条，知识库仍保留一个可见部门。
+  const twice = await ok(users.bases, 'POST', `${base}/knowledge-bases/${planBase}/grants`, { departmentId: 'dept-proc' })
+  const results = await Promise.all(twice.grants.map((grant: any) => api(users.bases, 'DELETE', `${base}/knowledge-bases/${planBase}/grants/${grant.id}`)))
+  assert.deepEqual(results.map(result => result.status).sort(), [200, 409])
+  assert.equal((await ok(users.bases, 'GET', `${base}/knowledge-bases/${planBase}`)).grants.length, 1)
+  const remaining = (await ok(users.bases, 'GET', `${base}/knowledge-bases/${planBase}`)).grants[0]
+  if (remaining.departmentName !== '计划组') {
+    // 留下的是采购组时补回计划组，后续用例仍按计划组成员可见。
+    await ok(users.bases, 'POST', `${base}/knowledge-bases/${planBase}/grants`, { departmentId: 'dept-plan' })
+  }
 
   await database`
     insert into external_knowledge_base_grants (id, tenant_id, knowledge_base_id, department_id, include_descendants, granted_by, granted_via)
@@ -281,6 +293,9 @@ test('KB-06 WeKnora 不可用时返回明确提示，不含密钥与正文', asy
   assert.equal(result.status, 503)
   assert.match(result.error?.message ?? '', /知识库服务暂不可用/)
   assert.doesNotMatch(result.text, new RegExp(double.apiKey))
+  // 对话中的选择器不读取 WeKnora 统计，WeKnora 不可用时仍可选择。
+  const picker = await ok(users.viewer, 'GET', `${base}/knowledge-bases?stats=false`)
+  assert.ok(picker.length > 0)
 
   // 连接被停用时与执行前检索同一口径：员工端不显示入口，接口回答不可用。
   double.failWith = null

@@ -72,10 +72,11 @@ void knowledge.ensureLoaded()
 const showKnowledge = computed(() => knowledge.enabled)
 const selectedKnowledge = ref<SessionKnowledgeBase[]>([])
 let knowledgeToken = 0
-watch(continueSessionId, async (sessionId) => {
+// 同时监听启用状态：刷新页面时状态可能晚于会话加载，否则会漏读已选知识库，之后保存时把它们覆盖掉。
+watch([continueSessionId, () => knowledge.enabled], async ([sessionId, enabled]) => {
   const token = ++knowledgeToken
   selectedKnowledge.value = []
-  if (!sessionId || !knowledge.enabled) return
+  if (!sessionId || !enabled) return
   try {
     const items = await workbenchApi.getSessionKnowledgeBases(sessionId)
     if (token === knowledgeToken) selectedKnowledge.value = items

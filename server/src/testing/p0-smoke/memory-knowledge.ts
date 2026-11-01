@@ -156,11 +156,12 @@ export class MemoryKnowledgeBaseStore implements KnowledgeBaseService {
     return { items: items.map(item => ({ ...item })), total: items.length, page: input.page ?? 1, pageSize: input.pageSize ?? 20 }
   }
 
-  async uploadDocument(_userId: string, knowledgeBaseId: string, input: { fileName: string; mimeType: string; bytes: Buffer }) {
+  async uploadDocument(_userId: string, knowledgeBaseId: string, input: { fileName: string; mimeType: string; read: () => Promise<Buffer> }) {
     const base = this.manage(knowledgeBaseId, 'docs')
+    const bytes = await input.read()
     if (base.documents.some(item => item.fileName === input.fileName)) throw stateConflict('该文档已存在')
     const document: KnowledgeDocumentView = {
-      id: `doc-new-${this.sequence++}`, title: input.fileName.replace(/\.[^.]+$/, ''), fileName: input.fileName, fileSize: input.bytes.length,
+      id: `doc-new-${this.sequence++}`, title: input.fileName.replace(/\.[^.]+$/, ''), fileName: input.fileName, fileSize: bytes.length,
       status: 'parsing', errorMessage: null, uploadedBy: '林岚', updatedAt: new Date().toISOString(),
     }
     base.documents.unshift(document)

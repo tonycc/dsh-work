@@ -72,15 +72,19 @@ export class PostgresKnowledgeBaseService implements KnowledgeBaseService {
     return row?.status === 'active'
   }
 
+  /** 新建与授权可选的部门：本人直接所属的部门，不含根部门（WK11）。 */
   async listDepartments(userId: string): Promise<KnowledgeDepartmentOption[]> {
-    return this.myDepartments(userId)
+    return this.myDepartments(userId, { excludeRoot: true })
   }
 
-  async list(userId: string): Promise<KnowledgeBaseView[]> {
+  async list(userId: string, options: { withStats?: boolean } = {}): Promise<KnowledgeBaseView[]> {
     const level = await this.requireLevel(userId, 'view')
     const rows = await this.visibleBases(userId)
     if (!rows.length) return []
-    const stats = new Map((await this.call(client => client.listKnowledgeBases())).map(item => [item.id, item]))
+    // 对话中的“添加知识库”只需要名称与归属部门，不读取 WeKnora 统计：WeKnora 暂不可用时也能选择。
+    const stats = new Map(options.withStats === false
+      ? []
+      : (await this.call(client => client.listKnowledgeBases())).map(item => [item.id, item]))
     const grants = await this.grantsOf(rows.map(row => row.id))
     return rows.map(row => this.view(row, level, grants, stats.get(row.externalId)))
   }
@@ -174,15 +178,22 @@ export class PostgresKnowledgeBaseService implements KnowledgeBaseService {
 
   async revokeGrant(userId: string, knowledgeBaseId: string, grantId: string) {
     const row = await this.requireManage(userId, knowledgeBaseId, 'bases')
-    const grants = await this.grantsOf([row.id])
-    const grant = grants.find(item => item.id === grantId)
+    const grant = (await this.grantsOf([row.id])).find(item => item.id === grantId)
     if (!grant) throw notFound('授权不存在')
     if (grant.grantedVia === 'admin') throw accessDenied('平台管理员授予的可见范围只能由平台管理员撤销')
-    if (grants.length <= 1) throw stateConflict('至少保留一个可见部门')
-    await this.database`
-      update external_knowledge_base_grants set status = 'invalid', invalidated_at = now()
-       where tenant_id = ${tenantId} and id = ${grant.id} and status = 'active'
-    `
+    // 计数与撤销在同一事务中，锁住知识库行：并发撤销不会撤到没有任何授权。
+    await this.database.begin(async transaction => {
+      await transaction`select id from external_knowledge_bases where tenant_id = ${tenantId} and id = ${row.id} for update`
+      const [{ count }] = await transaction<{ count: number }[]>`
+        select count(*)::int as count from external_knowledge_base_grants
+         where tenant_id = ${tenantId} and knowledge_base_id = ${row.id} and status = 'active'
+      `
+      if (count <= 1) throw stateConflict('至少保留一个可见部门')
+      await transaction`
+        update external_knowledge_base_grants set status = 'invalid', invalidated_at = now()
+         where tenant_id = ${tenantId} and id = ${grant.id} and status = 'active'
+      `
+    })
     await this.record(userId, 'knowledge.grant.revoke', row.id, `撤销知识库“${row.name}”对${grant.departmentName}的授权`)
     return this.get(userId, row.id)
   }
@@ -202,16 +213,23 @@ export class PostgresKnowledgeBaseService implements KnowledgeBaseService {
     const result = await this.call(client => client.listDocuments(row.externalId, { keyword, parseStatus, page, pageSize }))
     const documents = result.items.filter(item => item.parseStatus !== 'deleting')
     const uploaders = await this.uploaders(documents.map(item => item.id))
-    return { items: documents.map(item => toDocumentView(item, uploaders.get(item.id) ?? null)), total: result.total, page, pageSize }
+    // “删除中”的文档不显示，总数随之扣除本页去掉的条数（其他页的删除中文档由 WeKnora 清理后自然消失）。
+    const total = Math.max(result.total - (result.items.length - documents.length), documents.length)
+    return { items: documents.map(item => toDocumentView(item, uploaders.get(item.id) ?? null)), total, page, pageSize }
   }
 
-  async uploadDocument(userId: string, knowledgeBaseId: string, input: { fileName: string; mimeType: string; bytes: Buffer }) {
+  async uploadDocument(userId: string, knowledgeBaseId: string, input: { fileName: string; mimeType: string; read: () => Promise<Buffer> }) {
+    // 先校验权限与文件名，再接收文件内容：没有上传权限的请求不必先收下整份文件。
     const row = await this.requireManage(userId, knowledgeBaseId, 'docs')
     const fileName = input.fileName.trim()
     if (!fileName || fileName.length > 200 || /[\\/]/.test(fileName)) throw invalidRequest('文件名无效')
-    if (!input.bytes.length) throw invalidRequest('文件为空')
-    if (input.bytes.length > maxKnowledgeUploadBytes) throw invalidRequest('文件超过 50 MB 限制')
-    const document = await this.call(client => client.uploadDocument(row.externalId, { ...input, fileName }))
+    const bytes = await input.read()
+    if (!bytes.length) throw invalidRequest('文件为空')
+    if (bytes.length > maxKnowledgeUploadBytes) throw invalidRequest('文件超过 50 MB 限制')
+    const document = await this.call(
+      client => client.uploadDocument(row.externalId, { fileName, mimeType: input.mimeType, bytes }),
+      { conflict: '该文档已存在' },
+    )
     const visible = (await this.grantsOf([row.id])).map(grant => grant.departmentName).join('、')
     await this.record(userId, 'knowledge.document.upload', document.id, `上传“${fileName}”到知识库“${row.name}”，可见部门：${visible}`, 'knowledge_document', row.id)
     return toDocumentView(document, await this.displayName(userId))
@@ -254,7 +272,11 @@ export class PostgresKnowledgeBaseService implements KnowledgeBaseService {
     const row = await this.requireVisible(userId, knowledgeBaseId)
     const document = await this.requireDocument(row, documentId)
     const file = await this.call(client => client.previewDocument(document.id))
-    // 只返回纯文本：预览内容来自员工上传的文件，不能作为 HTML 在员工端渲染。
+    // 只返回文本类预览（纯文本、HTML、Markdown、JSON），按纯文本显示，不在员工端渲染 HTML；
+    // 其他类型（如原始 PDF、Office 二进制）不做预览，提示下载查看。
+    if (!/^(text\/|application\/(json|xml|markdown))/i.test(file.mimeType)) {
+      throw invalidRequest('该文件暂不支持在线预览，请下载查看')
+    }
     const truncated = file.bytes.length > maxPreviewBytes
     return { text: file.bytes.subarray(0, maxPreviewBytes).toString('utf8'), truncated }
   }
@@ -450,7 +472,7 @@ export class PostgresKnowledgeBaseService implements KnowledgeBaseService {
   }
 
   /** 把 WeKnora 的错误翻译成员工能理解的提示，不带 API Key、请求或响应正文。 */
-  private async call<T>(operation: (client: WeKnoraClient) => Promise<T>): Promise<T> {
+  private async call<T>(operation: (client: WeKnoraClient) => Promise<T>, messages: { conflict?: string } = {}): Promise<T> {
     const client = this.config.client
     if (!client) throw dependencyUnavailable('企业知识库尚未配置')
     try {
@@ -458,7 +480,7 @@ export class PostgresKnowledgeBaseService implements KnowledgeBaseService {
     } catch (error) {
       if (error instanceof WeKnoraUnavailableError) throw dependencyUnavailable('知识库服务暂不可用，请稍后重试')
       if (error instanceof WeKnoraRequestError) {
-        if (error.status === 409) throw stateConflict('该文档已存在')
+        if (error.status === 409) throw stateConflict(messages.conflict ?? '知识库服务中已有同名对象，请换一个名称')
         if (error.status === 404) throw notFound('知识库服务中找不到该对象')
         throw invalidRequest('知识库服务拒绝了这个请求')
       }

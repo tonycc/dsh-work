@@ -60,7 +60,7 @@ export interface SessionKnowledgeBaseView {
 export interface KnowledgeBaseService {
   status(userId: string): Promise<KnowledgeStatusView>
   listDepartments(userId: string): Promise<KnowledgeDepartmentOption[]>
-  list(userId: string): Promise<KnowledgeBaseView[]>
+  list(userId: string, options?: { withStats?: boolean }): Promise<KnowledgeBaseView[]>
   get(userId: string, knowledgeBaseId: string): Promise<KnowledgeBaseView>
   create(userId: string, input: { name: string; description?: string; ownerDepartmentId: string; includeDescendants?: boolean }): Promise<KnowledgeBaseView>
   update(userId: string, knowledgeBaseId: string, input: { name?: string; description?: string }): Promise<KnowledgeBaseView>
@@ -68,7 +68,8 @@ export interface KnowledgeBaseService {
   addGrant(userId: string, knowledgeBaseId: string, input: { departmentId: string; includeDescendants?: boolean }): Promise<KnowledgeBaseView>
   revokeGrant(userId: string, knowledgeBaseId: string, grantId: string): Promise<KnowledgeBaseView>
   listDocuments(userId: string, knowledgeBaseId: string, input: { keyword?: string; status?: string; page?: number; pageSize?: number }): Promise<{ items: KnowledgeDocumentView[]; total: number; page: number; pageSize: number }>
-  uploadDocument(userId: string, knowledgeBaseId: string, input: { fileName: string; mimeType: string; bytes: Buffer }): Promise<KnowledgeDocumentView>
+  /** read 在权限与文件名校验通过后才调用，读取请求中的文件内容。 */
+  uploadDocument(userId: string, knowledgeBaseId: string, input: { fileName: string; mimeType: string; read: () => Promise<Buffer> }): Promise<KnowledgeDocumentView>
   updateDocument(userId: string, knowledgeBaseId: string, documentId: string, input: { title: string }): Promise<void>
   reparseDocument(userId: string, knowledgeBaseId: string, documentId: string): Promise<void>
   deleteDocument(userId: string, knowledgeBaseId: string, documentId: string): Promise<void>

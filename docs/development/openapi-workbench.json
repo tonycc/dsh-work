@@ -3667,6 +3667,7 @@
     "/knowledge-bases": {
       "get": {
         "operationId": "listKnowledgeBases",
+        "parameters": [{ "name": "stats", "in": "query", "description": "false 时不读取 WeKnora 统计（documentCount、processingCount 为 0）。", "schema": { "enum": ["true", "false"] } }],
         "summary": "可见知识库",
         "description": "授给本人所属部门、或上级部门勾选“包含下级”授给的知识库（weknora-knowledge-plan 5.3）。",
         "responses": {

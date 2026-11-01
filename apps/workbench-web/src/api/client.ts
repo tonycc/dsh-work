@@ -661,7 +661,9 @@ export const workbenchApi = {
   // 企业知识库（weknora-knowledge-plan 第 8 节，WK-S2）。
   getKnowledgeStatus: () => request<KnowledgeStatus>('/knowledge/status'),
   listKnowledgeDepartments: () => request<KnowledgeDepartmentOption[]>('/knowledge/departments'),
-  listKnowledgeBases: () => request<KnowledgeBase[]>('/knowledge-bases'),
+  /** stats=false 时不读取 WeKnora 统计（文档数为 0），供对话中的知识库选择器在 WeKnora 暂不可用时也能使用。 */
+  listKnowledgeBases: (options: { stats?: boolean } = {}) =>
+    request<KnowledgeBase[]>(options.stats === false ? '/knowledge-bases?stats=false' : '/knowledge-bases'),
   getKnowledgeBase: (knowledgeBaseId: string) => request<KnowledgeBase>(`/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}`),
   createKnowledgeBase: (input: { name: string; description?: string; ownerDepartmentId: string; includeDescendants?: boolean }) =>
     request<KnowledgeBase>('/knowledge-bases', { method: 'POST', body: JSON.stringify(input) }),

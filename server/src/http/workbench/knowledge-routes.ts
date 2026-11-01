@@ -30,7 +30,9 @@ export function registerKnowledgeRoutes(
 
   router.get(`${basePath}/knowledge/departments`, async (_request, context) => ok(await knowledge.listDepartments(await identityOf(context))))
 
-  router.get(`${basePath}/knowledge-bases`, async (_request, context) => ok(await knowledge.list(await identityOf(context))))
+  router.get(`${basePath}/knowledge-bases`, async (_request, context) => ok(await knowledge.list(await identityOf(context), {
+    withStats: context.url.searchParams.get('stats') !== 'false',
+  })))
 
   router.post(`${basePath}/knowledge-bases`, async (request, context) => {
     const userId = await identityOf(context)
@@ -88,11 +90,10 @@ export function registerKnowledgeRoutes(
     const userId = await identityOf(context)
     const encodedName = headerValue(request, 'x-file-name')
     if (!encodedName) throw routeValidationFailed('缺少文件名')
-    const bytes = await readUpload(request)
     return httpResult(201, ok(await knowledge.uploadDocument(userId, context.params['knowledgeBaseId'] ?? '', {
       fileName: decodeHeader(encodedName),
       mimeType: headerValue(request, 'content-type') ?? 'application/octet-stream',
-      bytes,
+      read: () => readUpload(request),
     })))
   })
 

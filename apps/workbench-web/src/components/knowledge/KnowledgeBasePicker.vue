@@ -26,7 +26,7 @@ async function show() {
   loading.value = true
   error.value = ''
   try {
-    bases.value = await workbenchApi.listKnowledgeBases()
+    bases.value = await workbenchApi.listKnowledgeBases({ stats: false })
   } catch (cause) {
     bases.value = []
     error.value = cause instanceof Error ? cause.message : '知识库服务暂不可用，请稍后重试'
@@ -59,7 +59,7 @@ function confirm() {
     <el-checkbox-group v-else v-model="checked" class="knowledge-picker__list">
       <el-checkbox v-for="base in bases" :key="base.id" :value="base.id" :aria-label="base.name" class="knowledge-picker__item" border>
         <span class="knowledge-picker__name">{{ base.name }}</span>
-        <span class="knowledge-picker__meta">{{ base.ownerDepartmentName }} · {{ base.documentCount }} 篇文档</span>
+        <span class="knowledge-picker__meta">归属 {{ base.ownerDepartmentName }}</span>
       </el-checkbox>
     </el-checkbox-group>
     <template #footer>
