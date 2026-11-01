@@ -11,6 +11,9 @@ const managedScopeCode = 'application'
 export const permissionCatalog = [
   { code: LOCAL_PERMISSIONS.workbenchUse, name: '使用员工工作台', category: '员工端', description: '登录并使用员工工作台。' },
   { code: LOCAL_PERMISSIONS.workbenchManage, name: '管理部门工作内容', category: '员工端', description: '执行员工端的部门管理操作。' },
+  { code: LOCAL_PERMISSIONS.knowledgeView, name: '查看企业知识库', category: '企业知识库', description: '浏览可见知识库与文档，对话中添加知识库后检索。' },
+  { code: LOCAL_PERMISSIONS.knowledgeDocs, name: '管理知识库文档', category: '企业知识库', description: '包含查看；在归属本人所属部门的知识库中上传和维护文档。' },
+  { code: LOCAL_PERMISSIONS.knowledgeBases, name: '管理知识库', category: '企业知识库', description: '包含文档管理；新建知识库，改名、删除和调整归属本人所属部门的知识库授权。' },
   { code: LOCAL_PERMISSIONS.adminRead, name: '读取管理配置', category: '管理端', description: '查看非审计类管理页面与配置。' },
   { code: LOCAL_PERMISSIONS.adminWrite, name: '变更管理配置', category: '管理端', description: '执行管理端写操作。' },
   { code: LOCAL_PERMISSIONS.auditRead, name: '读取安全审计', category: '安全', description: '查看审计与运行治理信息。' },

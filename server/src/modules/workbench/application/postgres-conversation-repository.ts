@@ -170,11 +170,10 @@ interface ArtifactRow {
 interface SourceRow {
   id: string
   title: string
-  version: string
-  effectiveAt: Date
-  dataScope: string
+  fileName: string
+  knowledgeBaseName: string
+  updatedAt: Date
   excerpt: string
-  synthetic: boolean
 }
 
 interface AttachmentRow {
@@ -1445,14 +1444,12 @@ export class PostgresConversationRepository {
       : []
     const sources = row.currentAttemptId
       ? await this.database<SourceRow[]>`
-          select kd.id, kd.title, kd.version, kd.effective_date as "effectiveAt",
-                 kd.data_scope as "dataScope", rks.excerpt, ks.synthetic
-            from run_knowledge_sources rks
-            join knowledge_documents kd on kd.tenant_id = rks.tenant_id and kd.id = rks.document_id
-            join knowledge_sources ks on ks.tenant_id = kd.tenant_id and ks.id = kd.source_id
-           where rks.tenant_id = ${tenantId} and rks.run_id = ${row.id}
-             and rks.attempt_id = ${row.currentAttemptId}
-           order by rks.relevance_score desc, kd.effective_date desc
+          select id, title, file_name as "fileName", knowledge_base_name as "knowledgeBaseName",
+                 document_updated_at as "updatedAt", excerpt
+            from run_knowledge_citations
+           where tenant_id = ${tenantId} and run_id = ${row.id}
+             and attempt_id = ${row.currentAttemptId}
+           order by ordinal
         `
       : []
     const toolAudits = row.currentAttemptId
@@ -1487,11 +1484,10 @@ export class PostgresConversationRepository {
         type: 'knowledge' as const,
         title: source.title,
         description: source.excerpt,
-        version: source.version,
-        effectiveAt: formatDate(source.effectiveAt),
-        dataScope: source.dataScope,
-        synthetic: source.synthetic,
-        updatedAt: formatDate(source.effectiveAt),
+        // 引用快照（weknora-knowledge-plan 第 6 节第 5 条）：WeKnora 文档没有版本号与数据范围。
+        fileName: source.fileName || undefined,
+        knowledgeBaseName: source.knowledgeBaseName,
+        updatedAt: formatDate(source.updatedAt),
       })),
       toolAudits: toolAudits.map(mapToolAuditRow),
       runError: row.status === 'failed' ? toRunError(row.id, row.errorCode) : null,

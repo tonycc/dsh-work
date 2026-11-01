@@ -11,7 +11,7 @@ import type { PostgresConversationRepository } from '../workbench/application/po
 import type { PostgresContentService } from '../workbench/application/postgres-content-service.ts'
 import type { RunOperationsPort } from './run-operations-port.ts'
 import type { PostgresAgentService } from '../agent/postgres-agent-service.ts'
-import type { PostgresKnowledgeService } from '../knowledge/postgres-knowledge-service.ts'
+import type { KnowledgeProvider } from '../knowledge/knowledge-provider.ts'
 import type { PostgresControlledMemoryService } from '../memory/postgres-controlled-memory-service.ts'
 import type {
   PostgresAuthorizationService,
@@ -73,7 +73,7 @@ export class RunOrchestrationService {
     content?: PostgresContentService,
     operations?: RunOperationsPort,
     agents?: PostgresAgentService,
-    knowledge?: PostgresKnowledgeService,
+    knowledge?: KnowledgeProvider,
     authorization?: PostgresAuthorizationService,
     options?: {
       automationMaxConcurrent?: number

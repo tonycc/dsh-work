@@ -96,7 +96,7 @@ import { migrateSkillFilesToFileSystem } from './modules/skill/skill-file-storag
 import { builtinTools, missingDshBuiltinTools, type BuiltinToolStatus } from './modules/runtime/builtin-tools.ts'
 import { PostgresMcpConnectorService } from './modules/tool/postgres-mcp-connector-service.ts'
 import { PostgresEncryptedCredentialStore } from './modules/tool/postgres-encrypted-credential-store.ts'
-import { PostgresKnowledgeService } from './modules/knowledge/postgres-knowledge-service.ts'
+import { WeKnoraKnowledgeProvider } from './modules/knowledge/weknora-knowledge-provider.ts'
 import { PostgresAuthorizationService } from './modules/authorization/postgres-authorization-service.ts'
 import { PostgresAutomationRepository } from './modules/automation/postgres-automation-repository.ts'
 import { AutomationService } from './modules/automation/automation-service.ts'
@@ -421,7 +421,15 @@ async function start() {
   }
   skills.setPublicationAvailabilityChecker(checkInstallationRuntime)
   const agents = new PostgresAgentService(database, operations, skills, mcpService)
-  const knowledge = new PostgresKnowledgeService(database)
+  // 企业知识库（weknora-knowledge-plan）：WK-S1 连接由部署配置写入；未配置时不检索企业知识。
+  const knowledge = process.env.WEKNORA_BASE_URL && process.env.WEKNORA_API_KEY
+    ? new WeKnoraKnowledgeProvider(database, {
+        baseUrl: process.env.WEKNORA_BASE_URL,
+        apiKey: process.env.WEKNORA_API_KEY,
+        embeddingModelId: process.env.WEKNORA_EMBEDDING_MODEL_ID || undefined,
+      })
+    : undefined
+  await knowledge?.ensureConnection()
   const controlledMemory = new PostgresControlledMemoryService(database, authorization, operations)
   controlledMemoryRef.current = controlledMemory
   memoryProposalSweep = setInterval(() => {

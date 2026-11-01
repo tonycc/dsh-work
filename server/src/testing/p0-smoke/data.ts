@@ -467,6 +467,8 @@ export const mockTasks: TaskRun[] = [
           type: 'knowledge',
           title: '《委外加工业务管理办法》V3.2',
           description: '第 4.1～4.6 节：委外发料、在途与材料核销。',
+          knowledgeBaseName: '供应链制度库',
+          fileName: '委外加工业务管理办法.pdf',
           updatedAt: '2026-06-12',
         },
         {
@@ -474,6 +476,8 @@ export const mockTasks: TaskRun[] = [
           type: 'knowledge',
           title: '《仓储出入库操作规范》V5.0',
           description: '第 7 节：委外领料单与库存转移。',
+          knowledgeBaseName: '供应链制度库',
+          fileName: '仓储出入库操作规范.docx',
           updatedAt: '2026-07-03',
         },
       ],
