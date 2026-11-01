@@ -123,6 +123,12 @@ export class AttemptDispatcher {
           query: knowledgeQuery(input.prompt, input.history),
         })
       : null
+    if (knowledge?.status === 'unavailable') {
+      await this.deps.operations?.appendAudit(
+        input.userId, 'knowledge.retrieve.unavailable', run.id, 'failed', `trace-${run.id}`,
+        `企业知识库不可用，本次执行未注入知识（${knowledge.failureReason ?? 'unknown'}）`,
+      )
+    }
     // Experience is retrieved per person, workspace or organization. Runs without a
     // workspace (release trials) get none by design: validation checks SOUL.md, skills,
     // tools and access, not experience that differs per employee.

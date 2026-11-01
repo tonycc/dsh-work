@@ -21,6 +21,8 @@ export interface KnowledgeResolution {
   citations: KnowledgeCitation[]
   /** Names of selected knowledge bases skipped because they were deleted or are no longer visible. */
   skippedBases: string[]
+  /** 不可用原因分类（第 7 节），只在 unavailable 时出现；不含 API Key 与请求正文。 */
+  failureReason?: string
 }
 
 /**

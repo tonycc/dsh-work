@@ -253,6 +253,11 @@ test('WeKnora 不可用时执行继续，回答注明不可用并记录原因（
     select last_failure_reason as reason from external_knowledge_connections where tenant_id = ${tenantId}
   `
   assert.equal(connection?.reason, 'server')
+  const [audit] = await database<{ result: string }[]>`
+    select result from audit_events
+     where tenant_id = ${tenantId} and action = 'knowledge.retrieve.unavailable' and object_id = ${result.runId}
+  `
+  assert.equal(audit?.result, 'failed')
 
   double.failWith = null
   double.failBatchWith = 500

@@ -14,6 +14,7 @@ const searchMatchCount = 10
  */
 export const minimumRelevanceScore = 0.2
 const maxExcerptLength = 4000
+const maxSkippedBases = 20
 /** 三级权限码按级别包含（5.1）：具备任意一个即“具备查看级别”。 */
 export const knowledgeViewLevel = ['knowledge:view', 'knowledge:docs', 'knowledge:bases']
 const documentIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
@@ -107,7 +108,8 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
     `
     if (!selected.length) return { status: 'not_selected', ...empty }
     const scope = selected.filter(base => base.visible)
-    const skippedBases = selected.filter(base => !base.visible).map(base => base.name)
+    // Manifest 最多记 20 个名称；会话所选知识库没有数量上限，超出的不再逐一提示。
+    const skippedBases = selected.filter(base => !base.visible).map(base => base.name).slice(0, maxSkippedBases)
     if (!scope.length) return { status: 'skipped', documents: [], citations: [], skippedBases }
 
     try {
@@ -116,8 +118,9 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
       return { status: 'ok', ...documents, skippedBases }
     } catch (error) {
       if (!(error instanceof WeKnoraUnavailableError || error instanceof WeKnoraRequestError)) throw error
-      await this.recordFailure(error instanceof WeKnoraUnavailableError ? error.reason : 'protocol')
-      return { status: 'unavailable', documents: [], citations: [], skippedBases }
+      const failureReason = error instanceof WeKnoraUnavailableError ? error.reason : 'protocol'
+      await this.recordFailure(failureReason)
+      return { status: 'unavailable', documents: [], citations: [], skippedBases, failureReason }
     }
   }
 
