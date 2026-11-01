@@ -1862,7 +1862,7 @@ watch(
   display: block;
   margin-top: 4px;
   color: var(--color-text-muted);
-  font-size: var(--font-size-badge);
+  font-size: var(--dsh-font-size-micro);
   line-height: 1.5;
 }
 
