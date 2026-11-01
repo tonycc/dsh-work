@@ -90,7 +90,8 @@ export class WeKnoraClient {
   private readonly fetchImpl: typeof fetch
 
   constructor(config: WeKnoraClientConfig) {
-    this.baseUrl = config.baseUrl.replace(/\/+$/, '')
+    // WeKnora 文档给出的地址常带 /api/v1，客户端自己拼接这一段，这里去掉避免重复。
+    this.baseUrl = config.baseUrl.replace(/\/+$/, '').replace(/\/api\/v1$/, '')
     this.apiKey = config.apiKey
     this.timeoutMs = config.timeoutMs ?? weknoraSearchTimeoutMs
     this.fetchImpl = config.fetch ?? fetch

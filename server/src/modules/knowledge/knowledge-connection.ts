@@ -133,7 +133,7 @@ export class PostgresKnowledgeConnection {
   }
 }
 
-/** 规范化 WeKnora 地址：只允许 http/https，不能带账号或密码，去掉末尾斜杠。 */
+/** 规范化 WeKnora 地址：只允许 http/https，不能带账号或密码，去掉末尾斜杠和 WeKnora 文档常带的 /api/v1。 */
 export function normalizeBaseUrl(value: string): string {
   let url: URL
   try {
@@ -143,7 +143,7 @@ export function normalizeBaseUrl(value: string): string {
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') throw invalidRequest('WeKnora 地址必须以 http 或 https 开头')
   if (url.username || url.password) throw invalidRequest('WeKnora 地址不能包含账号或密码')
-  return url.toString().replace(/\/+$/, '')
+  return url.toString().replace(/\/+$/, '').replace(/\/api\/v1$/, '')
 }
 
 /** API Key 去掉首尾空白；中间含空白时视为填写错误（HTTP 头不能携带），返回 400。 */

@@ -145,11 +145,11 @@ test('KB-ADM-01 连接配置：API Key 加密保存、只返回末四位，测�
   assert.ok(tested.lastSuccessAt > tested.lastFailureAt)
 
   const saved = await ok('PUT', `${adminBase}/connection`, {
-    baseUrl: `${doubleUrl}/`, apiKey: double.apiKey, credentialExpiresAt: '2027-05-01T00:00:00Z', embeddingModelId: 'embed-2', enabled: true,
+    baseUrl: `${doubleUrl}/api/v1/`, apiKey: double.apiKey, credentialExpiresAt: '2027-05-01T00:00:00Z', embeddingModelId: 'embed-2', enabled: true,
   })
   assert.equal(saved.connection.credentialSource, 'admin')
   assert.equal(saved.connection.credentialHint, double.apiKey.slice(-4))
-  assert.equal(saved.connection.baseUrl, doubleUrl, '去掉末尾斜杠')
+  assert.equal(saved.connection.baseUrl, doubleUrl, '去掉末尾斜杠与 /api/v1')
   assert.equal(saved.connection.embeddingModelId, 'embed-2')
   assert.equal(saved.connection.lastFailureAt, null, '换了 Key 后清除旧的失败记录')
   const overviewText = (await api(ADMIN, 'GET', adminBase)).text

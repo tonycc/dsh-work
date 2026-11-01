@@ -29,6 +29,12 @@ test('检索只调用 knowledge-search，带 API Key，不传 rerank（4.3）', 
   assert.deepEqual(request?.body, { query: '安全库存', knowledge_base_ids: ['kb-1'], match_count: 10 })
 })
 
+test('地址带 /api/v1（WeKnora 文档的写法）时不重复拼接', async () => {
+  double.requests.length = 0
+  await new WeKnoraClient({ baseUrl: `${baseUrl}/api/v1/`, apiKey: double.apiKey }).search({ query: 'q', knowledgeBaseIds: ['kb-1'], matchCount: 1 })
+  assert.equal(double.requests.at(-1)?.path, '/api/v1/knowledge-search')
+})
+
 test('文档元数据批量读取 updated_at 与所属知识库', async () => {
   assert.deepEqual(await client().knowledgeBatch(['doc-1']), [{
     id: 'doc-1', knowledge_base_id: 'kb-1', title: '库存规范', file_name: '库存规范.pdf', updated_at: '2026-08-01T09:30:00Z',
