@@ -32,7 +32,8 @@ const emit = defineEmits<{ remove: [id: string] }>()
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  padding: 8px 2px 2px;
+  /* 与输入框文字对齐（TaskComposer 的输入区左右内边距约 13～17px）。 */
+  padding: 12px 15px 0;
 }
 
 .knowledge-chips__label {

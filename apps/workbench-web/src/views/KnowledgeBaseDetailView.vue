@@ -261,6 +261,12 @@ async function removeBase() {
   }
 }
 
+function onDocumentCommand(command: string, document: KnowledgeDocument) {
+  if (command === 'rename') void renameDocument(document)
+  if (command === 'reparse') void reparse(document)
+  if (command === 'delete') void removeDocument(document)
+}
+
 function onGrantsChanged(updated: KnowledgeBase) {
   base.value = updated
 }
@@ -314,17 +320,17 @@ onMounted(() => { void reload() })
             <el-button @click="loadDocuments">重试</el-button>
           </el-empty>
           <el-table v-else-if="documents.length || documentsLoading" v-loading="documentsLoading" :data="documents" class="knowledge-docs-table">
-            <el-table-column label="标题" min-width="200">
+            <el-table-column label="标题" min-width="150">
               <template #default="{ row }"><span class="knowledge-docs-table__title">{{ row.title }}</span></template>
             </el-table-column>
-            <el-table-column prop="fileName" label="文件名" min-width="180" />
-            <el-table-column label="上传人" width="110">
+            <el-table-column prop="fileName" label="文件名" min-width="150" show-overflow-tooltip />
+            <el-table-column label="上传人" width="90">
               <template #default="{ row }">{{ row.uploadedBy ?? '—' }}</template>
             </el-table-column>
-            <el-table-column label="更新时间" width="160">
+            <el-table-column label="更新时间" width="150" class-name="knowledge-docs-table__nowrap">
               <template #default="{ row }">{{ formatKnowledgeDateTime(row.updatedAt) || '—' }}</template>
             </el-table-column>
-            <el-table-column label="解析状态" width="110">
+            <el-table-column label="解析状态" width="100">
               <template #default="{ row }">
                 <el-tooltip v-if="row.errorMessage" :content="row.errorMessage" placement="top">
                   <StatusTag :status="statusLabels[row.status as KnowledgeDocumentStatus].tone" :label="statusLabels[row.status as KnowledgeDocumentStatus].label" />
@@ -332,15 +338,22 @@ onMounted(() => { void reload() })
                 <StatusTag v-else :status="statusLabels[row.status as KnowledgeDocumentStatus].tone" :label="statusLabels[row.status as KnowledgeDocumentStatus].label" />
               </template>
             </el-table-column>
-            <el-table-column label="操作" :width="base.canManageDocuments ? 280 : 130" fixed="right">
+            <el-table-column label="操作" :width="base.canManageDocuments ? 170 : 120">
               <template #default="{ row }">
-                <el-button link type="primary" @click="openPreview(row)">预览</el-button>
-                <el-button link type="primary" @click="download(row)">下载</el-button>
-                <template v-if="base.canManageDocuments">
-                  <el-button v-if="row.status === 'failed'" link type="primary" @click="reparse(row)">重新解析</el-button>
-                  <el-button link type="primary" @click="renameDocument(row)">编辑</el-button>
-                  <el-button link type="danger" @click="removeDocument(row)">删除</el-button>
-                </template>
+                <div class="knowledge-docs-table__actions">
+                  <el-button link type="primary" @click="openPreview(row)">预览</el-button>
+                  <el-button link type="primary" @click="download(row)">下载</el-button>
+                  <el-dropdown v-if="base.canManageDocuments" trigger="click" @command="(command: string) => onDocumentCommand(command, row)">
+                    <el-button link type="primary" :aria-label="`更多操作：${row.title}`">更多</el-button>
+                    <template #dropdown>
+                      <el-dropdown-menu>
+                        <el-dropdown-item command="rename">编辑标题</el-dropdown-item>
+                        <el-dropdown-item v-if="row.status === 'failed'" command="reparse">重新解析</el-dropdown-item>
+                        <el-dropdown-item command="delete" divided><span class="knowledge-docs-table__danger">删除</span></el-dropdown-item>
+                      </el-dropdown-menu>
+                    </template>
+                  </el-dropdown>
+                </div>
               </template>
             </el-table-column>
           </el-table>
@@ -568,6 +581,24 @@ onMounted(() => { void reload() })
 .knowledge-docs-table__title {
   color: var(--dsh-color-ink);
   font-weight: 500;
+}
+
+.knowledge-docs-table__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.knowledge-docs-table__actions :deep(.el-button + .el-button) {
+  margin-left: 0;
+}
+
+.knowledge-docs-table :deep(.knowledge-docs-table__nowrap .cell) {
+  white-space: nowrap;
+}
+
+.knowledge-docs-table__danger {
+  color: var(--dsh-color-danger);
 }
 
 .knowledge-pagination {

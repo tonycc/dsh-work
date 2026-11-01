@@ -57,7 +57,7 @@ function confirm() {
     <el-empty v-else-if="error" :description="error" :image-size="64" />
     <el-empty v-else-if="!bases.length" description="还没有你可以查看的知识库" :image-size="64" />
     <el-checkbox-group v-else v-model="checked" class="knowledge-picker__list">
-      <el-checkbox v-for="base in bases" :key="base.id" :value="base.id" class="knowledge-picker__item" border>
+      <el-checkbox v-for="base in bases" :key="base.id" :value="base.id" :aria-label="base.name" class="knowledge-picker__item" border>
         <span class="knowledge-picker__name">{{ base.name }}</span>
         <span class="knowledge-picker__meta">{{ base.ownerDepartmentName }} · {{ base.documentCount }} 篇文档</span>
       </el-checkbox>
