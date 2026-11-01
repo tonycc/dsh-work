@@ -15,7 +15,7 @@
 | 按统一阶段定义、发布、运行和退役 Agent | [通用 Agent 全生命周期模板](../development/agent-lifecycle-template.md) |
 | 移动端 H5 接入 | [移动端接入规范](../development/mobile-integration-guide.md) |
 | 待评审：钉钉工作通知、工作台免登与机器人对话 | [钉钉接入方案](../design/dingtalk-integration-plan.md) |
-| 待评审：企业知识库改用 WeKnora，员工端管理知识库与文档，按角色与部门授权 | [企业知识库接入 WeKnora 方案](../design/weknora-knowledge-plan.md) |
+| 实施中（WK-S1、WK-S2 代码级已实施）：企业知识库改用 WeKnora，员工端管理知识库与文档，按角色与部门授权 | [企业知识库接入 WeKnora 方案](../design/weknora-knowledge-plan.md) |
 | 已实施（NC-S1～S4，P2 待验收）：员工端统一站内通知（与我相关的事件、未读与跳转） | [站内通知方案](../design/notification-center-plan.md) |
 | 实施中：员工经 Skill 创建专家新建 Skill、管理员审核发布 | [Skill 创建专家方案](../design/skill-creator-plan.md) |
 | 平台内置 Skill（文件分析、HTML、Office 基线方法；代码级已实施，P2 待验收） | [平台内置 Skill 方案](../design/builtin-skills-plan.md) |

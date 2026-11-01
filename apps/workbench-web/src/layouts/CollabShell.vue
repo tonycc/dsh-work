@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   AlarmClock,
@@ -9,6 +9,7 @@ import {
   Document,
   Grid,
   Monitor,
+  Notebook,
   Setting,
   SwitchButton,
   UserFilled,
@@ -20,6 +21,7 @@ import NotificationCenter from '@/components/NotificationCenter.vue'
 import { useWorkbenchBootstrap } from '@/composables/useWorkbenchBootstrap'
 import { roleLabels, useAuthStore } from '@/stores/auth'
 import { useCollabConversationStore } from '@/stores/collab-conversations'
+import { useKnowledgeStore } from '@/stores/knowledge'
 
 /** 协作模式壳层（项目空间方案 12.3）：窄图标栏（只显示图标）+ 主内容；窄屏改为底部标签栏。 */
 const route = useRoute()
@@ -27,12 +29,15 @@ const router = useRouter()
 const authStore = useAuthStore()
 const conversations = useCollabConversationStore()
 
-const navigation = [
+const knowledge = useKnowledgeStore()
+// B 协作模式主导航（WK12）：知识库排在群组之后；企业知识库未启用或本人不能查看时不显示。
+const navigation = computed(() => [
   { label: '对话', path: '/c/chats', icon: ChatDotRound },
   { label: 'AI 同事', path: '/c/agents', icon: UserFilled },
   { label: '群组', path: '/c/groups', icon: Collection },
+  ...(knowledge.enabled ? [{ label: '知识库', path: '/knowledge', icon: Notebook }] : []),
   { label: '定时任务', path: '/automations', icon: AlarmClock },
-]
+])
 
 /** “对话”入口的 @ 提醒圆点（D38）。 */
 function mentionDot(path: string) {
@@ -70,6 +75,7 @@ useWorkbenchBootstrap()
 // D38：主导航“对话”在有 @ 本人的群组时显示提醒圆点；不在对话页时也加载一次对话列表。
 onMounted(() => {
   if (!conversations.loaded) void conversations.load()
+  void knowledge.ensureLoaded()
 })
 </script>
 

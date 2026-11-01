@@ -17,6 +17,10 @@ import { useTaskStore } from '@/stores/tasks'
 import type { Artifact, AgentConversation, AgentConversationSegment, ChatMessage, TaskRun } from '@/types/domain'
 import { notifyActionFailure } from '@/utils/feedback'
 import '@/styles/conversation-thread.css'
+import KnowledgeBaseChips from '@/components/knowledge/KnowledgeBaseChips.vue'
+import KnowledgeBasePicker from '@/components/knowledge/KnowledgeBasePicker.vue'
+import { useKnowledgeStore } from '@/stores/knowledge'
+import type { SessionKnowledgeBase } from '@/types/knowledge'
 
 /**
  * 协作模式单聊（S5c，D26）：与一个 AI 同事的多段会话按时间连续显示，段首“话题 · 时间”。
@@ -58,6 +62,40 @@ const displaySegments = computed(() => [...segments.value].reverse())
 const newestSegment = computed(() => segments.value[0])
 const continueSessionId = computed(() => conversation.value?.continueSessionId ?? null)
 const canSend = computed(() => agent.value?.available === true)
+
+/**
+ * 企业知识库（weknora-knowledge-plan 5.7）：单聊是个人空间的对话。续写最近一段会话时，添加、移除直接
+ * 保存到该会话；开启新会话时先在本地记下，随首条提问写入会话。
+ */
+const knowledge = useKnowledgeStore()
+void knowledge.ensureLoaded()
+const showKnowledge = computed(() => knowledge.enabled)
+const selectedKnowledge = ref<SessionKnowledgeBase[]>([])
+let knowledgeToken = 0
+// 同时监听启用状态：刷新页面时状态可能晚于会话加载，否则会漏读已选知识库，之后保存时把它们覆盖掉。
+watch([continueSessionId, () => knowledge.enabled], async ([sessionId, enabled]) => {
+  const token = ++knowledgeToken
+  selectedKnowledge.value = []
+  if (!sessionId || !enabled) return
+  try {
+    const items = await workbenchApi.getSessionKnowledgeBases(sessionId)
+    if (token === knowledgeToken) selectedKnowledge.value = items
+  } catch {
+    // 读取失败时不显示标签；执行时仍按服务端保存的选择检索。
+  }
+}, { immediate: true })
+async function changeKnowledge(items: SessionKnowledgeBase[]) {
+  const sessionId = continueSessionId.value
+  if (!sessionId) {
+    selectedKnowledge.value = items
+    return
+  }
+  try {
+    selectedKnowledge.value = await workbenchApi.setSessionKnowledgeBases(sessionId, items.map(item => item.id))
+  } catch (cause) {
+    notifyActionFailure('更新知识库', '当前对话', cause, '请稍后重试。')
+  }
+}
 
 function segmentTask(segment: AgentConversationSegment): TaskRun | undefined {
   return segment.latestRun ? taskStore.getTask(segment.latestRun.id) : undefined
@@ -237,7 +275,12 @@ async function submit(payload: { prompt: string; files: File[]; workspaceId: str
       taskStore.subscribe(task.id)
     } else {
       // 首次对话或 Agent 版本已变化：经既有 createSession 开启新会话，固定 AI 同事当前版本。
-      await taskStore.createTask(payload.prompt, payload.files, undefined, undefined, props.agentId, references)
+      const knowledgeBaseIds = showKnowledge.value ? selectedKnowledge.value.filter(item => item.available).map(item => item.id) : []
+      if (knowledgeBaseIds.length) {
+        await taskStore.createTask(payload.prompt, payload.files, undefined, undefined, props.agentId, references, undefined, undefined, [], knowledgeBaseIds)
+      } else {
+        await taskStore.createTask(payload.prompt, payload.files, undefined, undefined, props.agentId, references)
+      }
     }
     payload.confirm()
     referencedArtifacts.value = []
@@ -351,6 +394,12 @@ watch(() => [latestTask.value?.messages.length, latestTask.value?.status] as con
             @submit="submit"
             @stop="stopRun"
           >
+            <template v-if="showKnowledge" #composer-attachments>
+              <KnowledgeBaseChips :items="selectedKnowledge" @remove="id => changeKnowledge(selectedKnowledge.filter(item => item.id !== id))" />
+            </template>
+            <template v-if="showKnowledge" #composer-actions>
+              <KnowledgeBasePicker :selected="selectedKnowledge" @change="changeKnowledge" />
+            </template>
             <template #notices>
               <p v-if="recommendationPrefill" class="collab-agent-chat__notice" role="status" data-testid="recommendation-prefill-notice">
                 已带入要发给这位 AI 同事的问题，可以修改，确认后再发送；原对话记录与附件不会带入。

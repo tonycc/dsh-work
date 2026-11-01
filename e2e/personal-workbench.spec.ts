@@ -15,7 +15,7 @@ test('P0: personal Workspace is implicit, navigation exposes work entries', asyn
   await page.goto('/workbench')
   const navigation = page.getByRole('navigation', { name: '员工工作台主导航' })
   // 历史对话与我的文件保留上下文入口和直达路由，不进入员工主导航。
-  await expect(navigation.getByRole('button')).toHaveText(['新对话', 'Skill 广场', 'AI 同事', '项目空间', '定时任务'])
+  await expect(navigation.getByRole('button')).toHaveText(['新对话', 'Skill 广场', 'AI 同事', '项目空间', '知识库', '定时任务'])
   await expect(page.getByLabel('选择工作空间')).toHaveCount(0)
   await expect(page.getByLabel('当前工作空间')).toHaveCount(0)
   await page.getByRole('button', { name: '添加内容' }).click()
@@ -44,7 +44,7 @@ test('P0: personal Workspace is implicit, navigation exposes work entries', asyn
 test('NC-03: the sidebar bell above the avatar opens notifications and jumps to the project', async ({ page }) => {
   await page.goto('/workbench')
   // 通知入口不进入主导航（仍是五个入口），位于侧栏底部头像上方。
-  await expect(page.getByRole('navigation', { name: '员工工作台主导航' }).getByRole('button')).toHaveCount(5)
+  await expect(page.getByRole('navigation', { name: '员工工作台主导航' }).getByRole('button')).toHaveCount(6)
   const bell = page.getByRole('button', { name: '通知，2 条未读' })
   const avatar = page.getByRole('button', { name: '打开用户中心' })
   await expect(bell).toBeVisible()

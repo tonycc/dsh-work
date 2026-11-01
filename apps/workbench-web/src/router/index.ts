@@ -131,6 +131,9 @@ const router = createRouter({
     { path: '/files', name: 'my-files', component: () => import('@/views/MyFilesView.vue'), meta: { title: '我的文件', section: '员工工作台' } },
     { path: '/history', name: 'history', component: () => import('@/views/HistoryView.vue'), meta: { title: '历史对话', section: '员工工作台' } },
     { path: '/sessions/:id', name: 'session-detail', component: () => import('@/views/SessionResumeView.vue'), meta: { title: '对话', section: '员工工作台' } },
+    // 企业知识库（WK-S2）：两种模式共用，与定时任务一样不绑定模式。
+    { path: '/knowledge', name: 'knowledge', component: () => import('@/views/KnowledgeBasesView.vue'), meta: { title: '知识库', section: '员工工作台' } },
+    { path: '/knowledge/:id', name: 'knowledge-detail', component: () => import('@/views/KnowledgeBaseDetailView.vue'), meta: { title: '知识库', section: '员工工作台' } },
     {
       path: '/automations',
       name: 'automations',

@@ -31,7 +31,7 @@ async function switchToCollab(page: Page, options: { narrow?: boolean } = {}) {
 test('MODE-E2E-01: never-switched employees land in work mode and see the logo mode menu', async ({ page }) => {
   await page.goto('/workbench')
   const navigation = page.getByRole('navigation', { name: '员工工作台主导航' })
-  await expect(navigation.getByRole('button')).toHaveText(['新对话', 'Skill 广场', 'AI 同事', '项目空间', '定时任务'])
+  await expect(navigation.getByRole('button')).toHaveText(['新对话', 'Skill 广场', 'AI 同事', '项目空间', '知识库', '定时任务'])
 
   await page.getByRole('button', { name: '切换模式' }).click()
   await expect(page.getByRole('menuitem', { name: /工作模式.*当前模式/ })).toBeVisible()
@@ -83,13 +83,13 @@ test('MODE-E2E-02: a failed save keeps the current mode', async ({ page }) => {
   await expect(page.getByRole('navigation', { name: '员工工作台主导航' })).toBeVisible()
 })
 
-test('MODE-E2E-03: collaboration shell has four entries and an avatar menu for shared pages', async ({ page }) => {
+test('MODE-E2E-03: collaboration shell has five entries and an avatar menu for shared pages', async ({ page }) => {
   await switchToCollab(page)
   const navigation = page.getByRole('navigation', { name: '协作模式主导航' })
   // 宽屏图标栏只显示图标：入口名称在可访问名称与悬停提示中。
   const entries = navigation.getByRole('button')
-  await expect(entries).toHaveCount(4)
-  for (const [index, label] of ['对话', 'AI 同事', '群组', '定时任务'].entries()) {
+  await expect(entries).toHaveCount(5)
+  for (const [index, label] of ['对话', 'AI 同事', '群组', '知识库', '定时任务'].entries()) {
     await expect(entries.nth(index)).toHaveAccessibleName(label)
   }
   await expect(navigation.getByText('对话', { exact: true })).toBeHidden()
@@ -126,7 +126,7 @@ test('MODE-E2E-03: collaboration shell has four entries and an avatar menu for s
 
 test('NC-03: the rail bell above the avatar opens notifications and a mention opens the group', async ({ page }) => {
   await switchToCollab(page)
-  await expect(page.getByRole('navigation', { name: '协作模式主导航' }).getByRole('button')).toHaveCount(4)
+  await expect(page.getByRole('navigation', { name: '协作模式主导航' }).getByRole('button')).toHaveCount(5)
   const bell = page.getByRole('button', { name: '通知，2 条未读' })
   const avatar = page.getByRole('button', { name: '打开用户菜单' })
   const [bellBox, avatarBox] = [await bell.boundingBox(), await avatar.boundingBox()]
@@ -179,7 +179,7 @@ test('MODE-E2E-03: collaboration shell uses a bottom tab bar on narrow screens',
   await switchToCollab(page, { narrow: true })
   const navigation = page.getByRole('navigation', { name: '协作模式主导航' })
   // 窄屏底部标签栏显示入口名称。
-  await expect(navigation.getByRole('button')).toHaveText(['对话', 'AI 同事', '群组', '定时任务'])
+  await expect(navigation.getByRole('button')).toHaveText(['对话', 'AI 同事', '群组', '知识库', '定时任务'])
   const box = await navigation.boundingBox()
   expect(box?.y ?? 0).toBeGreaterThan(600)
   await navigation.getByRole('button', { name: '群组' }).click()

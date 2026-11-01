@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -12,6 +12,7 @@ import {
   Menu,
   Monitor,
   MoreFilled,
+  Notebook,
   Plus,
   Setting,
   Share,
@@ -26,6 +27,7 @@ import { useWorkbenchBootstrap } from '@/composables/useWorkbenchBootstrap'
 import { roleLabels, useAuthStore } from '@/stores/auth'
 import { useContentStore } from '@/stores/content'
 import { useNotificationStore } from '@/stores/notifications'
+import { useKnowledgeStore } from '@/stores/knowledge'
 import { useTaskStore } from '@/stores/tasks'
 import type { TaskRun } from '@/types/domain'
 import { isTaskInArchivedWorkspace } from '@/utils/archived-workspaces'
@@ -42,13 +44,17 @@ const notificationStore = useNotificationStore()
 const mobileOpen = ref(false)
 const deletingSessionId = ref<string>()
 
-const navigation = [
+const knowledge = useKnowledgeStore()
+// A 工作模式主导航（WK12）：知识库排在项目空间之后；企业知识库未启用或本人不能查看时不显示。
+const navigation = computed(() => [
   { label: '新对话', path: '/workbench', icon: HomeFilled },
   { label: 'Skill 广场', path: '/skills', icon: Grid },
   { label: 'AI 同事', path: '/agents', icon: UserFilled },
   { label: '项目空间', path: '/workspaces', icon: Collection },
+  ...(knowledge.enabled ? [{ label: '知识库', path: '/knowledge', icon: Notebook }] : []),
   { label: '定时任务', path: '/automations', icon: AlarmClock },
-]
+])
+onMounted(() => { void knowledge.ensureLoaded() })
 
 function isActive(path: string) {
   if (path === '/workbench') return route.path === path

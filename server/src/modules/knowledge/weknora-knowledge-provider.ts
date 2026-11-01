@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 
 import type { DatabaseClient } from '../../infrastructure/postgres/database.ts'
 import type { RuntimeKnowledgeDocument } from '../runtime/runtime-types.ts'
+import { knowledgeViewLevel, visibleBaseIdsSql } from './knowledge-access.ts'
 import type { KnowledgeCitation, KnowledgeProvider, KnowledgeResolution } from './knowledge-provider.ts'
 import { WeKnoraClient, WeKnoraRequestError, WeKnoraUnavailableError, type WeKnoraFailureReason } from './weknora-client.ts'
 
@@ -15,8 +16,6 @@ const searchMatchCount = 10
 export const minimumRelevanceScore = 0.2
 const maxExcerptLength = 4000
 const maxSkippedBases = 20
-/** 三级权限码按级别包含（5.1）：具备任意一个即“具备查看级别”。 */
-export const knowledgeViewLevel = ['knowledge:view', 'knowledge:docs', 'knowledge:bases']
 const documentIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 
 export interface WeKnoraConnectionConfig {
@@ -111,7 +110,7 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
 
     const selected = await this.database<SelectedBaseRow[]>`
       select kb.id, kb.external_id as "externalId", kb.name,
-             (kb.status = 'active' and kb.id in (${this.visibleBaseIdsSql(input.userId)})) as visible
+             (kb.status = 'active' and kb.id in (${visibleBaseIdsSql(this.database, input.userId)})) as visible
         from session_knowledge_bases skb
         join external_knowledge_bases kb on kb.tenant_id = skb.tenant_id and kb.id = skb.knowledge_base_id
        where skb.tenant_id = ${tenantId} and skb.session_id = ${input.sessionId}
@@ -156,22 +155,6 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
     for (const name of attempt?.skipped ?? []) sections.push(`知识库“${name}”你已无权查看，本次未使用。`)
     if (attempt?.status === 'unavailable') sections.push('企业知识库暂不可用，本次回答未引用企业知识。')
     return sections.length ? `${answer.trim()}\n\n${sections.join('\n\n')}` : answer
-  }
-
-  /**
-   * 员工可见的知识库 ID（5.3）：员工所属每个有效部门上的授权，加上其上级部门中勾选了
-   * “包含下级”的授权。只用有效的部门与授权；没有部门的员工没有可见知识库（WK7）。
-   */
-  private visibleBaseIdsSql(userId: string) {
-    return this.database`
-      select g.knowledge_base_id
-        from org_department_members m
-        join org_departments d on d.tenant_id = m.tenant_id and d.id = m.department_id and d.status = 'active'
-        join external_knowledge_base_grants g on g.tenant_id = m.tenant_id and g.status = 'active'
-        join org_departments gd on gd.tenant_id = g.tenant_id and gd.id = g.department_id and gd.status = 'active'
-       where m.tenant_id = ${tenantId} and m.user_id = ${userId}
-         and (gd.id = d.id or (g.include_descendants and left(d.path, length(gd.path)) = gd.path))
-    `
   }
 
   private async retrieve(query: string, scope: SelectedBaseRow[]): Promise<Omit<KnowledgeResolution, 'status' | 'skippedBases'>> {

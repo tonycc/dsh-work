@@ -14,6 +14,10 @@ import { TaskComposer } from '@dsh-work/workbench-components'
 import { workbenchApi } from '@/api/client'
 import { useContentStore } from '@/stores/content'
 import { useTaskStore } from '@/stores/tasks'
+import KnowledgeBaseChips from '@/components/knowledge/KnowledgeBaseChips.vue'
+import KnowledgeBasePicker from '@/components/knowledge/KnowledgeBasePicker.vue'
+import { useKnowledgeStore } from '@/stores/knowledge'
+import type { SessionKnowledgeBase } from '@/types/knowledge'
 import type { WorkbenchAgent, WorkbenchSkill, WorkspaceFile } from '@/types/domain'
 import { notifyActionFailure } from '@/utils/feedback'
 import { splitMentions, type MentionOption } from '@/utils/mentions'
@@ -101,6 +105,27 @@ const recommendationNotice = ref<'' | 'prefilled' | 'unavailable'>('')
 const composerWorkspaceId = computed(() => props.workspaceLocked ? props.workspaceId : '')
 const composerWorkspaceName = computed(() => props.workspaceLocked ? props.workspaceName : '')
 const composerReady = computed(() => true)
+
+/**
+ * 企业知识库（weknora-knowledge-plan 5.7）：一期只在个人空间的新对话中添加；所选知识库随首条提问
+ * 写入会话。从知识库页“用这个知识库提问”进入时经 `?knowledgeBase=` 预先带上。
+ */
+const knowledge = useKnowledgeStore()
+const showKnowledge = computed(() => !props.workspaceLocked && knowledge.enabled)
+const selectedKnowledge = ref<SessionKnowledgeBase[]>([])
+async function syncKnowledgeFromRoute() {
+  const id = typeof route.query.knowledgeBase === 'string' ? route.query.knowledgeBase : ''
+  if (!id || props.workspaceLocked) return
+  try {
+    const base = await workbenchApi.getKnowledgeBase(id)
+    selectedKnowledge.value = [{ id: base.id, name: base.name, available: true }]
+  } catch {
+    selectedKnowledge.value = []
+  }
+}
+function removeKnowledge(id: string) {
+  selectedKnowledge.value = selectedKnowledge.value.filter(item => item.id !== id)
+}
 const selectedSkill = computed<WorkbenchSkill | undefined>(() =>
   contentStore.skills.find(skill => skill.id === selectedSkillId.value),
 )
@@ -212,6 +237,7 @@ async function submitTask(payload: { prompt: string; files: File[]; workspaceId:
       referencedWorkspaceFileIds.value = []
       return
     }
+    const knowledgeBaseIds = showKnowledge.value ? selectedKnowledge.value.filter(item => item.available).map(item => item.id) : []
     const task = await taskStore.createTask(
       payload.prompt,
       payload.files,
@@ -222,6 +248,7 @@ async function submitTask(payload: { prompt: string; files: File[]; workspaceId:
       selectedSkillId.value || undefined,
       workspaceAgentMemberId,
       mentionedUserIds,
+      ...(knowledgeBaseIds.length ? [knowledgeBaseIds] as const : []),
     )
     await router.push(conversationPath(payload.workspaceId, task.id))
     payload.confirm?.()
@@ -291,6 +318,8 @@ onMounted(async () => {
 
 watch(() => route.query.skill, syncSkillFromRoute)
 watch(() => route.query.agent, syncAgentFromRoute)
+watch(() => route.query.knowledgeBase, () => { void syncKnowledgeFromRoute() }, { immediate: true })
+onMounted(() => { void knowledge.ensureLoaded() })
 
 let referenceSequence = 0
 function clearPersonalReference() {
@@ -393,7 +422,14 @@ defineExpose({ useWorkspaceFile })
           @clear-skill="clearSelectedSkill"
           @clear-agent="clearSelectedAgent"
           @open-files="router.push('/files')"
-        />
+        >
+          <template v-if="showKnowledge" #attachments>
+            <KnowledgeBaseChips :items="selectedKnowledge" @remove="removeKnowledge" />
+          </template>
+          <template v-if="showKnowledge" #leading-actions>
+            <KnowledgeBasePicker :selected="selectedKnowledge" @change="selectedKnowledge = $event" />
+          </template>
+        </TaskComposer>
         <el-skeleton v-else class="workbench-composer" :rows="3" animated />
 
         <footer class="workbench-trust">

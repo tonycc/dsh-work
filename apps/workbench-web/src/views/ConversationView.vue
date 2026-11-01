@@ -37,6 +37,10 @@ import { useMediaQuery } from '@/composables/useMediaQuery'
 import { useRunActions } from '@/composables/useRunActions'
 import { resultOutcomeLabels } from '@/composables/useRunProgress'
 import '@/styles/conversation-thread.css'
+import KnowledgeBaseChips from '@/components/knowledge/KnowledgeBaseChips.vue'
+import KnowledgeBasePicker from '@/components/knowledge/KnowledgeBasePicker.vue'
+import { useKnowledgeStore } from '@/stores/knowledge'
+import type { SessionKnowledgeBase } from '@/types/knowledge'
 
 const route = useRoute()
 const router = useRouter()
@@ -195,6 +199,39 @@ const mentionOptions = computed<MentionOption[]>(() => [
  */
 const projectTask = ref<ProjectTask | null>(null)
 const currentSessionId = computed(() => task.value?.sessionId ?? sessionThread.value?.sessionId ?? null)
+
+/**
+ * 企业知识库（weknora-knowledge-plan 5.7，WK17）：个人空间对话中添加的知识库在整个会话内有效，
+ * 添加、移除只影响之后的提问。一期团队空间不显示入口；只有发起人能修改自己的会话。
+ */
+const knowledge = useKnowledgeStore()
+const sessionKnowledge = ref<SessionKnowledgeBase[]>([])
+const showKnowledge = computed(() => knowledge.enabled && Boolean(task.value) && !isTeamSession.value && isRequester.value)
+let knowledgeToken = 0
+watch([currentSessionId, showKnowledge], async ([sessionId, show]) => {
+  const token = ++knowledgeToken
+  sessionKnowledge.value = []
+  if (!sessionId || !show) return
+  try {
+    const items = await workbenchApi.getSessionKnowledgeBases(sessionId)
+    if (token === knowledgeToken) sessionKnowledge.value = items
+  } catch {
+    // 读取失败时不显示标签；执行时仍按服务端保存的选择检索。
+  }
+}, { immediate: true })
+async function saveSessionKnowledge(items: SessionKnowledgeBase[]) {
+  const sessionId = currentSessionId.value
+  if (!sessionId) return
+  try {
+    sessionKnowledge.value = await workbenchApi.setSessionKnowledgeBases(sessionId, items.map(item => item.id))
+  } catch (cause) {
+    notifyActionFailure('更新知识库', '当前对话', cause, '请稍后重试。')
+  }
+}
+function removeSessionKnowledge(id: string) {
+  void saveSessionKnowledge(sessionKnowledge.value.filter(item => item.id !== id))
+}
+onMounted(() => { void knowledge.ensureLoaded() })
 /** 追问会换到新 Run 的地址但仍是同一对话：只在换到别的会话时关闭成果预览。 */
 let previewSessionId: string | null = null
 watch(currentSessionId, (sessionId) => {
@@ -1275,6 +1312,12 @@ watch(
             @submit="submitFollowUp"
             @stop="stopCurrentRun"
           >
+            <template v-if="showKnowledge" #composer-attachments>
+              <KnowledgeBaseChips :items="sessionKnowledge" @remove="removeSessionKnowledge" />
+            </template>
+            <template v-if="showKnowledge" #composer-actions>
+              <KnowledgeBasePicker :selected="sessionKnowledge" @change="saveSessionKnowledge" />
+            </template>
             <template #notices>
               <p v-if="taskThreadAgentName" data-testid="task-thread-notice" class="conversation-task-thread-notice">
                 回复会直接交给“{{ taskThreadAgentName }}”继续处理，无需 @；Agent 执行期间请等待完成或先停止。

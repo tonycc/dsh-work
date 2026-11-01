@@ -113,6 +113,7 @@ export const useTaskStore = defineStore('tasks', () => {
     skillId?: string,
     workspaceAgentMemberId?: string,
     mentionedUserIds: string[] = [],
+    knowledgeBaseIds: string[] = [],
   ) {
     void _workspaceName
     const current = generation
@@ -125,6 +126,17 @@ export const useTaskStore = defineStore('tasks', () => {
       ...(skillId ? { skillId } : {}),
     })
     requireGeneration(current)
+    // 企业知识库（WK-S2）：新对话中添加的知识库在首条提问执行前写入会话，首条就能检索。
+    if (knowledgeBaseIds.length) {
+      try {
+        await workbenchApi.setSessionKnowledgeBases(session.id, knowledgeBaseIds)
+      } catch (cause) {
+        // 写入失败（知识库刚被撤销可见范围、连接停用等）时首条提问不发出，删掉刚建的空会话，重试不会堆积空会话。
+        await workbenchApi.deleteSession(session.id).catch(() => undefined)
+        throw cause
+      }
+      requireGeneration(current)
+    }
     const task = await startRunWithSessionFiles(session.id, {
       prompt,
       attachments,

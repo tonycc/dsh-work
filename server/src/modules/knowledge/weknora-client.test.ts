@@ -32,6 +32,7 @@ test('检索只调用 knowledge-search，带 API Key，不传 rerank（4.3）', 
 test('文档元数据批量读取 updated_at 与所属知识库', async () => {
   assert.deepEqual(await client().knowledgeBatch(['doc-1']), [{
     id: 'doc-1', knowledge_base_id: 'kb-1', title: '库存规范', file_name: '库存规范.pdf', updated_at: '2026-08-01T09:30:00Z',
+    parse_status: 'completed',
   }])
   assert.deepEqual(await client().knowledgeBatch([]), [])
 })

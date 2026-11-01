@@ -10,8 +10,9 @@ import { registerSkillInstallationRoutes } from '../../http/admin/skill-installa
 import { registerUserPreferenceRoutes } from '../../http/workbench/preference-routes.ts'
 import { registerConversationTargetRoutes } from '../../http/workbench/conversation-target-routes.ts'
 import { registerUserNotificationRoutes } from '../../http/workbench/user-notification-routes.ts'
+import { registerKnowledgeRoutes } from '../../http/workbench/knowledge-routes.ts'
 import { registerWorkspaceTimelineRoutes } from '../../http/workbench/workspace-timeline-routes.ts'
-import { Router, envelope } from '../../http/router.ts'
+import { Router, envelope, readJsonBody } from '../../http/router.ts'
 import { MemoryModelGovernanceRepository } from '../../modules/model/memory-model-governance-repository.ts'
 import { ModelGovernanceService } from '../../modules/model/model-governance-service.ts'
 import { testApiAuthenticator } from '../test-identity.ts'
@@ -20,6 +21,7 @@ import { MemoryUserPreferenceStore } from './memory-user-preferences.ts'
 import { MemoryConversationTargetStore } from './memory-conversation-targets.ts'
 import { MemoryOrganizationStore } from './memory-organization.ts'
 import { MemoryUserNotificationStore } from './memory-user-notifications.ts'
+import { MemoryKnowledgeBaseStore } from './memory-knowledge.ts'
 import { MemoryWorkspaceTimeline } from './memory-workspace-timeline.ts'
 import { registerAdminRoutes } from './admin-routes.ts'
 import { registerSmokeProjectRoutes } from './project-routes.ts'
@@ -46,6 +48,15 @@ export function createSmokeRouter() {
   registerUserPreferenceRoutes(router, new MemoryUserPreferenceStore(), 'prototype-memory')
   registerConversationTargetRoutes(router, new MemoryConversationTargetStore(repository), undefined, 'prototype-memory')
   registerUserNotificationRoutes(router, new MemoryUserNotificationStore(), undefined, 'prototype-memory')
+  const knowledge = new MemoryKnowledgeBaseStore()
+  registerKnowledgeRoutes(router, knowledge, undefined, 'prototype-memory')
+  // 测试专用：切换测试身份的知识库权限级别（KB-P0-01 在三种权限下运行）。
+  router.post('/api/testing/p0/knowledge-level', async request => {
+    const body = await readJsonBody<{ level?: string }>(request)
+    if (body.level !== 'none' && body.level !== 'view' && body.level !== 'docs' && body.level !== 'bases') throw new Error('invalid level')
+    knowledge.level = body.level
+    return { level: knowledge.level }
+  })
   // 冒烟只有一个测试身份：授权直接通过，成员与归档口径由 PostgreSQL 集成测试覆盖。
   registerWorkspaceTimelineRoutes(router, new MemoryWorkspaceTimeline(repository), { authorizeWorkbench: async () => undefined as never }, 'prototype-memory')
   registerAdminRoutes(router, new AdminQueryService(repository))
