@@ -5,7 +5,7 @@ import type { AuditTrail } from '../../domain/audit-trail.ts'
 import { dependencyUnavailable, invalidRequest, notFound, RequestError, stateConflict } from '../../domain/request-errors.ts'
 import { requirePlatformAdminActor } from '../authorization/platform-admin-actor.ts'
 import type { PostgresEncryptedCredentialStore } from '../tool/postgres-encrypted-credential-store.ts'
-import { knowledgeCredentialRefId, type PostgresKnowledgeConnection } from './knowledge-connection.ts'
+import { knowledgeCredentialRefId, normalizeApiKey, normalizeBaseUrl, type PostgresKnowledgeConnection } from './knowledge-connection.ts'
 import { WeKnoraRequestError, WeKnoraUnavailableError, type WeKnoraClient } from './weknora-client.ts'
 
 const tenantId = 'tenant-dsh-work'
@@ -144,7 +144,7 @@ export class PostgresKnowledgeAdminService {
     if (embeddingModelId && embeddingModelId.length > 128) throw invalidRequest('嵌入模型 ID 不能超过 128 个字符')
     const expiresAt = input.credentialExpiresAt ? new Date(input.credentialExpiresAt) : null
     if (expiresAt && Number.isNaN(expiresAt.getTime())) throw invalidRequest('API Key 到期时间无效')
-    const apiKey = input.apiKey?.trim() || undefined
+    const apiKey = normalizeApiKey(input.apiKey)
     const existing = await this.row()
     if (!existing && !apiKey) throw invalidRequest('首次配置须填写 API Key')
     // 已保存的 Key 只发往已保存的地址：更换地址必须同时填写 Key，避免把 Key 带到新主机。
@@ -168,8 +168,10 @@ export class PostgresKnowledgeAdminService {
       }
       const hint = apiKey ? (apiKey.length > 8 ? apiKey.slice(-4) : null) : existing?.credentialHint ?? null
       const credentialRef = apiKey ? knowledgeCredentialRefId : existing?.credentialRef ?? null
-      // 未更换 Key 时保留原到期时间，除非本次显式填写。
-      const credentialExpiresAt = input.credentialExpiresAt === undefined ? existing?.credentialExpiresAt ?? null : expiresAt
+      // 未填写到期时间时：沿用原 Key 的到期时间；换了新 Key 则不再沿用（旧 Key 的到期时间不属于新 Key）。
+      const credentialExpiresAt = input.credentialExpiresAt === undefined ? (apiKey ? null : existing?.credentialExpiresAt ?? null) : expiresAt
+      // 换了 Key 或地址后，旧连接的失败记录不再代表当前状态。
+      const connectionChanged = Boolean(apiKey) || baseUrl !== existing?.baseUrl
       await transaction`
         insert into external_knowledge_connections (
           id, tenant_id, base_url, credential_ref, credential_hint, credential_expires_at, embedding_model_id, status, updated_by
@@ -180,7 +182,9 @@ export class PostgresKnowledgeAdminService {
         on conflict (tenant_id) do update
            set base_url = excluded.base_url, credential_ref = excluded.credential_ref, credential_hint = excluded.credential_hint,
                credential_expires_at = excluded.credential_expires_at, embedding_model_id = excluded.embedding_model_id,
-               status = excluded.status, updated_by = excluded.updated_by, updated_at = now()
+               status = excluded.status, updated_by = excluded.updated_by, updated_at = now(),
+               last_failure_at = case when ${connectionChanged} then null else external_knowledge_connections.last_failure_at end,
+               last_failure_reason = case when ${connectionChanged} then null else external_knowledge_connections.last_failure_reason end
       `
     })
     await this.record(actorId, 'knowledge.connection.update', this.connection.connectionId,
@@ -192,13 +196,19 @@ export class PostgresKnowledgeAdminService {
   /** 用填写的（或已保存的）地址与 Key 调用 WeKnora 的知识库列表接口，只返回结果与原因分类。 */
   async testConnection(actorId: string, input: { baseUrl?: string; apiKey?: string }): Promise<{ ok: boolean; reason: string | null }> {
     await requirePlatformAdminActor(this.database, actorId)
-    const probe = await this.connection.probeClient({
-      ...(input.baseUrl ? { baseUrl: normalizeBaseUrl(input.baseUrl) } : {}),
-      ...(input.apiKey?.trim() ? { apiKey: input.apiKey.trim() } : {}),
-    })
+    const baseUrl = input.baseUrl ? normalizeBaseUrl(input.baseUrl) : undefined
+    const apiKey = normalizeApiKey(input.apiKey)
+    const probe = await this.connection.probeClient({ ...(baseUrl ? { baseUrl } : {}), ...(apiKey ? { apiKey } : {}) })
     if ('reason' in probe) return { ok: false, reason: probe.reason }
     try {
       await probe.client.listKnowledgeBases()
+      // 测的是已保存的连接时记一次成功，“暂不可用”提示随之消失，不必等下一次检索。
+      if (!apiKey && (!baseUrl || baseUrl === await this.connection.savedBaseUrl())) {
+        await this.database`
+          update external_knowledge_connections set last_success_at = now()
+           where tenant_id = ${tenantId} and id = ${this.connection.connectionId}
+        `
+      }
       return { ok: true, reason: null }
     } catch (error) {
       if (error instanceof WeKnoraUnavailableError) return { ok: false, reason: error.reason }
@@ -318,12 +328,16 @@ export class PostgresKnowledgeAdminService {
     await requirePlatformAdminActor(this.database, actorId)
     const base = await this.requireBase(knowledgeBaseId)
     const department = await this.requireDepartment(input.departmentId, { allowRoot: true })
-    const inserted = await this.database`
+    // 已有有效授权时按本次选择更新“含下级”；完全相同时不写入也不记审计。
+    const includeDescendants = input.includeDescendants ?? true
+    const changed = await this.database`
       insert into external_knowledge_base_grants (id, tenant_id, knowledge_base_id, department_id, include_descendants, granted_by, granted_via)
-      values (${`knowledge-grant-${randomUUID()}`}, ${tenantId}, ${base.id}, ${department.id}, ${input.includeDescendants ?? true}, ${actorId}, 'admin')
-      on conflict (tenant_id, knowledge_base_id, department_id) where status = 'active' do nothing
+      values (${`knowledge-grant-${randomUUID()}`}, ${tenantId}, ${base.id}, ${department.id}, ${includeDescendants}, ${actorId}, 'admin')
+      on conflict (tenant_id, knowledge_base_id, department_id) where status = 'active'
+      do update set include_descendants = excluded.include_descendants, granted_by = excluded.granted_by
+       where external_knowledge_base_grants.include_descendants is distinct from excluded.include_descendants
     `
-    if (inserted.count) {
+    if (changed.count) {
       await this.record(actorId, 'knowledge.grant.add', base.id,
         `管理员把知识库“${base.name}”授给${department.label}${input.includeDescendants === false || department.root ? '' : '（含下级）'}`)
     }
@@ -334,13 +348,17 @@ export class PostgresKnowledgeAdminService {
   async revokeGrant(actorId: string, knowledgeBaseId: string, grantId: string): Promise<KnowledgeAdminBaseList> {
     await requirePlatformAdminActor(this.database, actorId)
     const base = await this.requireBase(knowledgeBaseId)
-    const [revoked] = await this.database<{ departmentId: string }[]>`
-      update external_knowledge_base_grants set status = 'invalid', invalidated_at = now()
-       where tenant_id = ${tenantId} and id = ${grantId} and knowledge_base_id = ${base.id} and status = 'active'
-       returning department_id as "departmentId"
+    const [revoked] = await this.database<{ departmentName: string }[]>`
+      with revoked as (
+        update external_knowledge_base_grants set status = 'invalid', invalidated_at = now()
+         where tenant_id = ${tenantId} and id = ${grantId} and knowledge_base_id = ${base.id} and status = 'active'
+         returning tenant_id, department_id
+      )
+      select case when d.id is null then r.department_id when d.parent_id is null then '全公司' else d.name end as "departmentName"
+        from revoked r left join org_departments d on d.tenant_id = r.tenant_id and d.id = r.department_id
     `
     if (!revoked) throw notFound('授权不存在')
-    await this.record(actorId, 'knowledge.grant.revoke', base.id, `管理员撤销知识库“${base.name}”对部门 ${revoked.departmentId} 的授权`)
+    await this.record(actorId, 'knowledge.grant.revoke', base.id, `管理员撤销知识库“${base.name}”对${revoked.departmentName}的授权`)
     return this.listBases()
   }
 
@@ -411,16 +429,4 @@ export class PostgresKnowledgeAdminService {
   private async record(actorId: string, action: string, objectId: string, detail: string, objectType = 'knowledge_base') {
     await this.audit.appendAudit(actorId, action, objectId, 'success', `trace-knowledge-${randomUUID()}`, detail, objectType)
   }
-}
-
-function normalizeBaseUrl(value: string): string {
-  let url: URL
-  try {
-    url = new URL(value.trim())
-  } catch {
-    throw invalidRequest('WeKnora 地址无效')
-  }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw invalidRequest('WeKnora 地址必须以 http 或 https 开头')
-  if (url.username || url.password) throw invalidRequest('WeKnora 地址不能包含账号或密码')
-  return url.toString().replace(/\/+$/, '')
 }

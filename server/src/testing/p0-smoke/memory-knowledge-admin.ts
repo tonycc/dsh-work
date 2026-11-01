@@ -58,7 +58,7 @@ export class MemoryKnowledgeAdminStore {
       enabled: input.enabled,
       embeddingModelId: input.embeddingModelId?.trim() || null,
       ...(input.apiKey ? { credentialHint: input.apiKey.slice(-4), credentialSource: 'admin' as const } : {}),
-      ...(input.credentialExpiresAt !== undefined ? { credentialExpiresAt: input.credentialExpiresAt } : {}),
+      ...(input.credentialExpiresAt !== undefined ? { credentialExpiresAt: input.credentialExpiresAt } : input.apiKey ? { credentialExpiresAt: null } : {}),
     }
     return this.overview()
   }
@@ -104,7 +104,9 @@ export class MemoryKnowledgeAdminStore {
   async addGrant(_actorId: string, knowledgeBaseId: string, input: { departmentId: string; includeDescendants?: boolean }) {
     const base = this.find(knowledgeBaseId)
     const department = this.activeDepartment(input.departmentId, true)
-    if (!base.grants.some(grant => grant.departmentId === department.id)) {
+    const existing = base.grants.find(grant => grant.departmentId === department.id)
+    if (existing) existing.includeDescendants = input.includeDescendants ?? true
+    else {
       base.grants.push({ id: `grant-admin-${this.sequence++}`, departmentId: department.id, departmentName: department.name, includeDescendants: input.includeDescendants ?? true, grantedVia: 'admin' })
     }
     return this.listBases()

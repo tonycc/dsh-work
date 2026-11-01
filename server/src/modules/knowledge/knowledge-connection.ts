@@ -1,5 +1,6 @@
 import type { DatabaseClient } from '../../infrastructure/postgres/database.ts'
 import type { PostgresEncryptedCredentialStore } from '../tool/postgres-encrypted-credential-store.ts'
+import { invalidRequest } from '../../domain/request-errors.ts'
 import { WeKnoraClient } from './weknora-client.ts'
 
 const tenantId = 'tenant-dsh-work'
@@ -41,38 +42,48 @@ export class PostgresKnowledgeConnection {
   }
 
   /**
-   * 启动时按部署配置写入连接：还没有连接时新建；连接仍由部署配置管理（管理员从未保存过）时同步地址与嵌入模型。
-   * 管理员保存过任何配置后，部署配置不再覆盖，重启不会撤销管理端的修改。
+   * 启动时按部署配置写入连接：还没有连接时新建。Key 仍来自部署配置（管理员没有保存过 Key）时，地址始终跟随
+   * 部署配置，保证部署配置的 Key 只发往部署配置的地址；嵌入模型只在管理员从未保存过时同步。
+   * 管理员保存过 Key 后，部署配置不再覆盖，重启不会撤销管理端的修改。
    */
   async ensureBootstrap(): Promise<void> {
     if (!this.bootstrap) return
+    let baseUrl: string
+    try {
+      baseUrl = normalizeBaseUrl(this.bootstrap.baseUrl)
+    } catch {
+      console.warn('WEKNORA_BASE_URL is invalid; knowledge connection bootstrap skipped')
+      return
+    }
     const hint = this.bootstrap.apiKey.length > 8 ? this.bootstrap.apiKey.slice(-4) : null
     await this.database`
       insert into external_knowledge_connections (id, tenant_id, base_url, credential_hint, embedding_model_id, updated_by)
-      values (${this.connectionId}, ${tenantId}, ${this.bootstrap.baseUrl}, ${hint}, ${this.bootstrap.embeddingModelId ?? null}, 'deployment-config')
+      values (${this.connectionId}, ${tenantId}, ${baseUrl}, ${hint}, ${this.bootstrap.embeddingModelId ?? null}, 'deployment-config')
       on conflict (tenant_id) do update
          set base_url = excluded.base_url,
              credential_hint = excluded.credential_hint,
-             embedding_model_id = excluded.embedding_model_id,
-             updated_by = excluded.updated_by,
+             embedding_model_id = case when external_knowledge_connections.updated_by = 'deployment-config'
+                                       then excluded.embedding_model_id else external_knowledge_connections.embedding_model_id end,
              updated_at = now()
        where external_knowledge_connections.credential_ref is null
-         and external_knowledge_connections.updated_by = 'deployment-config'
+         and (external_knowledge_connections.base_url is distinct from excluded.base_url
+              or external_knowledge_connections.credential_hint is distinct from excluded.credential_hint
+              or (external_knowledge_connections.updated_by = 'deployment-config'
+                  and external_knowledge_connections.embedding_model_id is distinct from excluded.embedding_model_id))
     `
   }
 
-  /** 有效连接的客户端；未配置、已停用或凭据不可读时为 null。 */
+  /** 有效连接的客户端；未配置、已停用或凭据不可读时为 null。按连接版本缓存，保存前不重复解密 Key。 */
   async client(): Promise<WeKnoraClient | null> {
     const row = await this.row()
     if (!row || row.status !== 'active') return null
+    const key = `${row.baseUrl}|${row.credentialRef ?? 'deployment'}|${row.updatedAt.toISOString()}`
+    if (this.cached?.key === key) return this.cached.client
     const apiKey = await this.apiKey(row)
     if (!apiKey) return null
-    const key = `${row.baseUrl}|${row.updatedAt.toISOString()}|${apiKey.length}`
-    if (this.cached?.key !== key) {
-      this.cached = {
-        key,
-        client: new WeKnoraClient({ baseUrl: row.baseUrl, apiKey, timeoutMs: this.bootstrap?.timeoutMs, fetch: this.bootstrap?.fetch }),
-      }
+    this.cached = {
+      key,
+      client: new WeKnoraClient({ baseUrl: row.baseUrl, apiKey, timeoutMs: this.bootstrap?.timeoutMs, fetch: this.bootstrap?.fetch }),
     }
     return this.cached.client
   }
@@ -120,4 +131,24 @@ export class PostgresKnowledgeConnection {
       return undefined
     }
   }
+}
+
+/** 规范化 WeKnora 地址：只允许 http/https，不能带账号或密码，去掉末尾斜杠。 */
+export function normalizeBaseUrl(value: string): string {
+  let url: URL
+  try {
+    url = new URL(value.trim())
+  } catch {
+    throw invalidRequest('WeKnora 地址无效')
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw invalidRequest('WeKnora 地址必须以 http 或 https 开头')
+  if (url.username || url.password) throw invalidRequest('WeKnora 地址不能包含账号或密码')
+  return url.toString().replace(/\/+$/, '')
+}
+
+/** API Key 去掉首尾空白；中间含空白时视为填写错误（HTTP 头不能携带），返回 400。 */
+export function normalizeApiKey(value: string | undefined): string | undefined {
+  const apiKey = value?.trim() || undefined
+  if (apiKey && /\s/.test(apiKey)) throw invalidRequest('API Key 不能包含空格或换行')
+  return apiKey
 }

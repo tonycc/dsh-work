@@ -60,6 +60,15 @@ function formatDateTime(value: string | null) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
+/** 到期日按本地零点保存（见 saveConnection），回显也按本地日期，避免东八区等时区回显早一天。 */
+function formatLocalDate(value: string | null) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const pad = (number: number) => String(number).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
 function grantLabel(grant: KnowledgeAdminBase['grants'][number]) {
   return grant.departmentName + (grant.includeDescendants && grant.departmentName !== '全公司' ? '（含下级）' : '')
 }
@@ -184,7 +193,7 @@ function resetConnectionForm() {
     baseUrl: value?.baseUrl ?? '',
     apiKey: '',
     editingKey: !value?.configured,
-    credentialExpiresAt: value?.credentialExpiresAt?.slice(0, 10) ?? '',
+    credentialExpiresAt: formatLocalDate(value?.credentialExpiresAt ?? null),
     embeddingModelId: value?.embeddingModelId ?? '',
     enabled: value?.configured ? value.enabled : true,
   })

@@ -123,13 +123,26 @@ test('KB-ADM-01 连接配置：API Key 加密保存、只返回末四位，测�
     assert.deepEqual(await ok('POST', `${adminBase}/connection/test`, { baseUrl: otherUrl }), { ok: false, reason: 'api_key_required' })
     assert.equal((await api(ADMIN, 'PUT', `${adminBase}/connection`, { baseUrl: otherUrl, enabled: true })).status, 422)
     assert.equal(other.requests.length, 0, '其他地址没有收到任何请求')
+
+    // Key 仍来自部署配置时，地址跟随部署配置（规范化后），部署配置的 Key 不会发往管理端留下的旧地址；管理端改过的嵌入模型保留。
+    await new PostgresKnowledgeConnection(database, { bootstrap: { baseUrl: `${otherUrl}/`, apiKey: double.apiKey } }).ensureBootstrap()
+    const moved = (await ok('GET', adminBase)).connection
+    assert.equal(moved.baseUrl, otherUrl)
+    assert.equal(moved.embeddingModelId, 'embed-x')
+    await connection.ensureBootstrap()
+    assert.equal((await ok('GET', adminBase)).connection.baseUrl, doubleUrl)
   } finally {
     await other.stop()
   }
 
   // 测试连接：填写的错误 Key 返回认证失败分类，已保存的配置可用。
   assert.deepEqual(await ok('POST', `${adminBase}/connection/test`, { apiKey: 'wrong-weknora-key-0000' }), { ok: false, reason: 'auth' })
+  assert.equal((await api(ADMIN, 'POST', `${adminBase}/connection/test`, { apiKey: 'bad key' })).status, 422)
+  // 已保存的连接测试成功后，之前的失败不再显示为“暂不可用”。
+  await database`update external_knowledge_connections set last_success_at = now() - interval '1 hour', last_failure_at = now() - interval '1 minute', last_failure_reason = 'timeout'`
   assert.deepEqual(await ok('POST', `${adminBase}/connection/test`, {}), { ok: true, reason: null })
+  const tested = (await ok('GET', adminBase)).connection
+  assert.ok(tested.lastSuccessAt > tested.lastFailureAt)
 
   const saved = await ok('PUT', `${adminBase}/connection`, {
     baseUrl: `${doubleUrl}/`, apiKey: double.apiKey, credentialExpiresAt: '2027-05-01T00:00:00Z', embeddingModelId: 'embed-2', enabled: true,
@@ -138,6 +151,7 @@ test('KB-ADM-01 连接配置：API Key 加密保存、只返回末四位，测�
   assert.equal(saved.connection.credentialHint, double.apiKey.slice(-4))
   assert.equal(saved.connection.baseUrl, doubleUrl, '去掉末尾斜杠')
   assert.equal(saved.connection.embeddingModelId, 'embed-2')
+  assert.equal(saved.connection.lastFailureAt, null, '换了 Key 后清除旧的失败记录')
   const overviewText = (await api(ADMIN, 'GET', adminBase)).text
   assert.doesNotMatch(overviewText, new RegExp(double.apiKey), '读取接口不返回明文')
   const [secret] = await database<{ ciphertext: Uint8Array }[]>`select ciphertext from credential_secrets where tenant_id = ${tenantId}`
@@ -147,6 +161,11 @@ test('KB-ADM-01 连接配置：API Key 加密保存、只返回末四位，测�
   await ok('PUT', `${adminBase}/connection`, { baseUrl: doubleUrl, embeddingModelId: 'embed-2', enabled: true })
   assert.ok(await connection.client(), '原 Key 保持不变')
   assert.equal((await ok('GET', adminBase)).connection.credentialExpiresAt, '2027-05-01T00:00:00.000Z')
+  // 换新 Key 且未填写到期时间：不沿用旧 Key 的到期时间。
+  const rotated = await ok('PUT', `${adminBase}/connection`, { baseUrl: doubleUrl, apiKey: double.apiKey, embeddingModelId: 'embed-2', enabled: true })
+  assert.equal(rotated.connection.credentialExpiresAt, null)
+  assert.ok(await connection.client(), '新 Key 立即生效')
+  assert.equal((await api(ADMIN, 'PUT', `${adminBase}/connection`, { baseUrl: doubleUrl, apiKey: 'key with\nnewline', enabled: true })).status, 422)
 
   assert.equal((await api(ADMIN, 'PUT', `${adminBase}/connection`, { baseUrl: 'ftp://weknora', enabled: true })).status, 422)
   assert.equal((await api(READER, 'PUT', `${adminBase}/connection`, { baseUrl: doubleUrl, enabled: true })).status, 403)
@@ -170,7 +189,7 @@ test('KB-ADM-01 连接配置：API Key 加密保存、只返回末四位，测�
     select count(*)::int as count, count(*) filter (where safe_context::text like ${`%${double.apiKey}%`})::int as leaked
       from audit_events where tenant_id = ${tenantId} and action = 'knowledge.connection.update'
   `
-  assert.equal(audit?.count, 5)
+  assert.equal(audit?.count, 6)
   assert.equal(audit?.leaked, 0, '审计不含 API Key')
 })
 
@@ -195,6 +214,15 @@ test('KB-ADM-02 全部知识库：跨部门授权、归属部门、需重建与�
   assert.deepEqual(await visible(), ['全员安全制度'])
   list = await ok('DELETE', `${adminBase}/bases/${created.id}/grants/${rootGrant.id}`)
   assert.deepEqual(await visible(), [])
+
+  const auditOf = async (action: string) => (await database<{ text: string }[]>`
+    select safe_context::text as text from audit_events where tenant_id = ${tenantId} and action = ${action} order by occurred_at desc limit 1
+  `)[0]?.text ?? ''
+  assert.match(await auditOf('knowledge.grant.revoke'), /对全公司的授权/, '审计写部门名称')
+
+  // 再次授给已有授权的部门：按本次选择更新“含下级”。
+  list = await ok('POST', `${adminBase}/bases/${created.id}/grants`, { departmentId: 'dept-supply', includeDescendants: false })
+  assert.deepEqual(list.items.find((item: any) => item.id === created.id).grants.map((grant: any) => [grant.departmentName, grant.includeDescendants]), [['供应链部', false]])
 
   // 管理员可以撤到没有任何授权（包括员工或管理员授予的最后一条）。
   const ownerGrant = list.items.find((item: any) => item.id === created.id).grants[0]
