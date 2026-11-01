@@ -164,7 +164,7 @@ flowchart LR
 
 | 表 | 作用 | 关键不变量 |
 | --- | --- | --- |
-| `external_knowledge_connections` | 企业知识库（WeKnora）连接 | 每个企业最多一条；API Key 不入库明文（WK-S1 由部署配置提供，只存末四位）；记录统一嵌入模型与最近成功、失败时间 |
+| `external_knowledge_connections` | 企业知识库（WeKnora）连接 | 每个企业最多一条；管理端保存的 API Key 经 `credential_refs`/`credential_secrets` 加密存储，本表只存引用与末四位，未保存时由部署配置提供；记录统一嵌入模型、启用状态与最近成功、失败时间 |
 | `external_knowledge_bases` | 经平台创建的知识库 | 同一连接下外部 ID 唯一；有且只有一个归属部门；记录建库时的嵌入模型；删除为置 `deleted`，不再检索 |
 | `external_knowledge_base_grants` | 知识库按部门的可见范围授权 | 同一知识库同一部门只有一条有效授权；可选包含下级；区分员工与管理员授予；可见范围读取时实时计算 |
 | `session_knowledge_bases` | 会话所选知识库 | 员工在个人空间对话中添加；每次执行与员工当前可见知识库取交集后检索 |

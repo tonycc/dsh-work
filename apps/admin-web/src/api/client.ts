@@ -1,3 +1,9 @@
+import type {
+  KnowledgeAdminBaseList,
+  KnowledgeAdminDepartment,
+  KnowledgeAdminOverview,
+  KnowledgeConnectionInput,
+} from '../types/knowledge'
 import type { AdminConversation, SkillInstallation } from '../types/assistant'
 import type {
   AdminSession,
@@ -135,6 +141,24 @@ function redirectToLogin() {
 }
 
 export const adminApi = {
+  // 企业知识库（weknora-knowledge-plan 第 9 节，WK-S3）。
+  getKnowledgeOverview: () => request<KnowledgeAdminOverview>('/knowledge'),
+  updateKnowledgeConnection: (input: KnowledgeConnectionInput) =>
+    request<KnowledgeAdminOverview>('/knowledge/connection', { method: 'PUT', body: JSON.stringify(input) }),
+  testKnowledgeConnection: (input: { baseUrl?: string; apiKey?: string } = {}) =>
+    request<{ ok: boolean; reason: string | null }>('/knowledge/connection/test', { method: 'POST', body: JSON.stringify(input) }),
+  listKnowledgeBases: () => request<KnowledgeAdminBaseList>('/knowledge/bases'),
+  listKnowledgeDepartments: () => request<KnowledgeAdminDepartment[]>('/knowledge/departments'),
+  createKnowledgeBase: (input: { name: string; description?: string; ownerDepartmentId: string }) =>
+    request<KnowledgeAdminBaseList>('/knowledge/bases', { method: 'POST', body: JSON.stringify(input) }),
+  updateKnowledgeBaseOwner: (knowledgeBaseId: string, ownerDepartmentId: string) =>
+    request<KnowledgeAdminBaseList>(`/knowledge/bases/${encodeURIComponent(knowledgeBaseId)}`, { method: 'PATCH', body: JSON.stringify({ ownerDepartmentId }) }),
+  deleteKnowledgeBase: (knowledgeBaseId: string) =>
+    request<KnowledgeAdminBaseList>(`/knowledge/bases/${encodeURIComponent(knowledgeBaseId)}`, { method: 'DELETE' }),
+  addKnowledgeGrant: (knowledgeBaseId: string, input: { departmentId: string; includeDescendants?: boolean }) =>
+    request<KnowledgeAdminBaseList>(`/knowledge/bases/${encodeURIComponent(knowledgeBaseId)}/grants`, { method: 'POST', body: JSON.stringify(input) }),
+  revokeKnowledgeGrant: (knowledgeBaseId: string, grantId: string) =>
+    request<KnowledgeAdminBaseList>(`/knowledge/bases/${encodeURIComponent(knowledgeBaseId)}/grants/${encodeURIComponent(grantId)}`, { method: 'DELETE' }),
   getExperienceIterationAgents: () =>
     request<ExperienceIterationAgentSummary[]>('/experience-iterations/agents'),
   getExperienceIterationApplications: (agentId?: string, status?: ExperienceIterationApplication['status']) => {
