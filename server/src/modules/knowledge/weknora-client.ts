@@ -50,6 +50,25 @@ export interface WeKnoraKnowledgeBase {
   name: string
 }
 
+export interface WeKnoraKnowledgeBaseStats {
+  id: string
+  knowledgeCount: number
+  processingCount: number
+  updatedAt: string | null
+}
+
+export interface WeKnoraDocument {
+  id: string
+  knowledgeBaseId: string
+  title: string
+  fileName: string
+  fileSize: number | null
+  /** pending、processing、finalizing、completed、failed、deleting、cancelled */
+  parseStatus: string
+  errorMessage: string | null
+  updatedAt: string | null
+}
+
 export interface WeKnoraClientConfig {
   baseUrl: string
   apiKey: string
@@ -59,6 +78,9 @@ export interface WeKnoraClientConfig {
 }
 
 export const weknoraSearchTimeoutMs = 5000
+/** 员工端管理操作不在执行链路上，可以多等一会儿；上传与下载按文件大小再放宽。 */
+const managementTimeoutMs = 15000
+const uploadTimeoutMs = 120000
 
 export class WeKnoraClient {
   private readonly baseUrl: string
@@ -127,20 +149,104 @@ export class WeKnoraClient {
       description: input.description,
       type: 'document',
       embedding_model_id: input.embeddingModelId,
-    })
+    }, managementTimeoutMs)
     const data = (body as { data?: Record<string, unknown> }).data
     if (!data || typeof data.id !== 'string') throw new WeKnoraUnavailableError('protocol', 'WeKnora 新建知识库响应缺少 ID')
     return { id: data.id, name: typeof data.name === 'string' ? data.name : input.name }
   }
 
   async deleteKnowledgeBase(id: string): Promise<void> {
-    await this.request('DELETE', `/api/v1/knowledge-bases/${encodeURIComponent(id)}`)
+    await this.request('DELETE', `/api/v1/knowledge-bases/${encodeURIComponent(id)}`, undefined, managementTimeoutMs)
   }
 
-  private async request(method: string, path: string, json?: unknown): Promise<unknown> {
+  /** 平台创建的知识库在 WeKnora 中的统计（文档数、解析中数量、更新时间），一次读取全部。 */
+  async listKnowledgeBases(): Promise<WeKnoraKnowledgeBaseStats[]> {
+    const body = await this.request('GET', '/api/v1/knowledge-bases?page=1&page_size=1000', undefined, managementTimeoutMs)
+    return arrayData(body).flatMap(item => {
+      const row = item as Record<string, unknown>
+      if (typeof row.id !== 'string') return []
+      return [{
+        id: row.id,
+        knowledgeCount: typeof row.knowledge_count === 'number' ? row.knowledge_count : 0,
+        processingCount: typeof row.processing_count === 'number' ? row.processing_count : 0,
+        updatedAt: typeof row.updated_at === 'string' ? row.updated_at : null,
+      }]
+    })
+  }
+
+  async updateKnowledgeBase(id: string, input: { name: string; description: string }): Promise<void> {
+    await this.request('PATCH', `/api/v1/knowledge-bases/${encodeURIComponent(id)}`, input, managementTimeoutMs)
+  }
+
+  async listDocuments(knowledgeBaseId: string, input: { keyword?: string; parseStatus?: string; page: number; pageSize: number }) {
+    const query = new URLSearchParams({ page: String(input.page), page_size: String(input.pageSize) })
+    if (input.keyword) query.set('keyword', input.keyword)
+    if (input.parseStatus) query.set('parse_status', input.parseStatus)
+    const body = await this.request('GET', `/api/v1/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/knowledge?${query.toString()}`, undefined, managementTimeoutMs)
+    const total = (body as { total?: unknown }).total
+    return {
+      items: arrayData(body).map(toDocument),
+      total: typeof total === 'number' ? total : 0,
+    }
+  }
+
+  async getDocument(id: string): Promise<WeKnoraDocument> {
+    const body = await this.request('GET', `/api/v1/knowledge/${encodeURIComponent(id)}`, undefined, managementTimeoutMs)
+    return toDocument((body as { data?: unknown }).data)
+  }
+
+  /** 上传文件（WK16：只支持文件，不调用网址导入）。重复文件由 WeKnora 返回 409。 */
+  async uploadDocument(knowledgeBaseId: string, input: { fileName: string; mimeType: string; bytes: Buffer }): Promise<WeKnoraDocument> {
+    const form = new FormData()
+    form.append('file', new Blob([new Uint8Array(input.bytes)], { type: input.mimeType }), input.fileName)
+    const body = await this.request('POST', `/api/v1/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/knowledge/file`, form, uploadTimeoutMs)
+    return toDocument((body as { data?: unknown }).data)
+  }
+
+  async updateDocumentTitle(id: string, title: string): Promise<void> {
+    await this.request('PUT', `/api/v1/knowledge/${encodeURIComponent(id)}`, { title }, managementTimeoutMs)
+  }
+
+  async reparseDocument(id: string): Promise<void> {
+    await this.request('POST', `/api/v1/knowledge/${encodeURIComponent(id)}/reparse`, {}, managementTimeoutMs)
+  }
+
+  async deleteDocument(id: string): Promise<void> {
+    await this.request('DELETE', `/api/v1/knowledge/${encodeURIComponent(id)}`, undefined, managementTimeoutMs)
+  }
+
+  async downloadDocument(id: string): Promise<{ bytes: Buffer; mimeType: string }> {
+    return this.binary(`/api/v1/knowledge/${encodeURIComponent(id)}/download`)
+  }
+
+  async previewDocument(id: string): Promise<{ bytes: Buffer; mimeType: string }> {
+    return this.binary(`/api/v1/knowledge/${encodeURIComponent(id)}/preview`)
+  }
+
+  private async binary(path: string): Promise<{ bytes: Buffer; mimeType: string }> {
+    return this.send('GET', path, undefined, uploadTimeoutMs, async response => ({
+      bytes: Buffer.from(await response.arrayBuffer()),
+      mimeType: response.headers.get('content-type') ?? 'application/octet-stream',
+    }))
+  }
+
+  private async request(method: string, path: string, payload?: unknown, timeoutMs = this.timeoutMs): Promise<unknown> {
+    return this.send(method, path, payload, timeoutMs, async response => {
+      const body: unknown = await response.json().catch(() => {
+        throw new WeKnoraUnavailableError('protocol', 'WeKnora 响应不是 JSON')
+      })
+      if (!body || typeof body !== 'object' || (body as { success?: unknown }).success === false) {
+        throw new WeKnoraUnavailableError('protocol', 'WeKnora 响应格式不符合约定')
+      }
+      return body
+    })
+  }
+
+  private async send<T>(method: string, path: string, payload: unknown, timeoutMs: number, read: (response: Response) => Promise<T>): Promise<T> {
     const controller = new AbortController()
     // 超时覆盖连接与读取响应正文，避免慢响应拖住执行。
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs)
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    const form = payload instanceof FormData
     try {
       let response: Response
       try {
@@ -149,9 +255,9 @@ export class WeKnoraClient {
           headers: {
             'X-API-Key': this.apiKey,
             accept: 'application/json',
-            ...(json === undefined ? {} : { 'content-type': 'application/json' }),
+            ...(payload === undefined || form ? {} : { 'content-type': 'application/json' }),
           },
-          ...(json === undefined ? {} : { body: JSON.stringify(json) }),
+          ...(payload === undefined ? {} : { body: form ? payload : JSON.stringify(payload) }),
           signal: controller.signal,
         })
       } catch (error) {
@@ -162,20 +268,32 @@ export class WeKnoraClient {
       if (response.status === 429) throw new WeKnoraUnavailableError('rate_limited', 'WeKnora 限流（429）')
       if (response.status >= 500) throw new WeKnoraUnavailableError('server', `WeKnora 服务错误（${response.status}）`)
       if (response.status >= 400) throw new WeKnoraRequestError(response.status, `WeKnora 拒绝请求（${response.status}）`)
-      let body: unknown
       try {
-        body = await response.json()
-      } catch {
+        return await read(response)
+      } catch (error) {
         if (controller.signal.aborted) throw new WeKnoraUnavailableError('timeout', 'WeKnora 请求超时')
-        throw new WeKnoraUnavailableError('protocol', 'WeKnora 响应不是 JSON')
+        throw error
       }
-      if (!body || typeof body !== 'object' || (body as { success?: unknown }).success === false) {
-        throw new WeKnoraUnavailableError('protocol', 'WeKnora 响应格式不符合约定')
-      }
-      return body
     } finally {
       clearTimeout(timer)
     }
+  }
+}
+
+function toDocument(value: unknown): WeKnoraDocument {
+  const row = (value ?? {}) as Record<string, unknown>
+  if (typeof row.id !== 'string' || typeof row.knowledge_base_id !== 'string') {
+    throw new WeKnoraUnavailableError('protocol', 'WeKnora 文档信息缺少必要字段')
+  }
+  return {
+    id: row.id,
+    knowledgeBaseId: row.knowledge_base_id,
+    title: typeof row.title === 'string' ? row.title : '',
+    fileName: typeof row.file_name === 'string' ? row.file_name : '',
+    fileSize: typeof row.file_size === 'number' ? row.file_size : null,
+    parseStatus: typeof row.parse_status === 'string' ? row.parse_status : 'pending',
+    errorMessage: typeof row.error_message === 'string' && row.error_message ? row.error_message : null,
+    updatedAt: typeof row.updated_at === 'string' ? row.updated_at : null,
   }
 }
 

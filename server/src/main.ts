@@ -26,6 +26,7 @@ import { registerWorkbenchAgentRoutes } from './http/workbench/agent-routes.ts'
 import { registerUserPreferenceRoutes } from './http/workbench/preference-routes.ts'
 import { registerConversationTargetRoutes } from './http/workbench/conversation-target-routes.ts'
 import { registerUserNotificationRoutes } from './http/workbench/user-notification-routes.ts'
+import { registerKnowledgeRoutes } from './http/workbench/knowledge-routes.ts'
 import { registerWorkspaceTimelineRoutes } from './http/workbench/workspace-timeline-routes.ts'
 import { registerOidcRoutes } from './http/auth-routes.ts'
 import { registerLocalAuthRoutes } from './http/local-auth-routes.ts'
@@ -97,6 +98,8 @@ import { builtinTools, missingDshBuiltinTools, type BuiltinToolStatus } from './
 import { PostgresMcpConnectorService } from './modules/tool/postgres-mcp-connector-service.ts'
 import { PostgresEncryptedCredentialStore } from './modules/tool/postgres-encrypted-credential-store.ts'
 import { WeKnoraKnowledgeProvider } from './modules/knowledge/weknora-knowledge-provider.ts'
+import { PostgresKnowledgeBaseService } from './modules/knowledge/postgres-knowledge-base-service.ts'
+import { WeKnoraClient } from './modules/knowledge/weknora-client.ts'
 import { PostgresAuthorizationService } from './modules/authorization/postgres-authorization-service.ts'
 import { PostgresAutomationRepository } from './modules/automation/postgres-automation-repository.ts'
 import { AutomationService } from './modules/automation/automation-service.ts'
@@ -430,6 +433,14 @@ async function start() {
       })
     : undefined
   await knowledge?.ensureConnection()
+  // 员工端知识库管理（WK-S2）与执行前检索共用同一连接；未配置时接口回答“尚未配置”，员工端不显示入口。
+  const knowledgeBases = new PostgresKnowledgeBaseService(database, operations, {
+    connectionId: knowledge?.connectionId ?? 'knowledge-connection-weknora',
+    client: knowledge
+      ? new WeKnoraClient({ baseUrl: process.env.WEKNORA_BASE_URL!, apiKey: process.env.WEKNORA_API_KEY! })
+      : null,
+    embeddingModelId: process.env.WEKNORA_EMBEDDING_MODEL_ID || undefined,
+  })
   const controlledMemory = new PostgresControlledMemoryService(database, authorization, operations)
   controlledMemoryRef.current = controlledMemory
   memoryProposalSweep = setInterval(() => {
@@ -579,6 +590,7 @@ async function start() {
   registerConversationTargetRoutes(router, new PostgresConversationTargetService(database, agents), authorization)
   const userNotifications = new PostgresUserNotificationService(database)
   registerUserNotificationRoutes(router, userNotifications, authorization)
+  registerKnowledgeRoutes(router, knowledgeBases, authorization)
   // 站内通知 NC-S4：启动后与每天清扫一次 90 天前的通知，不阻塞启动；清扫可重复执行。
   const purgeNotifications = () => {
     // 上一轮还没结束时不重叠；关闭服务时等进行中的一轮结束再关数据库。

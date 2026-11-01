@@ -11,6 +11,8 @@ export interface WeKnoraDoubleDocument {
   title: string
   fileName: string
   updatedAt: string
+  /** 缺省为 completed。 */
+  parseStatus?: string
 }
 
 export interface WeKnoraDoubleChunk {
@@ -44,6 +46,8 @@ export class WeKnoraDouble {
   ignoreKnowledgeBaseScope = false
   /** 元数据接口不返回这些文档（模拟两次请求之间被删除）。 */
   hiddenMetadataIds: string[] = []
+  /** 经 POST /knowledge-bases 创建、尚未删除的知识库及收到的建库请求体。 */
+  readonly knowledgeBases = new Map<string, Record<string, unknown>>()
   private server: Server | null = null
   private nextKnowledgeBase = 1
 
@@ -53,9 +57,14 @@ export class WeKnoraDouble {
 
   async start(): Promise<string> {
     this.server = createServer((request, response) => {
-      void this.handle(request).then(({ status, body }) => {
-        response.writeHead(status, { 'content-type': 'application/json' })
-        response.end(JSON.stringify(body))
+      void this.handle(request).then(result => {
+        if (result.raw) {
+          response.writeHead(result.status, { 'content-type': result.contentType ?? 'application/octet-stream' })
+          response.end(result.raw)
+          return
+        }
+        response.writeHead(result.status, { 'content-type': 'application/json' })
+        response.end(JSON.stringify(result.body))
       })
     })
     await new Promise<void>(resolve => this.server!.listen(0, '127.0.0.1', resolve))
@@ -80,12 +89,14 @@ export class WeKnoraDouble {
     this.omitKnowledgeBaseId = false
     this.ignoreKnowledgeBaseScope = false
     this.hiddenMetadataIds = []
+    this.knowledgeBases.clear()
   }
 
-  private async handle(request: IncomingMessage): Promise<{ status: number; body: unknown }> {
+  private async handle(request: IncomingMessage): Promise<{ status: number; body?: unknown; raw?: Buffer; contentType?: string }> {
     const url = new URL(request.url ?? '/', 'http://double')
     const raw = await readBody(request)
-    const body = raw ? JSON.parse(raw) as Record<string, unknown> : undefined
+    const json = String(request.headers['content-type'] ?? '').includes('application/json')
+    const body = raw && json ? JSON.parse(raw) as Record<string, unknown> : undefined
     const apiKey = request.headers['x-api-key']
     this.requests.push({ method: request.method ?? 'GET', path: url.pathname, apiKey: Array.isArray(apiKey) ? apiKey[0] : apiKey, body })
     if (this.delayMs) await new Promise(resolve => setTimeout(resolve, this.delayMs))
@@ -141,11 +152,64 @@ export class WeKnoraDouble {
     if (request.method === 'POST' && url.pathname === '/api/v1/knowledge-bases') {
       if (typeof body?.name !== 'string' || !body.name) return { status: 400, body: { success: false, error: { code: 1010, message: 'name required' } } }
       const id = `kb-double-${this.nextKnowledgeBase++}`
+      this.knowledgeBases.set(id, { ...body })
       return { status: 201, body: { success: true, data: { id, name: body.name, type: body.type ?? 'document', embedding_model_id: body.embedding_model_id ?? '' } } }
     }
-    const deleteBase = url.pathname.match(/^\/api\/v1\/knowledge-bases\/([^/]+)$/)
-    if (request.method === 'DELETE' && deleteBase) {
+    const ok = (data?: unknown) => ({ status: 200, body: { success: true, ...(data === undefined ? {} : { data }) } })
+    const missing = { status: 404, body: { success: false, error: { code: 1003, message: 'not found' } } }
+    const base = url.pathname.match(/^\/api\/v1\/knowledge-bases\/([^/]+)$/)
+    if (request.method === 'GET' && url.pathname === '/api/v1/knowledge-bases') {
+      const ids = new Set([...this.knowledgeBases.keys(), ...this.documents.map(document => document.knowledgeBaseId)])
+      return { status: 200, body: { success: true, total: ids.size, page: 1, page_size: 1000, data: [...ids].map(id => {
+        const documents = this.documents.filter(document => document.knowledgeBaseId === id)
+        return {
+          id, name: String(this.knowledgeBases.get(id)?.name ?? id), knowledge_count: documents.length,
+          processing_count: documents.filter(document => (document.parseStatus ?? 'completed') === 'processing').length,
+          updated_at: documents.map(document => document.updatedAt).sort().at(-1) ?? '2026-11-01T00:00:00Z',
+        }
+      }) } }
+    }
+    if (request.method === 'DELETE' && base) {
+      this.knowledgeBases.delete(decodeURIComponent(base[1]!))
       return { status: 200, body: { success: true, message: 'Knowledge base deleted successfully' } }
+    }
+    if (request.method === 'PATCH' && base) {
+      const id = decodeURIComponent(base[1]!)
+      this.knowledgeBases.set(id, { ...this.knowledgeBases.get(id), ...body })
+      return ok({ id, ...body })
+    }
+    const list = url.pathname.match(/^\/api\/v1\/knowledge-bases\/([^/]+)\/knowledge$/)
+    if (request.method === 'GET' && list) {
+      const keyword = url.searchParams.get('keyword') ?? ''
+      const status = url.searchParams.get('parse_status')
+      const items = this.documents
+        .filter(document => document.knowledgeBaseId === decodeURIComponent(list[1]!))
+        .filter(document => !keyword || document.title.includes(keyword) || document.fileName.includes(keyword))
+        .filter(document => !status || (document.parseStatus ?? 'completed') === status)
+      return { status: 200, body: { success: true, data: items.map(toKnowledge), total: items.length, page: 1, page_size: 20 } }
+    }
+    const upload = url.pathname.match(/^\/api\/v1\/knowledge-bases\/([^/]+)\/knowledge\/file$/)
+    if (request.method === 'POST' && upload) {
+      const fileName = /filename="([^"]+)"/.exec(raw)?.[1] ?? 'upload.bin'
+      const knowledgeBaseId = decodeURIComponent(upload[1]!)
+      const existing = this.documents.find(document => document.knowledgeBaseId === knowledgeBaseId && document.fileName === fileName)
+      if (existing) return { status: 409, body: { success: false, data: toKnowledge(existing) } }
+      const document = { id: `doc-double-${this.nextKnowledgeBase++}`, knowledgeBaseId, title: fileName.replace(/\.[^.]+$/, ''), fileName, updatedAt: new Date().toISOString(), parseStatus: 'processing' }
+      this.documents.push(document)
+      return ok(toKnowledge(document))
+    }
+    const knowledge = url.pathname.match(/^\/api\/v1\/knowledge\/([^/]+)(\/(reparse|download|preview))?$/)
+    if (knowledge) {
+      const document = this.documents.find(item => item.id === decodeURIComponent(knowledge[1]!))
+      if (!document) return missing
+      const action = knowledge[3]
+      if (request.method === 'GET' && !action) return ok(toKnowledge(document))
+      if (request.method === 'PUT' && !action) { document.title = String(body?.title ?? document.title); return ok(toKnowledge(document)) }
+      if (request.method === 'DELETE' && !action) { this.documents = this.documents.filter(item => item !== document); return ok({ task_id: 'task-delete' }) }
+      if (request.method === 'POST' && action === 'reparse') { document.parseStatus = 'processing'; return ok(toKnowledge(document)) }
+      if (request.method === 'GET' && (action === 'download' || action === 'preview')) {
+        return { status: 200, raw: Buffer.from(`${action}:${document.title}`), contentType: action === 'preview' ? 'text/html' : 'application/octet-stream' }
+      }
     }
     return { status: 404, body: { success: false, error: { code: 1003, message: 'not found' } } }
   }
@@ -155,4 +219,17 @@ async function readBody(request: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = []
   for await (const chunk of request) chunks.push(chunk as Buffer)
   return Buffer.concat(chunks).toString('utf8')
+}
+
+function toKnowledge(document: WeKnoraDoubleDocument) {
+  return {
+    id: document.id,
+    knowledge_base_id: document.knowledgeBaseId,
+    title: document.title,
+    file_name: document.fileName,
+    file_size: 1024,
+    parse_status: document.parseStatus ?? 'completed',
+    error_message: document.parseStatus === 'failed' ? 'parse failed' : '',
+    updated_at: document.updatedAt,
+  }
 }
