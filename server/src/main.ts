@@ -27,6 +27,7 @@ import { registerUserPreferenceRoutes } from './http/workbench/preference-routes
 import { registerConversationTargetRoutes } from './http/workbench/conversation-target-routes.ts'
 import { registerUserNotificationRoutes } from './http/workbench/user-notification-routes.ts'
 import { registerKnowledgeRoutes } from './http/workbench/knowledge-routes.ts'
+import { registerKnowledgeAdminRoutes } from './http/admin/knowledge-admin-routes.ts'
 import { registerWorkspaceTimelineRoutes } from './http/workbench/workspace-timeline-routes.ts'
 import { registerOidcRoutes } from './http/auth-routes.ts'
 import { registerLocalAuthRoutes } from './http/local-auth-routes.ts'
@@ -99,7 +100,8 @@ import { PostgresMcpConnectorService } from './modules/tool/postgres-mcp-connect
 import { PostgresEncryptedCredentialStore } from './modules/tool/postgres-encrypted-credential-store.ts'
 import { WeKnoraKnowledgeProvider } from './modules/knowledge/weknora-knowledge-provider.ts'
 import { PostgresKnowledgeBaseService } from './modules/knowledge/postgres-knowledge-base-service.ts'
-import { WeKnoraClient } from './modules/knowledge/weknora-client.ts'
+import { PostgresKnowledgeConnection } from './modules/knowledge/knowledge-connection.ts'
+import { PostgresKnowledgeAdminService } from './modules/knowledge/postgres-knowledge-admin-service.ts'
 import { PostgresAuthorizationService } from './modules/authorization/postgres-authorization-service.ts'
 import { PostgresAutomationRepository } from './modules/automation/postgres-automation-repository.ts'
 import { AutomationService } from './modules/automation/automation-service.ts'
@@ -424,23 +426,22 @@ async function start() {
   }
   skills.setPublicationAvailabilityChecker(checkInstallationRuntime)
   const agents = new PostgresAgentService(database, operations, skills, mcpService)
-  // 企业知识库（weknora-knowledge-plan）：WK-S1 连接由部署配置写入；未配置时不检索企业知识。
-  const knowledge = process.env.WEKNORA_BASE_URL && process.env.WEKNORA_API_KEY
-    ? new WeKnoraKnowledgeProvider(database, {
-        baseUrl: process.env.WEKNORA_BASE_URL,
-        apiKey: process.env.WEKNORA_API_KEY,
-        embeddingModelId: process.env.WEKNORA_EMBEDDING_MODEL_ID || undefined,
-      })
-    : undefined
-  await knowledge?.ensureConnection()
-  // 员工端知识库管理（WK-S2）与执行前检索共用同一连接；未配置时接口回答“尚未配置”，员工端不显示入口。
-  const knowledgeBases = new PostgresKnowledgeBaseService(database, operations, {
-    connectionId: knowledge?.connectionId ?? 'knowledge-connection-weknora',
-    client: knowledge
-      ? new WeKnoraClient({ baseUrl: process.env.WEKNORA_BASE_URL!, apiKey: process.env.WEKNORA_API_KEY! })
-      : null,
-    embeddingModelId: process.env.WEKNORA_EMBEDDING_MODEL_ID || undefined,
+  // 企业知识库（weknora-knowledge-plan）：连接由管理端配置（WK-S3），API Key 加密保存；部署配置 WEKNORA_*
+  // 只在管理员保存 API Key 之前提供初始连接。执行前检索、员工端与管理端共用同一连接，保存后立即生效。
+  const knowledgeConnection = new PostgresKnowledgeConnection(database, {
+    credentials: credentialSecrets,
+    bootstrap: process.env.WEKNORA_BASE_URL && process.env.WEKNORA_API_KEY
+      ? {
+          baseUrl: process.env.WEKNORA_BASE_URL,
+          apiKey: process.env.WEKNORA_API_KEY,
+          embeddingModelId: process.env.WEKNORA_EMBEDDING_MODEL_ID || undefined,
+        }
+      : undefined,
   })
+  await knowledgeConnection.ensureBootstrap()
+  const knowledge = new WeKnoraKnowledgeProvider(database, knowledgeConnection)
+  const knowledgeBases = new PostgresKnowledgeBaseService(database, operations, knowledgeConnection)
+  const knowledgeAdmin = new PostgresKnowledgeAdminService(database, operations, knowledgeConnection, credentialSecrets)
   const controlledMemory = new PostgresControlledMemoryService(database, authorization, operations)
   controlledMemoryRef.current = controlledMemory
   memoryProposalSweep = setInterval(() => {
@@ -591,6 +592,7 @@ async function start() {
   const userNotifications = new PostgresUserNotificationService(database)
   registerUserNotificationRoutes(router, userNotifications, authorization)
   registerKnowledgeRoutes(router, knowledgeBases, authorization)
+  registerKnowledgeAdminRoutes(router, knowledgeAdmin)
   // 站内通知 NC-S4：启动后与每天清扫一次 90 天前的通知，不阻塞启动；清扫可重复执行。
   const purgeNotifications = () => {
     // 上一轮还没结束时不重叠；关闭服务时等进行中的一轮结束再关数据库。

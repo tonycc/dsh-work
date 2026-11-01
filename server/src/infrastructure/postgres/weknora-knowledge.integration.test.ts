@@ -5,6 +5,7 @@ import { after, before, beforeEach, test } from 'node:test'
 import { PostgresAgentService } from '../../modules/agent/postgres-agent-service.ts'
 import { PostgresOperationsService } from '../../modules/admin/application/postgres-operations-service.ts'
 import { PostgresAuthorizationService } from '../../modules/authorization/postgres-authorization-service.ts'
+import { PostgresKnowledgeConnection } from '../../modules/knowledge/knowledge-connection.ts'
 import { WeKnoraKnowledgeProvider } from '../../modules/knowledge/weknora-knowledge-provider.ts'
 import { ModelGovernanceService } from '../../modules/model/model-governance-service.ts'
 import { PostgresModelGovernanceRepository } from '../../modules/model/postgres-model-governance-repository.ts'
@@ -49,8 +50,9 @@ before(async () => {
   const operations = new PostgresOperationsService(database)
   agents = new PostgresAgentService(database, operations, new PostgresSkillService(database, operations))
   conversations = new PostgresConversationRepository(database)
-  provider = new WeKnoraKnowledgeProvider(database, { baseUrl, apiKey: double.apiKey, embeddingModelId: 'embed-1', timeoutMs: 500 })
-  await provider.ensureConnection()
+  const connection = new PostgresKnowledgeConnection(database, { bootstrap: { baseUrl, apiKey: double.apiKey, embeddingModelId: 'embed-1', timeoutMs: 500 } })
+  await connection.ensureBootstrap()
+  provider = new WeKnoraKnowledgeProvider(database, connection)
   runtime = new CapturingRuntime()
   orchestration = new RunOrchestrationService(
     new PostgresRunRepository(database), conversations,
