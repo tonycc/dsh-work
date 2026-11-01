@@ -23,7 +23,7 @@
 
 | 编号 | 决策 | 状态 |
 | --- | --- | --- |
-| WK1 | WeKnora 替代本地知识库：生产只用 WeKnora。本地知识表、种子文档和 `PostgresKnowledgeService` 只留给 P0/P1 测试，不作为生产备用。 | 已确认（2026-11-01） |
+| WK1 | WeKnora 替代项目原有的知识库模块，一期直接删除原有模块（`PostgresKnowledgeService`、本地知识表、两篇合成种子文档与检索函数），不保留为测试或生产备用；历史执行的旧引用记录随表删除，不迁移（第 6 节第 6 条）。 | 已确认（2026-11-01，修订：由保留给测试改为一期删除） |
 | WK2 | WeKnora 超时或不可用时，执行继续，不注入知识；提示词告知模型知识库不可用、不得给出企业制度结论；回答末尾注明“企业知识库暂不可用，本次回答未引用企业知识”；记录事件，管理端显示健康状态。 | 已确认（2026-11-01） |
 | WK3 | 操作权限按角色授予，分三级：仅查看（`knowledge:view`）、文档管理（`knowledge:docs`）、知识库管理（`knowledge:bases`）。可见范围按部门：员工只能看到授给自己所属部门的知识库；文档管理和知识库管理只作用于归属部门是自己所属部门的知识库（WK15，第 5 节）。 | 已确认（2026-11-01） |
 | WK4 | 只有员工在对话框中添加了知识库，才在执行前用本次提问检索一次，且只检索所添加的知识库；没有添加时完全不调用 WeKnora，按普通对话回复。不向 Agent 提供检索工具。这改变了现有行为：现在每次执行都会自动检索本地知识。 | 已确认（2026-11-01，修订：由每次自动检索改为员工主动添加） |
@@ -48,7 +48,7 @@
 
 - **一期：** 检索链路；员工端知识库与文档管理（含员工新建知识库、归属部门与授权调整，WK9～WK11、WK15）；管理端；只在**个人空间对话**中添加知识库（WK4、WK17、WK18）。
 - **二期：** 团队空间中添加知识库（WK6 成员交集、WK20 显示与跳过提示）；定时任务选择知识库（WK19）；验证案例指定知识库（WK8）。
-- **一期的行为：** 团队空间对话、定时任务和验证运行都不显示添加入口、不检索企业知识。验证页注明“验证不覆盖企业知识”。这比现在少：现在这三类执行都会自动检索本地知识（见第 13 节上线影响）。
+- **一期的行为：** 团队空间对话、定时任务和验证运行都不显示添加入口、不检索企业知识。验证页注明“验证不覆盖企业知识”。现在这三类执行在机制上会自动检索原有知识库，但其中只有两篇合成测试文档，且只在授予了 `domain:supply-chain` 的测试空间 `ws-supply` 中可检索（迁移 0008、0010），对生产没有实际影响。
 - 二期决策已确认，方案中对应内容保留并标为“二期”，一期实现不得提前开放其入口。
 
 ## 3. 边界
@@ -201,12 +201,16 @@ DSH 适配器拼装“# 企业知识上下文”（`dsh-acp-runtime-adapter.ts`�
 
 ## 6. 执行链路改动
 
-1. **知识端口。** 把 `orchestration-dependencies.ts` 中对 `PostgresKnowledgeService` 具体类的依赖改为接口 `KnowledgeProvider`（`resolveContext`、`addCitationFooter`）。生产实现为 `WeKnoraKnowledgeProvider`，测试中可注入现有本地实现。
+1. **知识端口。** 把 `orchestration-dependencies.ts` 中对 `PostgresKnowledgeService` 具体类的依赖改为接口 `KnowledgeProvider`（`resolveContext`、`addCitationFooter`）。生产实现为 `WeKnoraKnowledgeProvider`，测试中注入按 WeKnora 接口实现的替身（第 12 节），不再使用原有实现。原有本地实现。
 2. **调度器。** `attempt-dispatcher.ts` 改为传入 `userId`、`purpose` 与 Agent 版本，由 Provider 自行完成第 5 节的授权计算，并传入本次所选知识库（一期只有个人空间会话，5.7；二期增加定时任务、验证案例，5.8）；Provider 用所选知识库与可见知识库的交集检索（二期团队空间按 WK6 取成员交集），并校验 Agent 岗位角色（WK14）；没有所选知识库时不调用 WeKnora；不再传 `dataScopes` 和 `roleIds`。`agent-routine` 仍不调用 Provider。
 3. **引用快照。** 新表 `run_knowledge_citations` 记录本次 Attempt 注入的每个分段：外部文档 ID、知识库 ID 和名称、标题、文件名、更新时间、校验值、摘录、得分。它不依赖 `knowledge_documents`，替代 `run_knowledge_sources` 在生产中的作用。引用页脚和员工端来源展示都读这张表；文档之后被删除，快照仍保留。
 4. **引用页脚。** 格式为 `【n】标题（更新日期：YYYY-MM-DD）`。WeKnora 的文档没有版本号，所以不显示“v版本”。不可用时追加 WK2 的说明（第 7 节）。
 5. **员工端来源展示。** 执行详情中的“企业知识”来源，显示标题、文件名、更新日期和摘录。查看者当前仍能看到该知识库且文档未删除时，提供跳转到员工端“知识库”中对应文档的链接；否则只显示快照。
-6. **本地知识表。** `knowledge_sources`、`knowledge_documents`、`knowledge_chunks` 及种子数据保留，供 P0/P1 测试使用，生产代码路径不再读取。是否在后续删除，待 WeKnora 运行稳定后另行决定。
+6. **删除原有知识库模块（WK1）。** 一期在 WK-S1 中删除：
+   - **代码：** `server/src/modules/knowledge/postgres-knowledge-service.ts`，以及 `main.ts`、`run-orchestration-service.ts`、`orchestration-dependencies.ts` 中的装配；`postgres-run-repository.ts` 写 `run_knowledge_sources` 的逻辑改为写 `run_knowledge_citations`；`postgres-conversation-repository.ts` 的来源查询改读新表；
+   - **测试：** 删除 `m4-enterprise-knowledge.integration.test.ts`，其覆盖的权限过滤、注入和引用页脚改由第 12 节基于 WeKnora 替身的用例覆盖；
+   - **数据库：** 新迁移删除 `run_knowledge_sources`、`knowledge_chunks`、`knowledge_documents`、`knowledge_sources` 及其中的两篇合成文档，删除 `knowledge_search_terms`、`knowledge_split_chunks`、`knowledge_index_document` 函数与相关触发器。迁移 0008、0081 本身不修改；
+   - **历史引用：** 旧执行在 `run_knowledge_sources` 中的引用记录随表删除、不迁移，它们引用的都是合成测试文档。这些旧执行的详情页不再显示“企业知识”来源，回答正文中已追加的引用页脚保持不变。
 
 ## 7. 不可用处理
 
@@ -287,7 +291,7 @@ DSH 适配器拼装“# 企业知识上下文”（`dsh-acp-runtime-adapter.ts`�
 
 | 切片 | 内容 | 依赖 |
 | --- | --- | --- |
-| WK-S1 | 知识端口抽象；WeKnora 客户端与契约测试；引用快照表、页脚和员工端来源改读快照；不可用处理与提示词标记；三个权限码；连接、知识库、部门授权数据表；归属部门；按部门计算可见知识库；会话所选知识库数据表与检索范围（5.7）；WK18 提示词；Agent 岗位角色校验与现有 Agent 的迁移（5.6）；知识提示词增加防注入约束；Manifest `knowledge_status`。连接先用配置写入，知识库先用脚本创建，供联调使用。 | ORG-S1 |
+| WK-S1 | 知识端口抽象；删除原有知识库模块、旧表与旧测试（第 6 节第 6 条）；WeKnora 客户端与契约测试；引用快照表、页脚和员工端来源改读快照；不可用处理与提示词标记；三个权限码；连接、知识库、部门授权数据表；归属部门；按部门计算可见知识库；会话所选知识库数据表与检索范围（5.7）；WK18 提示词；Agent 岗位角色校验与现有 Agent 的迁移（5.6）；知识提示词增加防注入约束；Manifest `knowledge_status`。连接先用配置写入，知识库先用脚本创建，供联调使用。 | ORG-S1 |
 | WK-S2 | 员工端“知识库”（先原型）：主导航入口、个人空间对话框“添加知识库”与会话标签、知识库列表与新建、文档列表、文件上传、预览下载、文档维护、授权调整；服务端权限校验与审计；AGENTS.md 导航规则、验收目录与导航 E2E 同步。 | WK-S1 |
 | WK-S3 | 管理端“企业知识库”（先原型）：连接配置、全部知识库与跨部门授权、覆盖查询、健康状态。 | WK-S1 |
 | WK-S4 | 一期 P2 真实环境验收；功能规则、数据模型、架构总览同步。 | WK-S2、WK-S3 |
@@ -296,9 +300,9 @@ DSH 适配器拼装“# 企业知识上下文”（`dsh-acp-runtime-adapter.ts`�
 
 **上线前提与影响：**
 
-- ORG-S1 上线时清空了所有本地员工的部门文本，员工都从“未分配部门”开始。按 WK7，没有部门就没有可见知识库；按 WK1，本地知识也不再作为生产备用。因此生产切换前，管理员必须先完成员工的部门分配，再由知识管理员建库上传或由平台管理员授权，否则切换后所有人都检索不到企业知识。
+- ORG-S1 上线时清空了所有本地员工的部门文本，员工都从“未分配部门”开始。按 WK7，没有部门就没有可见知识库；按 WK1，原有知识库模块已删除，没有备用。因此生产切换前，管理员必须先完成员工的部门分配，再由知识管理员建库上传或由平台管理员授权，否则切换后所有人都检索不到企业知识。
 - 切换后知识不再自动注入（WK4）：员工需要在个人对话中添加知识库才会检索；一期团队空间、定时任务和验证运行都不再获得企业知识，直到二期（2.1）。上线时在员工端给出一次性说明，并在 Agent 的示例问题或欢迎语中引导添加知识库。
-- OIDC 模式下没有部门，切换后这类企业的员工不再获得企业知识。现在他们按 Data Scope 可以检索本地知识。按组织架构方案 OD1，AI Hub/OIDC 登录计划删除，接受这一影响。
+- OIDC 模式下没有部门，切换后这类企业的员工不再获得企业知识。现在他们在机制上可以按 Data Scope 检索原有知识库中的合成文档，实际没有业务知识。按组织架构方案 OD1，AI Hub/OIDC 登录计划删除，接受这一影响。
 
 ## 14. 需同步修改的规则与文档
 
@@ -307,7 +311,7 @@ DSH 适配器拼装“# 企业知识上下文”（`dsh-acp-runtime-adapter.ts`�
 - [AGENTS.md](../../AGENTS.md) 与[项目空间方案第 12 节](project-space-plan.md)：A 工作模式主导航改为“新对话、Skill 广场、AI 同事、项目空间、知识库、定时任务”六个入口，B 协作模式改为“对话、AI 同事、群组、知识库、定时任务”五个入口；同步 `e2e/catalog/` 对应分册、`e2e/personal-workbench.spec.ts` 与 `e2e/collab-mode.spec.ts`。
 - [功能规则](../development/feature-rules.md)：新增“企业知识库”一节，写明一期生效的决策与第 5 节规则；3.3、3.4 注明一期团队空间不检索企业知识（二期改为按成员交集与所选知识库）；第 7 节注明一期定时任务不检索企业知识（二期可选择知识库，WK19）；第 8 节注明知识由岗位角色的 `knowledge:view` 约束（WK14），不再由数据范围约束；第 9 节“与生产一致”注明一期验证运行不检索企业知识（二期验证案例可指定知识库，5.8）；第 10 节组织架构注明知识库按部门授权是 OD10 的例外。
 - [内部端口与契约](../development/internal-ports.md) 与 [Runtime Manifest Schema](../development/runtime-manifest.schema.json)：新增 `knowledge_status`。
-- [数据模型](data-model.md)：登记第 10 节新表，注明本地知识表只用于测试。
+- [数据模型](data-model.md)：登记第 10 节新表，删除原有知识表、检索分段与相关触发器的条目。
 - [架构总览](../development/overview.md)：第 311 行一带的知识检索说明改为 WeKnora；第 10 节登记已交付和未验收事项。
 - [开发与测试](../development/development.md)：增加 WeKnora 测试替身与契约测试的运行方式。
 - 验收目录 `e2e/catalog/`：新建“企业知识库”分册，覆盖第 12 节的旅程，并登记到 `e2e/TEST-CATALOG.md`。
