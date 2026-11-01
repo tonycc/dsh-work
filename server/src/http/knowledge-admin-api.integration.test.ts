@@ -109,6 +109,23 @@ test('KB-ADM-01 连接配置：API Key 加密保存、只返回末四位，测�
   const initial = await ok('GET', adminBase)
   assert.equal(initial.connection.credentialSource, 'deployment')
   assert.equal(initial.connection.enabled, true)
+  assert.equal(initial.connection.credentialReadable, true)
+
+  // 管理员只改嵌入模型（Key 仍来自部署配置）：重启时部署配置不覆盖管理端的修改。
+  await ok('PUT', `${adminBase}/connection`, { baseUrl: doubleUrl, embeddingModelId: 'embed-x', enabled: true })
+  await connection.ensureBootstrap()
+  assert.equal((await ok('GET', adminBase)).connection.embeddingModelId, 'embed-x')
+
+  // 已保存的 Key 只发往已保存的地址：测试或保存其他地址必须填写 Key。
+  const other = new WeKnoraDouble()
+  const otherUrl = await other.start()
+  try {
+    assert.deepEqual(await ok('POST', `${adminBase}/connection/test`, { baseUrl: otherUrl }), { ok: false, reason: 'api_key_required' })
+    assert.equal((await api(ADMIN, 'PUT', `${adminBase}/connection`, { baseUrl: otherUrl, enabled: true })).status, 422)
+    assert.equal(other.requests.length, 0, '其他地址没有收到任何请求')
+  } finally {
+    await other.stop()
+  }
 
   // 测试连接：填写的错误 Key 返回认证失败分类，已保存的配置可用。
   assert.deepEqual(await ok('POST', `${adminBase}/connection/test`, { apiKey: 'wrong-weknora-key-0000' }), { ok: false, reason: 'auth' })
@@ -142,11 +159,18 @@ test('KB-ADM-01 连接配置：API Key 加密保存、只返回末四位，测�
   await ok('PUT', `${adminBase}/connection`, { baseUrl: doubleUrl, embeddingModelId: 'embed-2', enabled: true })
   assert.equal((await ok('GET', '/api/workbench/v1/knowledge/status', undefined, EMPLOYEE)).enabled, true)
 
+  // 未配置凭据主密钥时不能保存 API Key。
+  const withoutMasterKey = new PostgresKnowledgeAdminService(database, new PostgresOperationsService(database), connection)
+  await assert.rejects(
+    withoutMasterKey.updateConnection(ADMIN, { baseUrl: doubleUrl, apiKey: 'another-weknora-key-1', enabled: true }),
+    (error: { status?: number }) => error.status === 409,
+  )
+
   const [audit] = await database<{ count: number; leaked: number }[]>`
     select count(*)::int as count, count(*) filter (where safe_context::text like ${`%${double.apiKey}%`})::int as leaked
       from audit_events where tenant_id = ${tenantId} and action = 'knowledge.connection.update'
   `
-  assert.equal(audit?.count, 4)
+  assert.equal(audit?.count, 5)
   assert.equal(audit?.leaked, 0, '审计不含 API Key')
 })
 

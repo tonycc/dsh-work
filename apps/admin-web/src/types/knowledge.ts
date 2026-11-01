@@ -13,7 +13,7 @@ export interface KnowledgeAdminConnection {
 }
 
 export interface KnowledgeAdminOverview {
-  connection: KnowledgeAdminConnection
+  connection: KnowledgeAdminConnection & { credentialReadable: boolean }
   health: { retrievals24h: number; unavailable24h: number }
 }
 

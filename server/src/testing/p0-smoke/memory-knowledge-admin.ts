@@ -29,6 +29,7 @@ export class MemoryKnowledgeAdminStore {
     configured: true, baseUrl: 'https://weknora.internal.example.com', credentialHint: '7f3a',
     credentialExpiresAt: '2027-05-01T00:00:00.000Z', credentialSource: 'admin', embeddingModelId: 'bge-m3', enabled: true,
     lastSuccessAt: new Date(Date.now() - 2 * 60_000).toISOString(), lastFailureAt: '2026-11-01T13:14:00.000Z', lastFailureReason: 'timeout',
+    credentialReadable: true,
   }
   private bases: MemoryAdminBase[] = [
     { id: 'kb-plan', name: '计划组工作手册', description: '排产、补货与例会规范', ownerDepartmentId: 'dept-plan', documentCount: 4, updatedAt: '2026-10-28T09:30:00Z', embeddingModelId: 'bge-m3',

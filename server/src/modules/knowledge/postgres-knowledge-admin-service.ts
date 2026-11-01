@@ -25,7 +25,10 @@ export interface KnowledgeAdminConnection {
 }
 
 export interface KnowledgeAdminOverview {
-  connection: KnowledgeAdminConnection
+  connection: KnowledgeAdminConnection & {
+    /** 启用且能读出 API Key（主密钥正确、凭据完整）时为 true；为 false 时检索与员工端实际不可用。 */
+    credentialReadable: boolean
+  }
   /** 最近 24 小时调用了 WeKnora 的执行数与其中不可用的次数（按 Manifest 的 knowledge_status 统计）。 */
   health: { retrievals24h: number; unavailable24h: number }
 }
@@ -122,6 +125,7 @@ export class PostgresKnowledgeAdminService {
         lastSuccessAt: row?.lastSuccessAt?.toISOString() ?? null,
         lastFailureAt: row?.lastFailureAt?.toISOString() ?? null,
         lastFailureReason: row?.lastFailureReason ?? null,
+        credentialReadable: row?.status === 'active' ? (await this.connection.client()) !== null : false,
       },
       health: { retrievals24h: health?.retrievals ?? 0, unavailable24h: health?.unavailable ?? 0 },
     }
@@ -143,6 +147,8 @@ export class PostgresKnowledgeAdminService {
     const apiKey = input.apiKey?.trim() || undefined
     const existing = await this.row()
     if (!existing && !apiKey) throw invalidRequest('首次配置须填写 API Key')
+    // 已保存的 Key 只发往已保存的地址：更换地址必须同时填写 Key，避免把 Key 带到新主机。
+    if (existing && !apiKey && baseUrl !== existing.baseUrl) throw invalidRequest('更换 WeKnora 地址时须重新填写 API Key')
     if (apiKey && !this.credentials) throw stateConflict('服务未配置 DSH_CREDENTIAL_MASTER_KEY，不能保存 API Key')
     await this.database.begin(async transaction => {
       if (apiKey) {
@@ -186,13 +192,13 @@ export class PostgresKnowledgeAdminService {
   /** 用填写的（或已保存的）地址与 Key 调用 WeKnora 的知识库列表接口，只返回结果与原因分类。 */
   async testConnection(actorId: string, input: { baseUrl?: string; apiKey?: string }): Promise<{ ok: boolean; reason: string | null }> {
     await requirePlatformAdminActor(this.database, actorId)
-    const client = await this.connection.probeClient({
+    const probe = await this.connection.probeClient({
       ...(input.baseUrl ? { baseUrl: normalizeBaseUrl(input.baseUrl) } : {}),
       ...(input.apiKey?.trim() ? { apiKey: input.apiKey.trim() } : {}),
     })
-    if (!client) return { ok: false, reason: 'not_configured' }
+    if ('reason' in probe) return { ok: false, reason: probe.reason }
     try {
-      await client.listKnowledgeBases()
+      await probe.client.listKnowledgeBases()
       return { ok: true, reason: null }
     } catch (error) {
       if (error instanceof WeKnoraUnavailableError) return { ok: false, reason: error.reason }

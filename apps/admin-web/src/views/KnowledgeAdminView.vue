@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { Plus, Search } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -27,6 +27,7 @@ const filter = ref<'all' | 'attention'>('all')
 const failureLabels: Record<string, string> = {
   timeout: '超时', network: '连接失败', auth: '认证失败', rate_limited: '限流', server: '服务错误',
   protocol: '响应格式不符', request_rejected: '请求被拒绝', not_configured: '尚未配置',
+  api_key_required: '更换地址须重新填写 API Key',
 }
 
 const connection = computed(() => overview.value?.connection)
@@ -171,6 +172,10 @@ async function removeBase(base: KnowledgeAdminBase) {
 // —— 连接配置 ——
 const connectionForm = reactive({ baseUrl: '', apiKey: '', editingKey: false, credentialExpiresAt: '', embeddingModelId: '', enabled: true })
 const testResult = ref<{ ok: boolean; reason: string | null } | null>(null)
+/** 已保存的 Key 只发往已保存的地址：改了地址就必须重新填写 Key。 */
+const addressChanged = computed(() => Boolean(connection.value?.configured)
+  && connectionForm.baseUrl.trim().replace(/\/+$/, '') !== (connection.value?.baseUrl ?? ''))
+watch(addressChanged, changed => { if (changed) connectionForm.editingKey = true })
 const modelChanged = computed(() => Boolean(connection.value?.configured)
   && (connectionForm.embeddingModelId.trim() || null) !== (connection.value?.embeddingModelId ?? null))
 function resetConnectionForm() {
@@ -220,6 +225,14 @@ onMounted(load)
       show-icon
       title="知识库只按部门授权。员工只能授给自己所属的部门；授给其他部门或全公司在这里操作。WeKnora 的问答与 Agent 不使用，回答始终由 DSH 生成。"
     />
+    <el-alert
+      v-if="connection?.enabled && !connection.credentialReadable"
+      type="error"
+      :closable="false"
+      show-icon
+      title="API Key 无法读取：企业知识库实际不可用，员工端已隐藏入口、对话不检索。"
+      description="请检查服务的凭据主密钥 DSH_CREDENTIAL_MASTER_KEY 是否更换或缺失，然后在连接配置中重新填写 API Key。"
+    />
     <el-alert v-if="unavailableBanner" type="error" :closable="false" show-icon :title="unavailableBanner">
       <template #default>请检查连接配置；知识库与授权仍可查看和调整。</template>
     </el-alert>
@@ -227,7 +240,7 @@ onMounted(load)
     <section class="metric-grid" aria-label="企业知识库概况">
       <article class="metric-card">
         <div class="metric-label">连接状态</div>
-        <div class="metric-value">{{ !connection?.configured ? '未配置' : connection.enabled ? '已启用' : '已停用' }}</div>
+        <div class="metric-value">{{ !connection?.configured ? '未配置' : !connection.enabled ? '已停用' : connection.credentialReadable ? '已启用' : 'Key 不可读' }}</div>
         <div class="metric-detail">最近成功 {{ formatDateTime(connection?.lastSuccessAt ?? null) }}</div>
       </article>
       <article class="metric-card">
@@ -310,6 +323,7 @@ onMounted(load)
             <el-form label-position="top" class="knowledge-connection__form" :disabled="!canManage" @submit.prevent="saveConnection">
               <el-form-item label="WeKnora 地址" required>
                 <el-input v-model="connectionForm.baseUrl" placeholder="https://weknora.internal.example.com" aria-label="WeKnora 地址" />
+                <span v-if="addressChanged" class="knowledge-admin__hint knowledge-admin__hint--warn">更换地址须重新填写 API Key：已保存的 Key 不会发往新地址。</span>
                 <span class="knowledge-admin__hint">只开放平台服务端到 WeKnora 后端 API 的访问，员工浏览器不直接访问。</span>
               </el-form-item>
               <el-form-item label="API Key" :required="!connection?.configured">
@@ -418,13 +432,14 @@ onMounted(load)
 </template>
 
 <style scoped>
-.knowledge-admin__warn { color: #b45309; }
+.knowledge-admin__warn { color: var(--color-warning-strong); }
 .knowledge-admin__tabs { width: 100%; }
 .knowledge-admin__tabs :deep(.el-tab-pane) { display: flex; flex-direction: column; gap: 12px; }
 .knowledge-admin__create { margin-left: auto; }
 .knowledge-admin__name { display: block; color: var(--color-text-heading); font-weight: 600; }
 .knowledge-admin__desc { color: var(--color-text-secondary); font-size: var(--font-size-caption); }
 .knowledge-admin__tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.knowledge-admin__hint--warn { color: var(--color-warning-strong); }
 .knowledge-admin__hint { margin: 0; color: var(--color-text-secondary); font-size: var(--font-size-caption); line-height: 1.6; }
 .knowledge-connection { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; }
 .knowledge-connection__form { display: flex; flex: 2 1 420px; flex-direction: column; gap: 4px; max-width: 640px; }

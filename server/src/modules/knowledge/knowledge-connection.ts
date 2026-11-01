@@ -41,8 +41,8 @@ export class PostgresKnowledgeConnection {
   }
 
   /**
-   * 启动时按部署配置写入连接：还没有连接时新建；连接仍由部署配置管理（管理员未保存过 API Key）时同步地址与
-   * 嵌入模型。管理员保存过配置后，部署配置不再覆盖。
+   * 启动时按部署配置写入连接：还没有连接时新建；连接仍由部署配置管理（管理员从未保存过）时同步地址与嵌入模型。
+   * 管理员保存过任何配置后，部署配置不再覆盖，重启不会撤销管理端的修改。
    */
   async ensureBootstrap(): Promise<void> {
     if (!this.bootstrap) return
@@ -57,6 +57,7 @@ export class PostgresKnowledgeConnection {
              updated_by = excluded.updated_by,
              updated_at = now()
        where external_knowledge_connections.credential_ref is null
+         and external_knowledge_connections.updated_by = 'deployment-config'
     `
   }
 
@@ -80,13 +81,23 @@ export class PostgresKnowledgeConnection {
     return (await this.row())?.embeddingModelId ?? undefined
   }
 
-  /** 用给定的地址与 Key（缺省为已保存的）建立一次性客户端，供“测试连接”使用。 */
-  async probeClient(input: { baseUrl?: string; apiKey?: string }): Promise<WeKnoraClient | null> {
+  /**
+   * 用给定的地址与 Key（缺省为已保存的）建立一次性客户端，供“测试连接”使用。已保存的 Key 只发往已保存的地址：
+   * 测试其他地址必须同时填写 Key，避免把只写不读的 Key 发到输错或不受信任的主机。
+   */
+  async probeClient(input: { baseUrl?: string; apiKey?: string }): Promise<{ client: WeKnoraClient } | { reason: 'not_configured' | 'api_key_required' }> {
     const row = await this.row()
     const baseUrl = input.baseUrl ?? row?.baseUrl
+    if (!baseUrl) return { reason: 'not_configured' }
+    if (!input.apiKey && row && baseUrl !== row.baseUrl) return { reason: 'api_key_required' }
     const apiKey = input.apiKey ?? (row ? await this.apiKey(row) : undefined)
-    if (!baseUrl || !apiKey) return null
-    return new WeKnoraClient({ baseUrl, apiKey, timeoutMs: this.bootstrap?.timeoutMs, fetch: this.bootstrap?.fetch })
+    if (!apiKey) return { reason: 'not_configured' }
+    return { client: new WeKnoraClient({ baseUrl, apiKey, timeoutMs: this.bootstrap?.timeoutMs, fetch: this.bootstrap?.fetch }) }
+  }
+
+  /** 已保存的地址；用于判断更换地址时是否填写了新 Key。 */
+  async savedBaseUrl(): Promise<string | undefined> {
+    return (await this.row())?.baseUrl
   }
 
   private async row(): Promise<ConnectionRow | undefined> {

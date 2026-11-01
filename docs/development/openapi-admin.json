@@ -3586,8 +3586,9 @@
               "enabled",
               "lastSuccessAt",
               "lastFailureAt",
-              "lastFailureReason"
-            ],
+              "lastFailureReason",
+                "credentialReadable"
+              ],
             "properties": {
               "configured": {
                 "type": "boolean"
@@ -3643,7 +3644,11 @@
                   "string",
                   "null"
                 ]
-              }
+              },
+                "credentialReadable": {
+                  "type": "boolean",
+                  "description": "启用且能读出 API Key 时为 true；为 false 时检索与员工端实际不可用。"
+                }
             }
           },
           "health": {

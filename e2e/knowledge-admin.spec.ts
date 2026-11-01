@@ -68,8 +68,11 @@ test('KB-ADM-P0: 连接配置只显示 Key 末四位，修改嵌入模型与停�
   await page.getByRole('tab', { name: '连接配置' }).click()
   await expect(page.getByText('•••• 7f3a')).toBeVisible()
   await expect(page.getByLabel('新的 API Key')).toHaveCount(0)
-  await page.getByRole('button', { name: '更换' }).click()
+  // 改了地址：已保存的 Key 不会发往新地址，自动要求重新填写。
+  await page.getByLabel('WeKnora 地址').fill('https://weknora-new.internal.example.com')
+  await expect(page.getByText('更换地址须重新填写 API Key：已保存的 Key 不会发往新地址。')).toBeVisible()
   await expect(page.getByLabel('新的 API Key')).toBeVisible()
+  await page.getByLabel('WeKnora 地址').fill('https://weknora.internal.example.com')
 
   await page.getByLabel('统一嵌入模型 ID').fill('bge-m3-v2')
   await expect(page.getByText(/现有 5 个知识库仍按原模型检索/)).toBeVisible()
