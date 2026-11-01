@@ -147,6 +147,17 @@ const router = createRouter({
       meta: { title: '工作空间', requiresAdmin: true, requiredPermission: 'adminRead' },
     },
     {
+      path: '/knowledge',
+      name: 'knowledge',
+      component: () => import('@/views/KnowledgeAdminView.vue'),
+      meta: {
+        title: '企业知识库',
+        subtitle: '管理 WeKnora 连接、全部知识库与跨部门授权。文档由归属部门的员工在员工端上传和维护。',
+        requiresAdmin: true,
+        requiredPermission: 'adminRead',
+      },
+    },
+    {
       path: '/organization',
       name: 'organization',
       component: () => import('@/views/OrganizationView.vue'),

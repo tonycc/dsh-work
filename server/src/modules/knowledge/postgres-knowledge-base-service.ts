@@ -16,7 +16,8 @@ import {
   type KnowledgeStatusView,
   type SessionKnowledgeBaseView,
 } from './knowledge-base-service.ts'
-import { WeKnoraClient, WeKnoraRequestError, WeKnoraUnavailableError, type WeKnoraDocument } from './weknora-client.ts'
+import type { PostgresKnowledgeConnection } from './knowledge-connection.ts'
+import { WeKnoraRequestError, WeKnoraUnavailableError, type WeKnoraClient, type WeKnoraDocument } from './weknora-client.ts'
 
 const tenantId = 'tenant-dsh-work'
 const levelRank: Record<KnowledgeLevel, number> = { none: 0, view: 1, docs: 2, bases: 3 }
@@ -36,11 +37,6 @@ interface GrantRow extends KnowledgeGrantView {
   knowledgeBaseId: string
 }
 
-export interface PostgresKnowledgeBaseServiceConfig {
-  connectionId: string
-  client: WeKnoraClient | null
-  embeddingModelId?: string
-}
 
 /**
  * 员工端知识库与文档管理（weknora-knowledge-plan 第 5、8 节）。权限全部由平台校验：查看要求
@@ -50,12 +46,12 @@ export interface PostgresKnowledgeBaseServiceConfig {
 export class PostgresKnowledgeBaseService implements KnowledgeBaseService {
   private readonly database: DatabaseClient
   private readonly audit: AuditTrail
-  private readonly config: PostgresKnowledgeBaseServiceConfig
+  private readonly connection: PostgresKnowledgeConnection
 
-  constructor(database: DatabaseClient, audit: AuditTrail, config: PostgresKnowledgeBaseServiceConfig) {
+  constructor(database: DatabaseClient, audit: AuditTrail, connection: PostgresKnowledgeConnection) {
     this.database = database
     this.audit = audit
-    this.config = config
+    this.connection = connection
   }
 
   async status(userId: string): Promise<KnowledgeStatusView> {
@@ -63,13 +59,9 @@ export class PostgresKnowledgeBaseService implements KnowledgeBaseService {
     return { enabled: level !== 'none' && await this.connectionActive(), level }
   }
 
-  /** 与执行前检索同一口径：未配置或连接被停用时，员工端不显示入口、接口回答不可用。 */
+  /** 与执行前检索同一口径：未配置、凭据不可读或连接被停用时，员工端不显示入口、接口回答不可用。 */
   private async connectionActive(): Promise<boolean> {
-    if (!this.config.client) return false
-    const [row] = await this.database<{ status: string }[]>`
-      select status from external_knowledge_connections where tenant_id = ${tenantId} and id = ${this.config.connectionId}
-    `
-    return row?.status === 'active'
+    return (await this.connection.client()) !== null
   }
 
   /** 新建与授权可选的部门：本人直接所属的部门，不含根部门（WK11）。 */
@@ -103,7 +95,7 @@ export class PostgresKnowledgeBaseService implements KnowledgeBaseService {
     if (description.length > 200) throw invalidRequest('说明不能超过 200 个字')
     const department = (await this.myDepartments(userId, { excludeRoot: true })).find(item => item.id === input.ownerDepartmentId)
     if (!department) throw invalidRequest('归属部门必须是你所属的部门（不能是根部门）')
-    const embeddingModelId = this.config.embeddingModelId
+    const embeddingModelId = await this.connection.embeddingModelId()
     if (!embeddingModelId) throw dependencyUnavailable('尚未配置统一嵌入模型，暂不能新建知识库，请联系管理员')
     const created = await this.call(client => client.createKnowledgeBase({ name, description, embeddingModelId }))
     const id = `knowledge-base-${randomUUID()}`
@@ -113,7 +105,7 @@ export class PostgresKnowledgeBaseService implements KnowledgeBaseService {
           insert into external_knowledge_bases (
             id, tenant_id, connection_id, external_id, name, description, owner_department_id, embedding_model_id, created_by, updated_by
           ) values (
-            ${id}, ${tenantId}, ${this.config.connectionId}, ${created.id}, ${name}, ${description}, ${department.id},
+            ${id}, ${tenantId}, ${this.connection.connectionId}, ${created.id}, ${name}, ${description}, ${department.id},
             ${embeddingModelId}, ${userId}, ${userId}
           )
         `
@@ -124,7 +116,7 @@ export class PostgresKnowledgeBaseService implements KnowledgeBaseService {
       })
     } catch (error) {
       // 平台侧没有记录就不要留下孤立的 WeKnora 知识库。
-      await this.config.client?.deleteKnowledgeBase(created.id).catch(() => undefined)
+      await (await this.connection.client())?.deleteKnowledgeBase(created.id).catch(() => undefined)
       throw error
     }
     await this.record(userId, 'knowledge.base.create', id, `新建知识库“${name}”，可见部门：${department.name}${input.includeDescendants === false ? '' : '（含下级）'}`)
@@ -340,7 +332,7 @@ export class PostgresKnowledgeBaseService implements KnowledgeBaseService {
              ) as "ownedByMe"
         from external_knowledge_bases kb
         join org_departments d on d.tenant_id = kb.tenant_id and d.id = kb.owner_department_id
-       where kb.tenant_id = ${tenantId} and kb.status = 'active' and kb.connection_id = ${this.config.connectionId}
+       where kb.tenant_id = ${tenantId} and kb.status = 'active' and kb.connection_id = ${this.connection.connectionId}
          and kb.id in (${visibleBaseIdsSql(this.database, userId)})
        order by kb.created_at, kb.id
     `
@@ -473,8 +465,8 @@ export class PostgresKnowledgeBaseService implements KnowledgeBaseService {
 
   /** 把 WeKnora 的错误翻译成员工能理解的提示，不带 API Key、请求或响应正文。 */
   private async call<T>(operation: (client: WeKnoraClient) => Promise<T>, messages: { conflict?: string } = {}): Promise<T> {
-    const client = this.config.client
-    if (!client) throw dependencyUnavailable('企业知识库尚未配置')
+    const client = await this.connection.client()
+    if (!client) throw dependencyUnavailable('企业知识库尚未配置或已停用')
     try {
       return await operation(client)
     } catch (error) {

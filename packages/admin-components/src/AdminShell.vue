@@ -16,6 +16,7 @@ import {
   Menu,
   Monitor,
   Notebook,
+  Reading,
   OfficeBuilding,
   PieChart,
   SwitchButton,
@@ -80,6 +81,13 @@ const navigationGroups: Array<{ label: string; items: NavigationItem[] }> = [
       { label: 'Session 列表', path: '/sessions', icon: ChatDotRound, permission: 'admin' },
       { label: '模型治理', path: '/model-governance', icon: Key, permission: 'admin' },
       { label: '模型用量', path: '/model-usage', icon: PieChart, permission: 'admin' },
+    ],
+  },
+  {
+    // 企业知识库（weknora-knowledge-plan WK-S3）：独立分组，不放在组织与权限下。
+    label: '知识库',
+    items: [
+      { label: '企业知识库', path: '/knowledge', icon: Reading, permission: 'admin' },
     ],
   },
   {

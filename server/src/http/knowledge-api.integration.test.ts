@@ -5,8 +5,7 @@ import { after, before, beforeEach, test } from 'node:test'
 import type { ApiAudience, RequestIdentity } from '../modules/identity/types.ts'
 import { PostgresOperationsService } from '../modules/admin/application/postgres-operations-service.ts'
 import { PostgresKnowledgeBaseService } from '../modules/knowledge/postgres-knowledge-base-service.ts'
-import { WeKnoraClient } from '../modules/knowledge/weknora-client.ts'
-import { WeKnoraKnowledgeProvider } from '../modules/knowledge/weknora-knowledge-provider.ts'
+import { PostgresKnowledgeConnection } from '../modules/knowledge/knowledge-connection.ts'
 import { createThrowawayDatabase, type ThrowawayDatabase } from '../infrastructure/postgres/test-database.ts'
 import type { DatabaseClient } from '../infrastructure/postgres/database.ts'
 import { WeKnoraDouble } from '../testing/weknora-double.ts'
@@ -89,12 +88,10 @@ before(async () => {
   throwaway = await createThrowawayDatabase({ namePrefix: 'dsh_work_knowledge_api_test', maxConnections: 4 })
   database = throwaway.client
   doubleUrl = await double.start()
-  const provider = new WeKnoraKnowledgeProvider(database, { baseUrl: doubleUrl, apiKey: double.apiKey, embeddingModelId: 'embed-1' })
-  await provider.ensureConnection()
-  connectionId = provider.connectionId
-  const service = new PostgresKnowledgeBaseService(database, new PostgresOperationsService(database), {
-    connectionId, client: new WeKnoraClient({ baseUrl: doubleUrl, apiKey: double.apiKey }), embeddingModelId: 'embed-1',
-  })
+  const connection = new PostgresKnowledgeConnection(database, { bootstrap: { baseUrl: doubleUrl, apiKey: double.apiKey, embeddingModelId: 'embed-1' } })
+  await connection.ensureBootstrap()
+  connectionId = connection.connectionId
+  const service = new PostgresKnowledgeBaseService(database, new PostgresOperationsService(database), connection)
   const router = new Router({
     authenticateApi: (request: IncomingMessage, audience: ApiAudience) =>
       Promise.resolve(identity(String(request.headers['x-test-user']), audience)),

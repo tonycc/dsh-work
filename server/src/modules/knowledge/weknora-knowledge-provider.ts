@@ -4,7 +4,8 @@ import type { DatabaseClient } from '../../infrastructure/postgres/database.ts'
 import type { RuntimeKnowledgeDocument } from '../runtime/runtime-types.ts'
 import { knowledgeViewLevel, visibleBaseIdsSql } from './knowledge-access.ts'
 import type { KnowledgeCitation, KnowledgeProvider, KnowledgeResolution } from './knowledge-provider.ts'
-import { WeKnoraClient, WeKnoraRequestError, WeKnoraUnavailableError, type WeKnoraFailureReason } from './weknora-client.ts'
+import type { PostgresKnowledgeConnection } from './knowledge-connection.ts'
+import { WeKnoraRequestError, WeKnoraUnavailableError, type WeKnoraClient, type WeKnoraFailureReason } from './weknora-client.ts'
 
 const tenantId = 'tenant-dsh-work'
 const maxContextDocuments = 3
@@ -17,14 +18,6 @@ export const minimumRelevanceScore = 0.2
 const maxExcerptLength = 4000
 const maxSkippedBases = 20
 const documentIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
-
-export interface WeKnoraConnectionConfig {
-  baseUrl: string
-  apiKey: string
-  embeddingModelId?: string
-  timeoutMs?: number
-  fetch?: typeof fetch
-}
 
 interface SelectedBaseRow {
   id: string
@@ -39,31 +32,14 @@ interface SelectedBaseRow {
  * （4.4 第 4 步）。员工与 Agent 都须具备查看级别（5.1、WK14）。
  */
 export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
-  readonly connectionId = 'knowledge-connection-weknora'
+  readonly connectionId: string
   private readonly database: DatabaseClient
-  private readonly client: WeKnoraClient
-  private readonly config: WeKnoraConnectionConfig
+  private readonly connection: PostgresKnowledgeConnection
 
-  constructor(database: DatabaseClient, config: WeKnoraConnectionConfig) {
+  constructor(database: DatabaseClient, connection: PostgresKnowledgeConnection) {
     this.database = database
-    this.config = config
-    this.client = new WeKnoraClient(config)
-  }
-
-  /** WK-S1：连接由部署配置写入，API Key 不入库，只保存末四位提示（WK-S3 改为管理端配置）。 */
-  async ensureConnection(): Promise<void> {
-    await this.database`
-      insert into external_knowledge_connections (id, tenant_id, base_url, credential_hint, embedding_model_id, updated_by)
-      values (${this.connectionId}, ${tenantId}, ${this.config.baseUrl},
-              ${this.config.apiKey.length > 8 ? this.config.apiKey.slice(-4) : null},
-              ${this.config.embeddingModelId ?? null}, 'deployment-config')
-      on conflict (tenant_id) do update
-         set base_url = excluded.base_url,
-             credential_hint = excluded.credential_hint,
-             embedding_model_id = excluded.embedding_model_id,
-             updated_by = excluded.updated_by,
-             updated_at = now()
-    `
+    this.connection = connection
+    this.connectionId = connection.connectionId
   }
 
   async resolveContext(input: {
@@ -107,6 +83,9 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
     if (!levels?.connection || !levels.localIdentity || !levels.employee || !levels.agent) {
       return { status: 'not_applicable', ...empty }
     }
+    // 连接按管理端当前配置读取（地址与加密的 API Key），保存后下一次执行即生效。
+    const client = await this.connection.client()
+    if (!client) return { status: 'not_applicable', ...empty }
 
     const selected = await this.database<SelectedBaseRow[]>`
       select kb.id, kb.external_id as "externalId", kb.name,
@@ -125,7 +104,7 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
     if (!scope.length) return { status: 'skipped', documents: [], citations: [], skippedBases }
 
     try {
-      const documents = await this.retrieve(input.query, scope)
+      const documents = await this.retrieve(client, input.query, scope)
       await this.recordSuccess()
       return { status: 'ok', ...documents, skippedBases }
     } catch (error) {
@@ -157,9 +136,9 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
     return sections.length ? `${answer.trim()}\n\n${sections.join('\n\n')}` : answer
   }
 
-  private async retrieve(query: string, scope: SelectedBaseRow[]): Promise<Omit<KnowledgeResolution, 'status' | 'skippedBases'>> {
+  private async retrieve(client: WeKnoraClient, query: string, scope: SelectedBaseRow[]): Promise<Omit<KnowledgeResolution, 'status' | 'skippedBases'>> {
     const byExternalId = new Map(scope.map(base => [base.externalId, base]))
-    const results = await this.client.search({
+    const results = await client.search({
       query,
       knowledgeBaseIds: scope.map(base => base.externalId),
       matchCount: searchMatchCount,
@@ -175,7 +154,7 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
       best.set(result.knowledge_id, result)
     }
     if (!best.size) return { documents: [], citations: [] }
-    const metadata = new Map((await this.client.knowledgeBatch([...best.keys()])).map(item => [item.id, item]))
+    const metadata = new Map((await client.knowledgeBatch([...best.keys()])).map(item => [item.id, item]))
     const documents: RuntimeKnowledgeDocument[] = []
     const citations: KnowledgeCitation[] = []
     for (const result of best.values()) {

@@ -2864,6 +2864,626 @@
           }
         }
       }
+    },
+    "/knowledge": {
+      "get": {
+        "operationId": "getKnowledgeAdminOverview",
+        "summary": "企业知识库连接与健康状态",
+        "description": "需要管理读权限。API Key 只返回末四位与到期时间。",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/KnowledgeAdminOverview"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/knowledge/connection": {
+      "put": {
+        "operationId": "updateKnowledgeConnection",
+        "summary": "保存连接配置",
+        "description": "只有平台管理员。apiKey 省略时保留已保存的 Key；Key 用凭据主密钥加密保存。保存后检索与员工端立即生效。",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/KnowledgeAdminOverview"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "baseUrl",
+                  "enabled"
+                ],
+                "properties": {
+                  "baseUrl": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "apiKey": {
+                    "type": "string",
+                    "writeOnly": true
+                  },
+                  "credentialExpiresAt": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time"
+                  },
+                  "embeddingModelId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 128
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/knowledge/connection/test": {
+      "post": {
+        "operationId": "testKnowledgeConnection",
+        "summary": "测试连接",
+        "description": "用填写的或已保存的地址与 Key 调用 WeKnora，返回结果与原因分类（not_configured、timeout、network、auth、rate_limited、server、protocol、request_rejected）。",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "required": [
+                            "ok",
+                            "reason"
+                          ],
+                          "properties": {
+                            "ok": {
+                              "type": "boolean"
+                            },
+                            "reason": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "baseUrl": {
+                    "type": "string"
+                  },
+                  "apiKey": {
+                    "type": "string",
+                    "writeOnly": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/knowledge/departments": {
+      "get": {
+        "operationId": "listKnowledgeAdminDepartments",
+        "summary": "可选部门",
+        "description": "全部有效部门，带上级路径；根部门显示为“全公司”。",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/KnowledgeAdminDepartment"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/knowledge/bases": {
+      "get": {
+        "operationId": "listKnowledgeAdminBases",
+        "summary": "全部知识库",
+        "description": "所有经平台创建、未删除的知识库，标出无可见部门、归属部门已删除与需重建；WeKnora 不可用时 statsAvailable 为 false。",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/KnowledgeAdminBaseList"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createKnowledgeAdminBase",
+        "summary": "新建知识库",
+        "description": "只有平台管理员。归属部门为任意有效的非根部门，默认授给它并包含下级（管理员授予），带统一嵌入模型。",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/KnowledgeAdminBaseList"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "ownerDepartmentId"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 60
+                  },
+                  "description": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "ownerDepartmentId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/knowledge/bases/{knowledgeBaseId}": {
+      "patch": {
+        "operationId": "updateKnowledgeAdminBaseOwner",
+        "summary": "修改归属部门",
+        "description": "只有平台管理员；归属部门须为有效的非根部门，不改变可见部门。",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/KnowledgeAdminBaseList"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "knowledgeBaseId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "ownerDepartmentId"
+                ],
+                "properties": {
+                  "ownerDepartmentId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteKnowledgeAdminBase",
+        "summary": "删除知识库",
+        "description": "只有平台管理员；员工端立即不可见、不再检索。",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/KnowledgeAdminBaseList"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "knowledgeBaseId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/knowledge/bases/{knowledgeBaseId}/grants": {
+      "post": {
+        "operationId": "addKnowledgeAdminGrant",
+        "summary": "授给部门",
+        "description": "只有平台管理员；可授给任意有效部门（含根部门），同一部门重复授予幂等。",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/KnowledgeAdminBaseList"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "knowledgeBaseId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "departmentId"
+                ],
+                "properties": {
+                  "departmentId": {
+                    "type": "string"
+                  },
+                  "includeDescendants": {
+                    "type": "boolean",
+                    "default": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/knowledge/bases/{knowledgeBaseId}/grants/{grantId}": {
+      "delete": {
+        "operationId": "revokeKnowledgeAdminGrant",
+        "summary": "撤销授权",
+        "description": "只有平台管理员；可以撤销任何授权，包括员工授予的，也可以撤到没有授权。",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/KnowledgeAdminBaseList"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "knowledgeBaseId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "grantId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -2947,6 +3567,231 @@
       }
     },
     "schemas": {
+      "KnowledgeAdminOverview": {
+        "type": "object",
+        "required": [
+          "connection",
+          "health"
+        ],
+        "properties": {
+          "connection": {
+            "type": "object",
+            "required": [
+              "configured",
+              "baseUrl",
+              "credentialHint",
+              "credentialExpiresAt",
+              "credentialSource",
+              "embeddingModelId",
+              "enabled",
+              "lastSuccessAt",
+              "lastFailureAt",
+              "lastFailureReason",
+                "credentialReadable"
+              ],
+            "properties": {
+              "configured": {
+                "type": "boolean"
+              },
+              "baseUrl": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "credentialHint": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "credentialExpiresAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "credentialSource": {
+                "enum": [
+                  "admin",
+                  "deployment",
+                  null
+                ]
+              },
+              "embeddingModelId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "lastSuccessAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "lastFailureAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "lastFailureReason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+                "credentialReadable": {
+                  "type": "boolean",
+                  "description": "启用且能读出 API Key 时为 true；为 false 时检索与员工端实际不可用。"
+                }
+            }
+          },
+          "health": {
+            "type": "object",
+            "required": [
+              "retrievals24h",
+              "unavailable24h"
+            ],
+            "properties": {
+              "retrievals24h": {
+                "type": "integer"
+              },
+              "unavailable24h": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      },
+      "KnowledgeAdminDepartment": {
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "root"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "root": {
+            "type": "boolean"
+          }
+        }
+      },
+      "KnowledgeAdminBaseList": {
+        "type": "object",
+        "required": [
+          "items",
+          "statsAvailable"
+        ],
+        "properties": {
+          "statsAvailable": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "name",
+                "description",
+                "ownerDepartmentId",
+                "ownerDepartmentName",
+                "ownerDepartmentActive",
+                "grants",
+                "documentCount",
+                "updatedAt",
+                "embeddingModelId",
+                "needsRebuild"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "ownerDepartmentId": {
+                  "type": "string"
+                },
+                "ownerDepartmentName": {
+                  "type": "string"
+                },
+                "ownerDepartmentActive": {
+                  "type": "boolean"
+                },
+                "grants": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "id",
+                      "departmentId",
+                      "departmentName",
+                      "includeDescendants",
+                      "grantedVia"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "departmentId": {
+                        "type": "string"
+                      },
+                      "departmentName": {
+                        "type": "string"
+                      },
+                      "includeDescendants": {
+                        "type": "boolean"
+                      },
+                      "grantedVia": {
+                        "enum": [
+                          "employee",
+                          "admin"
+                        ]
+                      }
+                    }
+                  }
+                },
+                "documentCount": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "updatedAt": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "embeddingModelId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "needsRebuild": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      },
       "ToolDefinition": {
         "type": "object",
         "required": ["id", "allowedRoleIds", "allowedRoles", "dataScopes"],
