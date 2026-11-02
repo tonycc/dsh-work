@@ -1,7 +1,7 @@
 import type { DatabaseClient } from '../../infrastructure/postgres/database.ts'
 import type { PostgresEncryptedCredentialStore } from '../tool/postgres-encrypted-credential-store.ts'
 import { invalidRequest } from '../../domain/request-errors.ts'
-import { WeKnoraClient } from './weknora-client.ts'
+import { WeKnoraClient, weknoraServiceRoot } from './weknora-client.ts'
 
 const tenantId = 'tenant-dsh-work'
 export const knowledgeConnectionId = 'knowledge-connection-weknora'
@@ -106,7 +106,7 @@ export class PostgresKnowledgeConnection {
     return { client: new WeKnoraClient({ baseUrl, apiKey, timeoutMs: this.bootstrap?.timeoutMs, fetch: this.bootstrap?.fetch }) }
   }
 
-  /** 已保存的地址；用于判断更换地址时是否填写了新 Key。 */
+  /** 已保存的地址（规范化后，规则调整前保存的旧格式与现行格式可直接比较）；用于判断测试的是否是已保存的连接。 */
   async savedBaseUrl(): Promise<string | undefined> {
     const saved = (await this.row())?.baseUrl
     return saved === undefined ? undefined : comparableBaseUrl(saved)
@@ -144,7 +144,8 @@ export function normalizeBaseUrl(value: string): string {
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') throw invalidRequest('WeKnora 地址必须以 http 或 https 开头')
   if (url.username || url.password) throw invalidRequest('WeKnora 地址不能包含账号或密码')
-  return url.toString().replace(/\/+$/, '').replace(/\/api\/v1$/, '')
+  if (url.search || url.hash) throw invalidRequest('WeKnora 地址不能包含查询参数或锚点')
+  return weknoraServiceRoot(url.toString())
 }
 
 /** API Key 去掉首尾空白；中间含空白时视为填写错误（HTTP 头不能携带），返回 400。 */

@@ -203,7 +203,7 @@ export class PostgresKnowledgeAdminService {
     try {
       await probe.client.listKnowledgeBases()
       // 测的是已保存的连接时记一次成功，“暂不可用”提示随之消失，不必等下一次检索。
-      if (!apiKey && (!baseUrl || baseUrl === await this.connection.savedBaseUrl())) {
+      if (!apiKey && (!baseUrl || sameBaseUrl(baseUrl, await this.connection.savedBaseUrl() ?? ''))) {
         await this.database`
           update external_knowledge_connections set last_success_at = now()
            where tenant_id = ${tenantId} and id = ${this.connection.connectionId}

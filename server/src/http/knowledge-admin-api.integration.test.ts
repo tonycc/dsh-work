@@ -168,6 +168,7 @@ test('KB-ADM-01 连接配置：API Key 加密保存、只返回末四位，测�
   assert.equal((await api(ADMIN, 'PUT', `${adminBase}/connection`, { baseUrl: doubleUrl, apiKey: 'key with\nnewline', enabled: true })).status, 422)
 
   assert.equal((await api(ADMIN, 'PUT', `${adminBase}/connection`, { baseUrl: 'ftp://weknora', enabled: true })).status, 422)
+  assert.equal((await api(ADMIN, 'PUT', `${adminBase}/connection`, { baseUrl: `${doubleUrl}/api/v1?x=1`, enabled: true })).status, 422, '地址不能带查询参数')
   assert.equal((await api(READER, 'PUT', `${adminBase}/connection`, { baseUrl: doubleUrl, enabled: true })).status, 403)
   assert.equal((await api(READER, 'GET', adminBase)).status, 200)
 
