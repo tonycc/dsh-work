@@ -206,6 +206,8 @@ async function testConnection() {
     apiKey: connectionForm.editingKey ? connectionForm.apiKey.trim() || undefined : undefined,
   }), '测试已完成')
   if (result) testResult.value = result
+  // 测试已保存的连接成功时服务端会记录成功时间：刷新概览，让“暂不可用”提示与健康状态随之更新。
+  if (result?.ok) overview.value = await adminApi.getKnowledgeOverview().catch(() => overview.value)
 }
 async function saveConnection() {
   const result = await run(() => adminApi.updateKnowledgeConnection({

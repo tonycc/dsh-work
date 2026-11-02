@@ -1,7 +1,7 @@
 # 企业知识库接入 WeKnora 方案
 
-**状态：** 实施中：WK-S1（检索链路）、WK-S2（员工端）、WK-S3（管理端）已达到代码级；WK-S4（真实环境验收）未实施，一期全部交付前生产不切换。<br>
-**更新日期：** 2026-11-01<br>
+**状态：** 一期已实施：WK-S1（检索链路）、WK-S2（员工端）、WK-S3（管理端）已合入；WK-S4 已于 2026-11-02 在本机 WeKnora v0.9.0 完成真实环境验收（结果见 WK-S4 PR）。生产切换前在受控环境按发布流程复核重排序配置与最低相关度。<br>
+**更新日期：** 2026-11-02<br>
 **依据：** 现有知识模块（迁移 0008、0081；`server/src/modules/knowledge/`）、执行链路（`attempt-dispatcher.ts`、`manifest-compiler.ts`、`dsh-acp-runtime-adapter.ts`、`run-event-recorder.ts`）、[组织架构方案](org-structure-plan.md)、[功能规则](../development/feature-rules.md)；WeKnora v0.9.0（2026-10-29，MIT）公开文档与源码（`website-docs/04-api/`、`internal/types/search.go`、`internal/middleware/auth.go`）。
 
 ## 1. 现状与目标
