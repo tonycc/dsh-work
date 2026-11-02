@@ -178,6 +178,11 @@ test('KB-ADM-01 连接配置：API Key 加密保存、只返回末四位，测�
   await ok('PUT', `${adminBase}/connection`, { baseUrl: doubleUrl, embeddingModelId: 'embed-2', enabled: true })
   assert.equal((await ok('GET', '/api/workbench/v1/knowledge/status', undefined, EMPLOYEE)).enabled, true)
 
+  // 规则调整前保存的地址（带 /api/v1）：规范化后相同，不算更换地址，不要求重填 Key。
+  await database`update external_knowledge_connections set base_url = ${`${doubleUrl}/api/v1`}`
+  assert.deepEqual(await ok('POST', `${adminBase}/connection/test`, { baseUrl: doubleUrl }), { ok: true, reason: null })
+  assert.equal((await ok('PUT', `${adminBase}/connection`, { baseUrl: doubleUrl, embeddingModelId: 'embed-2', enabled: true })).connection.baseUrl, doubleUrl)
+
   // 未配置凭据主密钥时不能保存 API Key。
   const withoutMasterKey = new PostgresKnowledgeAdminService(database, new PostgresOperationsService(database), connection)
   await assert.rejects(
@@ -189,7 +194,7 @@ test('KB-ADM-01 连接配置：API Key 加密保存、只返回末四位，测�
     select count(*)::int as count, count(*) filter (where safe_context::text like ${`%${double.apiKey}%`})::int as leaked
       from audit_events where tenant_id = ${tenantId} and action = 'knowledge.connection.update'
   `
-  assert.equal(audit?.count, 6)
+  assert.equal(audit?.count, 7)
   assert.equal(audit?.leaked, 0, '审计不含 API Key')
 })
 

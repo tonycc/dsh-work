@@ -100,7 +100,7 @@ export class PostgresKnowledgeConnection {
     const row = await this.row()
     const baseUrl = input.baseUrl ?? row?.baseUrl
     if (!baseUrl) return { reason: 'not_configured' }
-    if (!input.apiKey && row && baseUrl !== row.baseUrl) return { reason: 'api_key_required' }
+    if (!input.apiKey && row && !sameBaseUrl(baseUrl, row.baseUrl)) return { reason: 'api_key_required' }
     const apiKey = input.apiKey ?? (row ? await this.apiKey(row) : undefined)
     if (!apiKey) return { reason: 'not_configured' }
     return { client: new WeKnoraClient({ baseUrl, apiKey, timeoutMs: this.bootstrap?.timeoutMs, fetch: this.bootstrap?.fetch }) }
@@ -108,7 +108,8 @@ export class PostgresKnowledgeConnection {
 
   /** 已保存的地址；用于判断更换地址时是否填写了新 Key。 */
   async savedBaseUrl(): Promise<string | undefined> {
-    return (await this.row())?.baseUrl
+    const saved = (await this.row())?.baseUrl
+    return saved === undefined ? undefined : comparableBaseUrl(saved)
   }
 
   private async row(): Promise<ConnectionRow | undefined> {
@@ -151,4 +152,17 @@ export function normalizeApiKey(value: string | undefined): string | undefined {
   const apiKey = value?.trim() || undefined
   if (apiKey && /\s/.test(apiKey)) throw invalidRequest('API Key 不能包含空格或换行')
   return apiKey
+}
+
+/** 规范化后比较，避免规则调整前保存的地址（如带 /api/v1）被当成“更换了地址”。 */
+export function sameBaseUrl(left: string, right: string): boolean {
+  return comparableBaseUrl(left) === comparableBaseUrl(right)
+}
+
+function comparableBaseUrl(value: string): string {
+  try {
+    return normalizeBaseUrl(value)
+  } catch {
+    return value
+  }
 }
