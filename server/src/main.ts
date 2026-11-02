@@ -621,7 +621,8 @@ async function start() {
   try {
     const preset = loadSkillCreatorPreset(resolve(projectRoot, 'server/config/agent-presets'))
     const seeded = await seedSkillCreatorDraft(database, agents, agentValidation, preset)
-    if (seeded.status === 'created' || seeded.reason === 'no_admin') console.info('skill creator preset', seeded)
+    if (seeded.status !== 'skipped') console.info('skill creator preset', seeded)
+    else if (seeded.reason === 'no_admin') console.warn('skill creator preset skipped: 没有可用的本地平台管理员，下次启动重试')
   } catch (error) {
     console.warn('skill creator preset skipped:', error instanceof Error ? error.message : error)
   }
