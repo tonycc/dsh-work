@@ -131,7 +131,7 @@ async function loadDepartmentOptions() {
     const build = (parentId: string | null): DepartmentOption[] => (children.get(parentId) ?? [])
       .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, 'zh-CN'))
       .map(department => ({ value: department.id, label: department.name, children: build(department.id) }))
-    departmentOptions.value = organization.available ? build(null) : []
+    departmentOptions.value = build(null)
   } catch (cause) {
     departmentOptions.value = []
     departmentLoadError.value = cause instanceof Error ? cause.message : '部门列表加载失败'

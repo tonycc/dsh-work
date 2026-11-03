@@ -5,6 +5,7 @@ import { after, before, test } from 'node:test'
 import type { ApiAudience, RequestIdentity } from '../modules/identity/types.ts'
 import { loadIdentityConfiguration } from '../modules/identity/config.ts'
 import { LocalAuthService } from '../modules/identity/local-auth-service.ts'
+import { IdentitySessionRepository } from '../modules/identity/session-repository.ts'
 import { IdentityAdministrationService } from '../modules/identity/administration-service.ts'
 import { PostgresAuthorizationService } from '../modules/authorization/postgres-authorization-service.ts'
 import { PostgresOrganizationService, type OrganizationSnapshot } from '../modules/organization/postgres-organization-service.ts'
@@ -13,7 +14,7 @@ import { registerOrganizationRoutes } from './admin/organization-routes.ts'
 import { Router } from './router.ts'
 
 // ORG-01～ORG-04（e2e/catalog/organization.md，企业组织架构方案 ORG-S1）：部门树维护与约束、
-// 成员与主部门、新建账号选择部门、上线清空历史部门文本、AI Hub 登录模式下不可用。
+// 成员与主部门、新建账号选择部门、上线清空历史部门文本、AI Hub 登录与目录同步不覆盖部门。
 // ORG-05～ORG-07（ORG-S2）：按部门授予角色、展开与重算、管理类角色限制、来源显示。
 
 const tenantId = 'tenant-dsh-work'
@@ -25,8 +26,6 @@ let auth: LocalAuthService
 let server: Server
 let baseUrl = ''
 let adminId = ''
-let unavailableBaseUrl = ''
-let unavailableServer: Server
 
 function identity(userId: string, audience: ApiAudience, permissions: string[]): RequestIdentity {
   return {
@@ -114,16 +113,12 @@ before(async () => {
   adminId = (await auth.bootstrap({ username: 'org.admin@example.invalid', name: '组织管理员', password })).userId
 
   const router = new Router({ authenticateApi: authenticator })
-  registerOrganizationRoutes(router, new PostgresOrganizationService(database.client, { available: true }))
+  registerOrganizationRoutes(router, new PostgresOrganizationService(database.client))
   ;({ server, url: baseUrl } = await listen(router))
-
-  const oidcRouter = new Router({ authenticateApi: authenticator })
-  registerOrganizationRoutes(oidcRouter, new PostgresOrganizationService(database.client, { available: false }))
-  ;({ server: unavailableServer, url: unavailableBaseUrl } = await listen(oidcRouter))
 })
 
 after(async () => {
-  for (const running of [server, unavailableServer]) {
+  for (const running of [server]) {
     if (running?.listening) await new Promise<void>((resolve, reject) => running.close(error => error ? reject(error) : resolve()))
   }
   await database.dispose()
@@ -134,7 +129,6 @@ test('ORG-03 迁移创建唯一根部门并清空历史部门文本；初始化�
   const roots = await database.client`select id from org_departments where tenant_id = ${tenantId} and parent_id is null`
   assert.equal(roots.length, 1)
   const view = await snapshot()
-  assert.equal(view.available, true)
   assert.equal(root(view).name, tenant!.name)
   const auditBefore = await database.client`select 1 from audit_events where action like 'organization.%'`
   await snapshot()
@@ -302,31 +296,23 @@ test('ORG-03 新建账号从部门树选择部门；不接受自由填写的部�
   assert.equal(orphan, undefined, '部门无效时不创建账号')
 })
 
-test('ORG-04 AI Hub 登录模式下组织架构不可用，写操作不落库', async () => {
-  const oidcConfig = loadIdentityConfiguration({
-    DSH_WORK_AUTH_MODE: 'local', DSH_WORK_SESSION_SECRET: 'organization-integration-secret-32-characters',
-    DSH_WORK_WORKBENCH_ORIGINS: 'http://localhost:4174', DSH_WORK_ADMIN_ORIGINS: 'http://localhost:4180',
-  })
-  assert.equal(oidcConfig.mode, 'local')
-  const oidcAuth = new LocalAuthService(oidcConfig, database.client, { organizationAvailable: false })
-  const department = root(await snapshot())
-  await assert.rejects(
-    oidcAuth.createAccount({ username: 'org.oidc.dept@example.invalid', password, name: 'AI Hub 模式员工', departmentId: department.id }, adminId),
-    (error: { code?: string }) => error.code === 'organization_unavailable',
-  )
-  const [created] = await database.client`
-    select 1 from local_user_credentials where tenant_id = ${tenantId} and username = 'org.oidc.dept@example.invalid'
-  `
-  assert.equal(created, undefined, 'AI Hub 模式下带部门建号被拒绝，不创建账号')
-
-  const view = (await api('GET', base, { url: unavailableBaseUrl })).body.data!
-  assert.deepEqual(view, { available: false, departments: [], members: [], employees: [], grants: [], roles: [], roleAssignments: [] })
+test('ORG-04 AI Hub 账号登录与目录同步不覆盖组织架构维护的部门', async () => {
   const rootId = root(await snapshot()).id
-  const [before] = await database.client<{ count: number }[]>`select count(*)::integer as count from org_departments`
-  const rejected = await api('POST', `${base}/departments`, { url: unavailableBaseUrl, body: { parentId: rootId, name: '不可用模式部门' } })
-  assert.equal(rejected.status, 409)
-  const [afterwards] = await database.client<{ count: number }[]>`select count(*)::integer as count from org_departments`
-  assert.equal(afterwards!.count, before!.count)
+  const department = await createDepartment(rootId, 'AI Hub 员工所在部门')
+  const identities = new IdentitySessionRepository(database.client)
+  const external = {
+    externalUserId: 'org-aihub-user', subject: 'org-aihub-subject', displayName: 'AI Hub 员工',
+    email: 'org.aihub@example.invalid', businessUser: true, status: 'ACTIVE',
+  }
+  const { userId } = await identities.synchronizeIdentity(external)
+  assert.equal(await displayDepartment(userId), null, '首次同步不写入 AI Hub 的组织名')
+  await ok('POST', `${base}/departments/${department.id}/members`, { userIds: [userId] })
+  assert.equal(await displayDepartment(userId), 'AI Hub 员工所在部门')
+
+  await identities.synchronizeIdentity({ ...external, displayName: 'AI Hub 员工（改名）' })
+  assert.equal(await displayDepartment(userId), 'AI Hub 员工所在部门', '再次同步不覆盖组织架构维护的部门')
+  const view = await snapshot()
+  assert.deepEqual(membershipsOf(view, userId), [{ departmentId: department.id, userId, primary: true }])
 })
 
 async function departmentRoleRows(userId: string) {
