@@ -30,7 +30,13 @@ test('the repository preset loads', () => {
 test('a release bundle without the preset directory fails startup with a clear error', () => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-work-agent-presets-'))
   try {
-    assert.throws(() => loadSkillCreatorPreset(root), /Skill 创建专家预置定义无效.*无法读取 preset\.json/)
+    assert.throws(() => loadSkillCreatorPreset(root), (error: Error) => {
+      // 缺文件只报一次读取失败，不能被误报成“不是有效 JSON”。
+      assert.match(error.message, /^Skill 创建专家预置定义无效（[^）]+）：无法读取 preset\.json/)
+      assert.doesNotMatch(error.message, /不是有效 JSON/)
+      assert.equal(error.message.split('预置定义无效').length, 2)
+      return true
+    })
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -40,6 +46,7 @@ test('a missing SOUL.md, invalid JSON or missing field is rejected', () => {
   for (const [files, message] of [
     [{ 'preset.json': validJson }, /无法读取 SOUL\.md/],
     [{ 'preset.json': '{', 'SOUL.md': '# 职责' }, /不是有效 JSON/],
+    [{ 'preset.json': 'null', 'SOUL.md': '# 职责' }, /preset\.json 必须是 JSON 对象/],
     [{ 'preset.json': JSON.stringify({ ...JSON.parse(validJson), testPrompts: [] }), 'SOUL.md': '# 职责' }, /testPrompts 必须是非空字符串数组/],
     [{ 'preset.json': JSON.stringify({ ...JSON.parse(validJson), name: '' }), 'SOUL.md': '# 职责' }, /缺少 name/],
     [{ 'preset.json': validJson, 'SOUL.md': '  \n' }, /SOUL\.md 为空/],

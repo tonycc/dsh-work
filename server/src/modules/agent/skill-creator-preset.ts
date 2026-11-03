@@ -34,12 +34,15 @@ export function loadSkillCreatorPreset(root: string): SkillCreatorPreset {
       return fail(`无法读取 ${file}：${error instanceof Error ? error.message : String(error)}`)
     }
   }
-  let raw: Record<string, unknown>
+  const json = read('preset.json')
+  let parsed: unknown
   try {
-    raw = JSON.parse(read('preset.json')) as Record<string, unknown>
+    parsed = JSON.parse(json)
   } catch (error) {
     return fail(`preset.json 不是有效 JSON：${error instanceof Error ? error.message : String(error)}`)
   }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return fail('preset.json 必须是 JSON 对象')
+  const raw = parsed as Record<string, unknown>
   const text = (key: string) => typeof raw[key] === 'string' && raw[key].trim() ? raw[key] : fail(`缺少 ${key}`)
   const list = (key: string) => {
     const value = raw[key]

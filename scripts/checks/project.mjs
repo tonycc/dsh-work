@@ -78,6 +78,7 @@ export function checkProject(check) {
   ])
   checkMigrationNumbers(check)
   checkDataModelCoversTables(check)
+  checkReleaseBundlesServerConfig(check)
   checkDatabaseTestsAreNamed(check)
 }
 
@@ -136,8 +137,13 @@ function checkDataModelCoversTables(check) {
     check.assert(model.includes(`\`${table}\``), `docs/design/data-model.md 未说明数据表 ${table}`)
   }
 
-  // 服务启动读取的 server/config 文件必须被发布打包脚本复制（Agent 预置曾因漏复制而未随版本交付）。
-  for (const file of uncoveredConfigFiles(check.root)) {
+}
+
+/** 服务启动读取的 server/config 文件必须被发布打包脚本复制（Agent 预置曾因漏复制而未随版本交付）。 */
+function checkReleaseBundlesServerConfig(check) {
+  const script = check.read('scripts/release/build-release.sh')
+  if (!script) return
+  for (const file of uncoveredConfigFiles(check.root, script)) {
     check.assert(false, `scripts/release/build-release.sh 未把 ${file} 复制进发布包`)
   }
 }

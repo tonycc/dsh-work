@@ -21,9 +21,10 @@ const config = {
   'server/config/builtin-skills/file-analysis/SKILL.md': '',
   'server/config/agent-presets/skill-creator/preset.json': '{}',
   'server/config/agent-presets/skill-creator/SOUL.md': '',
+  'server/config/dsh/.DS_Store': '',
 }
 
-test('server config files exclude tests', () => {
+test('server config files exclude tests and hidden files', () => {
   const root = fixture(config)
   try {
     assert.deepEqual(serverConfigFiles(root), [
@@ -56,6 +57,22 @@ test('a config directory the release script does not copy is reported (v2026.11.
       'cp -R "${project_root}/server/config/agent-presets" "${bundle}/server/config/agent-presets"',
     ].join('\n'))
     assert.deepEqual(uncoveredConfigFiles(root), [])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a commented-out copy line does not count as covered', () => {
+  const root = fixture({
+    ...config,
+    'scripts/release/build-release.sh': [
+      'cp "${project_root}/server/config/dsh/runtime-lock.json" "${bundle}/server/config/dsh/"',
+      'cp -R "${project_root}/server/config/builtin-skills" "${bundle}/server/config/builtin-skills"',
+      '# cp -R "${project_root}/server/config/agent-presets" "${bundle}/server/config/agent-presets"',
+    ].join('\n'),
+  })
+  try {
+    assert.equal(uncoveredConfigFiles(root).length, 2)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
