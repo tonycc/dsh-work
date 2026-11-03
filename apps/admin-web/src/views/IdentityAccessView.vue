@@ -28,7 +28,7 @@ const accountDialogOpen = ref(false)
 const accountTarget = ref<IdentityUserSummary>()
 const resettingPassword = ref(false)
 const accountForm = reactive({ username: '', password: '', name: '', departmentId: '', email: '' })
-// 新建账号时从组织架构部门树选择部门（成为主部门）；AI Hub 登录模式下组织架构不可用，不显示该字段。
+// 新建账号时从组织架构部门树选择部门（成为主部门），可以不选。
 const departmentOptions = ref<DepartmentOption[]>([])
 const departmentLoadError = ref('')
 const accountPasswordError = ref('')

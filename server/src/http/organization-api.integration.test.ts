@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import { createServer, type Server } from 'node:http'
 import { after, before, test } from 'node:test'
 
@@ -118,9 +119,7 @@ before(async () => {
 })
 
 after(async () => {
-  for (const running of [server]) {
-    if (running?.listening) await new Promise<void>((resolve, reject) => running.close(error => error ? reject(error) : resolve()))
-  }
+  if (server?.listening) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
   await database.dispose()
 })
 
@@ -313,6 +312,16 @@ test('ORG-04 AI Hub 账号登录与目录同步不覆盖组织架构维护的部
   assert.equal(await displayDepartment(userId), 'AI Hub 员工所在部门', '再次同步不覆盖组织架构维护的部门')
   const view = await snapshot()
   assert.deepEqual(membershipsOf(view, userId), [{ departmentId: department.id, userId, primary: true }])
+
+  // 迁移 0116：以前同步写进来的旧组织名统一为主部门名称，没有主部门的清空。
+  const stale = await identities.synchronizeIdentity({ ...external, externalUserId: 'org-aihub-stale', subject: 'org-aihub-stale', displayName: '旧同步员工' })
+  await database.client`update users set department_id = 'AI Hub 平台团队' where tenant_id = ${tenantId} and id in ${database.client([stale.userId, userId])}`
+  const migration = await readFile(new URL('../../migrations/0116_org_department_display_resync.sql', import.meta.url), 'utf8')
+  await database.client.unsafe(migration)
+  assert.equal(await displayDepartment(stale.userId), null, '没有主部门的 AI Hub 老账号清空旧组织名')
+  assert.equal(await displayDepartment(userId), 'AI Hub 员工所在部门', '有主部门的显示主部门名称')
+  await database.client.unsafe(migration)
+  assert.equal(await displayDepartment(userId), 'AI Hub 员工所在部门', '迁移可重复执行')
 })
 
 async function departmentRoleRows(userId: string) {
