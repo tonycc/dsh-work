@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { strToU8, zipSync, type Zippable } from 'fflate'
 import { parseSkillBundle, parseSkillPackage, toSkillPackageArtifact } from './skill-package.ts'
-import { buildSkillInstallationPlan, normalizePythonPackageName } from './skill-installation-plan.ts'
+import { buildSkillInstallationPlan, missingPythonDependencies, normalizePythonPackageName } from './skill-installation-plan.ts'
 import { continueSkillSource, isPublicAddress, parseSkillSource } from './skill-source.ts'
 import { SkillArtifactStore } from './skill-artifact-store.ts'
 import { LocalObjectStorage } from '../../infrastructure/storage/local-object-storage.ts'
@@ -162,4 +162,45 @@ test('continues only an explicit selection from a known source', () => {
   assert.equal(continueSkillSource('谢谢', previous), null)
   assert.equal(continueSkillSource('不要安装 wanted', previous), null)
   assert.equal(continueSkillSource('选择 wanted', null), null)
+})
+
+const pythonIndex = { stdlib: ['csv', 'os', 'sys', 'datetime', 'json'], modules: { pandas: ['pandas'], openpyxl: ['openpyxl'], docx: ['python-docx'] } }
+const scripted = (script: string, extra: Record<string, string> = {}) => parseSkillPackage(zipSync({
+  'SKILL.md': strToU8(sampleSkill), 'references/example.txt': strToU8('marker'), 'scripts/run.py': strToU8(script),
+  ...Object.fromEntries(Object.entries(extra).map(([path, content]) => [path, strToU8(content)])),
+}))
+const planFor = (pkg: ReturnType<typeof parseSkillPackage>, pythonModules: typeof pythonIndex | null = pythonIndex) =>
+  buildSkillInstallationPlan({ root: pkg, packages: [pkg], edges: [] }, { pythonSandboxAvailable: true, pythonPackages: ['pandas', 'openpyxl', 'python-docx'], pythonModules })
+
+test('undeclared third-party imports become dependencies checked against the execution image', () => {
+  const pkg = scripted('import os, csv\nimport pandas as pd\nfrom docx import Document\nfrom helpers import util\n"""\nimport fake\n"""\n', { 'scripts/helpers.py': 'import json\n' })
+  assert.deepEqual(pkg.requirements.filter(item => item.name.startsWith('python-import:')).map(item => item.name).sort(),
+    ['python-import:csv', 'python-import:docx', 'python-import:json', 'python-import:os', 'python-import:pandas'], 'parsing scans imports but skips local modules and strings')
+  const plan = planFor(pkg)
+  assert.equal(plan.compatibility.status, 'compatible')
+  const root = plan.packages[0]!
+  assert.deepEqual(root.requirements.filter(item => item.name.startsWith('python-')).map(item => [item.name, item.status]).sort(),
+    [['python-package:pandas', 'resolved'], ['python-package:python-docx', 'resolved'], ['python-runtime', 'resolved']])
+  assert.match(root.requirements.find(item => item.name === 'python-package:python-docx')!.evidence, /由 import 识别：docx/)
+})
+
+test('a required import the image cannot satisfy makes the plan incompatible; an optional one only warns', () => {
+  const missing = planFor(scripted('import sklearn\n'))
+  assert.equal(missing.compatibility.status, 'incompatible')
+  assert.match(missing.compatibility.issues.map(issue => issue.message).join('\n'), /执行镜像中没有 Python 模块 sklearn（scripts\/run\.py 中 import）/)
+  const optional = planFor(scripted('try:\n    import xlrd\nexcept ImportError:\n    xlrd = None\n'))
+  assert.equal(optional.compatibility.status, 'needs_review')
+  assert.ok(optional.compatibility.issues.some(issue => issue.code === 'python_optional_import_unavailable' && /xlrd/.test(issue.message)))
+  // A declared distribution covers its import; nothing is added twice.
+  const declared = planFor(scripted('import pandas\n', { 'requirements.txt': 'pandas\n' }))
+  assert.deepEqual(declared.packages[0]!.requirements.filter(item => item.name.startsWith('python-package:')).map(item => item.name), ['python-package:pandas'])
+  // Without the image's module index imports wait for review instead of passing silently.
+  assert.equal(planFor(scripted('import pandas\n'), null).packages[0]!.requirements.find(item => item.name === 'python-import:pandas')?.status, 'needs_review')
+})
+
+test('stored versions report what the current image lacks, including undeclared imports', () => {
+  const files = [{ path: 'scripts/run.py', content: 'import pandas\nimport sklearn\ntry:\n    import xlrd\nexcept ImportError:\n    pass\n' }]
+  const requirements = [{ type: 'external' as const, name: 'python-package:openpyxl', status: 'resolved' as const, evidence: 'requirements.txt' }]
+  assert.deepEqual(missingPythonDependencies({ requirements, files, packages: ['pandas'], modules: pythonIndex }), ['openpyxl', '模块 sklearn'])
+  assert.deepEqual(missingPythonDependencies({ requirements, files, packages: ['pandas', 'openpyxl'], modules: null }), [], 'without the module index only declared packages are checked')
 })

@@ -182,9 +182,52 @@ function parseSkillFiles(files: Record<string, Uint8Array>, specialPaths: Set<st
       }
     }
     if (packaged.some(file => /(?:^|\/)pyproject\.toml$/i.test(file.path))) requirements.push({ type: 'external', name: 'pyproject-dependencies', status: 'needs_review', evidence: 'pyproject.toml 需要与固定镜像核对' })
+    for (const found of scanPythonImports(packaged)) {
+      requirements.push({ type: 'external', name: `${found.optional ? 'python-optional-import' : 'python-import'}:${found.module}`, status: 'needs_review', evidence: found.path })
+    }
   }
   const compatibility = compatibilityFor(requirements)
   return { ...metadata, toolIds: [...tools], files: packaged, requirements, compatibility, archiveSha256, sha256: skillPackageContentHash(packaged) }
+}
+
+/**
+ * Top-level modules the package's Python files import, found by reading the source (never executing it).
+ * Imports at column 0 are required; indented ones (inside `try`, `if` or a function) are treated as optional.
+ * Relative imports, `__future__`, the package's own modules and lines inside triple-quoted strings are skipped. One entry per module, first file wins;
+ * a module imported both ways counts as required.
+ */
+export function scanPythonImports(files: Array<{ path: string; content: string }>) {
+  const local = new Set<string>()
+  for (const file of files.filter(item => item.path.endsWith('.py'))) {
+    const parts = file.path.slice(0, -'.py'.length).split('/')
+    for (const part of parts) local.add(part)
+  }
+  const found = new Map<string, { module: string; path: string; optional: boolean }>()
+  const record = (module: string, path: string, optional: boolean) => {
+    const top = module.split('.')[0]!
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(top) || top === '__future__' || local.has(top)) return
+    const existing = found.get(top)
+    if (!existing) found.set(top, { module: top, path, optional })
+    else if (existing.optional && !optional) found.set(top, { module: top, path, optional: false })
+  }
+  for (const file of files.filter(item => item.path.endsWith('.py'))) {
+    let quote: string | null = null
+    for (const line of file.content.split(/\r?\n/)) {
+      // Lines inside a triple-quoted string (docstrings, usage text) are not code.
+      const startsInString = quote !== null
+      for (const match of line.matchAll(/"""|'''/g)) {
+        if (quote === null) quote = match[0]
+        else if (quote === match[0]) quote = null
+      }
+      if (startsInString) continue
+      const optional = /^\s/.test(line)
+      const from = line.match(/^\s*from\s+([A-Za-z_][\w.]*)\s+import\b/)
+      if (from) { record(from[1]!, file.path, optional); continue }
+      const plain = line.match(/^\s*import\s+([\w.]+(?:\s+as\s+\w+)?(?:\s*,\s*[\w.]+(?:\s+as\s+\w+)?)*)\s*(?:#.*)?$/)
+      if (plain) for (const item of plain[1]!.split(',')) record(item.trim().split(/\s+/)[0]!, file.path, optional)
+    }
+  }
+  return [...found.values()].sort((left, right) => left.module.localeCompare(right.module))
 }
 
 /** Resolve same-archive Skill dependencies without executing package content. */

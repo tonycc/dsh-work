@@ -495,6 +495,34 @@ test('discarding works per installation graph and refuses drafts it does not own
   await assert.rejects(skills.discardDraft({ skillId: submittedSkill.skillId!, actor }), (error: Error & { code?: string }) => error.code === 'skill_submission_review_required')
 })
 
+test('published script Skills are rechecked against the execution image and refused at run time when it lacks a package', { skip: real }, async () => {
+  const skills = new PostgresSkillService(database.client, operations, artifactStore)
+  const modules = { stdlib: ['os', 'sys'], modules: { pandas: ['pandas'] } }
+  const installer = new AdminSkillInstallationService(database.client, orchestration, new PostgresAuthorizationService(database.client), fixtureAcquire, true, ['pandas'], artifactStore, undefined, modules)
+  // pandas is imported but never declared: the plan records it as a dependency found from the import.
+  const zip = zipSync({ 'SKILL.md': strToU8(body.replace('installation-test', 'py-gap')), 'references/value.txt': strToU8('v'), 'scripts/run.py': strToU8('import os\nimport pandas as pd\n') })
+  const preview = await installer.prepareZip(actor, { fileName: 'py-gap.zip', bytes: zip })
+  assert.equal(preview.plan?.compatibility.status, 'compatible')
+  assert.ok(preview.package?.requirements.some(item => item.name === 'python-package:pandas' && /由 import 识别/.test(item.evidence)))
+  const installed = await installer.confirmZip(actor, preview.id, preview.planSha256!)
+  await database.client`update skill_versions set status = 'published' where skill_id = ${installed.skillId!}`
+  await database.client`update skills set active_version_id = draft_version_id, draft_version_id = null, status = 'published' where id = ${installed.skillId!}`
+  const reference = `${installed.skillId}@${installed.installedVersion}`
+
+  skills.setPythonEnvironment({ image: 'execution@sha256:with-pandas', packages: ['pandas'], modules })
+  assert.deepEqual(await skills.recheckPublishedPythonDependencies(), [])
+  assert.equal((await skills.resolveRuntimeSkills([reference])).length, 1)
+
+  // A new image without pandas: the startup recheck lists the Skill, admin sees it, and runs are refused before starting.
+  skills.setPythonEnvironment({ image: 'execution@sha256:without-pandas', packages: [], modules: { stdlib: ['os', 'sys'], modules: {} } })
+  const affected = await skills.recheckPublishedPythonDependencies()
+  assert.deepEqual(affected.filter(item => item.skillId === installed.skillId).map(item => item.missing), [['pandas']])
+  assert.deepEqual((await skills.getSkills()).find(skill => skill.id === installed.skillId)?.missingPythonDependencies, ['pandas'])
+  await assert.rejects(skills.resolveRuntimeSkills([reference]), (error: Error & { code?: string }) => error.code === 'skill_python_dependency_missing' && /pandas/.test(error.message))
+  skills.setPythonEnvironment(null)
+  assert.equal((await skills.getSkills()).find(skill => skill.id === installed.skillId)?.missingPythonDependencies, undefined)
+})
+
 test('one confirmed plan atomically installs, tests and publishes same-source Skill dependencies', { skip: real, timeout: 30000 }, async () => {
   const { sessionId, runId } = await send('npx skills@latest add fixture/delegated --skill=grill-me')
   const detail = await wait(sessionId)

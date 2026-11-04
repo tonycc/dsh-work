@@ -317,6 +317,21 @@
 
 **验收：** 被放弃的版本标为停用、安装记录取消、审计记录 `skill.draft.discard`；试运行证据与已发布版本不受影响；与停用版本内容相同的包重新安装时生成新草稿，不复用停用版本。
 
+### SKILL-DEP-01 脚本依赖按执行镜像核对，换镜像后复查已发布 Skill
+
+**优先级：** P1
+**角色：** 平台管理员、员工
+**运行层级：** 专用可丢弃 PostgreSQL 与 Mock ACP Worker；包解析与计划单元测试；真实镜像探针另由本机开发环境核对
+**前置数据：** 一个 import 了 pandas 但没有 `requirements.txt` 的脚本型 Skill 包；一个 import 了镜像中没有的模块的包
+**spec：** `server/src/modules/skill/skill-package.test.ts`、`server/src/modules/skill/skill-test-evidence.test.ts`、`server/src/modules/runtime/execution-toolchain.test.ts`、`server/src/infrastructure/postgres/admin-skill-installation.integration.test.ts`
+
+1. 上传只 import pandas、未声明依赖的包：安装计划兼容，依赖中列出 pandas 并标“由 import 识别”；标准库与包内模块不列出。
+2. 上传 import 了镜像中没有的模块的包：计划不兼容，说明哪个文件 import 了哪个模块、需声明并加入镜像；同一模块只在 `try` 中 import 时只给警告。
+3. 发布后换成不含 pandas 的执行镜像并重启：服务日志列出该 Skill；管理端 Skill 列表标“依赖缺失”，详情说明缺哪些依赖；员工使用该 Skill 时在运行前被拒绝并提示联系管理员。
+4. 换镜像后，待发布的脚本型 Skill 版本此前的试运行证据不能用于发布，须重新试运行；不含 Python 的 Skill 不受影响。
+
+**验收：** 依赖只读源码识别，不执行包内代码；已发布版本只在依赖缺失时受影响；镜像换回后提示消失、员工可正常使用。
+
 ### SKILL-PY-P2 脚本型 Skill 读取员工上传的原始表格
 
 **优先级：** P2
