@@ -233,3 +233,9 @@ test('a declared package covers its import even when the names differ, and link 
   assert.equal(deferred.compatibility.status, 'needs_review')
   assert.deepEqual(missingPythonDependencies({ requirements: [{ type: 'external', name: 'python-package:python-docx', status: 'resolved', evidence: 'requirements.txt' }], files: [{ path: 'scripts/run.py', content: 'import docx\n' }], packages: [], modules: { stdlib: [], modules: {} } }), ['python-docx'])
 })
+
+test('CRLF continuations and suites on the header line are scanned too', () => {
+  const source = 'import os, \\\r\n    pandas\r\nif x: import yaml\r\ntry: import xlrd\r\nexcept ImportError: import xlwt\r\nd = {1: 2}; import numpy\r\n'
+  assert.deepEqual(scanPythonImports([{ path: 'scripts/run.py', content: source }]).map(item => `${item.module}${item.optional ? '?' : ''}`),
+    ['numpy', 'os', 'pandas', 'xlrd?', 'xlwt?', 'yaml'])
+})

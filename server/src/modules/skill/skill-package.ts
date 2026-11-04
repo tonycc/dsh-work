@@ -211,7 +211,7 @@ export function scanPythonImports(files: Array<{ path: string; content: string }
   }
   for (const file of sources) {
     const tryIndents: number[] = []
-    for (const statement of pythonStatements(file.content)) {
+    for (const statement of pythonStatements(file.content).flatMap(splitCompoundHeader)) {
       while (tryIndents.length && tryIndents.at(-1)! >= statement.indent
         && !(tryIndents.at(-1) === statement.indent && /^(?:except|else|finally)\b/.test(statement.text))) tryIndents.pop()
       const optional = tryIndents.length > 0 && statement.indent > tryIndents.at(-1)!
@@ -226,11 +226,32 @@ export function scanPythonImports(files: Array<{ path: string; content: string }
 }
 
 /**
+ * `if x: import y` and `try: import y` put the suite on the header line; return the header and the suite
+ * (one level deeper) as separate statements so imports in it are found and `try` tracking still applies.
+ */
+function splitCompoundHeader(statement: { indent: number; text: string }): Array<{ indent: number; text: string }> {
+  if (!/^(?:if|elif|else|for|while|with|try|except|finally|def|class|async)\b/.test(statement.text)) return [statement]
+  let depth = 0
+  for (let index = 0; index < statement.text.length; index++) {
+    const char = statement.text[index]!
+    if ('([{'.includes(char)) depth++
+    else if (')]}'.includes(char)) depth = Math.max(0, depth - 1)
+    else if (char === ':' && depth === 0) {
+      const body = statement.text.slice(index + 1).trim()
+      if (!body) return [statement]
+      return [{ indent: statement.indent, text: statement.text.slice(0, index + 1) }, { indent: statement.indent + 1, text: body }]
+    }
+  }
+  return [statement]
+}
+
+/**
  * Splits Python source into simple statements with their indentation, the way the tokenizer would for
  * this purpose: string literals (including triple-quoted ones) and comments are blanked, backslash and
  * bracket continuations join physical lines, and `;` separates statements on one line.
  */
-function pythonStatements(source: string): Array<{ indent: number; text: string }> {
+function pythonStatements(raw: string): Array<{ indent: number; text: string }> {
+  const source = raw.replace(/\r\n?/g, '\n')
   const statements: Array<{ indent: number; text: string }> = []
   let buffer = ''
   let indent = 0

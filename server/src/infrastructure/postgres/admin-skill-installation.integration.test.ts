@@ -524,6 +524,16 @@ test('published script Skills are rechecked against the execution image and refu
   assert.deepEqual(await skills.resolveRuntimeSkills([reference], { dependencyGaps: 'omit', omitted }), [])
   assert.deepEqual(omitted, [{ reference, name: 'py-gap', missing: ['pandas'] }])
   assert.equal((await skills.resolveRuntimeSkills([reference], { dependencyGaps: 'ignore' })).length, 1)
+  // An entry Skill left out because a dependency lacks a package is reported under its own name.
+  const rootZip = zipSync({ 'SKILL.md': strToU8(body.replace('installation-test', 'py-root')), 'references/value.txt': strToU8('v') })
+  const rootPreview = await installer.prepareZip(actor, { fileName: 'py-root.zip', bytes: rootZip })
+  const root = await installer.confirmZip(actor, rootPreview.id, rootPreview.planSha256!)
+  await database.client`update skill_versions set status = 'published', manifest = manifest || ${database.client.json({ dependencies: [reference] })} where skill_id = ${root.skillId!}`
+  await database.client`update skills set active_version_id = draft_version_id, draft_version_id = null, status = 'published' where id = ${root.skillId!}`
+  const rootReference = `${root.skillId}@${root.installedVersion}`
+  const omittedRoot: Array<{ reference: string; name: string; missing: string[] }> = []
+  assert.deepEqual(await skills.resolveRuntimeSkills([rootReference], { dependencyGaps: 'omit', omitted: omittedRoot }), [])
+  assert.deepEqual(omittedRoot, [{ reference: rootReference, name: 'py-root', missing: ['pandas（依赖 Skill“py-gap”）'] }])
   skills.setPythonEnvironment(null)
   assert.equal((await skills.getSkills()).find(skill => skill.id === installed.skillId)?.missingPythonDependencies, undefined)
 })

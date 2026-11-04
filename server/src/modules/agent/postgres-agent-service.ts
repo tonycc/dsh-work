@@ -818,12 +818,14 @@ export class PostgresAgentService {
     await this.assertCapabilityReferences(skills, row.webSearchEnabled)
     // 依赖登记（2026-11-04）：执行镜像缺少 Python 依赖时，Agent 固定引用的 Skill 本次不装配并告知模型，
     // 其余照常运行；员工在会话中直接选用的 Skill 缺依赖时拒绝本次运行。
+    // 按合并后的列表拆分（同一 Skill 只保留一个版本，会话选用的版本优先）；员工在会话中选用的引用即使 AI 同事也固定了，
+    // 也按“直接选用”处理。
     const unavailableSkills: Array<{ reference: string; name: string; missing: string[] }> = []
-    const pinned = new Set(row.skills)
+    const { pinnedOnly, selected } = splitSkillReferences(skills, additionalSkillReferences)
     const skillInstructions = this.skillService
       ? uniqueSkills([
-          ...await this.skillService.resolveRuntimeSkills(row.skills, { dependencyGaps: 'omit', omitted: unavailableSkills }),
-          ...await this.skillService.resolveRuntimeSkills(skills.filter(reference => !pinned.has(reference))),
+          ...await this.skillService.resolveRuntimeSkills(pinnedOnly, { dependencyGaps: 'omit', omitted: unavailableSkills }),
+          ...await this.skillService.resolveRuntimeSkills(selected),
         ])
       : []
     // 内置工具按注册表装配：默认工具、Agent 开启的联网搜索、Skill 需要的 Python 执行。
@@ -1128,6 +1130,15 @@ function parseReference(reference: string) {
 
 function formatDateTime(value: Date) {
   return value.toISOString().slice(0, 16).replace('T', ' ')
+}
+
+/**
+ * 把合并后的 Skill 引用（同一 Skill 只留一个版本，会话选用优先）分成只由 AI 同事固定的与员工在会话中选用的。
+ * 员工选用的引用即使 AI 同事也固定了，也归入选用。
+ */
+export function splitSkillReferences(merged: string[], additional: string[]) {
+  const chosen = new Set(additional.map(reference => reference.trim()))
+  return { pinnedOnly: merged.filter(reference => !chosen.has(reference)), selected: merged.filter(reference => chosen.has(reference)) }
 }
 
 /** 按 `id@version` 去重，保留首次出现的顺序。 */

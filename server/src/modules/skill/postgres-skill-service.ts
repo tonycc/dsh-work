@@ -934,8 +934,14 @@ export class PostgresSkillService {
           for (const skill of await this.resolveRuntimeSkills([reference])) merged.set(`${skill.id}@${skill.version}`, skill)
         } catch (error) {
           if (!(error instanceof SkillError) || error.code !== 'skill_python_dependency_missing') throw error
+          // 记入口 Skill 自己的名称；缺口在它的依赖 Skill 里时，注明是哪个依赖缺什么。
           const detail = error as SkillError & { skillName?: string; missing?: string[] }
-          options.omitted?.push({ reference, name: detail.skillName ?? reference, missing: detail.missing ?? [] })
+          const { id, version } = parseReference(reference)
+          const [root] = await this.database<{ name: string }[]>`
+            select name from skill_versions where tenant_id = ${tenantId} and skill_id = ${id} and version = ${version}`
+          const name = root?.name ?? reference
+          const missing = detail.missing ?? []
+          options.omitted?.push({ reference, name, missing: detail.skillName && detail.skillName !== name ? missing.map(item => `${item}（依赖 Skill“${detail.skillName}”）`) : missing })
         }
       }
       return [...merged.values()]

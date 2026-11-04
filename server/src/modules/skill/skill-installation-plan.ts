@@ -120,10 +120,17 @@ function resolvePythonImports(
   return result
 }
 
-/** Import names whose distribution is named differently; used only to tell that a declared package covers an import. */
+/**
+ * Import names whose distribution is named differently; used only to tell that a declared package covers an
+ * import when the image does not provide it (otherwise the image's own module index decides). Not exhaustive:
+ * an unlisted pair is reported once for the declared package and once for the import.
+ */
 const IMPORT_DISTRIBUTION_ALIASES: Record<string, string> = {
   docx: 'python-docx', pptx: 'python-pptx', yaml: 'pyyaml', PIL: 'pillow', cv2: 'opencv-python',
-  sklearn: 'scikit-learn', bs4: 'beautifulsoup4', dateutil: 'python-dateutil', dotenv: 'python-dotenv',
+  sklearn: 'scikit-learn', skimage: 'scikit-image', bs4: 'beautifulsoup4', dateutil: 'python-dateutil',
+  dotenv: 'python-dotenv', jwt: 'pyjwt', fitz: 'pymupdf', Crypto: 'pycryptodome', OpenSSL: 'pyopenssl',
+  serial: 'pyserial', magic: 'python-magic', attr: 'attrs', zmq: 'pyzmq', MySQLdb: 'mysqlclient',
+  psycopg2: 'psycopg2-binary', Levenshtein: 'python-levenshtein', pdfminer: 'pdfminer-six',
 }
 
 /** Whether a declared (normalized) distribution already stands for this import, so it is not reported twice. */
