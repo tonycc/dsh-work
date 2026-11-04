@@ -154,7 +154,7 @@ onMounted(() => {
         <div class="overview-stat"><dt>近 24 小时运行</dt><dd><strong class="overview-stat__value">{{ summary?.runs24h ?? 0 }}</strong><small>成功 {{ summary?.successfulRuns24h ?? 0 }} · 失败 {{ summary?.failedRuns24h ?? 0 }}</small></dd></div>
         <div class="overview-stat"><dt>模型 Token</dt><dd><strong class="overview-stat__value">{{ (summary?.modelTokens24h ?? 0).toLocaleString() }}</strong><small>仅记录用量，不记录提示词正文</small></dd></div>
         <div class="overview-stat"><dt>工具与成果</dt><dd><strong class="overview-stat__value">{{ (summary?.toolCalls24h ?? 0) + (summary?.artifacts24h ?? 0) }}</strong><small>工具 {{ summary?.toolCalls24h ?? 0 }} · 成果 {{ summary?.artifacts24h ?? 0 }}</small></dd></div>
-        <div class="overview-stat overview-stat--danger"><dt>需关注事件</dt><dd><strong class="overview-stat__value">{{ summary?.attentionEvents24h ?? 0 }}</strong><small>失败与已阻止事件</small></dd></div>
+        <div class="overview-stat" :class="{ 'overview-stat--danger': (summary?.attentionEvents24h ?? 0) > 0 }"><dt>需关注事件</dt><dd><strong class="overview-stat__value">{{ summary?.attentionEvents24h ?? 0 }}</strong><small>失败与已阻止事件</small></dd></div>
       </dl>
     </section>
 

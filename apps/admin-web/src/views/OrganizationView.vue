@@ -90,13 +90,18 @@ const selectedChildren = computed(() => selected.value ? childrenOf.value.get(se
 const siblings = computed(() => selected.value?.parentId ? childrenOf.value.get(selected.value.parentId) ?? [] : [])
 const siblingIndex = computed(() => siblings.value.findIndex(sibling => sibling.id === selected.value?.id))
 
-const memberRows = computed(() => {
-  const ids = includeSub.value ? subtreeMemberIds.value : directMemberIds.value
+function matchingEmployees(ids: Set<string>) {
   const query = memberQuery.value.trim().toLowerCase()
   return [...ids]
     .map(id => employeeById.value.get(id))
     .filter((employee): employee is OrganizationEmployee => Boolean(employee))
     .filter(employee => !query || employee.name.toLowerCase().includes(query) || (employee.loginAccount ?? '').toLowerCase().includes(query))
+}
+/** 只看直属成员时，下级部门中符合当前搜索的人数；用于空列表时给出“查看含下级部门”的入口。 */
+const subtreeMatchCount = computed(() => includeSub.value ? 0 : matchingEmployees(subtreeMemberIds.value).length)
+
+const memberRows = computed(() => {
+  return matchingEmployees(includeSub.value ? subtreeMemberIds.value : directMemberIds.value)
     .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
     .map(employee => {
       const memberships = membershipsByUser.value.get(employee.id) ?? []
@@ -243,7 +248,7 @@ async function run(action: () => Promise<OrganizationSnapshot>, success: string,
   }
 }
 
-function selectDepartment(node: TreeNode) {
+function selectDepartment(node: Pick<TreeNode, 'id'>) {
   selectedId.value = node.id
   includeSub.value = false
   memberQuery.value = ''
@@ -393,7 +398,7 @@ onMounted(load)
       </template>
     </el-alert>
 
-        <section class="content-panel overview-strip" aria-label="组织概况">
+    <section class="content-panel overview-strip" aria-label="组织概况">
       <dl class="overview-strip__stats">
         <div class="overview-stat">
           <dt>部门</dt>
@@ -474,9 +479,9 @@ onMounted(load)
                 <template #empty>
                   <div class="table-empty">
                     <span>{{ memberQuery.trim() ? '没有匹配的成员' : includeSub ? '本部门及下级部门都还没有成员' : '本部门还没有直属成员' }}</span>
-                    <!-- 根部门等上层部门通常没有直属成员，直接给出查看整棵子树的入口，避免误以为部门是空的。 -->
-                    <el-button v-if="!includeSub && !memberQuery.trim() && subtreeMemberIds.size" link type="primary" @click="includeSub = true">
-                      查看含下级部门的 {{ subtreeMemberIds.size }} 名成员
+                    <!-- 根部门等上层部门通常没有直属成员，直接给出查看整棵子树的入口，避免误以为部门是空的；搜索时同样适用。 -->
+                    <el-button v-if="subtreeMatchCount" link type="primary" @click="includeSub = true">
+                      {{ memberQuery.trim() ? `在下级部门中找到 ${subtreeMatchCount} 名匹配成员` : `查看含下级部门的 ${subtreeMatchCount} 名成员` }}
                     </el-button>
                   </div>
                 </template>
@@ -539,7 +544,7 @@ onMounted(load)
                 <el-table-column v-if="canManage" label="操作" width="150" fixed="right">
                   <template #default="scope">
                     <el-button v-if="!scope.row.inherited" link type="danger" :disabled="saving" @click="revokeGrant(scope.row.grant)">删除</el-button>
-                    <el-button v-else link type="primary" @click="selectedId = scope.row.grant.departmentId">到上级部门修改</el-button>
+                    <el-button v-else link type="primary" @click="selectDepartment({ id: scope.row.grant.departmentId })">到上级部门修改</el-button>
                   </template>
                 </el-table-column>
               </el-table>
