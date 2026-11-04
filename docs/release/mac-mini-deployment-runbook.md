@@ -626,7 +626,7 @@ bash current/scripts/deploy/restore.sh \
 
 1. 在仓库 [deploy/execution-image/requirements.in](../../deploy/execution-image/requirements.in) 添加包名，按该文件顶部注释的 `uv pip compile` 命令重新生成带哈希的 `requirements.lock`，提交 PR；[执行镜像工作流](../../.github/workflows/execution-image.yml)在 PR 中构建并跑冒烟检查，合入 `main` 后推送 GHCR，新摘要见该次运行的 Summary。
 2. 在 Mac mini 上按摘要拉取新镜像，把 `runtime.env` 中的 `DSH_WORK_EXECUTION_IMAGE` 改为新引用，按第 8 节部署（或重启服务）。
-3. 服务启动时会用新镜像复查所有已发布 Skill 的依赖：缺包的 Skill 记入服务日志（`skill python dependencies missing in execution image`），在管理端 Skill 列表标“依赖缺失”，员工使用时在运行前被拒绝。去掉包之前先确认没有已发布 Skill 依赖它。
+3. 服务启动时会用新镜像复查所有已发布 Skill 的依赖：缺包的 Skill 记入服务日志（`skill python dependencies missing in execution image`），在管理端 Skill 列表标“依赖缺失”；员工直接选用时在运行前被拒绝，固定引用它的 AI 同事本次不装配它、其余照常。去掉包之前先确认没有已发布 Skill 依赖它。
 4. 镜像摘要是脚本型 Skill 试运行证据的一部分：换镜像后，待发布的脚本型 Skill 版本须重新严格试运行才能发布；已发布且依赖仍满足的版本不受影响。
 
 ## 13. 多 IP、固定域名与证书

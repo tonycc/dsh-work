@@ -1592,6 +1592,13 @@ export function renderSystemPrompt(manifest: RuntimeManifest, options: { executi
         ),
       ].join('\n\n'))
   }
+  if (manifest.unavailable_skills?.length) {
+    sections.push([
+      '# 本次不可用的 Skill',
+      '以下 Skill 由当前 AI 同事固定使用，但执行环境缺少它们需要的 Python 依赖，本次没有装配。用户的请求需要它们时，说明这个 Skill 暂时不可用、需要平台管理员处理，不要假装已经使用，也不要自己编写替代脚本冒充它的结果。',
+      ...manifest.unavailable_skills.map(item => `- ${item.name}：缺少 ${item.missing.join('、') || 'Python 依赖'}`),
+    ].join('\n\n'))
+  }
   if (manifest.knowledge_context.length > 0) {
     sections.push([
       '# 企业知识上下文',

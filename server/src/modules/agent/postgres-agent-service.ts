@@ -160,6 +160,8 @@ export interface RuntimeAgentSnapshot {
   skillInstructions: RuntimeSkillConfiguration[]
   /** 本次全部 Skill（含依赖）及其“覆盖内置场景”（只有 Agent 固定与会话选择的 Skill 有），派发时据此去掉被覆盖或同名的平台内置 Skill。 */
   coveringSkills: CoveringSkill[]
+  /** Agent 固定引用、但执行镜像缺少其 Python 依赖而本次不装配的 Skill（2026-11-04 依赖登记）。 */
+  unavailableSkills?: Array<{ reference: string; name: string; missing: string[] }>
   /** 本 Agent 装配的内置工具名称（注册表默认工具、开启的联网搜索、Skill 需要的 Python 执行）。 */
   runtimeTools: string[]
   /** Agent 版本是否开启项目任务管理；实际工具由派发时按运行场景装配。 */
@@ -814,8 +816,15 @@ export class PostgresAgentService {
     const principal = await this.getAgentExecutionPrincipal(row.agentId)
     if (principal.status !== 'active') throw authorizationDenied('Agent 执行身份已停用')
     await this.assertCapabilityReferences(skills, row.webSearchEnabled)
+    // 依赖登记（2026-11-04）：执行镜像缺少 Python 依赖时，Agent 固定引用的 Skill 本次不装配并告知模型，
+    // 其余照常运行；员工在会话中直接选用的 Skill 缺依赖时拒绝本次运行。
+    const unavailableSkills: Array<{ reference: string; name: string; missing: string[] }> = []
+    const pinned = new Set(row.skills)
     const skillInstructions = this.skillService
-      ? await this.skillService.resolveRuntimeSkills(skills)
+      ? uniqueSkills([
+          ...await this.skillService.resolveRuntimeSkills(row.skills, { dependencyGaps: 'omit', omitted: unavailableSkills }),
+          ...await this.skillService.resolveRuntimeSkills(skills.filter(reference => !pinned.has(reference))),
+        ])
       : []
     // 内置工具按注册表装配：默认工具、Agent 开启的联网搜索、Skill 需要的 Python 执行。
     // Runtime 停用清单在创建 Attempt 时扣除。
@@ -840,14 +849,15 @@ export class PostgresAgentService {
       ? assembleAgentInstructions(row.agentSpec)
       : row.systemPrompt
     const { agentId: _agentId, agentSpec: _agentSpec, versionStatus: _versionStatus, ...snapshot } = row
-    return { ...snapshot, systemPrompt, skills: runtimeSkills, skillInstructions, coveringSkills, runtimeTools, mcpConnections, approvalMode }
+    return { ...snapshot, systemPrompt, skills: runtimeSkills, skillInstructions, coveringSkills, unavailableSkills, runtimeTools, mcpConnections, approvalMode }
   }
 
   /** Skill 必须已发布；Skill 需要的内置工具必须能由该 Agent 提供（联网搜索须开启）。 */
   private async assertCapabilityReferences(skills: string[], webSearchEnabled: boolean) {
     if (!this.skillService) return
     await this.skillService.assertPublishedReferences(skills)
-    const runtimeSkills = await this.skillService.resolveRuntimeSkills(skills)
+    // 只校验配置（保存与运行前共用）；执行镜像缺 Python 依赖由运行与 Agent 验证处理，不阻止保存。
+    const runtimeSkills = await this.skillService.resolveRuntimeSkills(skills, { dependencyGaps: 'ignore' })
     const problems = unavailableSkillTools(runtimeSkills.flatMap(skill => skill.tools), { webSearchEnabled })
     if (problems.length) {
       throw authorizationDenied(`所选 Skill 需要的工具不可用：${problems.join('、')}`, { status: 422, code: 'invalid_request', suggestion: '按提示调整输入内容或文件后重新提交。' })
@@ -1118,4 +1128,15 @@ function parseReference(reference: string) {
 
 function formatDateTime(value: Date) {
   return value.toISOString().slice(0, 16).replace('T', ' ')
+}
+
+/** 按 `id@version` 去重，保留首次出现的顺序。 */
+function uniqueSkills<T extends { id: string; version: string }>(skills: T[]): T[] {
+  const seen = new Set<string>()
+  return skills.filter(skill => {
+    const key = `${skill.id}@${skill.version}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 }

@@ -1,5 +1,5 @@
 import { authorizationDenied } from '../../domain/authorization-errors.ts'
-import { skillNotFound, skillConflict, skillInvalid, skillUnavailable, skillInternalFailure } from './skill-errors.ts'
+import { SkillError, skillNotFound, skillConflict, skillInvalid, skillUnavailable, skillInternalFailure } from './skill-errors.ts'
 import { ExecutionCapabilityUnavailableError } from '../runtime/execution-capabilities.ts'
 import type { RuntimeManifest } from '../runtime/runtime-types.ts'
 import { normalizeSkillTestScenario, type SkillTestScenario } from '../../domain/skill-test-scenario.ts'
@@ -917,7 +917,29 @@ export class PostgresSkillService {
     }
   }
 
-  async resolveRuntimeSkills(references: string[]): Promise<RuntimeSkillConfiguration[]> {
+  /**
+   * 解析运行用的 Skill 及其递归依赖。`dependencyGaps` 决定当前执行镜像缺少某个 Skill（含其依赖）需要的
+   * Python 依赖时怎么办（2026-11-04 决策）：`reject`（默认，员工直接选用、Agent 验证与发布）拒绝；
+   * `omit`（Agent 固定引用的 Skill）本次不装配该入口 Skill 并记入 `omitted`；`ignore`（保存 Agent 等配置校验）不检查。
+   */
+  async resolveRuntimeSkills(references: string[], options: {
+    dependencyGaps?: 'reject' | 'omit' | 'ignore'
+    omitted?: Array<{ reference: string; name: string; missing: string[] }>
+  } = {}): Promise<RuntimeSkillConfiguration[]> {
+    const mode = options.dependencyGaps ?? 'reject'
+    if (mode === 'omit') {
+      const merged = new Map<string, RuntimeSkillConfiguration>()
+      for (const reference of unique(references)) {
+        try {
+          for (const skill of await this.resolveRuntimeSkills([reference])) merged.set(`${skill.id}@${skill.version}`, skill)
+        } catch (error) {
+          if (!(error instanceof SkillError) || error.code !== 'skill_python_dependency_missing') throw error
+          const detail = error as SkillError & { skillName?: string; missing?: string[] }
+          options.omitted?.push({ reference, name: detail.skillName ?? reference, missing: detail.missing ?? [] })
+        }
+      }
+      return [...merged.values()]
+    }
     const resolved: RuntimeSkillConfiguration[] = []
     const pending = [...unique(references)]
     const seen = new Set<string>()
@@ -932,9 +954,12 @@ export class PostgresSkillService {
            and status = 'published'
       `
       if (!row) throw skillConflict(`Runtime 无法解析已锁定的 Skill Version：${reference}`, 'skill_dependency_unavailable')
-      const missing = await this.pythonDependencyGaps(`${id}@${version}`, row.manifest.artifact)
+      const missing = mode === 'ignore' ? [] : await this.pythonDependencyGaps(`${id}@${version}`, row.manifest.artifact)
       if (missing.length) {
-        throw skillConflict(`Skill“${row.name}”需要的 Python 依赖不在当前执行镜像中（${missing.join('、')}），暂时不能使用；请联系平台管理员`, 'skill_python_dependency_missing')
+        throw Object.assign(
+          skillConflict(`Skill“${row.name}”需要的 Python 依赖不在当前执行镜像中（${missing.join('、')}），暂时不能使用；请联系平台管理员`, 'skill_python_dependency_missing'),
+          { skillName: row.name, missing },
+        )
       }
       const artifactContent = row.manifest.artifact ? await this.requireArtifactStore().read(row.manifest.artifact) : null
       pending.push(...(row.manifest.dependencies ?? []))

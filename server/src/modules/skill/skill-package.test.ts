@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { strToU8, zipSync, type Zippable } from 'fflate'
-import { parseSkillBundle, parseSkillPackage, toSkillPackageArtifact } from './skill-package.ts'
+import { parseSkillBundle, parseSkillPackage, scanPythonImports, toSkillPackageArtifact } from './skill-package.ts'
 import { buildSkillInstallationPlan, missingPythonDependencies, normalizePythonPackageName } from './skill-installation-plan.ts'
 import { continueSkillSource, isPublicAddress, parseSkillSource } from './skill-source.ts'
 import { SkillArtifactStore } from './skill-artifact-store.ts'
@@ -203,4 +203,33 @@ test('stored versions report what the current image lacks, including undeclared 
   const requirements = [{ type: 'external' as const, name: 'python-package:openpyxl', status: 'resolved' as const, evidence: 'requirements.txt' }]
   assert.deepEqual(missingPythonDependencies({ requirements, files, packages: ['pandas'], modules: pythonIndex }), ['openpyxl', '模块 sklearn'])
   assert.deepEqual(missingPythonDependencies({ requirements, files, packages: ['pandas', 'openpyxl'], modules: null }), [], 'without the module index only declared packages are checked')
+})
+
+test('import scanning reads Python like the tokenizer: strings, comments, continuations and try blocks', () => {
+  const source = [
+    '"""Usage: import fake1"""',
+    'x = "quoted \\"\\"\\" inside"  # comment with """ quotes',
+    'import numpy as np; import pandas as pd',
+    'from openpyxl import (', '    Workbook,', '    load_workbook)',
+    'import os, \\', '    sys',
+    'def main():', '    import docx',
+    'if __name__ == "__main__":', '    import yaml',
+    'try:', '    import xlrd', 'except ImportError:', '    import xlwt', 'else:', '    pass',
+    'import requests',
+    "s = '''", 'import fake2', "'''",
+  ].join('\n')
+  const found = scanPythonImports([{ path: 'scripts/run.py', content: source }, { path: 'references/example.py', content: 'import tensorflow\n' }])
+  assert.deepEqual(found.map(item => `${item.module}${item.optional ? '?' : ''}`),
+    ['docx', 'numpy', 'openpyxl', 'os', 'pandas', 'requests', 'sys', 'xlrd?', 'xlwt?', 'yaml'],
+    'function and __main__ imports are required; only try/except imports are optional; examples and strings are ignored')
+})
+
+test('a declared package covers its import even when the names differ, and link checks stay for review', () => {
+  const pkg = scripted('import docx\n', { 'requirements.txt': 'python-docx\n' })
+  const plan = buildSkillInstallationPlan({ root: pkg, packages: [pkg], edges: [] }, { pythonSandboxAvailable: true, pythonPackages: [], pythonModules: { stdlib: [], modules: {} } })
+  assert.deepEqual(plan.compatibility.issues.filter(issue => issue.severity === 'error').map(issue => issue.message), ['test-skill：平台暂不支持依赖：python-package:python-docx'], 'one error for the declared package, none for its import')
+  const linked = scripted('import sklearn\n')
+  const deferred = buildSkillInstallationPlan({ root: linked, packages: [linked], edges: [] }, { pythonSandboxAvailable: true, pythonPackages: [], pythonModules: { stdlib: [], modules: {} }, deferRuntimeRequirements: true })
+  assert.equal(deferred.compatibility.status, 'needs_review')
+  assert.deepEqual(missingPythonDependencies({ requirements: [{ type: 'external', name: 'python-package:python-docx', status: 'resolved', evidence: 'requirements.txt' }], files: [{ path: 'scripts/run.py', content: 'import docx\n' }], packages: [], modules: { stdlib: [], modules: {} } }), ['python-docx'])
 })

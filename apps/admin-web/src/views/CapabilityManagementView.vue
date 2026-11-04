@@ -1043,7 +1043,7 @@ onUnmounted(() => clearSkillTestPoll())
 
     <el-drawer v-model="detailOpen" size="min(620px, 100vw)" :title="detailTitle">
       <div v-if="detailType === 'skill'" class="capability-detail__notice"><el-icon><Connection /></el-icon><p>Skill 发布后当前版本不可原地编辑，Agent 引用时锁定具体版本。</p></div>
-      <div v-if="detailType === 'skill' && selectedSkill?.missingPythonDependencies?.length" class="capability-detail__notice capability-detail__notice--warning" role="alert"><el-icon><Connection /></el-icon><p>当前执行镜像缺少已发布版本需要的 Python 依赖：{{ selectedSkill.missingPythonDependencies.join('、') }}。员工使用这个 Skill 时会在运行前被拒绝；请把对应的包加入执行镜像并部署，或发布不需要它的新版本。</p></div>
+      <div v-if="detailType === 'skill' && selectedSkill?.missingPythonDependencies?.length" class="capability-detail__notice capability-detail__notice--warning" role="alert"><el-icon><Connection /></el-icon><p>当前执行镜像缺少已发布版本需要的 Python 依赖：{{ selectedSkill.missingPythonDependencies.join('、') }}。员工直接选用时会在运行前被拒绝；固定引用它的 AI 同事本次不装配它，验证与发布这些 AI 同事会被拒绝。请把对应的包加入执行镜像并部署，或发布不需要它的新版本。</p></div>
       <div v-if="detailType === 'skill'" class="status-tabs capability-detail__tabs" role="tablist" aria-label="Skill 详情类型">
         <button class="status-tab" :class="{ active: skillDetailTab === 'config' }" type="button" role="tab" :aria-selected="skillDetailTab === 'config'" @click="skillDetailTab = 'config'">配置详情</button>
         <button class="status-tab" :class="{ active: skillDetailTab === 'versions' }" type="button" role="tab" :aria-selected="skillDetailTab === 'versions'" @click="skillDetailTab = 'versions'">版本历史 <span class="tab-count">{{ selectedSkillVersions.length }}</span></button>

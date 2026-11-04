@@ -106,17 +106,30 @@ function resolvePythonImports(
     const module = requirement.name.slice(requirement.name.indexOf(':') + 1)
     if (stdlib.has(module)) continue
     const distributions = index.modules[module] ?? []
-    if (distributions.some(name => declared.has(name))) continue
+    if (distributions.some(name => declared.has(name)) || declaredCovers(declared, module)) continue
     if (distributions.length) {
       declared.add(distributions[0]!)
       result.push({ type: 'external', name: `python-package:${distributions[0]}`, status: 'needs_review', evidence: `由 import 识别：${module}（${requirement.evidence}）` })
     } else if (optional) {
       warnings.push({ code: 'python_optional_import_unavailable', severity: 'warning', message: `${pkg.name}：${requirement.evidence} 在条件分支中 import 的模块 ${module} 不在执行镜像中，相关代码路径运行时会失败` })
     } else {
-      result.push({ ...requirement, status: 'unsupported' })
+      // 链接安装延后核对时与声明的包一样待复核，不直接判为不兼容。
+      result.push({ ...requirement, status: options.deferRuntimeRequirements ? 'needs_review' : 'unsupported' })
     }
   }
   return result
+}
+
+/** Import names whose distribution is named differently; used only to tell that a declared package covers an import. */
+const IMPORT_DISTRIBUTION_ALIASES: Record<string, string> = {
+  docx: 'python-docx', pptx: 'python-pptx', yaml: 'pyyaml', PIL: 'pillow', cv2: 'opencv-python',
+  sklearn: 'scikit-learn', bs4: 'beautifulsoup4', dateutil: 'python-dateutil', dotenv: 'python-dotenv',
+}
+
+/** Whether a declared (normalized) distribution already stands for this import, so it is not reported twice. */
+function declaredCovers(declared: ReadonlySet<string>, module: string) {
+  const alias = IMPORT_DISTRIBUTION_ALIASES[module]
+  return declared.has(normalizePythonPackageName(module)) || (alias !== undefined && declared.has(alias))
 }
 
 /**
@@ -147,7 +160,7 @@ export function missingPythonDependencies(input: {
   if (input.modules) {
     const stdlib = new Set(input.modules.stdlib)
     for (const found of scanPythonImports(input.files)) {
-      if (found.optional || stdlib.has(found.module) || covered.has(normalizePythonPackageName(found.module))) continue
+      if (found.optional || stdlib.has(found.module) || covered.has(normalizePythonPackageName(found.module)) || declaredCovers(covered, found.module)) continue
       const distributions = input.modules.modules[found.module] ?? []
       if (!distributions.some(name => installed.has(name))) missing.add(`模块 ${found.module}`)
     }

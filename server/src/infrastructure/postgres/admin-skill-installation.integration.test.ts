@@ -519,6 +519,11 @@ test('published script Skills are rechecked against the execution image and refu
   assert.deepEqual(affected.filter(item => item.skillId === installed.skillId).map(item => item.missing), [['pandas']])
   assert.deepEqual((await skills.getSkills()).find(skill => skill.id === installed.skillId)?.missingPythonDependencies, ['pandas'])
   await assert.rejects(skills.resolveRuntimeSkills([reference]), (error: Error & { code?: string }) => error.code === 'skill_python_dependency_missing' && /pandas/.test(error.message))
+  // An Agent's pinned Skill is left out of the run (and reported) instead of failing the Agent; saving skips the check.
+  const omitted: Array<{ reference: string; name: string; missing: string[] }> = []
+  assert.deepEqual(await skills.resolveRuntimeSkills([reference], { dependencyGaps: 'omit', omitted }), [])
+  assert.deepEqual(omitted, [{ reference, name: 'py-gap', missing: ['pandas'] }])
+  assert.equal((await skills.resolveRuntimeSkills([reference], { dependencyGaps: 'ignore' })).length, 1)
   skills.setPythonEnvironment(null)
   assert.equal((await skills.getSkills()).find(skill => skill.id === installed.skillId)?.missingPythonDependencies, undefined)
 })

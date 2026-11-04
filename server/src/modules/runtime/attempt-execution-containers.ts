@@ -133,7 +133,11 @@ export class AttemptExecutionContainers {
     this.toolchain = await this.backend.inspectExecutionImage(this.image, this.user)
     if (this.toolchain.some(tool => tool.id === 'python3')) {
       this.pythonPackages = await this.backend.inspectPythonPackages(this.image, this.user)
-      this.pythonModules = await this.backend.inspectPythonModules?.(this.image, this.user) ?? null
+      // 模块清单只用于核对 Skill 的 import；读不出时退回只按声明的包核对，不影响执行容器可用性。
+      this.pythonModules = await Promise.resolve(this.backend.inspectPythonModules?.(this.image, this.user) ?? null).catch(error => {
+        console.warn(`execution image python module index unavailable: ${error instanceof Error ? error.message : String(error)}`)
+        return null
+      })
     }
     await this.backend.detectFeatures()
     await this.backend.removeOrphans()
