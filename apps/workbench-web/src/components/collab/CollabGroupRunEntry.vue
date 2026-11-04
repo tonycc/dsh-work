@@ -42,22 +42,26 @@ watch(active, (running) => {
 onBeforeUnmount(() => { if (timer) clearInterval(timer) })
 
 const elapsed = computed(() => progress.value ? formatElapsed(elapsedMs(progress.value.startMs, now.value, offset.value)) : '')
-/** 有步骤时转圈与步骤计时已表明“执行中、用了多久”，不再重复显示状态标签。 */
-const showSteps = computed(() => active.value && Boolean(progress.value?.rows.length))
+/** 群聊里只显示正在进行的步骤，其余折叠成计数，完整步骤在执行详情中查看。 */
+const currentRows = computed(() => progress.value?.rows.filter(row => row.state === 'active') ?? [])
+/**
+ * 有正在进行的步骤时，转圈与步骤计时已表明“执行中、用了多久”，不再重复状态标签、不套卡片。
+ * 群聊状态与执行详情可能短暂不同步（详情里已没有进行中的步骤），这时回到状态标签加说明，避免把已完成的步骤当作进度。
+ */
+const showSteps = computed(() => active.value && currentRows.value.length > 0)
 const chipLabel = computed(() => {
   if (props.status === 'running') return elapsed.value ? `执行中 · 已用 ${elapsed.value}` : '执行中'
   if (props.status === 'cancelled' && props.stoppedByName) return `${props.stoppedByName} 停止`
   if (props.status === 'cancel_requested') return '正在停止'
   return undefined
 })
-const activeLabels = computed(() => progress.value?.rows.filter(row => row.state === 'active').map(row => row.label).join('，') ?? '')
-/** 群聊里只显示正在进行的步骤，已完成的折叠成一句计数，完整步骤在执行详情中查看。 */
-const liveRows = computed(() => {
+/** 已结束的步骤分开计数：失败或未收到结果的步骤不算“已完成”，避免在群聊里掩盖失败。 */
+const stepSummary = computed(() => {
   const rows = progress.value?.rows ?? []
-  const current = rows.filter(row => row.state === 'active')
-  return current.length ? current : rows.slice(-1)
+  const done = rows.filter(row => row.state === 'done').length
+  const failed = rows.filter(row => row.state === 'failed' || row.state === 'unknown').length
+  return [done ? `已完成 ${done} 步` : '', failed ? `${failed} 步失败` : ''].filter(Boolean).join(' · ')
 })
-const finishedCount = computed(() => (progress.value?.rows.length ?? 0) - liveRows.value.length)
 const notice = computed(() => {
   if (props.status === 'queued') return '排队中，即将开始执行。'
   if (props.status === 'running') return '正在执行…'
@@ -67,6 +71,10 @@ const notice = computed(() => {
   if (props.status === 'cancelled') return `执行已被 ${props.stoppedByName ?? '成员'} 停止，没有生成回复。`
   return '执行已结束，没有生成回复。'
 })
+/** 读屏播报：有进行中的步骤时报步骤与计数，否则报与页面一致的说明，不留空。 */
+const liveAnnouncement = computed(() => showSteps.value
+  ? [currentRows.value.map(row => row.label).join('，'), stepSummary.value].filter(Boolean).join('，')
+  : notice.value)
 </script>
 
 <template>
@@ -90,14 +98,14 @@ const notice = computed(() => {
     <div class="collab-run-entry__body" :class="showSteps ? 'collab-run-entry__body--live' : 'assistant-answer'">
       <RunProgressSteps
         v-if="showSteps"
-        :rows="liveRows"
+        :rows="currentRows"
         :now="now"
         :clock-offset-ms="offset"
       />
       <p v-else class="collab-run-entry__notice">{{ notice }}</p>
-      <p v-if="active" class="run-progress-sr" role="status">{{ activeLabels }}</p>
+      <p v-if="active" class="run-progress-sr" role="status">{{ liveAnnouncement }}</p>
       <div class="collab-run-entry__actions">
-        <span v-if="showSteps && finishedCount" class="collab-run-entry__done">已完成 {{ finishedCount }} 步</span>
+        <span v-if="showSteps && stepSummary" class="collab-run-entry__done">{{ stepSummary }}</span>
         <button type="button" class="collab-run-entry__link" @click="emit('open')">查看执行详情</button>
         <button
           v-if="active && canStop"
