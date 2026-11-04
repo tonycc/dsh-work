@@ -1479,10 +1479,6 @@ export class PostgresConversationRepository {
   }
 
 
-  /**
-   * 个人会话详情展示整段多轮消息时，按消息所属 Run 装载各自当前 Attempt 的成果，
-   * 让历史轮次的成果卡仍能挂在对应回复下（不只最新 Run 的 result.artifacts）。
-   */
   /** 会话内各 Run 的状态与归因（按创建时间），共享线程的执行记录与个人多轮详情的历史轮次共用。 */
   private async loadSessionRuns(sessionId: string) {
     return this.database<{
@@ -1504,6 +1500,10 @@ export class PostgresConversationRepository {
     `
   }
 
+  /**
+   * 个人会话详情展示整段多轮消息时，按消息所属 Run 装载各自当前 Attempt 的成果，
+   * 让历史轮次的成果卡仍能挂在对应回复下（不只最新 Run 的 result.artifacts）。
+   */
   private async loadThreadArtifactsForRuns(runIds: string[]): Promise<Array<ArtifactRow & { sourceRunId: string }>> {
     if (!runIds.length) return []
     return this.database<Array<ArtifactRow & { sourceRunId: string }>>`

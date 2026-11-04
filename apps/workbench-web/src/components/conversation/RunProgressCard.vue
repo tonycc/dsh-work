@@ -23,10 +23,10 @@ const totalLabel = computed(() => formatElapsed(elapsedMs(progress.value.startMs
 const activeLabels = computed(() => progress.value.rows.filter(row => row.state === 'active').map(row => row.label).join('，'))
 /**
  * 执行中的 AI 同事名称与完成后的回复一致：agentVersion 为“名称@版本”（无版本时为空串），
- * 取不到时退回最近一条回复的 agentName，再退回 dsh-work。
+ * 取不到时退回本轮已有回复的 agentName（不取其他轮，避免共享对话里借用别的同事），再退回 dsh-work。
  */
 const agentName = computed(() => props.task.agentVersion.split('@')[0]
-  || [...props.task.messages].reverse().find(message => message.role === 'assistant' && message.agentName)?.agentName
+  || props.task.messages.find(message => message.role === 'assistant' && message.runId === props.task.id && message.agentName)?.agentName
   || 'dsh-work')
 </script>
 

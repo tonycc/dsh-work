@@ -122,22 +122,24 @@ function skippedArtifactsForMessage(message: ChatMessage) {
  */
 const pastRunNotes = computed(() => {
   const answered = new Set(task.value.messages.filter(message => message.role === 'assistant').map(message => message.runId))
-  const notes = new Map<string, string>()
+  const byRun = new Map<string, string>()
   for (const run of task.value.threadRuns ?? []) {
     if (run.runId === task.value.id || answered.has(run.runId)) continue
-    if (run.status === 'cancelled') notes.set(run.runId, run.stoppedBy ? `已停止（${run.stoppedBy}），没有生成回复` : '已停止，没有生成回复')
-    else if (run.status === 'failed') notes.set(run.runId, '这一轮没有完成，没有生成回复')
+    if (run.status === 'cancelled') byRun.set(run.runId, run.stoppedBy ? `已停止（${run.stoppedBy}），没有生成回复` : '已停止，没有生成回复')
+    else if (run.status === 'failed') byRun.set(run.runId, '这一轮没有完成，没有生成回复')
   }
-  return notes
+  // 每轮只在该轮最后一条员工消息下标出一次：按消息 id 记录，渲染时直接取。
+  const byMessage = new Map<string, string>()
+  const lastUserByRun = new Map<string, string>()
+  for (const message of task.value.messages) {
+    if (message.role === 'user' && message.runId && byRun.has(message.runId)) lastUserByRun.set(message.runId, message.id)
+  }
+  for (const [runId, messageId] of lastUserByRun) byMessage.set(messageId, byRun.get(runId)!)
+  return byMessage
 })
 
-/** 每轮只在该轮最后一条员工消息下标出一次。 */
 function pastRunNote(message: ChatMessage) {
-  if (message.role !== 'user' || !message.runId) return undefined
-  const note = pastRunNotes.value.get(message.runId)
-  if (!note) return undefined
-  const lastUser = [...task.value.messages].reverse().find(item => item.role === 'user' && item.runId === message.runId)
-  return lastUser?.id === message.id ? note : undefined
+  return pastRunNotes.value.get(message.id)
 }
 
 /** 本轮最后一条回复在执行结束后显示业务结论与耗时，代替发送时间。 */
@@ -214,7 +216,7 @@ function messageMeta(message: ChatMessage) {
 
   <RunApprovalNotice v-if="task.status === 'awaiting_approval'" :task="task" />
 
-  <section v-if="task.result.error" class="conversation-notice error-notice">
+  <section v-if="task.result.error" class="conversation-notice error-notice" data-testid="run-error-notice">
     <span class="conversation-notice__icon"><el-icon><Close /></el-icon></span>
     <div>
       <strong>{{ task.result.error.message }}</strong>

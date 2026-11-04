@@ -16,6 +16,7 @@ import {
 
 import { AssistantMessageContent, RunTimeline, StatusTag } from '@dsh-work/ui-core'
 import { workbenchApi } from '@/api/client'
+import { isMissingResource } from '@/utils/missing-resource'
 import { useAuthStore } from '@/stores/auth'
 import { useContentStore } from '@/stores/content'
 import { useTaskStore } from '@/stores/tasks'
@@ -61,15 +62,9 @@ const sessionThread = ref<SessionThread | null>(null)
 const threadMissing = ref(false)
 /**
  * 加载失败但不能断定对话不存在（服务不可用、网络中断等）：显示“暂时无法加载”并可重试，
- * 不落到“未找到对话”——后者只用于服务端明确答复不存在或无权访问（401/403/404）。
+ * 不落到“未找到对话”——后者只用于服务端明确答复不存在或无权访问（见 isMissingResource）。
  */
 const targetUnavailable = ref(false)
-
-/** 服务端明确答复“没有这个对话或无权访问”；其余错误（5xx、网络）不能当作不存在。 */
-function isMissingTarget(error: unknown) {
-  const status = error instanceof Error && 'status' in error ? error.status : undefined
-  return typeof status === 'number' && [400, 401, 403, 404].includes(status)
-}
 /** 「加载更早」在途标记（评审中3）：线程只保留最近一页，更早历史按需前置合并。 */
 const loadingEarlierMessages = ref(false)
 /** Run/Session 目标解析在途标记：避免加载间隙闪现「未找到对话」。 */
@@ -845,7 +840,8 @@ async function loadEarlierMessages() {
 }
 
 async function initializeConversation() {
-  await taskStore.load()
+  // 对话列表只是缓存来源：服务整体不可用时它会先失败，仍要继续解析目标，才能给出“暂时无法加载”。
+  await taskStore.load().catch(() => undefined)
   const thread = await loadConversationTarget(routeTargetId.value)
   await reconcileConversationRoute()
   await loadAgentMembers(task.value?.workspaceId ?? thread?.workspaceId)
@@ -897,7 +893,7 @@ async function loadConversationTarget(id: string): Promise<SessionThread | null>
     if (run) return null
     // 不是 Run 时按 Session 加载；Run 接口暂时不可用时同样先试 Session，两者都没能确认才判定。
     const thread = await loadSessionMode(id)
-    if (!thread && runError !== undefined && !isMissingTarget(runError)) {
+    if (!thread && runError !== undefined && !isMissingResource(runError)) {
       threadMissing.value = false
       targetUnavailable.value = true
     }
@@ -913,22 +909,16 @@ async function loadSessionMode(id: string): Promise<SessionThread | null> {
     sessionThread.value = thread
     return thread
   } catch (error) {
-    if (isMissingTarget(error)) threadMissing.value = true
+    if (isMissingResource(error)) threadMissing.value = true
     else targetUnavailable.value = true
     return null
   }
 }
 
-/** “暂时无法加载”后的重试：重新解析当前目标，成功后与初次进入一致。 */
+/** “暂时无法加载”后的重试：与初次进入走同一流程（含此前失败的对话列表），加载中显示骨架屏。 */
 async function retryConversationTarget() {
   threadMissing.value = false
-  const thread = await loadConversationTarget(routeTargetId.value)
-  if (!task.value && !thread) return
-  await reconcileConversationRoute()
-  await loadAgentMembers(task.value?.workspaceId ?? thread?.workspaceId)
-  await loadProjectTask(task.value?.workspaceId ?? thread?.workspaceId)
-  await nextTick()
-  scrollToBottom('auto')
+  await initializeConversation()
 }
 
 onMounted(initializeConversation)
@@ -978,7 +968,7 @@ async function refreshSharedTarget() {
       } catch (error) {
         // 会话被删除或已失权：与初次加载同一口径落到「未找到对话」。后台刷新遇到服务暂时不可用时
         // 保留当前内容，等下一次刷新，不把正在看的对话换成“未找到”。
-        if (isMissingTarget(error)) {
+        if (isMissingResource(error)) {
           sessionThread.value = null
           threadMissing.value = true
         }
@@ -1257,7 +1247,7 @@ watch(
       data-testid="conversation-unavailable"
     >
       <template #extra>
-        <el-button type="primary" :loading="targetLoading" @click="retryConversationTarget">重试</el-button>
+        <el-button type="primary" @click="retryConversationTarget">重试</el-button>
       </template>
     </el-result>
 
