@@ -395,6 +395,32 @@ describe('ConversationView 归档只读态（design §2.7 / AC-23）', () => {
     expect(wrapper.text()).toContain('共享 Run 的回答')
   })
 
+  it('EX-STATE-01: tells a temporary outage apart from a missing conversation and can retry', async () => {
+    const outage = Object.assign(new Error('服务暂时不可用'), { status: 503 })
+    api.getRun.mockRejectedValue(outage)
+    api.getSessionThread.mockRejectedValue(outage)
+    const { wrapper } = await mountView({ item: null })
+    expect(wrapper.text()).toContain('暂时无法加载对话')
+    expect(wrapper.text()).not.toContain('未找到对话')
+
+    api.getRun.mockResolvedValue(task({
+      messages: [{ id: 'm-back', role: 'assistant', content: '恢复后的回答', createdAt: '10:01', runId: 'run-001' }],
+    }))
+    await wrapper.get('[data-testid="conversation-unavailable"] button').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('恢复后的回答')
+    expect(wrapper.find('[data-testid="conversation-unavailable"]').exists()).toBe(false)
+  })
+
+  it('EX-STATE-01: still says not found when the server answers that the conversation is missing', async () => {
+    const missing = Object.assign(new Error('不存在'), { status: 404 })
+    api.getRun.mockRejectedValue(missing)
+    api.getSessionThread.mockRejectedValue(missing)
+    const { wrapper } = await mountView({ item: null })
+    expect(wrapper.text()).toContain('未找到对话')
+    expect(wrapper.find('[data-testid="conversation-unavailable"]').exists()).toBe(false)
+  })
+
   it('loads a shared session thread without runs and shows sender/Agent attribution (TW-10)', async () => {
     route.params = { id: 'session-001' }
     api.getSessionThread.mockResolvedValue(sessionThread({
