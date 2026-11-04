@@ -39,7 +39,8 @@ const agentName = computed(() => props.task.agentVersion.split('@')[0]
       <span class="assistant-avatar">{{ agentName.slice(0, 1) }}</span>
       <div>
         <strong>{{ agentName }}</strong>
-        <span>正在处理<template v-if="totalLabel"> · 已用 {{ totalLabel }}</template></span>
+        <!-- 只有一个步骤时它的计时就是总用时，不在标题旁重复。 -->
+        <span>正在处理<template v-if="totalLabel && progress.rows.length > 1"> · 已用 {{ totalLabel }}</template></span>
       </div>
     </div>
     <div class="run-progress">

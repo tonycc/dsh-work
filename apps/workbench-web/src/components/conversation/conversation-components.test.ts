@@ -147,8 +147,18 @@ describe('RunMessageList', () => {
       global,
       props: { task: run({ result: result({ artifacts: [file] }) }), isOwn: m => m.role === 'user', canFollowUp: true },
     })
-    expect(wrapper.text()).toContain('目标已达成 · 1 分 5 秒')
-    expect(wrapper.text()).toContain('1,200 Token · inventory')
+    // 身份行保留时间并追加结论；个人对话不标“由某人发起”；底部只留 Token 用量，不重复同事名称。
+    expect(wrapper.text()).toContain('10:01 · 目标已达成')
+    expect(wrapper.text()).not.toContain('由 林岚 发起')
+    expect(wrapper.get('.assistant-run-meta').text()).toBe('1,200 Token')
+
+    const team = mount(RunMessageList, { global, props: { task: run({ workspaceType: 'team', tokenUsage: undefined }), isOwn: m => m.role === 'user' } })
+    expect(team.text()).toContain('由 林岚 发起')
+    expect(team.find('.assistant-run-meta').exists()).toBe(false)
+
+    const unverified = mount(RunMessageList, { global, props: { task: run({ result: result({ outcome: 'unverified' }) }), isOwn: m => m.role === 'user' } })
+    expect(unverified.text()).toContain('库存助手10:01')
+    expect(unverified.text()).not.toContain('待核验')
 
     await wrapper.get('[data-testid="preview-artifact-artifact-1"]').trigger('click')
     await wrapper.get('button[aria-label="下载成果 库存周报.md"]').trigger('click')
@@ -477,8 +487,25 @@ describe('RunMessageList', () => {
     expect(failed.emitted('retry')).toHaveLength(1)
     expect(failed.find('[data-testid="run-result-not-achieved"]').exists()).toBe(false)
 
-    const stopped = mount(RunMessageList, { global, props: { task: run({ status: 'cancelled', stoppedBy: '周航', result: result({ outcome: 'unverified' }) }), isOwn: () => false } })
+    // 失败说明先给原因与下一步，运行编号与错误码收进默认收起的技术详情。
+    const details = failed.get('[data-testid="run-error-details"]')
+    expect(details.attributes('open')).toBeUndefined()
+    expect(details.text()).toContain('run_failed')
+    expect(failed.get('[data-testid="run-error-notice"]').text()).toContain('超时重试')
+
+    // 员工主动停止：只留一行，不再用“目标未达成”的警示卡片重复说明。
+    const stopped = mount(RunMessageList, { global, props: { task: run({ status: 'cancelled', stoppedBy: '周航', result: result({ outcome: 'not_achieved', summary: '执行已取消，任务目标未达成。' }) }), isOwn: () => false } })
     expect(stopped.get('[data-testid="run-stopped-by"]').text()).toBe('本轮执行已由 周航 停止')
+    expect(stopped.find('[data-testid="run-result-not-achieved"]').exists()).toBe(false)
+    expect(stopped.text()).not.toContain('目标未达成')
+
+    const systemStopped = mount(RunMessageList, { global, props: { task: run({ status: 'cancelled', stoppedBy: null, result: result({ outcome: 'not_achieved' }) }), isOwn: () => false } })
+    expect(systemStopped.get('[data-testid="run-stopped-by"]').text()).toBe('本轮执行已停止')
+  })
+
+  it('shows the elapsed total beside the title only when there is more than one step (EX-PROGRESS-01)', () => {
+    const several = mount(RunMessageList, { global, props: { task: run({ status: 'running', result: result({ outcome: 'pending' }), steps: liveSteps }), isOwn: () => false } })
+    expect(several.get('[data-testid="run-progress-card"] .assistant-identity').text()).toMatch(/正在处理 · 已用/)
   })
 
   it('EX-STATE-01: names the working colleague the same way as its finished reply', () => {
