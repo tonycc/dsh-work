@@ -239,7 +239,7 @@
   background: #fafbfa;
 }
 
-.answer-artifact__row:has(.answer-artifact__open.is-active) {
+.answer-artifact__row.is-active {
   border-color: #356858;
   box-shadow: 0 0 0 2px rgb(53 104 88 / 12%);
 }
@@ -264,7 +264,6 @@
   border-radius: 0;
   color: #356858;
   background: transparent;
-  white-space: nowrap;
   cursor: pointer;
   font-size: var(--dsh-font-size-badge);
   white-space: nowrap;
@@ -294,7 +293,7 @@
   display: grid;
   grid-template-columns: 30px minmax(0, 1fr) auto;
   align-items: center;
-  min-width: 0;
+  min-width: 140px;
   flex: 1 1 260px;
   gap: 8px;
   padding: 8px 12px 8px 10px;
@@ -308,6 +307,14 @@
 
 .answer-artifact__open:hover {
   background: #f0f4f2;
+}
+
+/* 卡片裁切圆角外的内容，焦点框画在按钮内侧，键盘切换时仍清晰可见。 */
+.answer-artifact__open:focus-visible,
+.answer-artifact__download:focus-visible,
+.answer-artifact__revise:focus-visible {
+  outline: 2px solid #356858;
+  outline-offset: -2px;
 }
 
 .answer-artifact__open.is-active {

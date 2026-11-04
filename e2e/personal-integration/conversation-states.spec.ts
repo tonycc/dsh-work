@@ -43,7 +43,7 @@ test('P1: stopped and failed rounds keep a note after later rounds, and the fail
   // 失败说明不出现内部用语；运行编号与错误码收在默认收起的技术详情里。
   await expect(notice).not.toContainText(/Attempt|Worker|DSH/)
   await expect(notice.getByText('RUNTIME_EXECUTION_FAILED')).toBeHidden()
-  await notice.getByText('技术详情').click()
+  await notice.getByText('技术详情', { exact: true }).click()
   await expect(notice.getByText('RUNTIME_EXECUTION_FAILED')).toBeVisible()
   await expect(page.getByTestId('past-run-note')).toHaveText([/^已停止（.+），没有生成回复$/])
 

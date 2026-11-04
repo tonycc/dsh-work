@@ -1715,7 +1715,7 @@ export function toRunError(runId: string, errorCode: string | null | undefined):
     RUNTIME_EXECUTION_FAILED: {
       message: '本轮执行失败',
       reason: '执行服务没有正常完成本轮。',
-      suggestion: '可以重新执行；若再次失败，请在对话详情中复制运行编号交给管理员排查。',
+      suggestion: '可以重新执行；若再次失败，请展开“技术详情”复制运行编号交给管理员排查。',
       retryable: true,
     },
   }

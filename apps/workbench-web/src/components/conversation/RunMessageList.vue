@@ -142,6 +142,9 @@ function pastRunNote(message: ChatMessage) {
   return pastRunNotes.value.get(message.id)
 }
 
+/** 写入外部系统但效果未知的操作：失败说明与停止提醒共用。 */
+const unknownExternalEffects = computed(() => task.value.result.pendingItems.filter(item => item.kind === 'external_effect_unknown'))
+
 /** 个人对话只有本人发起，不再标“由某人发起”；团队对话保留归因。 */
 const showRequester = computed(() => task.value.workspaceType === 'team')
 
@@ -231,9 +234,10 @@ function messageMeta(message: ChatMessage) {
     <div>
       <strong>{{ task.result.error.message }}</strong>
       <!-- 员工先看到原因与下一步；运行编号与错误码收进技术详情，排查时再展开复制给管理员。 -->
-      <p>{{ task.result.error.reason }}{{ task.result.error.suggestion }}</p>
-      <ul v-if="task.result.pendingItems.some(item => item.kind === 'external_effect_unknown')" class="result-pending">
-        <li v-for="item in task.result.pendingItems.filter(item => item.kind === 'external_effect_unknown')" :key="item.message">{{ item.message }}</li>
+      <p>{{ task.result.error.reason }}</p>
+      <p><strong>下一步：</strong>{{ task.result.error.suggestion }}</p>
+      <ul v-if="unknownExternalEffects.length" class="result-pending">
+        <li v-for="item in unknownExternalEffects" :key="item.message">{{ item.message }}</li>
       </ul>
       <details class="error-notice__details" data-testid="run-error-details">
         <summary>技术详情</summary>
@@ -270,5 +274,21 @@ function messageMeta(message: ChatMessage) {
   <p v-if="task.status === 'cancelled'" class="conversation-stopped-by" data-testid="run-stopped-by">
     {{ task.stoppedBy ? `本轮执行已由 ${task.stoppedBy} 停止` : '本轮执行已停止' }}
   </p>
+  <!-- 停止时正在执行的写入操作效果未知：单独提醒先核对，避免重新发送后对外部系统重复操作。 -->
+  <section
+    v-if="task.status === 'cancelled' && unknownExternalEffects.length"
+    class="conversation-notice verify-notice"
+    role="alert"
+    data-testid="run-external-effect-unknown"
+  >
+    <span class="conversation-notice__icon"><el-icon><Warning /></el-icon></span>
+    <div>
+      <strong>停止时有操作的实际效果尚未确认</strong>
+      <p>重新发送前，请先在对应系统中核对结果，避免重复操作。</p>
+      <ul class="result-pending">
+        <li v-for="item in unknownExternalEffects" :key="item.message">{{ item.message }}</li>
+      </ul>
+    </div>
+  </section>
 
 </template>
