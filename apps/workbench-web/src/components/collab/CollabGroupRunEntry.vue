@@ -42,6 +42,8 @@ watch(active, (running) => {
 onBeforeUnmount(() => { if (timer) clearInterval(timer) })
 
 const elapsed = computed(() => progress.value ? formatElapsed(elapsedMs(progress.value.startMs, now.value, offset.value)) : '')
+/** 有步骤时转圈与步骤计时已表明“执行中、用了多久”，不再重复显示状态标签。 */
+const showSteps = computed(() => active.value && Boolean(progress.value?.rows.length))
 const chipLabel = computed(() => {
   if (props.status === 'running') return elapsed.value ? `执行中 · 已用 ${elapsed.value}` : '执行中'
   if (props.status === 'cancelled' && props.stoppedByName) return `${props.stoppedByName} 停止`
@@ -49,6 +51,13 @@ const chipLabel = computed(() => {
   return undefined
 })
 const activeLabels = computed(() => progress.value?.rows.filter(row => row.state === 'active').map(row => row.label).join('，') ?? '')
+/** 群聊里只显示正在进行的步骤，已完成的折叠成一句计数，完整步骤在执行详情中查看。 */
+const liveRows = computed(() => {
+  const rows = progress.value?.rows ?? []
+  const current = rows.filter(row => row.state === 'active')
+  return current.length ? current : rows.slice(-1)
+})
+const finishedCount = computed(() => (progress.value?.rows.length ?? 0) - liveRows.value.length)
 const notice = computed(() => {
   if (props.status === 'queued') return '排队中，即将开始执行。'
   if (props.status === 'running') return '正在执行…'
@@ -75,18 +84,20 @@ const notice = computed(() => {
           <span>{{ time }} · 由 {{ requesterName }} 发起</span>
         </div>
       </div>
-      <StatusTag :status="tagStatus" :label="chipLabel" dot />
+      <StatusTag v-if="!showSteps" :status="tagStatus" :label="chipLabel" dot />
     </div>
-    <div class="assistant-answer collab-run-entry__body">
+    <!-- 执行中只留步骤与操作一行，不再套卡片；等待、失败、停止等需要说明原因时仍用卡片。 -->
+    <div class="collab-run-entry__body" :class="showSteps ? 'collab-run-entry__body--live' : 'assistant-answer'">
       <RunProgressSteps
-        v-if="active && progress?.rows.length"
-        :rows="progress.rows"
+        v-if="showSteps"
+        :rows="liveRows"
         :now="now"
         :clock-offset-ms="offset"
       />
       <p v-else class="collab-run-entry__notice">{{ notice }}</p>
       <p v-if="active" class="run-progress-sr" role="status">{{ activeLabels }}</p>
       <div class="collab-run-entry__actions">
+        <span v-if="showSteps && finishedCount" class="collab-run-entry__done">已完成 {{ finishedCount }} 步</span>
         <button type="button" class="collab-run-entry__link" @click="emit('open')">查看执行详情</button>
         <button
           v-if="active && canStop"
@@ -112,6 +123,24 @@ const notice = computed(() => {
   position: relative;
 }
 
+.collab-run-entry__body--live {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 4px 20px;
+  margin: 6px 0 0 34px;
+}
+
+.collab-run-entry__body--live .run-progress-steps {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.collab-run-entry__body--live .collab-run-entry__actions {
+  margin-top: 0;
+  padding-bottom: 4px;
+}
+
 .collab-run-entry__notice {
   margin: 0;
   color: var(--dsh-color-muted);
@@ -119,8 +148,14 @@ const notice = computed(() => {
 
 .collab-run-entry__actions {
   display: flex;
+  align-items: center;
   gap: 16px;
   margin-top: 8px;
+}
+
+.collab-run-entry__done {
+  color: var(--dsh-color-muted);
+  font-size: var(--dsh-font-size-caption);
 }
 
 .collab-run-entry__link {

@@ -278,7 +278,9 @@ describe('CollabGroupTimeline (S5d 群聊)', () => {
       const entry = wrapper.get('[data-testid="group-run-entry"]')
       expect(entry.attributes('data-status')).toBe('running')
       expect(entry.text()).toContain('由 管理员 发起')
-      expect(entry.text()).toMatch(/执行中 · 已用/)
+      // 有步骤时只用转圈与步骤计时表示执行中，不再重复状态标签，也不套卡片。
+      expect(entry.text()).not.toMatch(/执行中 · 已用/)
+      expect(entry.find('.assistant-answer').exists()).toBe(false)
       expect(entry.findAll('[data-testid="run-progress-step"]').length).toBeGreaterThan(0)
 
       timeline(ask, run('cancelled', '管理员'))
