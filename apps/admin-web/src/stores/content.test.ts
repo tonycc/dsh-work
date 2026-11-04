@@ -25,6 +25,7 @@ const api = vi.hoisted(() => ({
   reconcileGrantSources: vi.fn(),
   updateRuntimeConfiguration: vi.fn(),
   rollbackSkill: vi.fn(),
+  discardSkillDraft: vi.fn(),
   setAgentWorkspaceJoin: vi.fn(),
   setSkillStatus: vi.fn(),
 }))
@@ -80,6 +81,34 @@ describe('admin content store Skill version state', () => {
     expect(store.skillVersions.find(item => item.id === 'skill-version-draft')?.status).toBe('disabled')
     expect(store.skillVersions.find(item => item.id === 'skill-version-target')?.status).toBe('published')
     expect(store.skillReleaseRecords).toEqual([release])
+  })
+
+  it('disables a discarded draft and drops a never-published Skill from the list', async () => {
+    const { useContentStore } = await import('./content')
+    const store = useContentStore()
+    store.$patch({
+      skills: [makeSkill({ version: '0.1.0', status: 'draft' })],
+      skillVersions: [makeVersion({ id: 'skill-version-draft', version: '0.1.0', status: 'draft' })],
+    })
+    api.discardSkillDraft.mockResolvedValue({ skill: null, discardedVersionIds: ['skill-version-draft'] })
+
+    await expect(store.discardSkillDraft('skill-reporting')).resolves.toBeNull()
+
+    expect(api.discardSkillDraft).toHaveBeenCalledWith('skill-reporting')
+    expect(store.skills).toEqual([])
+    expect(store.skillVersions[0]?.status).toBe('disabled')
+  })
+
+  it('keeps a published Skill on its active version after its draft is discarded', async () => {
+    const { useContentStore } = await import('./content')
+    const store = useContentStore()
+    store.$patch({ skills: [makeSkill({ version: '0.2.0', activeVersion: '0.1.0', status: 'draft' })] })
+    const restored = makeSkill({ version: '0.1.0', activeVersion: '0.1.0', status: 'published' })
+    api.discardSkillDraft.mockResolvedValue({ skill: restored, discardedVersionIds: ['skill-version-draft'] })
+
+    await store.discardSkillDraft('skill-reporting')
+
+    expect(store.skills).toEqual([restored])
   })
 
   it('loads only audit endpoints for an audit-only session', async () => {

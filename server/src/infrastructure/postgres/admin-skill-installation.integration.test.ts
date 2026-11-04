@@ -409,6 +409,42 @@ test('ZIP upload reuses package parsing, compatibility planning, folder storage 
   assert.equal(version?.status, 'published')
   assert.equal((await artifactStore.read(version!.manifest.artifact)).files.find(file => file.path === 'references/value.txt')?.content, 'SKILL_RESOURCE_MARKER_7F31')
 })
+test('an installed draft can be discarded and replaced by a corrected package', { skip: real }, async () => {
+  const skills = new PostgresSkillService(database.client, operations, artifactStore)
+  const draftBody = body.replace('installation-test', 'discard-test')
+  const original = zipSync({ 'SKILL.md': strToU8(draftBody), 'references/value.txt': strToU8('v1') })
+  const corrected = zipSync({ 'SKILL.md': strToU8(`${draftBody}\nReturn one line.\n`), 'references/value.txt': strToU8('v1') })
+  const install = async (zip: Uint8Array) => {
+    const preview = await service.prepareZip(actor, { fileName: 'discard-test.zip', bytes: zip })
+    return service.confirmZip(actor, preview.id, preview.planSha256!)
+  }
+  const first = await install(original)
+  assert.deepEqual([first.resultType, first.installedVersion], ['created', '0.1.0'])
+  // A failed trial leaves the draft in place; a corrected package cannot silently replace it.
+  await assert.rejects(install(corrected), (error: Error & { status?: number }) => error.status === 409 && /放弃该草稿/.test(error.message))
+
+  const [firstVersion] = await database.client<{ id: string }[]>`select id from skill_versions where skill_id = ${first.skillId!} and version = '0.1.0'`
+  const discarded = await skills.discardDraft({ skillId: first.skillId!, actor })
+  assert.equal(discarded.skill, null, 'a never-published Skill leaves the list once its only draft is discarded')
+  assert.deepEqual(discarded.discardedVersionIds, [firstVersion!.id])
+  assert.equal((await skills.getSkills()).some(skill => skill.id === first.skillId), false)
+  const [state] = await database.client<{ versionStatus: string; installationStatus: string; audits: number }[]>`
+    select (select status from skill_versions where id = ${firstVersion!.id}) as "versionStatus",
+           (select status from skill_installations where id = ${first.id}) as "installationStatus",
+           (select count(*)::int from audit_events where action = 'skill.draft.discard' and object_id = ${first.skillId!}) as audits
+  `
+  assert.deepEqual(state, { versionStatus: 'disabled', installationStatus: 'cancelled', audits: 1 })
+  await assert.rejects(skills.discardDraft({ skillId: first.skillId!, actor }), /Skill 不存在/)
+
+  const second = await install(corrected)
+  assert.deepEqual([second.skillId, second.resultType, second.installedVersion], [first.skillId, 'updated', '0.2.0'])
+  assert.equal((await skills.getSkills()).find(skill => skill.id === first.skillId)?.status, 'draft')
+  // Re-uploading content identical to a discarded version creates a new draft instead of reviving the disabled one.
+  await skills.discardDraft({ skillId: first.skillId!, actor })
+  const third = await install(original)
+  assert.deepEqual([third.resultType, third.installedVersion], ['updated', '0.3.0'])
+})
+
 test('one confirmed plan atomically installs, tests and publishes same-source Skill dependencies', { skip: real, timeout: 30000 }, async () => {
   const { sessionId, runId } = await send('npx skills@latest add fixture/delegated --skill=grill-me')
   const detail = await wait(sessionId)

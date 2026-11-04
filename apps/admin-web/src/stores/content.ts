@@ -278,6 +278,18 @@ export const useContentStore = defineStore('admin-content', () => {
     return result.skill
   }
 
+  /** 放弃待发布草稿；从未发布过的 Skill 放弃后从列表移除，返回 null。 */
+  async function discardSkillDraft(skillId: string) {
+    const result = await adminApi.discardSkillDraft(skillId)
+    if (result.skill) replaceById(skills.value, result.skill)
+    else skills.value = skills.value.filter(item => item.id !== skillId)
+    const discarded = new Set(result.discardedVersionIds)
+    for (const item of skillVersions.value) {
+      if (discarded.has(item.id)) item.status = 'disabled'
+    }
+    return result.skill
+  }
+
   async function checkConnector(connectorId: string) {
     const connector = await adminApi.checkConnector({ connectorId })
     replaceById(connectors.value, connector)
@@ -375,6 +387,7 @@ export const useContentStore = defineStore('admin-content', () => {
     startSkillTestRun,
     getSkillTestRun,
     rollbackSkill,
+    discardSkillDraft,
     setSkillBuiltinCoverage,
     setSkillVisibility,
     checkConnector,

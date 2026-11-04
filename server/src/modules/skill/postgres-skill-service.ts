@@ -742,6 +742,48 @@ export class PostgresSkillService {
   }
 
   /**
+   * 放弃安装得到的待发布草稿（例如严格试运行未通过、需要重新上传修正包）。草稿版本与同一安装图中
+   * 仍为草稿的依赖版本标为停用、该安装记录取消，释放待发布指针；版本记录与试运行证据保留，
+   * 已发布版本不受影响。从未发布过的 Skill 放弃后不再出现在列表中，再次安装时沿用同一 Skill 并递增版本号。
+   * 来自员工提交的草稿只能经“待审核”撤回或拒绝。
+   */
+  async discardDraft(input: { skillId: string; actor: string }) {
+    const actor = await this.requireActor(input.actor)
+    assertSkillId(input.skillId)
+    const [current] = await this.readSkillRows(input.skillId)
+    if (!current) throw skillNotFound(`Skill 不存在：${input.skillId}`)
+    const draftVersionId = current.draftVersionId
+    if (!draftVersionId) throw skillConflict('当前 Skill 没有待发布草稿')
+    if (current.submissionDraft) throw skillConflict('待发布版本来自员工提交，请在“待审核”中撤回或拒绝', 'skill_submission_review_required')
+    if (current.installationRole === 'dependency') throw skillConflict('这个草稿是安装其他 Skill 时一并带入的依赖，请放弃入口 Skill 的草稿')
+
+    const discarded = await this.database.begin(async transaction => {
+      const [locked] = await transaction<{ draftVersionId: string | null }[]>`
+        select draft_version_id as "draftVersionId" from skills where tenant_id = ${tenantId} and id = ${input.skillId} for update
+      `
+      if (locked?.draftVersionId !== draftVersionId) throw skillConflict('Skill 状态已发生变化，请刷新后重试')
+      const graph = current.installationId ? await transaction<{ id: string; skillId: string }[]>`
+        select sv.id, sv.skill_id as "skillId" from skill_versions sv
+          join skills s on s.tenant_id = sv.tenant_id and s.id = sv.skill_id and s.draft_version_id = sv.id
+         where sv.tenant_id = ${tenantId} and sv.status = 'draft' and sv.manifest->>'installationId' = ${current.installationId}
+         for update of s
+      ` : []
+      const versions = [{ id: draftVersionId, skillId: input.skillId }, ...graph.filter(row => row.id !== draftVersionId)]
+      const versionIds = versions.map(row => row.id)
+      await transaction`update skill_versions set status = 'disabled' where tenant_id = ${tenantId} and id in ${transaction(versionIds)} and status = 'draft'`
+      await transaction`update skills set draft_version_id = null, updated_at = now() where tenant_id = ${tenantId} and draft_version_id in ${transaction(versionIds)}`
+      if (current.installationId) {
+        await transaction`update skill_installations set status = 'cancelled', updated_at = now() where tenant_id = ${tenantId} and id = ${current.installationId} and status = 'installed'`
+      }
+      return versions
+    })
+    const note = `放弃待发布草稿 v${current.version}${discarded.length > 1 ? `，连同同一安装带入的 ${discarded.length - 1} 个依赖草稿` : ''}；已发布版本不受影响。`
+    await this.audit(actor.id, 'skill.draft.discard', input.skillId, 'success', note)
+    const [skill] = await this.readSkillRows(input.skillId)
+    return { skill: skill ? toSkillDefinition(skill) : null, discardedVersionIds: discarded.map(row => row.id) }
+  }
+
+  /**
    * 管理员设置已安装 Skill 的“覆盖内置场景”（builtin-skills-plan 5.4）。Skill 级配置，不随版本固定，
    * 立即作用于新运行；不改变 Skill 版本、试运行证据或 Agent 验证结果。
    */
