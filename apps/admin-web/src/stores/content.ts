@@ -278,15 +278,15 @@ export const useContentStore = defineStore('admin-content', () => {
     return result.skill
   }
 
-  /** 放弃待发布草稿；从未发布过的 Skill 放弃后从列表移除，返回 null。 */
+  /**
+   * 放弃待发布草稿；从未发布过的 Skill 放弃后返回 null。同一安装带入的依赖草稿会一并停用，
+   * 因此重新读取 Skill 列表与版本，不在本地推算。
+   */
   async function discardSkillDraft(skillId: string) {
     const result = await adminApi.discardSkillDraft(skillId)
-    if (result.skill) replaceById(skills.value, result.skill)
-    else skills.value = skills.value.filter(item => item.id !== skillId)
-    const discarded = new Set(result.discardedVersionIds)
-    for (const item of skillVersions.value) {
-      if (discarded.has(item.id)) item.status = 'disabled'
-    }
+    const [nextSkills, nextVersions] = await Promise.all([adminApi.getSkills(), adminApi.getSkillVersions()])
+    skills.value = nextSkills
+    skillVersions.value = nextVersions
     return result.skill
   }
 

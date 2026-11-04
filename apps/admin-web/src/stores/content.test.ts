@@ -83,32 +83,24 @@ describe('admin content store Skill version state', () => {
     expect(store.skillReleaseRecords).toEqual([release])
   })
 
-  it('disables a discarded draft and drops a never-published Skill from the list', async () => {
+  it('reloads Skills and versions after discarding, so dependency drafts discarded alongside update too', async () => {
     const { useContentStore } = await import('./content')
     const store = useContentStore()
     store.$patch({
-      skills: [makeSkill({ version: '0.1.0', status: 'draft' })],
+      skills: [makeSkill({ version: '0.1.0', status: 'draft' }), makeSkill({ id: 'skill-dependency', version: '0.1.0', status: 'draft' })],
       skillVersions: [makeVersion({ id: 'skill-version-draft', version: '0.1.0', status: 'draft' })],
     })
-    api.discardSkillDraft.mockResolvedValue({ skill: null, discardedVersionIds: ['skill-version-draft'] })
+    const remaining = makeSkill({ id: 'skill-other', version: '1.0.0', status: 'published' })
+    const disabled = makeVersion({ id: 'skill-version-draft', version: '0.1.0', status: 'disabled' })
+    api.discardSkillDraft.mockResolvedValue({ skill: null, discardedVersionIds: ['skill-version-draft', 'skill-version-dependency'], discardedSkillIds: ['skill-reporting', 'skill-dependency'] })
+    api.getSkills.mockResolvedValue([remaining])
+    api.getSkillVersions.mockResolvedValue([disabled])
 
     await expect(store.discardSkillDraft('skill-reporting')).resolves.toBeNull()
 
     expect(api.discardSkillDraft).toHaveBeenCalledWith('skill-reporting')
-    expect(store.skills).toEqual([])
-    expect(store.skillVersions[0]?.status).toBe('disabled')
-  })
-
-  it('keeps a published Skill on its active version after its draft is discarded', async () => {
-    const { useContentStore } = await import('./content')
-    const store = useContentStore()
-    store.$patch({ skills: [makeSkill({ version: '0.2.0', activeVersion: '0.1.0', status: 'draft' })] })
-    const restored = makeSkill({ version: '0.1.0', activeVersion: '0.1.0', status: 'published' })
-    api.discardSkillDraft.mockResolvedValue({ skill: restored, discardedVersionIds: ['skill-version-draft'] })
-
-    await store.discardSkillDraft('skill-reporting')
-
-    expect(store.skills).toEqual([restored])
+    expect(store.skills).toEqual([remaining])
+    expect(store.skillVersions).toEqual([disabled])
   })
 
   it('loads only audit endpoints for an audit-only session', async () => {

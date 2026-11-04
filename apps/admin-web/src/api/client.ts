@@ -324,7 +324,7 @@ export const adminApi = {
   rollbackSkill: (input: { skillId: string; version: string }) =>
     request<{ skill: SkillDefinition; release: SkillReleaseRecord }>('/skills/rollback', { method: 'POST', body: JSON.stringify(input) }),
   discardSkillDraft: (skillId: string) =>
-    request<{ skill: SkillDefinition | null; discardedVersionIds: string[] }>(`/skills/${encodeURIComponent(skillId)}/draft/discard`, { method: 'POST' }),
+    request<{ skill: SkillDefinition | null; discardedVersionIds: string[]; discardedSkillIds: string[] }>(`/skills/${encodeURIComponent(skillId)}/draft/discard`, { method: 'POST' }),
   getMcpConnectors: () => request<ConnectorDefinition[]>('/connectors'),
   getBuiltinTools: () => request<BuiltinToolStatus>('/runtimes/builtin-tools'),
   getBuiltinSkills: () => request<BuiltinSkillStatus>('/skills/builtin'),
