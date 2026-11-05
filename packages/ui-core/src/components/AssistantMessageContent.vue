@@ -22,6 +22,12 @@ type Block =
 
 const props = defineProps<{ text: string }>()
 const blocks = computed(() => parseBlocks(props.text))
+/** 每个表格是回答中的第几个表格（从 1 起），用于下载文件名；与其他内容块的位置无关。 */
+const tableNumbers = computed(() => {
+  const numbers = new Map<number, number>()
+  blocks.value.forEach((block, index) => { if (block.type === 'table') numbers.set(index, numbers.size + 1) })
+  return numbers
+})
 
 /*
  * EX-STYLE-01：表格工具栏。复制为制表符分隔（粘贴到表格软件按列分开），下载为带 UTF-8 BOM 的 CSV
@@ -51,11 +57,18 @@ function tableTsv(block: TableBlock) {
 }
 
 function tableCsv(block: TableBlock) {
-  const quote = (cell: string) => /[",\n]/.test(cell) ? `"${cell.replaceAll('"', '""')}"` : cell
+  // 以 = + - @ 开头的单元格在表格软件中会被当作公式执行；表格内容来自模型输出，加前导单引号按文本处理。
+  const neutralize = (cell: string) => /^[=+\-@]/.test(cell) ? `'${cell}` : cell
+  const quote = (raw: string) => {
+    const cell = neutralize(raw)
+    return /[",\n]/.test(cell) ? `"${cell.replaceAll('"', '""')}"` : cell
+  }
   return `\uFEFF${tableMatrix(block).map(row => row.map(quote).join(',')).join('\r\n')}`
 }
 
 function copyWithSelection(text: string) {
+  // 选区复制会移走焦点，复制后还给原来的按钮，键盘用户不会被带回页面开头。
+  const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
   const area = document.createElement('textarea')
   area.value = text
   area.setAttribute('readonly', '')
@@ -69,6 +82,7 @@ function copyWithSelection(text: string) {
     return false
   } finally {
     area.remove()
+    previous?.focus()
   }
 }
 
@@ -91,11 +105,12 @@ function downloadTable(block: TableBlock, index: number) {
   const url = URL.createObjectURL(new Blob([tableCsv(block)], { type: 'text/csv;charset=utf-8' }))
   const link = document.createElement('a')
   link.href = url
-  link.download = `表格-${index + 1}.csv`
+  link.download = `表格-${tableNumbers.value.get(index) ?? 1}.csv`
   document.body.appendChild(link)
   link.click()
   link.remove()
-  URL.revokeObjectURL(url)
+  // 立即释放会让部分浏览器（如 Safari）取消下载，稍后再释放。
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
   showTableStatus(index, '已开始下载 CSV')
 }
 

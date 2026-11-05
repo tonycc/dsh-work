@@ -77,6 +77,37 @@ describe('AssistantMessageContent', () => {
       expect(wrapper.get('.assistant-table-status').text()).toBe('复制失败，请手动选中表格复制')
     })
 
+    it('neutralizes formula-like cells, names files by table order and releases the link later', async () => {
+      vi.useFakeTimers()
+      let blob: Blob | undefined
+      vi.spyOn(URL, 'createObjectURL').mockImplementation((value) => { blob = value as Blob; return 'blob:table' })
+      const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined)
+      let fileName = ''
+      vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) { fileName = this.download })
+      const text = ['说明在前', '', '| 公式 | 数值 |', '|---|---|', '| =SUM(A1:A9) | -5 |', '| @cmd | +1 |'].join('\n')
+      const wrapper = mount(AssistantMessageContent, { props: { text } })
+      await button(wrapper, '下载 CSV').trigger('click')
+      expect(fileName).toBe('表格-1.csv')
+      expect((await blob!.text()).slice(1)).toBe("公式,数值\r\n'=SUM(A1:A9),'-5\r\n'@cmd,'+1")
+      expect(revoke).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(1000)
+      expect(revoke).toHaveBeenCalledWith('blob:table')
+      vi.useRealTimers()
+    })
+
+    it('returns focus to the copy button after the selection fallback', async () => {
+      vi.stubGlobal('navigator', { ...navigator, clipboard: undefined })
+      Object.defineProperty(document, 'execCommand', { configurable: true, value: vi.fn().mockReturnValue(true) })
+      const wrapper = mount(AssistantMessageContent, { props: { text: table }, attachTo: document.body })
+      const copy = button(wrapper, '复制表格')
+      ;(copy.element as HTMLButtonElement).focus()
+      await copy.trigger('click')
+      await flushPromises()
+      expect(document.activeElement).toBe(copy.element)
+      expect(wrapper.get('.assistant-table-status').text()).toBe('已复制 2 行，可直接粘贴到表格')
+      wrapper.unmount()
+    })
+
     it('downloads a UTF-8 CSV with a BOM and quoted cells', async () => {
       let blob: Blob | undefined
       vi.spyOn(URL, 'createObjectURL').mockImplementation((value) => { blob = value as Blob; return 'blob:table' })

@@ -42,6 +42,7 @@ import KnowledgeBaseChips from '@/components/knowledge/KnowledgeBaseChips.vue'
 import KnowledgeBasePicker from '@/components/knowledge/KnowledgeBasePicker.vue'
 import { useKnowledgeStore } from '@/stores/knowledge'
 import type { SessionKnowledgeBase } from '@/types/knowledge'
+import { runAgentName } from '@/utils/run-agent-name'
 
 const route = useRoute()
 const router = useRouter()
@@ -114,14 +115,8 @@ function conversationPath(target: string) {
 }
 
 const task = computed(() => taskStore.getTask(routeTargetId.value))
-/** 一对一对话的标题栏显示正在对话的 AI 同事（名称取 agentVersion 的“名称@版本”，退回最近回复）；团队对话不显示。 */
-const headerAgentName = computed(() => {
-  const current = task.value
-  if (!current || current.workspaceType === 'team') return ''
-  return current.agentVersion.split('@')[0]
-    || [...current.messages].reverse().find(message => message.role === 'assistant' && message.agentName)?.agentName
-    || ''
-})
+/** 一对一对话的标题栏显示正在对话的 AI 同事，与执行中卡片同一取值（runAgentName）；团队对话不显示。 */
+const headerAgentName = computed(() => task.value && task.value.workspaceType !== 'team' ? runAgentName(task.value) : '')
 /**
  * 归档只读态（design §2.7 / 3-T1 执行轨）：运行所属团队空间归档后，续写（发送消息）
  * 与重试入口隐藏；内容、来源与成果下载保持可读。个人空间不会命中（AC-23）。
@@ -1673,6 +1668,8 @@ watch(
 /* 项目空间 S3：任务详情内的任务对话——没有会话标题栏，时间线与系统记录。 */
 .conversation-page--task .conversation-scroll {
   padding-top: 8px;
+  /* 与下方任务对话的列宽一致，回答中的表格按此计算可展开的宽度（conversation-thread.css）。 */
+  --conversation-column-max: 760px;
 }
 
 .conversation-page--task .conversation-thread {

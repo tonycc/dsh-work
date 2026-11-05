@@ -58,8 +58,11 @@
   transition: opacity 0.15s;
 }
 
+/* 自己的消息没有可聚焦的元素：键盘焦点进入对话区（如回复的复制按钮）时一并显示所有时间。 */
 .conversation-message--compact:hover .message-time,
-.conversation-message--compact:focus-within .message-time {
+.conversation-message--compact:focus-within .message-time,
+.conversation-thread:focus-within .conversation-message--compact .message-time,
+.collab-agent-chat__thread:focus-within .conversation-message--compact .message-time {
   opacity: 1;
 }
 
@@ -847,12 +850,13 @@
 
 /*
  * EX-STYLE-01：回答中的表格可超出对话列，最宽到对话区（滚动容器设 container-type: inline-size）。
- * 对话列最宽 1040px 居中、回答缩进 42px；不支持容器单位的浏览器保持与对话列同宽并横向滚动。
+ * 对话列居中、回答缩进 42px；列宽上限取滚动容器上的 --conversation-column-max（默认 1040px，
+ * 任务详情内嵌的任务对话为 760px），与实际列宽一致才不会溢出。不支持容器单位时与对话列同宽并横向滚动。
  */
 @supports (width: 1cqw) {
   .assistant-reply .assistant-table {
     width: max-content;
     min-width: 100%;
-    max-width: calc(100cqw - (100cqw - min(100cqw, 1040px)) / 2 - 42px);
+    max-width: calc(100cqw - (100cqw - min(100cqw, var(--conversation-column-max, 1040px))) / 2 - 42px);
   }
 }
