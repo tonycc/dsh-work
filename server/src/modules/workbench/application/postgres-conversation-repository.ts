@@ -1721,7 +1721,7 @@ export function toRunError(runId: string, errorCode: string | null | undefined):
   }
   const detail = catalog[code] ?? {
     message: '本轮执行失败',
-    reason: '执行服务返回了错误。',
+    reason: `执行服务返回了未识别的错误（错误码 ${code}）。`,
     suggestion: '可重新执行；若再次失败，请将运行编号和错误码交给管理员排查。',
     retryable: true,
   }
