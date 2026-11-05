@@ -324,12 +324,13 @@ function inlineNodes(value: string): VNodeChild[] {
 .assistant-message-content { color: var(--dsh-color-text, var(--color-text-primary)); font-size: var(--dsh-font-size-body, var(--font-size-body)); line-height: 1.75; overflow-wrap: anywhere; }
 .assistant-message-content > :first-child { margin-top: 0; }
 .assistant-message-content > :last-child { margin-bottom: 0; }
-.assistant-message-content p { margin: 8px 0; }
-.assistant-message-content h3, .assistant-message-content h4 { margin: 18px 0 8px; color: var(--dsh-color-ink, var(--color-text-heading)); font-weight: 650; line-height: 1.45; }
-.assistant-message-content h3 { font-size: var(--dsh-font-size-subheading, var(--font-size-title)); }
-.assistant-message-content h4 { font-size: var(--dsh-font-size-title, var(--font-size-body)); }
-.assistant-message-content ul, .assistant-message-content ol { margin: 8px 0; padding-left: 24px; }
-.assistant-message-content li + li { margin-top: 5px; }
+.assistant-message-content p { margin: 12px 0; }
+.assistant-message-content h3, .assistant-message-content h4 { margin: 22px 0 8px; color: var(--dsh-color-ink, var(--color-text-heading)); font-weight: 650; line-height: 1.45; }
+.assistant-message-content h3 { font-size: var(--dsh-font-size-section, var(--font-size-title)); }
+.assistant-message-content h4 { font-size: var(--dsh-font-size-subheading, var(--font-size-body)); }
+.assistant-message-content ul, .assistant-message-content ol { margin: 12px 0; padding-left: 24px; }
+.assistant-message-content li > ul, .assistant-message-content li > ol { margin: 6px 0 4px; }
+.assistant-message-content li + li { margin-top: 8px; }
 .assistant-message-content li::marker { color: var(--dsh-color-subtle, #98a2b3); }
 .assistant-message-content :deep(.assistant-inline-code) { padding: 2px 6px; border-radius: var(--dsh-radius-sm, var(--radius-tag)); background: var(--dsh-color-canvas, var(--color-bg-page)); color: var(--dsh-color-brand, var(--color-primary)); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: .92em; }
 .assistant-message-content :deep(a) { color: var(--dsh-color-brand, var(--color-primary)); text-decoration: none; }

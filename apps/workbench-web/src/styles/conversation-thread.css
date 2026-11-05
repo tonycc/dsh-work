@@ -52,8 +52,8 @@
 
 .message-time {
   margin-top: 4px;
-  color: #7a827c;
-  font-size: var(--dsh-font-size-micro);
+  color: #646a65;
+  font-size: var(--dsh-font-size-badge);
   opacity: 0;
   transition: opacity 0.15s;
 }
@@ -80,8 +80,9 @@
 
 .user-message p {
   margin: 0;
-  font-size: var(--dsh-font-size-body);
-  line-height: 1.65;
+  /* EX-STYLE-01：对话内容（气泡与回答正文）15px，界面元素保持 14px 及以下。 */
+  font-size: var(--dsh-font-size-title);
+  line-height: 1.7;
   white-space: pre-wrap;
 }
 
@@ -210,13 +211,14 @@
 
 .assistant-identity strong {
   color: #292c29;
-  font-size: var(--dsh-font-size-caption);
+  font-size: var(--dsh-font-size-body);
   font-weight: 650;
 }
 
 .assistant-identity > div > span {
-  color: #858b86;
-  font-size: var(--dsh-font-size-micro);
+  /* 时间与“由某人发起”：12px，颜色加深到对比度 4.5:1 以上。 */
+  color: #646a65;
+  font-size: var(--dsh-font-size-badge);
 }
 
 .assistant-answer {
@@ -238,6 +240,23 @@
 
 .assistant-answer .assistant-message-content {
   color: #303430;
+}
+
+/*
+ * EX-STYLE-01：回答正文 15px；文字段落、列表与小标题最宽 760px（约 50 字一行），
+ * 表格、代码块与成果卡片仍可占满对话列。表格保持 14px，信息密度高的内容不放大。
+ */
+.assistant-reply .assistant-message-content {
+  font-size: var(--dsh-font-size-title);
+  line-height: 1.75;
+}
+
+.assistant-reply .assistant-message-content > :is(p, ul, ol, h3, h4) {
+  max-width: 760px;
+}
+
+.assistant-reply .assistant-table {
+  font-size: var(--dsh-font-size-body);
 }
 
 /* 回复操作在悬停或键盘聚焦时出现；最新一条回复常显；触屏设备没有悬停，常显。 */
@@ -793,7 +812,7 @@
     padding: 14px 14px 10px;
   }
 
-  .assistant-answer .assistant-message-content {
+  .assistant-answer:not(.assistant-reply) .assistant-message-content {
     font-size: var(--dsh-font-size-caption);
   }
 
