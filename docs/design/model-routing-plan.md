@@ -156,6 +156,8 @@ patch 只含引用名，不含密钥；敏感值继续沿用 `!!js process.env.X
 
 ## 7. 第二阶段：模型网关（另行立项）
 
+> **2026-11-05 更新：** 模型网关已提前立项，由[发往模型的数据防护方案](model-data-protection-plan.md)（DLP-S1）实施，网关职责增加数据防护（敏感值遮盖与还原、密钥拦截）。Provider 增加信任级别 `trust_level`（内部部署 / 外部厂商），并入 MR-S1；4.2 的 `model_route` 增加 `trust_level`、`data_policy_version`。以下原文保留为网关的结构约定。
+
 pi-ai 路由的 `baseURL` 指向平台模型网关，`apiKeyEnv` 改为本 Attempt 的短期令牌；网关校验令牌后用平台加密保存的密钥转发，并在网关侧计量。DSH 中不再持有任何模型凭据，`dsh-managed` 后端退役。第一阶段的 Manifest 快照、patch 生成与校验结构不变，只替换路由目标与凭据来源。网关只做认证、转发与计量，不承担任何 Agent 执行逻辑。该阶段列在[执行隔离方案](execution-isolation-plan.md)第 10 节后续方向：执行容器的环境变量由执行器固定，模型可执行的代码本就接触不到 Worker 凭据，网关不是放开可执行能力的前提；它缓解的是 DSH 本身被攻破时的长期凭据暴露。
 
 ## 8. 验证
