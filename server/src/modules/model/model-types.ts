@@ -1,6 +1,7 @@
 export type ProviderStatus = 'active' | 'disabled'
 export type CredentialStatus = 'configured' | 'missing' | 'revoked'
-export type CredentialBackend = 'dsh-managed' | 'keychain' | 'secret-manager'
+/** postgres-encrypted：管理端录入的厂商密钥，以 DSH_CREDENTIAL_MASTER_KEY 加密存入 credential_secrets。 */
+export type CredentialBackend = 'dsh-managed' | 'keychain' | 'secret-manager' | 'postgres-encrypted'
 export type ModelStatus = 'active' | 'disabled'
 /** 路由用途只保留默认路由（模型路由方案 R2、4.8）。 */
 export type ModelRoutePurpose = 'default'
@@ -19,6 +20,8 @@ export interface CredentialReference {
   backend: CredentialBackend
   externalRef: string
   status: CredentialStatus
+  /** 平台加密保存的密钥后 4 位，只用于识别；其他后端为 null。 */
+  hint: string | null
   lastVerifiedAt: string | null
   updatedAt: string
 }
@@ -83,6 +86,14 @@ export interface CreateProviderInput {
   providerType: ProviderType
   trustLevel: ProviderTrustLevel
   baseUrl: string
+  /** 可选：创建时一并录入厂商密钥，平台加密保存；不返回、不回显。 */
+  apiKey?: string
+  actor: string
+}
+
+export interface SetProviderApiKeyInput {
+  providerId: string
+  apiKey: string
   actor: string
 }
 

@@ -1426,7 +1426,7 @@
       },
       "post": {
         "operationId": "createModelProvider",
-        "summary": "创建平台级模型 Provider；必须选择协议类型（首批仅 openai-completions）与信任级别",
+        "summary": "创建平台级模型 Provider；必须选择协议类型（首批仅 openai-completions）与信任级别，可同时录入厂商密钥（加密保存）",
         "responses": {
           "200": {
             "$ref": "#/components/responses/Ok"
@@ -1447,6 +1447,17 @@
       "patch": {
         "operationId": "setModelProviderStatus",
         "summary": "启用或停用 Provider",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          }
+        }
+      }
+    },
+    "/model-providers/api-key": {
+      "patch": {
+        "operationId": "setModelProviderApiKey",
+        "summary": "录入或替换厂商密钥，以平台主密钥加密保存；响应只含末尾 4 位提示，不返回密钥",
         "responses": {
           "200": {
             "$ref": "#/components/responses/Ok"

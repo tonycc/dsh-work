@@ -198,7 +198,13 @@ async function start() {
   )
   registerOrganizationRoutes(router, new PostgresOrganizationService(database))
   const directorySyncTimer = directorySync?.startScheduler() ?? null
-  const modelRepository = new PostgresModelGovernanceRepository(database)
+  // 管理端录入的厂商密钥以 DSH_CREDENTIAL_MASTER_KEY 加密保存；未配置时不能录入，只能登记 DSH 受管引用。
+  const modelRepository = new PostgresModelGovernanceRepository(database, process.env.DSH_CREDENTIAL_MASTER_KEY
+    ? new PostgresEncryptedCredentialStore(database, {
+        masterKeyBase64: process.env.DSH_CREDENTIAL_MASTER_KEY,
+        keyId: process.env.DSH_CREDENTIAL_MASTER_KEY_ID,
+      })
+    : undefined)
 
   let orchestration: RunOrchestrationService | null = null
   let revocationSweep: RunRevocationSweep | null = null

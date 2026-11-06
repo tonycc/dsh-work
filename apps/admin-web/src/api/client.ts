@@ -393,7 +393,10 @@ export const adminApi = {
     providerType: ProviderType
     trustLevel: ProviderTrustLevel
     baseUrl: string
+    apiKey?: string
   }) => request<ModelProvider>('/model-providers', { method: 'POST', body: JSON.stringify(input) }),
+  setModelProviderApiKey: (input: { providerId: string; apiKey: string }) =>
+    request<ModelProvider>('/model-providers/api-key', { method: 'PATCH', body: JSON.stringify(input) }),
   updateModelProvider: (input: {
     providerId: string
     name: string

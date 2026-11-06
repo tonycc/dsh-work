@@ -28,10 +28,12 @@ const providerTypeOptions: { value: ProviderType; label: string; disabled: boole
   { value: 'anthropic-messages', label: 'Anthropic Messages（暂未开放）', disabled: true },
 ]
 
-const providerForm = reactive({ key: '', name: '', providerType: 'openai-completions' as ProviderType, trustLevel: '' as ProviderTrustLevel | '', baseUrl: '' })
+const providerForm = reactive({ key: '', name: '', providerType: 'openai-completions' as ProviderType, trustLevel: '' as ProviderTrustLevel | '', baseUrl: '', apiKey: '' })
 const providerEditForm = reactive({ name: '', baseUrl: '', trustLevel: 'external' as ProviderTrustLevel })
 const modelForm = reactive({ modelKey: '', displayName: '', capabilities: ['text'] as string[] })
-const credentialForm = reactive({ backend: 'dsh-managed' as const, externalRef: '', status: 'configured' as const })
+const credentialMode = ref<'platform' | 'dsh'>('platform')
+const apiKeyInput = ref('')
+const credentialForm = reactive({ backend: 'dsh-managed' as const, externalRef: '', status: 'configured' as 'configured' | 'missing' | 'revoked' })
 const routeForm = reactive({ key: '', name: '', providerModelId: '', enabled: true })
 
 const activeProviderCount = computed(() => providers.value.filter((item) => item.status === 'active').length)
@@ -62,7 +64,7 @@ async function load() {
 }
 
 function openProviderDialog() {
-  Object.assign(providerForm, { key: '', name: '', providerType: 'openai-completions', trustLevel: '', baseUrl: '' })
+  Object.assign(providerForm, { key: '', name: '', providerType: 'openai-completions', trustLevel: '', baseUrl: '', apiKey: '' })
   providerDialogOpen.value = true
 }
 
@@ -80,10 +82,13 @@ function openModelDialog(provider: ModelProvider) {
 
 function openCredentialDialog(provider: ModelProvider) {
   selectedProvider.value = provider
+  const dshManaged = provider.credential?.backend === 'dsh-managed'
+  credentialMode.value = dshManaged ? 'dsh' : 'platform'
+  apiKeyInput.value = ''
   Object.assign(credentialForm, {
     backend: 'dsh-managed',
-    externalRef: provider.credential?.externalRef ?? '',
-    status: provider.credential?.status ?? 'configured',
+    externalRef: dshManaged ? provider.credential?.externalRef ?? '' : '',
+    status: dshManaged ? provider.credential?.status ?? 'configured' : 'configured',
   })
   credentialDialogOpen.value = true
 }
@@ -102,9 +107,11 @@ async function createProvider() {
     return
   }
   try {
-    await adminApi.createModelProvider({ ...providerForm, trustLevel: providerForm.trustLevel })
+    const { apiKey, ...provider } = providerForm
+    await adminApi.createModelProvider({ ...provider, trustLevel: providerForm.trustLevel, ...(apiKey ? { apiKey } : {}) })
+    providerForm.apiKey = ''
     providerDialogOpen.value = false
-    ElMessage.success('Provider 已创建')
+    ElMessage.success(apiKey ? 'Provider 已创建，密钥已加密保存' : 'Provider 已创建')
     await load()
   } catch (cause) {
     ElMessage.error(cause instanceof Error ? cause.message : 'Provider 创建失败')
@@ -152,22 +159,44 @@ async function toggleModel(model: ProviderModel) {
   }
 }
 
-async function saveCredentialReference() {
+async function saveCredential() {
   if (!selectedProvider.value) return
   try {
-    await adminApi.updateCredentialReference({
-      providerId: selectedProvider.value.id,
-      ...credentialForm,
-    })
+    if (credentialMode.value === 'platform') {
+      if (!apiKeyInput.value) {
+        ElMessage.error('请输入密钥')
+        return
+      }
+      await adminApi.setModelProviderApiKey({ providerId: selectedProvider.value.id, apiKey: apiKeyInput.value })
+      apiKeyInput.value = ''
+      ElMessage.success('密钥已加密保存')
+    } else {
+      await adminApi.updateCredentialReference({ providerId: selectedProvider.value.id, ...credentialForm })
+      ElMessage.success('密钥引用已更新；密钥正文未进入 dsh-work')
+    }
     credentialDialogOpen.value = false
-    ElMessage.success('密钥引用已更新；密钥正文未进入 dsh-work')
     await load()
   } catch (cause) {
-    ElMessage.error(cause instanceof Error ? cause.message : '密钥引用更新失败')
+    ElMessage.error(cause instanceof Error ? cause.message : '密钥保存失败')
   }
 }
 
 async function saveRoute() {
+  const target = modelOptions.value.find((item) => item.value === routeForm.providerModelId)
+  if (routeForm.enabled && target?.disabled) {
+    ElMessage.error('目标模型或其 Provider 已停用，不能设为默认路由')
+    return
+  }
+  const current = enabledRoute.value
+  try {
+    if (editingRoute.value?.enabled && !routeForm.enabled) {
+      await ElMessageBox.confirm('停用后没有启用的默认路由，新运行会被拒绝；已启动的运行不受影响。', `停用 ${editingRoute.value.name}`, { type: 'warning' })
+    } else if (routeForm.enabled && current && current.id !== editingRoute.value?.id) {
+      await ElMessageBox.confirm(`保存后将同时停用当前的默认路由“${current.name}”，之后新建的运行使用该路由。`, '设为默认路由', { type: 'warning' })
+    }
+  } catch {
+    return
+  }
   try {
     if (editingRoute.value) {
       await adminApi.updateModelRoute({ routeId: editingRoute.value.id, name: routeForm.name, providerModelId: routeForm.providerModelId, enabled: routeForm.enabled })
@@ -228,6 +257,13 @@ function providerTypeLabel(type: ProviderType) {
   return { 'openai-completions': 'OpenAI Chat Completions 兼容', 'openai-responses': 'OpenAI Responses', 'anthropic-messages': 'Anthropic Messages' }[type]
 }
 
+function credentialSummary(provider: ModelProvider) {
+  const credential = provider.credential
+  if (!credential) return '尚未配置'
+  if (credential.backend === 'postgres-encrypted') return credential.hint ? `平台加密保存 · 末尾 ${credential.hint}` : '平台加密保存'
+  return `${credential.backend} / ${credential.externalRef}`
+}
+
 function trustLevelLabel(level: ProviderTrustLevel) {
   return level === 'internal' ? '内部部署' : '外部厂商'
 }
@@ -243,7 +279,7 @@ onMounted(() => void load())
     </div>
 
     <el-alert v-if="error" type="error" :closable="false" show-icon :title="error" />
-    <el-alert class="record-only-notice" type="warning" :closable="false" show-icon title="模型路由目前仅记录，不决定执行使用的模型" description="每次运行会把启用的默认路由写入快照，用于审计和用量统计；DSH 实际调用的模型由 DSH Profile 固定，修改路由不会改变执行模型。没有可用的默认路由（未启用、Provider 或模型已停用、密钥引用未配置）时，新运行会被拒绝。dsh-work 只保存密钥引用与状态，不能读取、回显或导出密钥正文。" />
+    <el-alert class="record-only-notice" type="warning" :closable="false" show-icon title="模型路由目前仅记录，不决定执行使用的模型" description="每次运行会把启用的默认路由写入快照，用于审计和用量统计；DSH 实际调用的模型由 DSH Profile 固定，修改路由不会改变执行模型。没有可用的默认路由（未启用、Provider 或模型已停用、密钥引用未配置）时，新运行会被拒绝。管理端录入的厂商密钥以平台主密钥加密保存，不能读取、回显或导出。" />
 
     <section class="content-panel overview-strip" aria-label="模型治理概况">
       <dl class="overview-strip__stats">
@@ -264,9 +300,9 @@ onMounted(() => void load())
         <el-table-column label="Provider" min-width="220"><template #default="scope"><div class="stack-cell"><div class="provider-title"><strong>{{ scope.row.name }}</strong><el-tag size="small" :type="scope.row.trustLevel === 'internal' ? 'success' : 'warning'" effect="plain">{{ trustLevelLabel(scope.row.trustLevel) }}</el-tag></div><span>{{ scope.row.key }} · {{ providerTypeLabel(scope.row.providerType) }}</span></div></template></el-table-column>
         <el-table-column label="服务地址" min-width="150"><template #default="scope"><span class="mono-value">{{ scope.row.baseUrl }}</span></template></el-table-column>
         <el-table-column label="模型数" width="72"><template #default="scope">{{ scope.row.models.length }} 个</template></el-table-column>
-        <el-table-column label="密钥引用" min-width="180"><template #default="scope"><div class="stack-cell"><el-tag :type="credentialStatusType(scope.row)" effect="plain">{{ credentialStatusLabel(scope.row) }}</el-tag><span>{{ scope.row.credential ? `${scope.row.credential.backend} / ${scope.row.credential.externalRef}` : '尚未登记' }}</span></div></template></el-table-column>
+        <el-table-column label="密钥" min-width="180"><template #default="scope"><div class="stack-cell"><el-tag :type="credentialStatusType(scope.row)" effect="plain">{{ credentialStatusLabel(scope.row) }}</el-tag><span>{{ credentialSummary(scope.row) }}</span></div></template></el-table-column>
         <el-table-column label="状态" width="80"><template #default="scope"><el-tag :type="scope.row.status === 'active' ? 'success' : 'info'" effect="plain">{{ scope.row.status === 'active' ? '启用' : '停用' }}</el-tag></template></el-table-column>
-        <el-table-column v-if="authStore.canManage" label="操作" width="260" fixed="right"><template #default="scope"><el-button link type="primary" @click="openProviderEditDialog(scope.row)">编辑</el-button><el-button link type="primary" @click="openModelDialog(scope.row)">添加模型</el-button><el-button link type="primary" @click="openCredentialDialog(scope.row)">密钥引用</el-button><el-button link :type="scope.row.status === 'active' ? 'danger' : 'primary'" @click="toggleProvider(scope.row)">{{ scope.row.status === 'active' ? '停用' : '启用' }}</el-button></template></el-table-column>
+        <el-table-column v-if="authStore.canManage" label="操作" width="260" fixed="right"><template #default="scope"><el-button link type="primary" @click="openProviderEditDialog(scope.row)">编辑</el-button><el-button link type="primary" @click="openModelDialog(scope.row)">添加模型</el-button><el-button link type="primary" @click="openCredentialDialog(scope.row)">密钥</el-button><el-button link :type="scope.row.status === 'active' ? 'danger' : 'primary'" @click="toggleProvider(scope.row)">{{ scope.row.status === 'active' ? '停用' : '启用' }}</el-button></template></el-table-column>
         <el-table-column type="expand" width="48"><template #default="scope"><div class="model-expansion"><h3>已注册模型</h3><el-empty v-if="scope.row.models.length === 0" description="尚未添加模型" :image-size="54" /><div v-else class="model-card-grid"><article v-for="model in scope.row.models" :key="model.id"><div><strong>{{ model.displayName }}</strong><span>{{ model.modelKey }}</span></div><el-tag :type="model.status === 'active' ? 'success' : 'info'" effect="plain">{{ model.status === 'active' ? '启用' : '停用' }}</el-tag><p>{{ model.capabilities.join(' · ') || '未声明能力' }}</p><el-button v-if="authStore.canManage" class="model-card__action" link :type="model.status === 'active' ? 'danger' : 'primary'" @click="toggleModel(model)">{{ model.status === 'active' ? '停用模型' : '启用模型' }}</el-button></article></div></div></template></el-table-column>
       </el-table>
 
@@ -281,7 +317,7 @@ onMounted(() => void load())
     </section>
 
     <el-dialog v-model="providerDialogOpen" title="新建 Provider" width="620px" destroy-on-close>
-      <el-form label-position="top" :model="providerForm"><div class="form-grid"><el-form-item label="Provider 名称" required><el-input v-model="providerForm.name" placeholder="例如：DeepSeek 官方" /></el-form-item><el-form-item label="Provider 标识" required><el-input v-model="providerForm.key" placeholder="例如：deepseek-official" /></el-form-item></div><el-form-item label="协议类型" required><el-select v-model="providerForm.providerType"><el-option v-for="option in providerTypeOptions" :key="option.value" :label="option.label" :value="option.value" :disabled="option.disabled" /></el-select></el-form-item><el-form-item label="信任级别" required><el-radio-group v-model="providerForm.trustLevel" aria-label="信任级别"><el-radio value="internal">内部部署</el-radio><el-radio value="external">外部厂商</el-radio></el-radio-group><p class="field-hint">内部部署指数据不出企业网络的模型服务；其余一律选外部厂商。后续数据防护按此级别处理发往模型的请求。</p></el-form-item><el-form-item label="服务地址" required><el-input v-model="providerForm.baseUrl" placeholder="https://api.example.com" /></el-form-item></el-form>
+      <el-form label-position="top" :model="providerForm"><div class="form-grid"><el-form-item label="Provider 名称" required><el-input v-model="providerForm.name" placeholder="例如：DeepSeek 官方" /></el-form-item><el-form-item label="Provider 标识" required><el-input v-model="providerForm.key" placeholder="例如：deepseek-official" /></el-form-item></div><el-form-item label="协议类型" required><el-select v-model="providerForm.providerType"><el-option v-for="option in providerTypeOptions" :key="option.value" :label="option.label" :value="option.value" :disabled="option.disabled" /></el-select></el-form-item><el-form-item label="信任级别" required><el-radio-group v-model="providerForm.trustLevel" aria-label="信任级别"><el-radio value="internal">内部部署</el-radio><el-radio value="external">外部厂商</el-radio></el-radio-group><p class="field-hint">内部部署指数据不出企业网络的模型服务；其余一律选外部厂商。后续数据防护按此级别处理发往模型的请求。</p></el-form-item><el-form-item label="服务地址" required><el-input v-model="providerForm.baseUrl" placeholder="https://api.example.com" /></el-form-item><el-form-item label="API Key"><el-input v-model="providerForm.apiKey" type="password" show-password autocomplete="new-password" placeholder="可稍后在“密钥”中填写" /><p class="field-hint">平台加密保存，只能写入、不能读出，保存后只显示末尾 4 位。网关上线前，执行仍使用 DSH 中配置的凭据，此处的密钥届时生效。</p></el-form-item></el-form>
       <template #footer><el-button @click="providerDialogOpen = false">取消</el-button><el-button type="primary" :icon="Connection" @click="createProvider">创建 Provider</el-button></template>
     </el-dialog>
 
@@ -295,10 +331,17 @@ onMounted(() => void load())
       <template #footer><el-button @click="modelDialogOpen = false">取消</el-button><el-button type="primary" @click="createModel">添加模型</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="credentialDialogOpen" :title="`配置 ${selectedProvider?.name ?? ''} 的密钥引用`" width="620px" destroy-on-close>
-      <el-alert type="warning" :closable="false" show-icon title="这里只登记引用，不输入密钥正文。当前 DSH 管理的密钥请继续在 DSH Credentials Provider 中更新。" />
-      <el-form class="dialog-form" label-position="top" :model="credentialForm"><el-form-item label="密钥后端" required><el-select v-model="credentialForm.backend"><el-option label="DSH 受管凭据" value="dsh-managed" /></el-select></el-form-item><el-form-item label="外部引用" required><el-input v-model="credentialForm.externalRef" placeholder="例如：DEEPSEEK_API_KEY" /></el-form-item><el-form-item label="配置状态" required><el-radio-group v-model="credentialForm.status"><el-radio value="configured">已配置</el-radio><el-radio value="missing">缺失</el-radio><el-radio value="revoked">已撤销</el-radio></el-radio-group></el-form-item></el-form>
-      <template #footer><el-button @click="credentialDialogOpen = false">取消</el-button><el-button type="primary" :icon="SetUp" @click="saveCredentialReference">保存引用</el-button></template>
+    <el-dialog v-model="credentialDialogOpen" :title="`配置 ${selectedProvider?.name ?? ''} 的密钥`" width="620px" destroy-on-close>
+      <el-radio-group v-model="credentialMode" class="credential-mode" aria-label="密钥保存方式"><el-radio-button value="platform">平台加密保存</el-radio-button><el-radio-button value="dsh">DSH 受管引用</el-radio-button></el-radio-group>
+      <template v-if="credentialMode === 'platform'">
+        <el-alert type="info" :closable="false" show-icon title="密钥以平台主密钥加密保存，只能写入、不能读出，保存后只显示末尾 4 位。网关上线前，执行仍使用 DSH 中配置的凭据，此处的密钥届时生效。" />
+        <el-form class="dialog-form" label-position="top"><el-form-item label="API Key" required><el-input v-model="apiKeyInput" type="password" show-password autocomplete="new-password" :placeholder="selectedProvider?.credential?.backend === 'postgres-encrypted' ? '已保存，填写新密钥即替换' : '粘贴厂商提供的 API Key'" /></el-form-item></el-form>
+      </template>
+      <template v-else>
+        <el-alert type="warning" :closable="false" show-icon title="这里只登记引用，不输入密钥正文。密钥请在 DSH Credentials Provider 中更新；切换到此方式会删除平台已加密保存的密钥。" />
+        <el-form class="dialog-form" label-position="top" :model="credentialForm"><el-form-item label="外部引用" required><el-input v-model="credentialForm.externalRef" placeholder="例如：DEEPSEEK_API_KEY" /></el-form-item><el-form-item label="配置状态" required><el-radio-group v-model="credentialForm.status"><el-radio value="configured">已配置</el-radio><el-radio value="missing">缺失</el-radio><el-radio value="revoked">已撤销</el-radio></el-radio-group></el-form-item></el-form>
+      </template>
+      <template #footer><el-button @click="credentialDialogOpen = false">取消</el-button><el-button type="primary" :icon="SetUp" @click="saveCredential">保存</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="routeDialogOpen" :title="editingRoute ? `编辑 ${editingRoute.name}` : '新建默认路由'" width="640px" destroy-on-close>
@@ -329,6 +372,7 @@ onMounted(() => void load())
 .model-card-grid article span, .model-card-grid article p { color: var(--color-text-secondary); font-size: var(--font-size-caption); }
 .model-card-grid article p { grid-column: 1 / -1; margin: 0; }
 .model-card__action { grid-column: 1 / -1; justify-self: start; }
+.credential-mode { margin-bottom: 14px; }
 .field-hint { margin: 6px 0 0; color: var(--color-text-secondary); font-size: var(--font-size-caption); line-height: 1.5; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .dialog-form { margin-top: 18px; }

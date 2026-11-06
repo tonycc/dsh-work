@@ -6,6 +6,7 @@ import {
   type CreateProviderInput,
   type CreateProviderModelInput,
   type ProviderStatus,
+  type SetProviderApiKeyInput,
   type SetProviderModelStatusInput,
   type UpdateModelRouteInput,
   type UpdateProviderInput,
@@ -37,12 +38,19 @@ export class ModelGovernanceService {
     }
     assertTrustLevel(input.trustLevel)
     assertHttpUrl(input.baseUrl)
+    const apiKey = input.apiKey === undefined || input.apiKey === '' ? undefined : normalizeApiKey(input.apiKey)
     return this.repository.createProvider(this.tenantId, {
       ...input,
       key: input.key.trim(),
       name: input.name.trim(),
       baseUrl: normalizeUrl(input.baseUrl),
+      apiKey,
     })
+  }
+
+  setProviderApiKey(input: SetProviderApiKeyInput) {
+    assertActor(input.actor)
+    return this.repository.setProviderApiKey(this.tenantId, { ...input, apiKey: normalizeApiKey(input.apiKey) })
   }
 
   updateProvider(input: UpdateProviderInput) {
@@ -82,7 +90,9 @@ export class ModelGovernanceService {
 
   upsertCredentialReference(input: UpsertCredentialReferenceInput) {
     assertActor(input.actor)
-    if (!['dsh-managed', 'keychain', 'secret-manager'].includes(input.backend)) throw invalidRequest('密钥后端无效')
+    if (!['dsh-managed', 'keychain', 'secret-manager'].includes(input.backend)) {
+      throw invalidRequest('密钥后端无效；平台加密保存的密钥请直接录入密钥')
+    }
     if (!input.externalRef.trim()) throw stateConflict('密钥引用不能为空')
     if (!['configured', 'missing', 'revoked'].includes(input.status)) throw invalidRequest('凭据状态无效')
     return this.repository.upsertCredentialReference(this.tenantId, {
@@ -99,12 +109,14 @@ export class ModelGovernanceService {
     assertActor(input.actor)
     assertKey(input.key, '模型路由')
     assertRouteName(input.name)
+    assertEnabledFlag(input.enabled)
     return this.repository.createRoute(this.tenantId, { ...input, key: input.key.trim(), name: input.name.trim() })
   }
 
   updateRoute(input: UpdateModelRouteInput) {
     assertActor(input.actor)
     assertRouteName(input.name)
+    assertEnabledFlag(input.enabled)
     return this.repository.updateRoute(this.tenantId, { ...input, name: input.name.trim() })
   }
 
@@ -146,6 +158,18 @@ function assertTrustLevel(value: string) {
   if (!providerTrustLevels.includes(value as never)) {
     throw invalidRequest('请选择 Provider 信任级别：内部部署（internal）或外部厂商（external）')
   }
+}
+
+function assertEnabledFlag(value: unknown) {
+  if (typeof value !== 'boolean') throw invalidRequest('请指定路由是否启用（enabled 必须是布尔值）')
+}
+
+/** 厂商密钥：1–8192 字节、不含空白字符；只校验格式，不记录、不回显。 */
+function normalizeApiKey(value: unknown) {
+  if (typeof value !== 'string' || !value || Buffer.byteLength(value, 'utf8') > 8192 || /\s/.test(value)) {
+    throw invalidRequest('密钥必须为 1～8192 字节且不能包含空白字符')
+  }
+  return value
 }
 
 function normalizeUrl(value: string) {

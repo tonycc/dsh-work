@@ -925,7 +925,7 @@ export interface EmployeeModelUsageSummary {
 }
 
 export type ProviderStatus = 'active' | 'disabled'
-export type CredentialBackend = 'dsh-managed' | 'keychain' | 'secret-manager'
+export type CredentialBackend = 'dsh-managed' | 'keychain' | 'secret-manager' | 'postgres-encrypted'
 export type CredentialStatus = 'configured' | 'missing' | 'revoked'
 /** 路由用途只保留默认路由（模型路由方案 R2）。 */
 export type ModelRoutePurpose = 'default'
@@ -939,6 +939,8 @@ export interface CredentialReference {
   backend: CredentialBackend
   externalRef: string
   status: CredentialStatus
+  /** 平台加密保存的密钥后 4 位，只用于识别。 */
+  hint: string | null
   lastVerifiedAt: string | null
   updatedAt: string
 }

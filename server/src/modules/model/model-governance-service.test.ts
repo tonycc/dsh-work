@@ -86,3 +86,30 @@ test('a route must target an existing model', async () => {
   const service = new ModelGovernanceService(new MemoryModelGovernanceRepository())
   await assert.rejects(service.createRoute({ key: 'missing-model', name: '缺失模型', providerModelId: 'model-missing', enabled: false, actor }), /目标模型不存在/)
 })
+
+test('an API key is stored for the provider without ever being returned', async () => {
+  const service = new ModelGovernanceService(new MemoryModelGovernanceRepository())
+  const created = await service.createProvider({ key: 'vendor-two', name: '第二家厂商', providerType: 'openai-completions', trustLevel: 'external', baseUrl: 'https://vendor.example.com', apiKey: 'fake-model-key-0123456789abcd', actor })
+  assert.equal(created.credential?.backend, 'postgres-encrypted')
+  assert.equal(created.credential?.hint, 'abcd')
+  assert.equal(JSON.stringify(created).includes('fake-model-key-0123456789abcd'), false)
+
+  const rotated = await service.setProviderApiKey({ providerId: created.id, apiKey: 'fake-model-key-rotated-9999', actor })
+  assert.equal(rotated.credential?.hint, '9999')
+  assert.equal(rotated.credential?.id, created.credential?.id)
+  assert.throws(() => service.setProviderApiKey({ providerId: created.id, apiKey: 'has space', actor }), /空白字符/)
+  assert.throws(() => service.upsertCredentialReference({ providerId: created.id, backend: 'postgres-encrypted', externalRef: 'x', status: 'configured', actor }), /直接录入密钥/)
+})
+
+test('a route cannot become the default while its target is disabled, and enabled must be explicit', async () => {
+  const service = new ModelGovernanceService(new MemoryModelGovernanceRepository())
+  const provider = (await service.listProviders())[0]!
+  const model = provider.models[0]!
+  const standby = await service.createRoute({ key: 'standby', name: '备用路由', providerModelId: model.id, enabled: false, actor })
+  await service.setProviderModelStatus({ modelId: model.id, status: 'disabled', actor })
+  await assert.rejects(service.updateRoute({ routeId: standby.id, name: '备用路由', providerModelId: model.id, enabled: true, actor }), /已停用，不能设为默认路由/)
+  await service.updateRoute({ routeId: standby.id, name: '备用路由（改名）', providerModelId: model.id, enabled: false, actor })
+  await service.setProviderModelStatus({ modelId: model.id, status: 'active', actor })
+  assert.equal((await service.resolveDefaultRoute()).routeKey, 'default', 'the working default route was never switched off')
+  assert.throws(() => service.createRoute({ key: 'no-flag', name: '未指定启用', providerModelId: model.id, enabled: undefined as never, actor }), /布尔值/)
+})
