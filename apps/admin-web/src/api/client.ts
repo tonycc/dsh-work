@@ -49,7 +49,8 @@ import type {
   ManagedWorkspaceDefinition,
   ModelProvider,
   ModelRoute,
-  ModelRoutePurpose,
+  ProviderTrustLevel,
+  ProviderType,
   OperationsSummary,
   PlatformStatus,
   PersistentApproval,
@@ -389,9 +390,16 @@ export const adminApi = {
   createModelProvider: (input: {
     key: string
     name: string
-    providerType: string
+    providerType: ProviderType
+    trustLevel: ProviderTrustLevel
     baseUrl: string
   }) => request<ModelProvider>('/model-providers', { method: 'POST', body: JSON.stringify(input) }),
+  updateModelProvider: (input: {
+    providerId: string
+    name: string
+    baseUrl: string
+    trustLevel: ProviderTrustLevel
+  }) => request<ModelProvider>('/model-providers', { method: 'PATCH', body: JSON.stringify(input) }),
   setModelProviderStatus: (input: { providerId: string; status: 'active' | 'disabled' }) =>
     request<ModelProvider>('/model-providers/status', { method: 'PATCH', body: JSON.stringify(input) }),
   createProviderModel: (input: {
@@ -400,6 +408,8 @@ export const adminApi = {
     displayName: string
     capabilities: string[]
   }) => request<ModelProvider>('/provider-models', { method: 'POST', body: JSON.stringify(input) }),
+  setProviderModelStatus: (input: { modelId: string; status: 'active' | 'disabled' }) =>
+    request<ModelProvider>('/provider-models/status', { method: 'PATCH', body: JSON.stringify(input) }),
   updateCredentialReference: (input: {
     providerId: string
     backend: 'dsh-managed' | 'keychain' | 'secret-manager'
@@ -413,11 +423,15 @@ export const adminApi = {
   createModelRoute: (input: {
     key: string
     name: string
-    purpose: ModelRoutePurpose
     providerModelId: string
-    priority: number
     enabled: boolean
   }) => request<ModelRoute>('/model-routes', { method: 'POST', body: JSON.stringify(input) }),
+  updateModelRoute: (input: {
+    routeId: string
+    name: string
+    providerModelId: string
+    enabled: boolean
+  }) => request<ModelRoute>('/model-routes', { method: 'PATCH', body: JSON.stringify(input) }),
   getPlatformStatus: () => request<PlatformStatus>('/platform-status'),
   getIdentityUsers: (input: { query?: string; status?: string; dingtalk?: string; page?: number; pageSize?: number } = {}) => {
     const query = new URLSearchParams()

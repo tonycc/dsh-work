@@ -10,9 +10,12 @@ import type {
   ModelRoute,
   ModelRouteSnapshot,
   ProviderStatus,
+  SetProviderModelStatusInput,
+  UpdateModelRouteInput,
+  UpdateProviderInput,
   UpsertCredentialReferenceInput,
 } from './model-types.ts'
-import { dependencyUnavailable, notFound, stateConflict } from '../../domain/request-errors.ts'
+import { dependencyUnavailable, invalidRequest, notFound, stateConflict } from '../../domain/request-errors.ts'
 
 const clone = <T>(value: T): T => structuredClone(value)
 
@@ -34,6 +37,7 @@ export class MemoryModelGovernanceRepository implements ModelGovernanceRepositor
       key: input.key,
       name: input.name,
       providerType: input.providerType,
+      trustLevel: input.trustLevel,
       baseUrl: input.baseUrl,
       status: 'active',
       credential: null,
@@ -41,6 +45,18 @@ export class MemoryModelGovernanceRepository implements ModelGovernanceRepositor
       updatedAt: timestamp,
     }
     this.providers.push(provider)
+    return clone(provider)
+  }
+
+  async updateProvider(_tenantId: string, input: UpdateProviderInput) {
+    const provider = this.requireProvider(input.providerId)
+    provider.name = input.name
+    provider.baseUrl = input.baseUrl
+    provider.trustLevel = input.trustLevel
+    provider.updatedAt = new Date().toISOString()
+    for (const route of this.routes) {
+      if (route.providerId === provider.id) route.providerName = provider.name
+    }
     return clone(provider)
   }
 
@@ -64,6 +80,13 @@ export class MemoryModelGovernanceRepository implements ModelGovernanceRepositor
       capabilities: [...new Set(input.capabilities)],
       status: 'active',
     })
+    provider.updatedAt = new Date().toISOString()
+    return clone(provider)
+  }
+
+  async setProviderModelStatus(_tenantId: string, input: SetProviderModelStatusInput) {
+    const { provider, model } = this.requireModel(input.modelId)
+    model.status = input.status
     provider.updatedAt = new Date().toISOString()
     return clone(provider)
   }
@@ -92,23 +115,19 @@ export class MemoryModelGovernanceRepository implements ModelGovernanceRepositor
     if (this.routes.some((route) => route.key === input.key)) {
       throw stateConflict(`模型路由标识已存在：${input.key}`)
     }
-    if (input.purpose === 'default' && input.enabled) {
-      for (const route of this.routes) {
-        if (route.purpose === 'default') route.enabled = false
-      }
-    }
-    const { provider, model } = this.requireModel(input.providerModelId)
+    const { provider, model } = this.requireRouteTarget(input.providerModelId)
+    if (input.enabled) this.disableDefaultRoutes()
     const route: ModelRoute = {
       id: `route-${randomUUID()}`,
       key: input.key,
       name: input.name,
-      purpose: input.purpose,
+      purpose: 'default',
       providerModelId: model.id,
       providerId: provider.id,
       providerName: provider.name,
       modelKey: model.modelKey,
       modelName: model.displayName,
-      priority: input.priority,
+      priority: 100,
       enabled: input.enabled,
       updatedAt: new Date().toISOString(),
     }
@@ -116,9 +135,27 @@ export class MemoryModelGovernanceRepository implements ModelGovernanceRepositor
     return clone(route)
   }
 
-  async resolveRoute(_tenantId: string, routeKey = 'default'): Promise<ModelRouteSnapshot> {
-    const route = this.routes.find((item) => item.key === routeKey && item.enabled)
-    if (!route) throw dependencyUnavailable(`没有可用的模型路由：${routeKey}`)
+  async updateRoute(_tenantId: string, input: UpdateModelRouteInput) {
+    const route = this.routes.find((item) => item.id === input.routeId)
+    if (!route) throw notFound(`模型路由不存在：${input.routeId}`)
+    const { provider, model } = this.requireRouteTarget(input.providerModelId)
+    if (input.enabled) this.disableDefaultRoutes(route.id)
+    Object.assign(route, {
+      name: input.name,
+      providerModelId: model.id,
+      providerId: provider.id,
+      providerName: provider.name,
+      modelKey: model.modelKey,
+      modelName: model.displayName,
+      enabled: input.enabled,
+      updatedAt: new Date().toISOString(),
+    })
+    return clone(route)
+  }
+
+  async resolveDefaultRoute(): Promise<ModelRouteSnapshot> {
+    const route = this.routes.find((item) => item.purpose === 'default' && item.enabled)
+    if (!route) throw dependencyUnavailable('没有可用的默认模型路由')
     const { provider, model } = this.requireModel(route.providerModelId)
     if (provider.status !== 'active' || model.status !== 'active') throw dependencyUnavailable('模型路由目标已停用')
     if (!provider.credential || provider.credential.status !== 'configured') throw dependencyUnavailable('Provider 凭据未配置')
@@ -128,6 +165,7 @@ export class MemoryModelGovernanceRepository implements ModelGovernanceRepositor
       providerId: provider.id,
       providerKey: provider.key,
       providerType: provider.providerType,
+      trustLevel: provider.trustLevel,
       baseUrl: provider.baseUrl,
       modelId: model.id,
       modelKey: model.modelKey,
@@ -136,6 +174,20 @@ export class MemoryModelGovernanceRepository implements ModelGovernanceRepositor
       credentialBackend: provider.credential.backend,
       credentialExternalRef: provider.credential.externalRef,
       resolvedAt: new Date().toISOString(),
+    }
+  }
+
+  private disableDefaultRoutes(exceptRouteId?: string) {
+    for (const route of this.routes) {
+      if (route.purpose === 'default' && route.id !== exceptRouteId) route.enabled = false
+    }
+  }
+
+  private requireRouteTarget(modelId: string) {
+    try {
+      return this.requireModel(modelId)
+    } catch {
+      throw invalidRequest(`目标模型不存在：${modelId}`)
     }
   }
 
@@ -160,7 +212,8 @@ function createSeedProvider(): ModelProvider {
     id: 'provider-deepseek-official',
     key: 'deepseek-official',
     name: 'DeepSeek 官方',
-    providerType: 'openai-compatible',
+    providerType: 'openai-completions',
+    trustLevel: 'external',
     baseUrl: 'https://api.deepseek.com',
     status: 'active',
     credential: {

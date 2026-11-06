@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
-import type { DatabaseClient } from '../../infrastructure/postgres/database.ts'
+import type { DatabaseClient, DatabaseTransaction } from '../../infrastructure/postgres/database.ts'
 import type { ModelGovernanceRepository } from './model-governance-repository.ts'
 import type {
   CreateModelRouteInput,
@@ -16,15 +16,21 @@ import type {
   ModelStatus,
   ProviderModel,
   ProviderStatus,
+  ProviderTrustLevel,
+  ProviderType,
+  SetProviderModelStatusInput,
+  UpdateModelRouteInput,
+  UpdateProviderInput,
   UpsertCredentialReferenceInput,
 } from './model-types.ts'
-import { dependencyUnavailable, notFound } from '../../domain/request-errors.ts'
+import { dependencyUnavailable, invalidRequest, notFound } from '../../domain/request-errors.ts'
 
 interface ProviderRow {
   id: string
   key: string
   name: string
-  providerType: string
+  providerType: ProviderType
+  trustLevel: ProviderTrustLevel
   baseUrl: string
   status: ProviderStatus
   updatedAt: Date
@@ -69,7 +75,8 @@ export class PostgresModelGovernanceRepository implements ModelGovernanceReposit
 
   async listProviders(tenantId: string): Promise<ModelProvider[]> {
     const providers = await this.database<ProviderRow[]>`
-      select p.id, p.key, p.name, p.provider_type as "providerType", p.base_url as "baseUrl",
+      select p.id, p.key, p.name, p.provider_type as "providerType", p.trust_level as "trustLevel",
+             p.base_url as "baseUrl",
              p.status, p.updated_at as "updatedAt",
              c.id as "credentialId", c.backend as "credentialBackend",
              c.external_ref as "credentialExternalRef", c.status as "credentialStatus",
@@ -94,13 +101,26 @@ export class PostgresModelGovernanceRepository implements ModelGovernanceReposit
     const providerId = `provider-${randomUUID()}`
     await this.database`
       insert into model_providers (
-        id, tenant_id, key, name, provider_type, base_url, status
+        id, tenant_id, key, name, provider_type, trust_level, base_url, status
       ) values (
-        ${providerId}, ${tenantId}, ${input.key}, ${input.name}, ${input.providerType}, ${input.baseUrl}, 'active'
+        ${providerId}, ${tenantId}, ${input.key}, ${input.name}, ${input.providerType},
+        ${input.trustLevel}, ${input.baseUrl}, 'active'
       )
     `
     await this.appendAudit(tenantId, input.actor, 'model_provider.create', providerId)
     return this.requireProvider(tenantId, providerId)
+  }
+
+  async updateProvider(tenantId: string, input: UpdateProviderInput) {
+    const result = await this.database`
+      update model_providers
+         set name = ${input.name}, base_url = ${input.baseUrl}, trust_level = ${input.trustLevel},
+             updated_at = now()
+       where tenant_id = ${tenantId} and id = ${input.providerId}
+    `
+    if (result.count !== 1) throw notFound(`Provider 不存在：${input.providerId}`)
+    await this.appendAudit(tenantId, input.actor, 'model_provider.update', input.providerId)
+    return this.requireProvider(tenantId, input.providerId)
   }
 
   async setProviderStatus(
@@ -135,6 +155,21 @@ export class PostgresModelGovernanceRepository implements ModelGovernanceReposit
     `
     await this.appendAudit(tenantId, input.actor, 'provider_model.create', modelId)
     return this.requireProvider(tenantId, input.providerId)
+  }
+
+  async setProviderModelStatus(tenantId: string, input: SetProviderModelStatusInput) {
+    const [row] = await this.database<{ providerId: string }[]>`
+      update provider_models set status = ${input.status}
+       where tenant_id = ${tenantId} and id = ${input.modelId}
+      returning provider_id as "providerId"
+    `
+    if (!row) throw notFound(`Provider 模型不存在：${input.modelId}`)
+    await this.database`
+      update model_providers set updated_at = now()
+       where tenant_id = ${tenantId} and id = ${row.providerId}
+    `
+    await this.appendAudit(tenantId, input.actor, `provider_model.${input.status}`, input.modelId)
+    return this.requireProvider(tenantId, row.providerId)
   }
 
   async upsertCredentialReference(tenantId: string, input: UpsertCredentialReferenceInput) {
@@ -183,34 +218,45 @@ export class PostgresModelGovernanceRepository implements ModelGovernanceReposit
   async createRoute(tenantId: string, input: CreateModelRouteInput): Promise<ModelRoute> {
     const routeId = `route-${randomUUID()}`
     await this.database.begin(async (transaction) => {
-      if (input.purpose === 'default' && input.enabled) {
-        await transaction`
-          update model_routes set enabled = false, updated_at = now()
-           where tenant_id = ${tenantId} and purpose = 'default' and enabled
-        `
-      }
+      await assertModelExists(transaction, tenantId, input.providerModelId)
+      if (input.enabled) await disableDefaultRoutes(transaction, tenantId)
       await transaction`
         insert into model_routes (
-          id, tenant_id, key, name, purpose, provider_model_id, priority, enabled
+          id, tenant_id, key, name, purpose, provider_model_id, enabled
         ) values (
-          ${routeId}, ${tenantId}, ${input.key}, ${input.name}, ${input.purpose},
-          ${input.providerModelId}, ${input.priority}, ${input.enabled}
+          ${routeId}, ${tenantId}, ${input.key}, ${input.name}, 'default',
+          ${input.providerModelId}, ${input.enabled}
         )
       `
     })
     await this.appendAudit(tenantId, input.actor, 'model_route.create', routeId)
-    const route = (await this.listRoutes(tenantId)).find((item) => item.id === routeId)
-    if (!route) throw new Error(`模型路由创建失败：${routeId}`)
-    return route
+    return this.requireRoute(tenantId, routeId)
   }
 
-  async resolveRoute(tenantId: string, routeKey = 'default'): Promise<ModelRouteSnapshot> {
+  async updateRoute(tenantId: string, input: UpdateModelRouteInput): Promise<ModelRoute> {
+    await this.database.begin(async (transaction) => {
+      await assertModelExists(transaction, tenantId, input.providerModelId)
+      if (input.enabled) await disableDefaultRoutes(transaction, tenantId, input.routeId)
+      const result = await transaction`
+        update model_routes
+           set name = ${input.name}, provider_model_id = ${input.providerModelId},
+               enabled = ${input.enabled}, updated_at = now()
+         where tenant_id = ${tenantId} and id = ${input.routeId}
+      `
+      if (result.count !== 1) throw notFound(`模型路由不存在：${input.routeId}`)
+    })
+    await this.appendAudit(tenantId, input.actor, 'model_route.update', input.routeId)
+    return this.requireRoute(tenantId, input.routeId)
+  }
+
+  async resolveDefaultRoute(tenantId: string): Promise<ModelRouteSnapshot> {
     const [row] = await this.database<{
       routeId: string
       routeKey: string
       providerId: string
       providerKey: string
-      providerType: string
+      providerType: ProviderType
+      trustLevel: ProviderTrustLevel
       baseUrl: string
       providerStatus: ProviderStatus
       modelId: string
@@ -224,7 +270,7 @@ export class PostgresModelGovernanceRepository implements ModelGovernanceReposit
     }[]>`
       select r.id as "routeId", r.key as "routeKey",
              p.id as "providerId", p.key as "providerKey", p.provider_type as "providerType",
-             p.base_url as "baseUrl", p.status as "providerStatus",
+             p.trust_level as "trustLevel", p.base_url as "baseUrl", p.status as "providerStatus",
              m.id as "modelId", m.model_key as "modelKey", m.status as "modelStatus",
              m.capabilities as "modelCapabilities",
              c.id as "credentialRefId", c.backend as "credentialBackend",
@@ -233,11 +279,10 @@ export class PostgresModelGovernanceRepository implements ModelGovernanceReposit
         join provider_models m on m.tenant_id = r.tenant_id and m.id = r.provider_model_id
         join model_providers p on p.tenant_id = m.tenant_id and p.id = m.provider_id
         left join credential_refs c on c.tenant_id = p.tenant_id and c.id = p.credential_ref_id
-       where r.tenant_id = ${tenantId} and r.key = ${routeKey} and r.enabled
-       order by r.priority asc
+       where r.tenant_id = ${tenantId} and r.purpose = 'default' and r.enabled
        limit 1
     `
-    if (!row) throw dependencyUnavailable(`没有可用的模型路由：${routeKey}`)
+    if (!row) throw dependencyUnavailable('没有可用的默认模型路由')
     if (row.providerStatus !== 'active' || row.modelStatus !== 'active') throw dependencyUnavailable('模型路由目标已停用')
     if (!row.credentialRefId || !row.credentialBackend || !row.credentialExternalRef || row.credentialStatus !== 'configured') {
       throw dependencyUnavailable('Provider 凭据未配置')
@@ -248,6 +293,7 @@ export class PostgresModelGovernanceRepository implements ModelGovernanceReposit
       providerId: row.providerId,
       providerKey: row.providerKey,
       providerType: row.providerType,
+      trustLevel: row.trustLevel,
       baseUrl: row.baseUrl,
       modelId: row.modelId,
       modelKey: row.modelKey,
@@ -257,6 +303,12 @@ export class PostgresModelGovernanceRepository implements ModelGovernanceReposit
       credentialExternalRef: row.credentialExternalRef,
       resolvedAt: new Date().toISOString(),
     }
+  }
+
+  private async requireRoute(tenantId: string, routeId: string) {
+    const route = (await this.listRoutes(tenantId)).find((item) => item.id === routeId)
+    if (!route) throw notFound(`模型路由不存在：${routeId}`)
+    return route
   }
 
   private async requireProvider(tenantId: string, providerId: string) {
@@ -294,6 +346,7 @@ function mapProvider(provider: ProviderRow, models: ModelRow[]): ModelProvider {
     key: provider.key,
     name: provider.name,
     providerType: provider.providerType,
+    trustLevel: provider.trustLevel,
     baseUrl: provider.baseUrl,
     status: provider.status,
     credential,
@@ -308,4 +361,20 @@ function mapModel(model: ModelRow): ProviderModel {
 
 function mapRoute(row: RouteRow): ModelRoute {
   return { ...row, updatedAt: row.updatedAt.toISOString() }
+}
+
+async function assertModelExists(transaction: DatabaseTransaction, tenantId: string, modelId: string) {
+  const [model] = await transaction<{ id: string }[]>`
+    select id from provider_models where tenant_id = ${tenantId} and id = ${modelId}
+  `
+  if (!model) throw invalidRequest(`目标模型不存在：${modelId}`)
+}
+
+/** 每个租户只能有一条启用的默认路由：启用一条前先停用其余（与唯一索引 model_routes_one_default 一致）。 */
+async function disableDefaultRoutes(transaction: DatabaseTransaction, tenantId: string, exceptRouteId?: string) {
+  await transaction`
+    update model_routes set enabled = false, updated_at = now()
+     where tenant_id = ${tenantId} and purpose = 'default' and enabled
+       and id <> ${exceptRouteId ?? ''}
+  `
 }

@@ -927,7 +927,12 @@ export interface EmployeeModelUsageSummary {
 export type ProviderStatus = 'active' | 'disabled'
 export type CredentialBackend = 'dsh-managed' | 'keychain' | 'secret-manager'
 export type CredentialStatus = 'configured' | 'missing' | 'revoked'
-export type ModelRoutePurpose = 'default' | 'chat' | 'analysis' | 'fallback'
+/** 路由用途只保留默认路由（模型路由方案 R2）。 */
+export type ModelRoutePurpose = 'default'
+/** Provider 协议类型；首批只开放 openai-completions。 */
+export type ProviderType = 'openai-completions' | 'openai-responses' | 'anthropic-messages'
+/** Provider 信任级别：内部部署 / 外部厂商。 */
+export type ProviderTrustLevel = 'internal' | 'external'
 
 export interface CredentialReference {
   id: string
@@ -951,7 +956,8 @@ export interface ModelProvider {
   id: string
   key: string
   name: string
-  providerType: string
+  providerType: ProviderType
+  trustLevel: ProviderTrustLevel
   baseUrl: string
   status: ProviderStatus
   credential: CredentialReference | null

@@ -1,10 +1,15 @@
 import type { ModelGovernanceRepository } from './model-governance-repository.ts'
-import type {
-  CreateModelRouteInput,
-  CreateProviderInput,
-  CreateProviderModelInput,
-  ProviderStatus,
-  UpsertCredentialReferenceInput,
+import {
+  creatableProviderTypes,
+  providerTrustLevels,
+  type CreateModelRouteInput,
+  type CreateProviderInput,
+  type CreateProviderModelInput,
+  type ProviderStatus,
+  type SetProviderModelStatusInput,
+  type UpdateModelRouteInput,
+  type UpdateProviderInput,
+  type UpsertCredentialReferenceInput,
 } from './model-types.ts'
 import { invalidRequest, stateConflict } from '../../domain/request-errors.ts'
 
@@ -26,15 +31,29 @@ export class ModelGovernanceService {
   createProvider(input: CreateProviderInput) {
     assertActor(input.actor)
     assertKey(input.key, 'Provider')
-    if (input.name.trim().length < 2) throw invalidRequest('Provider 名称至少需要 2 个字符')
-    if (!input.providerType.trim()) throw stateConflict('Provider 类型不能为空')
+    assertProviderName(input.name)
+    if (!creatableProviderTypes.includes(input.providerType)) {
+      throw invalidRequest('Provider 协议类型无效：首批只开放 OpenAI Chat Completions 兼容协议（openai-completions）')
+    }
+    assertTrustLevel(input.trustLevel)
     assertHttpUrl(input.baseUrl)
     return this.repository.createProvider(this.tenantId, {
       ...input,
       key: input.key.trim(),
       name: input.name.trim(),
-      providerType: input.providerType.trim(),
-      baseUrl: input.baseUrl.trim().replace(/\/$/, ''),
+      baseUrl: normalizeUrl(input.baseUrl),
+    })
+  }
+
+  updateProvider(input: UpdateProviderInput) {
+    assertActor(input.actor)
+    assertProviderName(input.name)
+    assertTrustLevel(input.trustLevel)
+    assertHttpUrl(input.baseUrl)
+    return this.repository.updateProvider(this.tenantId, {
+      ...input,
+      name: input.name.trim(),
+      baseUrl: normalizeUrl(input.baseUrl),
     })
   }
 
@@ -55,6 +74,12 @@ export class ModelGovernanceService {
     })
   }
 
+  setProviderModelStatus(input: SetProviderModelStatusInput) {
+    assertActor(input.actor)
+    if (!['active', 'disabled'].includes(input.status)) throw invalidRequest('模型状态无效')
+    return this.repository.setProviderModelStatus(this.tenantId, input)
+  }
+
   upsertCredentialReference(input: UpsertCredentialReferenceInput) {
     assertActor(input.actor)
     if (!['dsh-managed', 'keychain', 'secret-manager'].includes(input.backend)) throw invalidRequest('密钥后端无效')
@@ -73,14 +98,18 @@ export class ModelGovernanceService {
   createRoute(input: CreateModelRouteInput) {
     assertActor(input.actor)
     assertKey(input.key, '模型路由')
-    if (input.name.trim().length < 2) throw invalidRequest('模型路由名称至少需要 2 个字符')
-    if (!['default', 'chat', 'analysis', 'fallback'].includes(input.purpose)) throw invalidRequest('模型路由用途无效')
-    if (!Number.isInteger(input.priority) || input.priority < 0) throw invalidRequest('路由优先级必须是非负整数')
+    assertRouteName(input.name)
     return this.repository.createRoute(this.tenantId, { ...input, key: input.key.trim(), name: input.name.trim() })
   }
 
-  async resolveRoute(routeKey?: string, requirements: readonly string[] = []) {
-    const route = await this.repository.resolveRoute(this.tenantId, routeKey)
+  updateRoute(input: UpdateModelRouteInput) {
+    assertActor(input.actor)
+    assertRouteName(input.name)
+    return this.repository.updateRoute(this.tenantId, { ...input, name: input.name.trim() })
+  }
+
+  async resolveDefaultRoute(requirements: readonly string[] = []) {
+    const route = await this.repository.resolveDefaultRoute(this.tenantId)
     const missing = requirements.filter(requirement => !route.modelCapabilities.includes(requirement))
     if (missing.length) throw new ModelCapabilityMismatchError(missing)
     return route
@@ -103,6 +132,24 @@ function assertKey(key: string, objectName: string) {
   if (!keyPattern.test(key.trim())) {
     throw invalidRequest(`${objectName} 标识必须以小写字母开头，只能包含小写字母、数字和连字符，长度为 3～48 位`)
   }
+}
+
+function assertProviderName(name: string) {
+  if (name.trim().length < 2) throw invalidRequest('Provider 名称至少需要 2 个字符')
+}
+
+function assertRouteName(name: string) {
+  if (name.trim().length < 2) throw invalidRequest('模型路由名称至少需要 2 个字符')
+}
+
+function assertTrustLevel(value: string) {
+  if (!providerTrustLevels.includes(value as never)) {
+    throw invalidRequest('请选择 Provider 信任级别：内部部署（internal）或外部厂商（external）')
+  }
+}
+
+function normalizeUrl(value: string) {
+  return value.trim().replace(/\/$/, '')
 }
 
 function assertHttpUrl(value: string) {
