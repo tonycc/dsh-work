@@ -55,7 +55,7 @@
 3. **共享 `settings.yaml` 会覆盖 patch。** `dsh-settings-file` 的路由段落热加载并覆盖适配器配置；`settings.path` 可配置，每个 Attempt 指向平台独立文件即可隔离。
 4. **会话日志记录请求的模型与实际返回的来源。** 本方案以网关记录为准（R5），会话日志只作排障参考。
 5. **候选目录包含未配置凭据的内置模型。** `configOptions` 仍列出 `deepseek-official` 的内置目录模型；平台不开放会话内切换，不受影响。
-6. **未验证：** Anthropic 协议路由。
+6. **未验证：** DeepSeek 以外真实厂商的流式与工具调用兼容性、Anthropic 协议路由。
 7. **DLP-S0（2026-11-06）补充：** pi-ai 路由指向网关可行，令牌以 Bearer 发送；`deepseek-v4-pro` 以 `openai-completions` 经透传网关完成思考与工具调用，`reasoning_content` 被原样回传并被接受（R4 可行）；403、400 不被重试，429、5xx 按 `maxRetries` 重试。详见[数据防护方案 4.1](model-data-protection-plan.md#41-dlp-s0-探针结论2026-11-06)。
 
 ## 4. 方案
@@ -105,12 +105,12 @@ DSH patch 中的 `baseURL` 固定为网关地址，`apiKeyEnv` 为令牌环境�
 
 | `provider_type` | 首批 | 生成内容 |
 | --- | --- | --- |
-| `openai-completions` | 开放 | 声明 pi-ai 路由：`api`、`baseURL`（网关）、`apiKeyEnv`（令牌变量）、`models`、`retryPolicy`；DeepSeek 模型另设 `compat.thinkingFormat: deepseek`（DLP-S0 验证） |
+| `openai-completions` | 开放 | 声明 pi-ai 路由：`api`、`baseURL`（网关）、`apiKeyEnv`（令牌变量）、`models`、`retryPolicy`；DeepSeek 模型条目另设 `compat.thinkingFormat: deepseek`（DLP-S0 验证） |
 | `openai-responses`、`anthropic-messages` | 不开放 | 同上；探针覆盖后再加入 |
 
-- **DeepSeek 官方**配置为 `openai-completions`，`base_url` 为 DeepSeek 官方的 OpenAI 兼容地址。现有种子数据中 `provider_type = 'deepseek-official'` 的 Provider 迁移为 `openai-completions`。不再使用 DSH 自带的 `dsh-llm-deepseek` 适配器；DLP-S0 验证 pi-ai 对 DeepSeek 推理内容与工具调用的兼容性，不兼容时先修 DSH 的 pi-ai 适配链路（AGENTS.md：完善现有适配链路，不另建执行引擎）。
+- **DeepSeek 官方**配置为 `openai-completions`，`base_url` 为 DeepSeek 官方的 OpenAI 兼容地址，模型条目设置 `compat.thinkingFormat: deepseek`。现有种子数据中 `provider_type = 'deepseek-official'` 的 Provider 迁移为 `openai-completions`。不再使用 DSH 自带的 `dsh-llm-deepseek` 适配器；DLP-S0 已用真实 `deepseek-v4-pro` 验证推理内容与工具调用兼容（[数据防护方案 4.1](model-data-protection-plan.md#41-dlp-s0-探针结论2026-11-06)），DSH 升级时须复验。
 - 平台声明的 pi-ai 路由名统一加前缀 `dshw-<provider_key>`，避免与 DSH 内置路由同名（pi-ai 对重复注册的路由名在加载时失败）。
-- `retryPolicy` 由平台显式给出：只重试连接错误、408、429 与 5xx，**不重试其他 4xx**（含网关的令牌拒绝与数据防护拒绝），避免与平台 Attempt 重试叠加放大。
+- `retryPolicy` 由平台显式给出：`mode: normal`、有限的 `maxRetries`，并显式列出 `retryableCodes`（限流、服务端错误、超时、传输错误、空回复），**不重试其他 4xx**（含网关的令牌拒绝与数据防护拒绝），避免与平台 Attempt 重试叠加放大。DLP-S0 已确认 403、400 不被重试；408 是否归入超时未验证。
 
 ### 4.4 每 Attempt patch
 
@@ -241,7 +241,7 @@ Mock 或 P1 通过不能代替 P2，未完成 P2 前总览仍须标注路由生�
 | --- | --- | --- | --- |
 | MR-S1 治理数据补强（代码级已完成） | `provider_type` 枚举与历史取值迁移、`trust_level`、用途收敛与按用途解析、路由编辑与模型启停、管理端录入厂商密钥（加密保存，MR-S2 起生效）；不改变执行行为 | 无，可先行 | 管理端与接口用例通过；执行仍按 Profile 默认模型 |
 | DLP-S0 探针（已完成，2026-11-06） | 见数据防护方案 4.1：pi-ai 接 DeepSeek 的推理内容与工具调用兼容、4xx 不重试、429 与 5xx 按次数重试 | 无 | R4 可行；`web_search` 出口待决策 |
-| MR-S2 + DLP-S1 路由生效与网关 | Manifest `model_route`、统一 patch 生成器、令牌、网关校验转发与计量、平台加密凭据、模型错误细分 | MR-S1、DLP-S0 | 所有正式执行经网关，路由决定实际模型；第 8 节 P1（MR-S2）通过 |
+| MR-S2 + DLP-S1 路由生效与网关 | Manifest `model_route`、统一 patch 生成器、令牌、网关校验转发与计量、平台加密凭据、模型错误细分 | MR-S1、DLP-S0、`web_search` 出口决策（数据防护方案 4.1 第 6 条） | 所有正式执行经网关，路由决定实际模型；第 8 节 P1（MR-S2）通过 |
 | MR-S3 证据与展示 | `effective_model` 与用量归属、运行详情、文档更新 | MR-S2 | 第 8 节 P1（MR-S3）与管理端用例通过 |
 | MR-P2 真实验收 | 第 8 节 P2 | MR-S3 | 留证完成，总览去掉“未真实验收” |
 
