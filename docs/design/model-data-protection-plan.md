@@ -187,7 +187,7 @@ DSH Worker ──请求──> 模型网关
 - 第 7 节的模型网关不再是“另行立项的后续方向”，由本方案 DLP-S1 实施；令牌与转发结构按该节描述不变，职责增加数据防护。
 - 第 5 节 Model 模块改动（`provider_type` 枚举与校验）同批增加 `trust_level` 字段与管理端选择项。
 - 4.2 的 `model_route` 增加 `trust_level`、`data_policy_version`；4.3 的 pi-ai 路由 `baseURL` 指向网关，`retryPolicy` 不重试 4xx。
-- 4.5 的 `dsh-managed` 凭据检查在网关上线后由令牌签发替代。
+- 4.5 按路由方案评审决策 R1 不实施 DSH 侧凭据检查，直接采用平台加密凭据与 Attempt 令牌。
 
 ### 6.2 执行隔离方案
 
@@ -199,7 +199,7 @@ DSH Worker ──请求──> 模型网关
 
 ## 7. 分期
 
-**前置条件：** DLP-S1 依赖[模型路由方案](model-routing-plan.md) 4.2～4.4（Manifest 携带路由快照、Provider 类型映射、统一的每 Attempt patch 生成器）。该方案仍为“待评审，尚未实施”，须先完成评审，并在 DLP-S1 之前或与之同批实施。
+**前置条件：** DLP-S1 与[模型路由方案](model-routing-plan.md) MR-S2 同批交付（路由方案 4.2～4.5：Manifest 携带路由快照、Provider 类型映射、统一的每 Attempt patch 生成器、平台加密凭据与令牌），依赖路由方案 MR-S1 与本方案 DLP-S0，分期见路由方案第 9 节。
 
 | 阶段 | 内容 | 完成标志 |
 | --- | --- | --- |
