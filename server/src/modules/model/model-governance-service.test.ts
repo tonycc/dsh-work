@@ -113,3 +113,9 @@ test('a route cannot become the default while its target is disabled, and enable
   assert.equal((await service.resolveDefaultRoute()).routeKey, 'default', 'the working default route was never switched off')
   assert.throws(() => service.createRoute({ key: 'no-flag', name: '未指定启用', providerModelId: model.id, enabled: undefined as never, actor }), /布尔值/)
 })
+
+test('route ids are required before reaching the repository', () => {
+  const service = new ModelGovernanceService(new MemoryModelGovernanceRepository())
+  assert.throws(() => service.createRoute({ key: 'no-model', name: '缺少模型', providerModelId: undefined as never, enabled: false, actor }), /请指定目标模型/)
+  assert.throws(() => service.updateRoute({ routeId: '', name: '缺少路由', providerModelId: 'model-x', enabled: false, actor }), /请指定模型路由/)
+})

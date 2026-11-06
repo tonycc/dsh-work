@@ -110,6 +110,7 @@ export class ModelGovernanceService {
     assertKey(input.key, '模型路由')
     assertRouteName(input.name)
     assertEnabledFlag(input.enabled)
+    assertId(input.providerModelId, '目标模型')
     return this.repository.createRoute(this.tenantId, { ...input, key: input.key.trim(), name: input.name.trim() })
   }
 
@@ -117,6 +118,8 @@ export class ModelGovernanceService {
     assertActor(input.actor)
     assertRouteName(input.name)
     assertEnabledFlag(input.enabled)
+    assertId(input.routeId, '模型路由')
+    assertId(input.providerModelId, '目标模型')
     return this.repository.updateRoute(this.tenantId, { ...input, name: input.name.trim() })
   }
 
@@ -158,6 +161,10 @@ function assertTrustLevel(value: string) {
   if (!providerTrustLevels.includes(value as never)) {
     throw invalidRequest('请选择 Provider 信任级别：内部部署（internal）或外部厂商（external）')
   }
+}
+
+function assertId(value: unknown, objectName: string) {
+  if (typeof value !== 'string' || !value.trim()) throw invalidRequest(`请指定${objectName}`)
 }
 
 function assertEnabledFlag(value: unknown) {

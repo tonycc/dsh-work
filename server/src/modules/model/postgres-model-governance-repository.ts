@@ -205,9 +205,15 @@ export class PostgresModelGovernanceRepository implements ModelGovernanceReposit
   }
 
   async upsertCredentialReference(tenantId: string, input: UpsertCredentialReferenceInput) {
-    const provider = await this.requireProvider(tenantId, input.providerId)
-    const credentialId = provider.credential?.id ?? `credential-${randomUUID()}`
     await this.database.begin(async (transaction) => {
+      // 与 writeApiKey 一样先锁住 Provider 行再读凭据 ID，避免并发录入密钥时两边各建一条凭据。
+      const [provider] = await transaction<{ credentialRefId: string | null }[]>`
+        select credential_ref_id as "credentialRefId" from model_providers
+         where tenant_id = ${tenantId} and id = ${input.providerId}
+         for update
+      `
+      if (!provider) throw notFound(`Provider 不存在：${input.providerId}`)
+      const credentialId = provider.credentialRefId ?? `credential-${randomUUID()}`
       await transaction`
         insert into credential_refs (
           id, tenant_id, backend, external_ref, status, last_verified_at, updated_by

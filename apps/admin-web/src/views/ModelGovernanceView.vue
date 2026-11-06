@@ -171,6 +171,13 @@ async function saveCredential() {
       apiKeyInput.value = ''
       ElMessage.success('密钥已加密保存')
     } else {
+      if (selectedProvider.value.credential?.backend === 'postgres-encrypted') {
+        try {
+          await ElMessageBox.confirm('切换后将删除平台已加密保存的密钥，且无法恢复；之后如需改回，需要重新录入密钥。', '改为 DSH 受管引用', { type: 'warning' })
+        } catch {
+          return
+        }
+      }
       await adminApi.updateCredentialReference({ providerId: selectedProvider.value.id, ...credentialForm })
       ElMessage.success('密钥引用已更新；密钥正文未进入 dsh-work')
     }
