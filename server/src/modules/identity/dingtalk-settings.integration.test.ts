@@ -165,3 +165,101 @@ test('只有平台管理员可以查看与修改；清除后钉钉功能立即�
   assert.equal(resaved.configured, true)
   assert.equal((await service.current())!.corpId, 'ding-corp-page')
 })
+
+async function seedBinding(userId: string, externalUserId: string) {
+  const bindingId = `binding-${externalUserId}`
+  await database.client`
+    insert into external_account_bindings (id, tenant_id, channel, user_id, external_user_id, bound_by, status)
+    values (${bindingId}, 'tenant-dsh-work', 'dingtalk', ${userId}, ${externalUserId}, 'self', 'valid')
+  `
+  await database.client`
+    insert into authentication_sessions (session_hash, tenant_id, audience, user_id, authentication_provider, binding_id, authorization_version, permissions_expires_at, expires_at)
+    values (${`s-${externalUserId}`}, 'tenant-dsh-work', 'workbench', ${userId}, 'dingtalk', ${bindingId}, 1, now() + interval '1 hour', now() + interval '1 hour')
+  `
+  await database.client`
+    insert into external_binding_tickets (ticket_hash, tenant_id, channel, purpose, external_user_id, corp_id, request_origin, expires_at)
+    values (${`t-${externalUserId}`}, 'tenant-dsh-work', 'dingtalk', 'self-bind', ${externalUserId}, 'old-corp', 'http://localhost:4174', now() + interval '5 minutes')
+  `
+  return bindingId
+}
+
+async function bindingState(bindingId: string) {
+  const [binding] = await database.client<{ status: string; reason: string | null }[]>`select status, revoke_reason as reason from external_account_bindings where id = ${bindingId}`
+  const [session] = await database.client<{ revoked: boolean }[]>`select revoked_at is not null as revoked from authentication_sessions where binding_id = ${bindingId}`
+  const [tickets] = await database.client<{ count: number }[]>`select count(*)::integer as count from external_binding_tickets where consumed_at is null`
+  return { status: binding!.status, reason: binding!.reason, sessionRevoked: session!.revoked, openTickets: tickets!.count }
+}
+
+test('换到另一个钉钉企业（页面保存）时，所有绑定失效、钉钉会话撤销、未用凭证删除；同企业改参数不影响绑定', async () => {
+  const service = settingsService()
+  await service.save(pageInput, adminId)
+  const bindingId = await seedBinding(employeeId, 'ding-user-a')
+  await service.save({ ...pageInput, appSecret: '', adminDailyBindLimit: 21 }, adminId)
+  assert.equal((await bindingState(bindingId)).status, 'valid', '同一企业只改参数不失效')
+
+  await service.save({ ...pageInput, corpId: 'ding-corp-b' }, adminId)
+  assert.deepEqual(await bindingState(bindingId), { status: 'invalid', reason: 'corp_changed', sessionRevoked: true, openTickets: 0 })
+  const [audit] = await database.client<{ context: Record<string, string> }[]>`
+    select safe_context as context from audit_events where action = 'identity.dingtalk.settings.update' order by occurred_at desc limit 1
+  `
+  assert.equal(audit!.context.previousCorpId, 'ding-corp-page')
+  assert.equal(audit!.context.invalidatedBindings, '1')
+})
+
+test('部署配置换了企业：启动同步初始配置时同样使旧企业的绑定失效；超出范围的部署值收进范围、不阻止启动', async () => {
+  await database.client`delete from dingtalk_app_configurations`
+  const base = {
+    DSH_WORK_DINGTALK_AGENT_ID: '3189001', DSH_WORK_DINGTALK_APP_KEY: 'env-app-key', DSH_WORK_DINGTALK_APP_SECRET: correctSecret,
+  }
+  const first = settingsService({ bootstrap: loadDingTalkConfiguration({ ...base, DSH_WORK_DINGTALK_CORP_ID: 'ding-corp-env-a', DSH_WORK_DINGTALK_TIMEOUT_MS: '500' })! })
+  await first.ensureBootstrap()
+  assert.equal((await first.current())!.timeoutMs, 1000, '500 毫秒收进 1–60 秒范围')
+  await database.client`delete from external_account_bindings where external_user_id = 'ding-user-env'`
+  const bindingId = await seedBinding(employeeId, 'ding-user-env')
+
+  const second = settingsService({ bootstrap: loadDingTalkConfiguration({ ...base, DSH_WORK_DINGTALK_CORP_ID: 'ding-corp-env-b' })! })
+  await second.ensureBootstrap()
+  assert.equal((await second.current())!.corpId, 'ding-corp-env-b')
+  assert.equal((await bindingState(bindingId)).reason, 'corp_changed')
+})
+
+test('依赖部署配置的 AppSecret：删除部署配置后提示原因；页面保存一次即加密入库、不再依赖部署配置', async () => {
+  await database.client`delete from dingtalk_app_configurations`
+  await database.client`delete from credential_secrets where credential_ref_id = ${dingtalkCredentialRefId}`
+  const bootstrap = loadDingTalkConfiguration({
+    DSH_WORK_DINGTALK_CORP_ID: 'ding-corp-env', DSH_WORK_DINGTALK_AGENT_ID: '3189001',
+    DSH_WORK_DINGTALK_APP_KEY: 'env-app-key', DSH_WORK_DINGTALK_APP_SECRET: correctSecret,
+  })!
+  await settingsService({ bootstrap }).ensureBootstrap()
+  const withoutEnvironment = settingsService()
+  const missing = await withoutEnvironment.view()
+  assert.equal(missing.secretReadable, false)
+  assert.equal(missing.secretProblem, 'deployment_secret_missing')
+  const failure = await withoutEnvironment.save({ ...pageInput, corpId: 'ding-corp-env', appKey: 'env-app-key', appSecret: '' }, adminId)
+    .then(() => '', (error: Error) => error.message)
+  assert.match(failure, /部署配置中已没有它/)
+
+  const withEnvironment = settingsService({ bootstrap })
+  const saved = await withEnvironment.save({ ...pageInput, corpId: 'ding-corp-env', appKey: 'env-app-key', appSecret: '' }, adminId)
+  assert.equal(saved.source, 'admin')
+  const [row] = await database.client<{ credentialRef: string | null }[]>`select credential_ref as "credentialRef" from dingtalk_app_configurations`
+  assert.equal(row!.credentialRef, dingtalkCredentialRefId, '部署配置的 AppSecret 已加密入库')
+  assert.equal((await settingsService().current())!.appSecret, correctSecret, '删除部署配置后仍可用')
+})
+
+test('验证期间配置被其他管理员清除时不保存，不写回指向已删除密钥的配置', async () => {
+  const service = settingsService()
+  await service.save(pageInput, adminId)
+  const racing = new DingTalkSettingsService(database.client, {
+    deployment: { apiBaseUrl: 'https://oapi.dingtalk.com/', bootstrap: null },
+    credentials: new PostgresEncryptedCredentialStore(database.client, { masterKeyBase64: masterKey }),
+    directoryFactory: configuration => {
+      const double = new DingTalkDirectoryDouble(configuration.corpId)
+      double.checkCredentials = async () => { await service.clear(adminId) }
+      return double
+    },
+  })
+  assert.equal(await code(racing.save({ ...pageInput, appSecret: '', adminDailyBindLimit: 22 }, adminId)), 'dingtalk_settings_changed')
+  const view = await service.view()
+  assert.equal(view.configured, false, '清除结果保留')
+})

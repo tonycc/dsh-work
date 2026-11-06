@@ -6,6 +6,7 @@ import { IdentityAccessError } from '../auth-service.ts'
 import { DINGTALK_DEFAULTS, type DingTalkConfiguration, type DingTalkDeploymentSettings } from './dingtalk-config.ts'
 import { DingTalkDirectoryError, type DingTalkDirectory } from './dingtalk-directory.ts'
 import { DingTalkOpenApiDirectory } from './dingtalk-open-api.ts'
+import { invalidateAllBindingsForCorpChange } from './dingtalk-bindings.ts'
 
 const tenantId = 'tenant-dsh-work'
 export const dingtalkCredentialRefId = 'credential-dingtalk-app-secret'
@@ -40,8 +41,10 @@ export interface DingTalkSettingsView {
   agentId: string | null
   appKey: string | null
   secretHint: string | null
-  /** 已保存的 AppSecret 能否读取（主密钥丢失或更换后为 false，须重新填写）。 */
+  /** 已保存的 AppSecret 能否读取；不能读取时 `secretProblem` 说明原因。 */
   secretReadable: boolean
+  /** deployment_secret_missing：仍依赖部署配置的 AppSecret，但部署配置已删除；master_key：加密保存的 AppSecret 无法用当前主密钥解密。 */
+  secretProblem: 'deployment_secret_missing' | 'master_key' | null
   sessionTtlSeconds: number
   bindingTicketTtlSeconds: number
   adminDailyBindLimit: number
@@ -105,31 +108,42 @@ export class DingTalkSettingsService implements DingTalkSettingsProvider, DingTa
 
   /** 启动时：页面从未保存过（没有记录）时，用部署配置建立初始配置；部署配置变化时同步更新这份初始配置。 */
   async ensureBootstrap() {
-    const bootstrap = this.deployment.bootstrap
-    if (!bootstrap) return
-    await this.database`
-      insert into dingtalk_app_configurations (
-        tenant_id, status, source, corp_id, agent_id, app_key, credential_ref, secret_hint,
-        session_ttl_seconds, binding_ticket_ttl_seconds, admin_daily_bind_limit, timeout_ms
-      ) values (
-        ${tenantId}, 'configured', 'deployment-config', ${bootstrap.corpId}, ${bootstrap.agentId}, ${bootstrap.appKey}, null,
-        ${secretHint(bootstrap.appSecret)}, ${bootstrap.sessionTtlSeconds}, ${bootstrap.bindingTicketTtlSeconds},
-        ${bootstrap.adminDailyBindLimit}, ${bootstrap.timeoutMs}
-      )
-      on conflict (tenant_id) do update
-         set corp_id = excluded.corp_id, agent_id = excluded.agent_id, app_key = excluded.app_key,
-             secret_hint = excluded.secret_hint, session_ttl_seconds = excluded.session_ttl_seconds,
-             binding_ticket_ttl_seconds = excluded.binding_ticket_ttl_seconds,
-             admin_daily_bind_limit = excluded.admin_daily_bind_limit, timeout_ms = excluded.timeout_ms, updated_at = now()
-       where dingtalk_app_configurations.source = 'deployment-config' and dingtalk_app_configurations.status = 'configured'
-         and (dingtalk_app_configurations.corp_id, dingtalk_app_configurations.agent_id, dingtalk_app_configurations.app_key,
-              dingtalk_app_configurations.secret_hint, dingtalk_app_configurations.session_ttl_seconds,
-              dingtalk_app_configurations.binding_ticket_ttl_seconds, dingtalk_app_configurations.admin_daily_bind_limit,
-              dingtalk_app_configurations.timeout_ms)
-             is distinct from
-             (excluded.corp_id, excluded.agent_id, excluded.app_key, excluded.secret_hint, excluded.session_ttl_seconds,
-              excluded.binding_ticket_ttl_seconds, excluded.admin_daily_bind_limit, excluded.timeout_ms)
-    `
+    const raw = this.deployment.bootstrap
+    if (!raw) return
+    // 旧部署配置只要求正整数；超出页面允许范围的值收进范围并告警，不阻止启动。
+    const bootstrap = { ...raw, ...clampToPageRanges(raw) }
+    await this.database.begin(async transaction => {
+      const [previous] = await transaction<{ corpId: string | null; source: string; status: string }[]>`
+        select corp_id as "corpId", source, status from dingtalk_app_configurations where tenant_id = ${tenantId} for update
+      `
+      await transaction`
+        insert into dingtalk_app_configurations (
+          tenant_id, status, source, corp_id, agent_id, app_key, credential_ref, secret_hint,
+          session_ttl_seconds, binding_ticket_ttl_seconds, admin_daily_bind_limit, timeout_ms
+        ) values (
+          ${tenantId}, 'configured', 'deployment-config', ${bootstrap.corpId}, ${bootstrap.agentId}, ${bootstrap.appKey}, null,
+          ${secretHint(bootstrap.appSecret)}, ${bootstrap.sessionTtlSeconds}, ${bootstrap.bindingTicketTtlSeconds},
+          ${bootstrap.adminDailyBindLimit}, ${bootstrap.timeoutMs}
+        )
+        on conflict (tenant_id) do update
+           set corp_id = excluded.corp_id, agent_id = excluded.agent_id, app_key = excluded.app_key,
+               secret_hint = excluded.secret_hint, session_ttl_seconds = excluded.session_ttl_seconds,
+               binding_ticket_ttl_seconds = excluded.binding_ticket_ttl_seconds,
+               admin_daily_bind_limit = excluded.admin_daily_bind_limit, timeout_ms = excluded.timeout_ms, updated_at = now()
+         where dingtalk_app_configurations.source = 'deployment-config' and dingtalk_app_configurations.status = 'configured'
+           and (dingtalk_app_configurations.corp_id, dingtalk_app_configurations.agent_id, dingtalk_app_configurations.app_key,
+                dingtalk_app_configurations.secret_hint, dingtalk_app_configurations.session_ttl_seconds,
+                dingtalk_app_configurations.binding_ticket_ttl_seconds, dingtalk_app_configurations.admin_daily_bind_limit,
+                dingtalk_app_configurations.timeout_ms)
+               is distinct from
+               (excluded.corp_id, excluded.agent_id, excluded.app_key, excluded.secret_hint, excluded.session_ttl_seconds,
+                excluded.binding_ticket_ttl_seconds, excluded.admin_daily_bind_limit, excluded.timeout_ms)
+      `
+      // 部署配置换了企业：钉钉 userid 只在企业内唯一，旧企业的绑定必须失效。
+      if (previous?.source === 'deployment-config' && previous.status === 'configured' && previous.corpId && previous.corpId !== bootstrap.corpId) {
+        await invalidateAllBindingsForCorpChange(transaction)
+      }
+    })
     this.cached = null
   }
 
@@ -173,7 +187,7 @@ export class DingTalkSettingsService implements DingTalkSettingsProvider, DingTa
       agentId: configured ? row!.agentId : null,
       appKey: configured ? row!.appKey : null,
       secretHint: configured ? row!.secretHint : null,
-      secretReadable: configured ? Boolean(await this.secret(row!)) : false,
+      ...await this.secretState(configured ? row : null),
       sessionTtlSeconds: row?.sessionTtlSeconds ?? DINGTALK_DEFAULTS.sessionTtlSeconds,
       bindingTicketTtlSeconds: row?.bindingTicketTtlSeconds ?? DINGTALK_DEFAULTS.bindingTicketTtlSeconds,
       adminDailyBindLimit: row?.adminDailyBindLimit ?? DINGTALK_DEFAULTS.adminDailyBindLimit,
@@ -207,15 +221,19 @@ export class DingTalkSettingsService implements DingTalkSettingsProvider, DingTa
     }
     const effectiveSecret = appSecret ?? (existing ? await this.secret(existing) : undefined)
     if (!effectiveSecret) {
-      throw new IdentityAccessError(422, 'dingtalk_secret_required', '已保存的 AppSecret 无法读取（主密钥可能已更换），请重新填写')
+      throw new IdentityAccessError(422, 'dingtalk_secret_required', existing && !existing.credentialRef
+        ? 'AppSecret 来自部署配置，但部署配置中已没有它，请重新填写'
+        : '已保存的 AppSecret 无法读取（凭据主密钥可能已更换），请重新填写')
     }
+    // 仍依赖部署配置的 AppSecret 时，页面保存一次就把它加密入库，之后不再依赖部署配置。
+    const secretToStore = appSecret ?? (existing && !existing.credentialRef && this.credentials ? effectiveSecret : undefined)
     const candidate: DingTalkConfiguration = {
       corpId, agentId, appKey, appSecret: effectiveSecret, apiBaseUrl: this.deployment.apiBaseUrl,
       timeoutMs, sessionTtlSeconds, bindingTicketTtlSeconds, adminDailyBindLimit,
     }
     // 钉钉调用在事务之外；凭据错误或出口 IP 未登记时不保存。
     try {
-      await this.directoryFactory(candidate).checkCredentials()
+      await this.directory(candidate).checkCredentials()
     } catch (error) {
       if (error instanceof DingTalkDirectoryError && error.code === 'unavailable') {
         throw new IdentityAccessError(503, 'dingtalk_unavailable', `暂时无法连接钉钉，未保存：${error.message}`)
@@ -223,7 +241,16 @@ export class DingTalkSettingsService implements DingTalkSettingsProvider, DingTa
       throw new IdentityAccessError(422, 'dingtalk_credentials_rejected', '钉钉拒绝了这组凭据：请核对 AppKey、AppSecret，并确认服务器出口 IP 已在钉钉后台登记。未保存')
     }
     await this.database.begin(async transaction => {
-      if (appSecret) {
+      // 锁定后复核：验证期间配置被清除或改动时不保存，避免写回指向已删除密钥的配置。
+      const [locked] = await transaction<{ status: string; corpId: string | null; appKey: string | null; credentialRef: string | null }[]>`
+        select status, corp_id as "corpId", app_key as "appKey", credential_ref as "credentialRef"
+          from dingtalk_app_configurations where tenant_id = ${tenantId} for update
+      `
+      if ((locked?.status ?? null) !== (existing?.status ?? null) || (locked?.corpId ?? null) !== (existing?.corpId ?? null)
+        || (locked?.appKey ?? null) !== (existing?.appKey ?? null) || (locked?.credentialRef ?? null) !== (existing?.credentialRef ?? null)) {
+        throw new IdentityAccessError(409, 'dingtalk_settings_changed', '钉钉应用配置刚被其他管理员修改，请刷新后重试')
+      }
+      if (secretToStore) {
         await transaction`
           insert into credential_refs (id, tenant_id, backend, external_ref, status, last_verified_at, updated_by)
           values (${dingtalkCredentialRefId}, ${tenantId}, 'dsh-managed', 'dingtalk:app-secret', 'configured', now(), ${actorId})
@@ -232,12 +259,15 @@ export class DingTalkSettingsService implements DingTalkSettingsProvider, DingTa
         const [secret] = await transaction<{ exists: boolean }[]>`
           select exists (select 1 from credential_secrets where tenant_id = ${tenantId} and credential_ref_id = ${dingtalkCredentialRefId}) as exists
         `
-        const write = { tenantId, credentialRefId: dingtalkCredentialRefId, bearerToken: appSecret, actorId }
+        const write = { tenantId, credentialRefId: dingtalkCredentialRefId, bearerToken: secretToStore, actorId }
         if (secret?.exists) await this.credentials!.rotate(transaction, write)
         else await this.credentials!.create(transaction, write)
       }
-      const credentialRef = appSecret ? dingtalkCredentialRefId : existing?.credentialRef ?? null
-      const hint = appSecret ? secretHint(appSecret) : existing?.secretHint ?? null
+      const credentialRef = secretToStore ? dingtalkCredentialRefId : existing?.credentialRef ?? null
+      const hint = secretToStore ? secretHint(secretToStore) : existing?.secretHint ?? null
+      // 换了企业：钉钉 userid 只在企业内唯一，旧企业的绑定与待绑定凭证全部失效，钉钉会话一并撤销。
+      const corpChanged = existing?.status === 'configured' && Boolean(existing.corpId) && existing.corpId !== corpId
+      const invalidatedBindings = corpChanged ? await invalidateAllBindingsForCorpChange(transaction) : 0
       await transaction`
         insert into dingtalk_app_configurations (
           tenant_id, status, source, corp_id, agent_id, app_key, credential_ref, secret_hint,
@@ -254,7 +284,8 @@ export class DingTalkSettingsService implements DingTalkSettingsProvider, DingTa
                updated_by = excluded.updated_by, updated_at = now()
       `
       await settingsAudit(transaction, actorId, 'identity.dingtalk.settings.update', {
-        corpId, agentId, appKey, secretChanged: String(Boolean(appSecret)),
+        corpId, agentId, appKey, secretChanged: String(Boolean(appSecret)), secretStored: String(Boolean(secretToStore)),
+        ...(corpChanged ? { previousCorpId: existing!.corpId!, invalidatedBindings: String(invalidatedBindings) } : {}),
         sessionTtlSeconds: String(sessionTtlSeconds), bindingTicketTtlSeconds: String(bindingTicketTtlSeconds),
         adminDailyBindLimit: String(adminDailyBindLimit), timeoutMs: String(timeoutMs),
       })
@@ -299,6 +330,12 @@ export class DingTalkSettingsService implements DingTalkSettingsProvider, DingTa
     return row ?? null
   }
 
+  private async secretState(row: SettingsRow | null): Promise<Pick<DingTalkSettingsView, 'secretReadable' | 'secretProblem'>> {
+    if (!row) return { secretReadable: false, secretProblem: null }
+    if (await this.secret(row)) return { secretReadable: true, secretProblem: null }
+    return { secretReadable: false, secretProblem: row.credentialRef ? 'master_key' : 'deployment_secret_missing' }
+  }
+
   private async secret(row: SettingsRow): Promise<string | undefined> {
     if (!row.credentialRef) return this.deployment.bootstrap?.appSecret
     if (!this.credentials) return undefined
@@ -317,6 +354,20 @@ async function settingsAudit(database: DatabaseClient | DatabaseTransaction, act
     values (${`audit-${randomUUID()}`}, ${tenantId}, 'user', ${actorId}, ${action}, 'dingtalk_settings', ${tenantId},
       'success', ${`trace-dingtalk-${randomUUID()}`}, ${database.json({ channel: 'dingtalk', ...context })})
   `
+}
+
+function clampToPageRanges(configuration: DingTalkConfiguration) {
+  const clamp = (value: number, min: number, max: number, name: string) => {
+    const clamped = Math.min(max, Math.max(min, value))
+    if (clamped !== value) console.warn(`${name}=${value} 超出范围 ${min}–${max}，已按 ${clamped} 使用；可在“钉钉集成 › 应用配置”中调整`)
+    return clamped
+  }
+  return {
+    sessionTtlSeconds: clamp(configuration.sessionTtlSeconds, 300, 2_592_000, 'DSH_WORK_DINGTALK_SESSION_TTL_SECONDS'),
+    bindingTicketTtlSeconds: clamp(configuration.bindingTicketTtlSeconds, 60, 3600, 'DSH_WORK_DINGTALK_BINDING_TICKET_TTL_SECONDS'),
+    adminDailyBindLimit: clamp(configuration.adminDailyBindLimit, 1, 10_000, 'DSH_WORK_DINGTALK_ADMIN_DAILY_BIND_LIMIT'),
+    timeoutMs: clamp(configuration.timeoutMs, 1000, 60_000, 'DSH_WORK_DINGTALK_TIMEOUT_MS'),
+  }
 }
 
 function secretHint(secret: string) {

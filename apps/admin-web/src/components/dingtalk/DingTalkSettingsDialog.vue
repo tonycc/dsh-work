@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ElMessageBox } from 'element-plus'
 import { reactive, ref, watch } from 'vue'
 
 import { adminApi } from '@/api/client'
@@ -30,21 +31,37 @@ watch(open, value => {
   error.value = ''
 }, { immediate: true })
 
+/** 没改的字段原样提交原值，避免按小时、分钟取整后悄悄改变（例如 30 分钟的会话被存成 1 小时）。 */
+function keepOrConvert(value: number, unit: number, original: number) {
+  return value === Math.round(original / unit) ? original : value * unit
+}
+
 function secretPlaceholder() {
   if (!props.settings.configured) return '首次配置须填写'
+  if (props.settings.secretProblem === 'deployment_secret_missing') return '部署配置中已没有 AppSecret，请重新填写'
   if (!props.settings.secretReadable) return '已保存的 AppSecret 无法读取，请重新填写'
   return props.settings.secretHint ? `已保存（尾号 ${props.settings.secretHint}），留空不修改` : '已保存，留空不修改'
 }
 
 async function save() {
+  const previousCorpId = props.settings.configured ? props.settings.corpId : null
+  if (previousCorpId && form.corpId.trim() !== previousCorpId) {
+    try {
+      await ElMessageBox.confirm(
+        `CorpId 由 ${previousCorpId} 改为 ${form.corpId.trim()}，即换到另一个钉钉企业。钉钉账号只在企业内唯一，保存后所有员工的钉钉绑定都会失效、钉钉内的登录立即退出，员工需在新企业的钉钉中重新绑定。`,
+        '更换钉钉企业？', { confirmButtonText: '确认更换', cancelButtonText: '取消', type: 'warning', appendTo: 'body' },
+      )
+    } catch { return }
+  }
   saving.value = true
   error.value = ''
   try {
     const saved = await adminApi.saveDingTalkSettings({
       corpId: form.corpId.trim(), agentId: form.agentId.trim(), appKey: form.appKey.trim(),
       ...(form.appSecret.trim() ? { appSecret: form.appSecret.trim() } : {}),
-      sessionTtlSeconds: form.sessionHours * 3600, bindingTicketTtlSeconds: form.ticketMinutes * 60,
-      adminDailyBindLimit: form.dailyLimit, timeoutMs: form.timeoutSeconds * 1000,
+      sessionTtlSeconds: keepOrConvert(form.sessionHours, 3600, props.settings.sessionTtlSeconds),
+      bindingTicketTtlSeconds: keepOrConvert(form.ticketMinutes, 60, props.settings.bindingTicketTtlSeconds),
+      adminDailyBindLimit: form.dailyLimit, timeoutMs: keepOrConvert(form.timeoutSeconds, 1000, props.settings.timeoutMs),
     })
     form.appSecret = ''
     open.value = false

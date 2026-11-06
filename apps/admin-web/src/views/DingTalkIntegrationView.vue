@@ -64,7 +64,11 @@ async function loadOverview() {
 async function settingsSaved(saved: DingTalkSettings) {
   settings.value = saved
   checkMessage.value = '已保存，立即生效。'
-  overview.value = await adminApi.getDingTalkOverview()
+  try {
+    overview.value = await adminApi.getDingTalkOverview()
+  } catch (cause) {
+    error.value = cause instanceof Error ? `配置已保存，但刷新概况失败：${cause.message}` : '配置已保存，但刷新概况失败，请刷新页面'
+  }
 }
 
 async function clearSettings() {
@@ -176,7 +180,15 @@ onMounted(load)
               <h2>应用配置</h2>
               <el-tag :type="connectionTag.type" effect="plain">{{ connectionTag.label }}</el-tag>
             </div>
-            <el-alert v-if="settings?.configured && !settings.secretReadable" type="error" :closable="false" show-icon title="已保存的 AppSecret 无法读取（凭据主密钥可能已更换），钉钉功能已停用。请编辑配置并重新填写 AppSecret。" />
+            <el-alert
+              v-if="settings?.configured && !settings.secretReadable"
+              type="error"
+              :closable="false"
+              show-icon
+              :title="settings.secretProblem === 'deployment_secret_missing'
+                ? 'AppSecret 原来来自部署配置，但部署配置中已没有它，钉钉功能已停用。请编辑配置并重新填写 AppSecret。'
+                : '已保存的 AppSecret 无法读取（凭据主密钥可能已更换），钉钉功能已停用。请编辑配置并重新填写 AppSecret。'"
+            />
             <dl class="dingtalk-kv">
               <dt>CorpId</dt>
               <dd>{{ settings?.corpId ?? '未配置' }}</dd>

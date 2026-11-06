@@ -184,7 +184,7 @@
 | `DELETE /api/workbench/v1/me/dingtalk-binding` | 员工自行解绑 |
 | 管理端“钉钉集成”页 | 应用凭据状态、已绑定 / 未绑定人数与未绑定名单、投递失败列表 |
 
-钉钉应用配置（DT30）在管理端“钉钉集成 › 应用配置”填写并立即生效：`dingtalk_app_configurations` 保存非敏感参数，AppSecret 以 `DSH_CREDENTIAL_MASTER_KEY` 加密存入 `credential_secrets`（与 MCP Bearer Token、企业知识库 API Key 相同），不回显、不进 Git，审计不含密钥；保存前用这组凭据换取 access_token，失败不保存；更换 CorpId 或 AppKey 须重新填写 AppSecret。部署配置 `DSH_WORK_DINGTALK_*` 只在页面从未保存过时作为初始配置；开放平台地址 `DSH_WORK_DINGTALK_API_BASE_URL` 只能由部署配置决定（AppSecret 会发往该地址）。端口按[内部端口与契约](../development/internal-ports.md)新增 `ExternalNotificationChannel`，钉钉为第一种实现；测试替身只用于测试。
+钉钉应用配置（DT30）在管理端“钉钉集成 › 应用配置”填写并立即生效：`dingtalk_app_configurations` 保存非敏感参数，AppSecret 以 `DSH_CREDENTIAL_MASTER_KEY` 加密存入 `credential_secrets`（与 MCP Bearer Token、企业知识库 API Key 相同），不回显、不进 Git，审计不含密钥；保存前用这组凭据换取 access_token，失败不保存；更换 CorpId 或 AppKey 须重新填写 AppSecret；更换 CorpId 时全部绑定失效、钉钉会话撤销（绑定只记钉钉 userid，它只在企业内唯一）。部署配置 `DSH_WORK_DINGTALK_*` 只在页面从未保存过时作为初始配置；开放平台地址 `DSH_WORK_DINGTALK_API_BASE_URL` 只能由部署配置决定（AppSecret 会发往该地址）。端口按[内部端口与契约](../development/internal-ports.md)新增 `ExternalNotificationChannel`，钉钉为第一种实现；测试替身只用于测试。
 
 ## 6. 需同步修改的规则与文档
 

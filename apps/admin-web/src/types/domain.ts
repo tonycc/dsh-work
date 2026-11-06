@@ -1088,6 +1088,7 @@ export interface DingTalkSettings {
   appKey: string | null
   secretHint: string | null
   secretReadable: boolean
+  secretProblem: 'deployment_secret_missing' | 'master_key' | null
   sessionTtlSeconds: number
   bindingTicketTtlSeconds: number
   adminDailyBindLimit: number
