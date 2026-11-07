@@ -170,4 +170,50 @@ describe('ModelGovernanceView', () => {
     await flushPromises()
     expect(setKey).toHaveBeenCalledWith({ providerId: legacy.id, apiKey: 'sk-new-key' })
   })
+
+  describe('添加模型时的厂商模型下拉', () => {
+    const keyed: ModelProvider = { ...provider, credential: { id: 'c1', backend: 'postgres-encrypted', externalRef: 'model-provider:deepseek-official:api-key', status: 'configured', hint: 'wxyz', lastVerifiedAt: null, updatedAt: '2026-11-06T00:00:00.000Z' } }
+
+    async function renderWith(providers: ModelProvider[]) {
+      const pinia = createPinia()
+      setActivePinia(pinia)
+      useAuthStore().$patch({ permissions: ['admin:write'] })
+      vi.spyOn(adminApi, 'getModelProviders').mockResolvedValue(providers)
+      vi.spyOn(adminApi, 'getModelRoutes').mockResolvedValue([route])
+      const wrapper = mount(ModelGovernanceView, { attachTo: document.body, global: { plugins: [pinia, ElementPlus], stubs: { teleport: true, ElSelect: { template: '<div><slot /></div>' }, ElOption: true } } })
+      wrappers.push(wrapper)
+      await flushPromises()
+      return wrapper
+    }
+
+    it('已录入密钥时打开弹窗即拉取厂商模型，已添加的模型不可再选', async () => {
+      const catalog = vi.spyOn(adminApi, 'listProviderModelCatalog').mockResolvedValue({ modelKeys: ['deepseek-v4-flash', 'deepseek-v4-pro'] })
+      const wrapper = await renderWith([keyed])
+      await buttonByText(wrapper, '添加模型').trigger('click')
+      await flushPromises()
+      expect(catalog).toHaveBeenCalledWith({ providerId: 'provider-1' })
+      expect(wrapper.text()).toContain('已从厂商获取 2 个模型')
+      const options = wrapper.findAll('.catalog-field el-option-stub')
+      expect(options.map(option => option.attributes('value'))).toEqual(['deepseek-v4-flash', 'deepseek-v4-pro'])
+      expect(options[1]!.attributes('disabled')).toBe('true')
+      expect(options[1]!.attributes('label')).toContain('已添加')
+    })
+
+    it('拉取失败时提示原因，仍可手动填写', async () => {
+      vi.spyOn(adminApi, 'listProviderModelCatalog').mockRejectedValue(new Error('厂商未提供模型列表（HTTP 404），请手动填写模型标识'))
+      const wrapper = await renderWith([keyed])
+      await buttonByText(wrapper, '添加模型').trigger('click')
+      await flushPromises()
+      expect(wrapper.text()).toContain('未能获取模型列表：厂商未提供模型列表（HTTP 404）')
+    })
+
+    it('未录入密钥时不请求厂商，提示手动填写', async () => {
+      const catalog = vi.spyOn(adminApi, 'listProviderModelCatalog')
+      const wrapper = await renderWith([provider])
+      await buttonByText(wrapper, '添加模型').trigger('click')
+      await flushPromises()
+      expect(catalog).not.toHaveBeenCalled()
+      expect(wrapper.text()).toContain('尚未录入 API Key，无法获取模型列表')
+    })
+  })
 })
