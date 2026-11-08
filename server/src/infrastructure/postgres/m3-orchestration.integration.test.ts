@@ -10,7 +10,7 @@ import { PostgresDataProtectionStore } from '../../modules/data-protection/data-
 import { join } from 'node:path'
 import { after, before, test } from 'node:test'
 
-import { registerTaskExecutionRoutes, registerTaskOperationAdminRoutes } from '../../http/workbench/tas' + 'k-execution-routes.ts'
+import { registerTaskExecutionRoutes, registerTaskOperationAdminRoutes } from '../../http/workbench/task-execution-routes.ts'
 import { Router } from '../../http/router.ts'
 import type { PostgresAgentService, RuntimeAgentSnapshot } from '../../modules/agent/postgres-agent-service.ts'
 import { PostgresModelUsageService } from '../../modules/admin/application/postgres-model-usage-service.ts'
@@ -33,8 +33,8 @@ import type {
 } from '../../modules/runtime/runtime-types.ts'
 import { PostgresContentService } from '../../modules/workbench/application/postgres-content-service.ts'
 import { PostgresConversationRepository } from '../../modules/workbench/application/postgres-conversation-repository.ts'
-import { PostgresTaskRepository, TaskContractConflictError, taskOperationParameterDigest } from '../../modules/task/postgres-tas' + 'k-repository.ts'
-import { PostgresTaskQueryService } from '../../modules/run/postgres-tas' + 'k-query-service.ts'
+import { PostgresTaskRepository, TaskContractConflictError, taskOperationParameterDigest } from '../../modules/task/postgres-task-repository.ts'
+import { PostgresTaskQueryService } from '../../modules/run/postgres-task-query-service.ts'
 import type { DatabaseClient } from './database.ts'
 import { createThrowawayDatabase, type ThrowawayDatabase } from './test-database.ts'
 import { LocalObjectStorage } from '../storage/local-object-storage.ts'
@@ -127,7 +127,7 @@ test('real PostgreSQL orchestration persists the assistant result without publis
 
   // I-06：版本化结果投影——执行终态与业务核验状态独立。回答登记只证明
   // 内容落库：没有已登记成果等可核验交付物时保持 unverified（评审修复）。
-  assert.equal(task.result.version, 'tas' + 'k-result/v1')
+  assert.equal(task.result.version, 'task-result/v1')
   assert.equal(task.result.execution, 'succeeded')
   assert.equal(task.result.outcome, 'unverified')
   assert.equal(
@@ -213,7 +213,7 @@ test('MR-S3：有网关计量时按对话、联网搜索各写一行，记录实
 })
 
 test('PF-01 API Task executes through the governed Runtime without creating a Session', async () => {
-  const correlationKey = `api-tas' + 'k-${randomUUID()}`
+  const correlationKey = `api-task-${randomUUID()}`
   const created = await orchestration.startTaskExecution({
     userId: 'U00001',
     workspaceId: 'ws-personal-U00001',
@@ -276,7 +276,7 @@ test('PF-02 keeps the PF-01 request digest for budgetless API idempotency replay
 test('PF-02 HTTP contract clamps the Attempt, exposes cumulative usage, and rejects unsupported hard budgets', async () => {
   const correlationKey = `api-budget-${randomUUID()}`
   const budget = { maxDurationMs: 60_000, maxToolCalls: 5, maxOutputBytes: 4096 }
-  const createdResponse = await fetch(`${apiBaseUrl}/api/workbench/v1/tas' + 'k-executions`, {
+  const createdResponse = await fetch(`${apiBaseUrl}/api/workbench/v1/task-executions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Idempotency-Key': correlationKey },
     body: JSON.stringify({
@@ -314,7 +314,7 @@ test('PF-02 HTTP contract clamps the Attempt, exposes cumulative usage, and reje
     'base_url', 'credential_ref_id', 'model_key', 'provider_key', 'provider_type', 'route_id', 'route_key', 'trust_level',
   ])
 
-  const readResponse = await fetch(`${apiBaseUrl}/api/workbench/v1/tas' + 'k-executions/${createdEnvelope.data.task.id}`)
+  const readResponse = await fetch(`${apiBaseUrl}/api/workbench/v1/task-executions/${createdEnvelope.data.task.id}`)
   assert.equal(readResponse.status, 200)
   const readEnvelope = await readResponse.json() as {
     data: {
@@ -345,7 +345,7 @@ test('PF-02 HTTP contract clamps the Attempt, exposes cumulative usage, and reje
     outputBytes: 'platform',
   })
 
-  const changedReplay = await fetch(`${apiBaseUrl}/api/workbench/v1/tas' + 'k-executions`, {
+  const changedReplay = await fetch(`${apiBaseUrl}/api/workbench/v1/task-executions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Idempotency-Key': correlationKey },
     body: JSON.stringify({
@@ -357,7 +357,7 @@ test('PF-02 HTTP contract clamps the Attempt, exposes cumulative usage, and reje
   assert.equal(changedReplay.status, 409)
   assert.equal(((await changedReplay.json()) as { error: { code: string } }).error.code, 'TASK_CONTRACT_CONFLICT')
 
-  const unsupported = await fetch(`${apiBaseUrl}/api/workbench/v1/tas' + 'k-executions`, {
+  const unsupported = await fetch(`${apiBaseUrl}/api/workbench/v1/task-executions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Idempotency-Key': `api-budget-token-${randomUUID()}` },
     body: JSON.stringify({
@@ -372,7 +372,7 @@ test('PF-02 HTTP contract clamps the Attempt, exposes cumulative usage, and reje
 
 test('PF-01 HTTP contract creates and queries a Task and lets an administrator reconcile an Operation', async () => {
   const correlationKey = `api-route-${randomUUID()}`
-  const createdResponse = await fetch(`${apiBaseUrl}/api/workbench/v1/tas' + 'k-executions`, {
+  const createdResponse = await fetch(`${apiBaseUrl}/api/workbench/v1/task-executions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Idempotency-Key': correlationKey },
     body: JSON.stringify({
@@ -386,12 +386,12 @@ test('PF-01 HTTP contract creates and queries a Task and lets an administrator r
   const createdEnvelope = await createdResponse.json() as { data: { task: { id: string }; run: { id: string } } }
   await waitForRun(createdEnvelope.data.run.id, 'succeeded')
 
-  const readResponse = await fetch(`${apiBaseUrl}/api/workbench/v1/tas' + 'k-executions/${createdEnvelope.data.task.id}`)
+  const readResponse = await fetch(`${apiBaseUrl}/api/workbench/v1/task-executions/${createdEnvelope.data.task.id}`)
   assert.equal(readResponse.status, 200)
   const readEnvelope = await readResponse.json() as { data: { task: { correlationKey: string }; result: { answer: string } } }
   assert.equal(readEnvelope.data.task.correlationKey, correlationKey)
   assert.equal(readEnvelope.data.result.answer, 'M3 真实回答')
-  const deniedResponse = await fetch(`${apiBaseUrl}/api/workbench/v1/tas' + 'k-executions/${createdEnvelope.data.task.id}`, {
+  const deniedResponse = await fetch(`${apiBaseUrl}/api/workbench/v1/task-executions/${createdEnvelope.data.task.id}`, {
     headers: { 'x-test-user-id': 'U99999' },
   })
   assert.equal(deniedResponse.status, 403)
@@ -409,7 +409,7 @@ test('PF-01 HTTP contract creates and queries a Task and lets an administrator r
     tenantId: 'tenant-dsh-work', operationId: operation.id, status: 'unknown', receipt: { reason: 'timeout_after_send' },
   })
   const resolveResponse = await fetch(
-    `${apiBaseUrl}/api/admin/v1/tas' + 'k-executions/${createdEnvelope.data.task.id}/operations/${operation.id}/resolve`,
+    `${apiBaseUrl}/api/admin/v1/task-executions/${createdEnvelope.data.task.id}/operations/${operation.id}/resolve`,
     { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'completed', receipt: { externalStatus: 'completed' } }) },
   )
   assert.equal(resolveResponse.status, 200)
@@ -417,7 +417,7 @@ test('PF-01 HTTP contract creates and queries a Task and lets an administrator r
 })
 
 test('PF-01 session-neutral Artifact is owned by Task and readable from the Task result', async () => {
-  const workspaceDirectory = await mkdtemp(join(tmpdir(), 'dsh-work-tas' + 'k-artifact-'))
+  const workspaceDirectory = await mkdtemp(join(tmpdir(), 'dsh-work-task-artifact-'))
   await mkdir(join(workspaceDirectory, 'output'))
   await writeFile(join(workspaceDirectory, 'output', 'API任务结果.md'), '# API Task result\n')
   let release: () => void = () => undefined
@@ -1080,7 +1080,7 @@ test('cancel and retry keep one Run and create a new immutable Attempt', async (
 test('generic retry rejects a historical delegated Task', async () => {
   const task = await tasks.createTask({
     tenantId: 'tenant-dsh-work', requestedBy: 'U00001', sourceType: 'delegation',
-    sourceRef: 'tas' + 'k-parent-retry-guard', correlationKey: `delegation-retry-guard-${randomUUID()}`,
+    sourceRef: 'task-parent-retry-guard', correlationKey: `delegation-retry-guard-${randomUUID()}`,
     workspaceId: 'ws-personal-U00001',
   })
   const run = await runs.createRun({
@@ -1898,7 +1898,7 @@ test('DLP-S2 输入预检：首条被拦截不保存正文并清掉标题，已�
   assert.equal(replayed!.id, accepted!.id)
 })
 
-test('DLP-S2 输入预检：tas' + 'k-executions 接口命中密钥时不创建 Run', async () => {
+test('DLP-S2 输入预检：task-executions 接口命中密钥时不创建 Run', async () => {
   await assert.rejects(orchestration.startTaskExecution({
     userId: 'U00001',
     workspaceId: 'ws-personal-U00001',
