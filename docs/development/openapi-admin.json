@@ -1487,6 +1487,17 @@
         }
       }
     },
+    "/provider-models/capabilities": {
+      "patch": {
+        "operationId": "updateProviderModelCapabilities",
+        "summary": "修改模型能力标签（用于 Agent model.requirements 准入）；只影响之后新建的运行，记审计前后值",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          }
+        }
+      }
+    },
     "/provider-models/{modelId}": {
       "delete": {
         "operationId": "deleteProviderModel",

@@ -351,6 +351,19 @@ describe('ModelGovernanceView', () => {
       expect(remove).not.toHaveBeenCalled()
     })
 
+    it('编辑能力：弹窗带出当前能力，保存后提交并刷新', async () => {
+      const wrapper = await render()
+      const update = vi.spyOn(adminApi, 'updateProviderModelCapabilities').mockResolvedValue(provider)
+      await expandProvider(wrapper)
+      await wrapper.find('[aria-label="编辑模型能力 DeepSeek V4 Pro"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.text()).toContain('编辑能力：DeepSeek V4 Pro（deepseek-v4-pro）')
+      expect(wrapper.text()).toContain('只影响之后新建的运行')
+      await buttonByText(wrapper, '保存能力').trigger('click')
+      await flushPromises()
+      expect(update).toHaveBeenCalledWith({ modelId: 'model-1', capabilities: ['text'] })
+    })
+
     it('添加模型时能力默认全选', async () => {
       vi.spyOn(adminApi, 'listProviderModelCatalog').mockResolvedValue({ modelKeys: [] })
       const create = vi.spyOn(adminApi, 'createProviderModel').mockResolvedValue(provider)

@@ -113,6 +113,12 @@ export interface CreateProviderModelInput {
   actor: string
 }
 
+export interface UpdateProviderModelCapabilitiesInput {
+  modelId: string
+  capabilities: string[]
+  actor: string
+}
+
 export interface DeleteProviderModelInput {
   modelId: string
   actor: string

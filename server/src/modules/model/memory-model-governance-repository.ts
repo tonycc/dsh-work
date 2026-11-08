@@ -6,6 +6,7 @@ import type {
   CreateProviderInput,
   CreateProviderModelInput,
   DeleteProviderModelInput,
+  UpdateProviderModelCapabilitiesInput,
   ModelProvider,
   ModelRoute,
   ModelRouteSnapshot,
@@ -105,6 +106,13 @@ export class MemoryModelGovernanceRepository implements ModelGovernanceRepositor
     const routes = this.routes.filter((route) => route.providerModelId === model.id)
     if (routes.length) throw modelInUse(model.displayName, routes.map((route) => route.name))
     provider.models = provider.models.filter((item) => item.id !== model.id)
+    provider.updatedAt = new Date().toISOString()
+    return clone(provider)
+  }
+
+  async updateProviderModelCapabilities(_tenantId: string, input: UpdateProviderModelCapabilitiesInput) {
+    const { provider, model } = this.requireModel(input.modelId)
+    model.capabilities = [...input.capabilities]
     provider.updatedAt = new Date().toISOString()
     return clone(provider)
   }

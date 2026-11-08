@@ -195,3 +195,16 @@ test('删除模型：被任何路由（含停用路由）引用时拒绝并列�
   await assert.rejects(service.deleteProviderModel({ modelId: wrong.id, actor }), /Provider 模型不存在/)
   assert.throws(() => service.deleteProviderModel({ modelId: '', actor }), /请指定模型/)
 })
+
+test('编辑模型能力：规范化后保存，之后解析的路由快照使用新能力', async () => {
+  const service = new ModelGovernanceService(new MemoryModelGovernanceRepository())
+  const provider = (await service.listProviders())[0]!
+  const model = provider.models[0]!
+  const updated = await service.updateProviderModelCapabilities({ modelId: model.id, capabilities: [' text ', 'tool-calling', 'text', ''], actor })
+  assert.deepEqual(updated.models[0]?.capabilities, ['text', 'tool-calling'])
+  assert.deepEqual((await service.resolveDefaultRoute()).modelCapabilities, ['text', 'tool-calling'])
+  await assert.rejects(service.resolveDefaultRoute(['thinking']), { code: 'MODEL_CAPABILITY_MISMATCH' })
+  assert.throws(() => service.updateProviderModelCapabilities({ modelId: model.id, capabilities: 'text' as unknown as string[], actor }), /文本列表/)
+  assert.throws(() => service.updateProviderModelCapabilities({ modelId: model.id, capabilities: ['x'.repeat(65)], actor }), /不超过 64/)
+  await assert.rejects(service.updateProviderModelCapabilities({ modelId: 'model-missing', capabilities: [], actor }), /Provider 模型不存在/)
+})

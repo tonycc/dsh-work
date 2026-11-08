@@ -7,6 +7,7 @@ import type {
   CreateProviderInput,
   CreateProviderModelInput,
   DeleteProviderModelInput,
+  UpdateProviderModelCapabilitiesInput,
   CredentialBackend,
   CredentialReference,
   CredentialStatus,
@@ -206,9 +207,12 @@ export class PostgresModelGovernanceRepository implements ModelGovernanceReposit
   }
 
   async deleteProviderModel(tenantId: string, input: DeleteProviderModelInput) {
-    const [model] = await this.database<{ providerId: string; displayName: string }[]>`
-      select provider_id as "providerId", display_name as "displayName"
-        from provider_models where tenant_id = ${tenantId} and id = ${input.modelId}
+    const [model] = await this.database<{ providerId: string; providerKey: string; providerName: string; modelKey: string; displayName: string }[]>`
+      select m.provider_id as "providerId", p.key as "providerKey", p.name as "providerName",
+             m.model_key as "modelKey", m.display_name as "displayName"
+        from provider_models m
+        join model_providers p on p.tenant_id = m.tenant_id and p.id = m.provider_id
+       where m.tenant_id = ${tenantId} and m.id = ${input.modelId}
     `
     if (!model) throw notFound(`Provider 模型不存在：${input.modelId}`)
     const routes = await this.database<{ name: string }[]>`
@@ -219,16 +223,43 @@ export class PostgresModelGovernanceRepository implements ModelGovernanceReposit
     if (routes.length) throw modelInUse(model.displayName, routes.map((route) => route.name))
     try {
       await this.database.begin(async (transaction) => {
-        await transaction`delete from provider_models where tenant_id = ${tenantId} and id = ${input.modelId}`
+        const deleted = await transaction`delete from provider_models where tenant_id = ${tenantId} and id = ${input.modelId}`
+        if (deleted.count !== 1) throw notFound(`Provider 模型不存在：${input.modelId}`)
         await transaction`update model_providers set updated_at = now() where tenant_id = ${tenantId} and id = ${model.providerId}`
+        // 删除后行已不存在，审计里记下可识别的模型信息；与删除同一事务，审计失败则删除回滚。
+        await this.appendAudit(tenantId, input.actor, 'provider_model.delete', input.modelId, {
+          provider_id: model.providerId, provider_key: model.providerKey, provider_name: model.providerName,
+          model_key: model.modelKey, display_name: model.displayName,
+        }, transaction)
       })
     } catch (error) {
       // 检查后、删除前有路由改为指向该模型：外键拒绝，按同一业务冲突返回。
       if ((error as { code?: string }).code === '23503') throw modelInUse(model.displayName, [])
       throw error
     }
-    await this.appendAudit(tenantId, input.actor, 'provider_model.delete', input.modelId)
     return this.requireProvider(tenantId, model.providerId)
+  }
+
+  async updateProviderModelCapabilities(tenantId: string, input: UpdateProviderModelCapabilitiesInput) {
+    return this.database.begin(async (transaction) => {
+      const [before] = await transaction<{ providerId: string; modelKey: string; capabilities: unknown }[]>`
+        select provider_id as "providerId", model_key as "modelKey", capabilities
+          from provider_models where tenant_id = ${tenantId} and id = ${input.modelId}
+         for update
+      `
+      if (!before) throw notFound(`Provider 模型不存在：${input.modelId}`)
+      await transaction`
+        update provider_models set capabilities = ${transaction.json(input.capabilities)}
+         where tenant_id = ${tenantId} and id = ${input.modelId}
+      `
+      await transaction`update model_providers set updated_at = now() where tenant_id = ${tenantId} and id = ${before.providerId}`
+      await this.appendAudit(tenantId, input.actor, 'provider_model.capabilities.update', input.modelId, {
+        model_key: before.modelKey,
+        before: Array.isArray(before.capabilities) ? before.capabilities : [],
+        after: input.capabilities,
+      }, transaction)
+      return before.providerId
+    }).then((providerId) => this.requireProvider(tenantId, providerId))
   }
 
   async listRoutes(tenantId: string): Promise<ModelRoute[]> {
@@ -395,13 +426,17 @@ export class PostgresModelGovernanceRepository implements ModelGovernanceReposit
     return provider
   }
 
-  private async appendAudit(tenantId: string, actor: string, action: string, objectId: string) {
-    await this.database`
+  /** safeContext 只放可公开的识别信息（名称、标识、状态），不放密钥；executor 传事务时与业务写入同进同退。 */
+  private async appendAudit(
+    tenantId: string, actor: string, action: string, objectId: string,
+    safeContext: Record<string, unknown> = {}, executor: DatabaseClient | DatabaseTransaction = this.database,
+  ) {
+    await executor`
       insert into audit_events (
         id, tenant_id, actor_type, actor_id, action, object_type, object_id, result, trace_id, safe_context
       ) values (
         ${`audit-${randomUUID()}`}, ${tenantId}, 'user', ${actor}, ${action},
-        'model_governance', ${objectId}, 'success', ${`trace-${randomUUID()}`}, '{}'::jsonb
+        'model_governance', ${objectId}, 'success', ${`trace-${randomUUID()}`}, ${this.database.json(safeContext as never)}
       )
     `
   }
@@ -444,11 +479,13 @@ function mapRoute(row: RouteRow): ModelRoute {
 
 /** 路由目标必须存在；启用为默认路由时，模型与其 Provider 还必须处于启用状态，否则会让租户失去可用的默认路由。 */
 async function assertRouteTarget(transaction: DatabaseTransaction, tenantId: string, modelId: string, enabling: boolean) {
+  // for share of m：锁住目标模型直到路由写入提交，并发删除该模型会等待并因外键失败，不会让路由保存撞上 500。
   const [target] = await transaction<{ modelStatus: ModelStatus; providerStatus: ProviderStatus }[]>`
     select m.status as "modelStatus", p.status as "providerStatus"
       from provider_models m
       join model_providers p on p.tenant_id = m.tenant_id and p.id = m.provider_id
      where m.tenant_id = ${tenantId} and m.id = ${modelId}
+       for share of m
   `
   if (!target) throw invalidRequest(`目标模型不存在：${modelId}`)
   if (enabling && (target.modelStatus !== 'active' || target.providerStatus !== 'active')) {
