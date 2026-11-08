@@ -282,6 +282,35 @@ describe('ModelGovernanceView', () => {
       expect(noRoute.find('.route-issue-alert').text()).toContain('没有启用的默认路由')
     })
 
+    it('Provider 停用或只有旧的 DSH 受管引用时告警', async () => {
+      const disabled = await renderWith([{ ...provider, credential, status: 'disabled' }], [route])
+      expect(disabled.find('.route-issue-alert').text()).toContain('Provider“DeepSeek 官方”已停用')
+      const legacy = await renderWith([{ ...provider, credential: { ...credential, backend: 'dsh-managed', hint: null } }], [route])
+      expect(legacy.find('.route-issue-alert').text()).toContain('尚未录入 API Key')
+    })
+
+    it('非默认路由的问题以灰色提示“设为默认前需处理”，不按故障标红', async () => {
+      const disabledModel: ModelProvider = { ...provider, credential, models: [...provider.models, { id: 'model-2', providerId: 'provider-1', modelKey: 'qwen38flash', displayName: '录错的模型', capabilities: ['text'], status: 'disabled' }] }
+      const wrapper = await renderWith([disabledModel], [route, { ...standbyRoute, providerModelId: 'model-2', modelKey: 'qwen38flash', modelName: '录错的模型' }])
+      expect(wrapper.find('.route-issue-alert').exists()).toBe(false)
+      await wrapper.findAll('.el-tabs__item')[1]!.trigger('click')
+      await flushPromises()
+      const issue = wrapper.find('.route-issue-text')
+      expect(issue.text()).toContain('设为默认前需处理：目标模型“录错的模型”（qwen38flash）已停用')
+      expect(issue.classes()).toContain('route-issue-text--muted')
+      expect(wrapper.text()).not.toContain('当前默认 · 不可用')
+    })
+
+    it('刷新失败时清除旧的不可用告警，只显示加载错误', async () => {
+      const wrapper = await renderWith([provider], [route])
+      expect(wrapper.find('.route-issue-alert').exists()).toBe(true)
+      vi.spyOn(adminApi, 'getModelProviders').mockRejectedValue(new Error('网络中断'))
+      await buttonByText(wrapper, '刷新').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('.route-issue-alert').exists()).toBe(false)
+      expect(wrapper.text()).toContain('网络中断')
+    })
+
     it('默认路由可用时不显示告警', async () => {
       const wrapper = await renderWith([{ ...provider, credential }], [route])
       expect(wrapper.find('.route-issue-alert').exists()).toBe(false)
