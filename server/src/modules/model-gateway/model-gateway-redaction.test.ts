@@ -166,6 +166,85 @@ describe('模型网关数据防护（DLP-S2）', () => {
     assert.equal(upstream.length, 0)
   })
 
+  it('工具参数的键名参与识别，取值遮盖', async () => {
+    await (await chat([{ role: 'assistant', content: null, tool_calls: [{ id: 'c', type: 'function', function: { name: 'f', arguments: '{"password":"Abc#2026xQ","api_key":"zK81mNq02LpX"}' } }] }])).text()
+    assert.equal(upstream[0]!.includes('Abc#2026xQ'), false)
+    assert.equal(upstream[0]!.includes('zK81mNq02LpX'), false)
+    assert.equal(store.events[0]?.counts.secret, 2)
+  })
+
+  it('工具描述遮盖，Schema 结构不动', async () => {
+    store.policy = { terms: [{ value: '华星科技', caseSensitive: false, wholeWord: false }], allowlist: [] }
+    const tools = [{ type: 'function', function: { name: '华星科技', description: '查询华星科技', parameters: { type: 'object', properties: { 华星科技: { type: 'string', description: '华星科技编号', enum: ['华星科技'] } } } } }]
+    await (await chat([{ role: 'user', content: 'x' }], 'external', { tools })).text()
+    const sent = JSON.parse(upstream[0]!).tools[0].function
+    assert.equal(sent.name, '华星科技')
+    assert.equal(sent.description.includes('华星科技'), false)
+    assert.equal(sent.parameters.properties['华星科技'].description.includes('华星科技'), false)
+    assert.deepEqual(sent.parameters.properties['华星科技'].enum, ['华星科技'])
+  })
+
+  it('跳过键只在消息结构层生效：对象参数的 name、参数键名、文本 document 都遮盖', async () => {
+    await (await chat([{ role: 'assistant', content: [
+      { type: 'tool_use', id: 'u', name: 't', input: { name: PHONE, [PHONE]: 1 } },
+      { type: 'document', source: { type: 'text', data: PHONE } },
+      { type: 'image', source: { type: 'base64', data: PHONE } },
+    ] }])).text()
+    const blocks = JSON.parse(upstream[0]!).messages[0].content
+    assert.equal(JSON.stringify(blocks[0]).includes(PHONE), false)
+    assert.equal(blocks[1].source.data.includes(PHONE), false)
+    assert.equal(blocks[2].source.data, PHONE, '图片数据不动')
+  })
+
+  it('内容和 finish_reason 同帧时尾部不颠倒', async () => {
+    respond = placeholder => pieces(data({ id: 'x', choices: [{ index: 0, delta: { content: `hello ${placeholder.slice(0, 4)}` }, finish_reason: 'stop' }] }), 50)
+    const body = await (await chat([{ role: 'user', content: PHONE }])).text()
+    assert.match(joined(body, delta => delta.content), /^hello \{\{PE$/)
+  })
+
+  it('只有字面占位符时审计记为放行', async () => {
+    await (await chat([{ role: 'user', content: '解释 {{SECRET_abcdefghij}}' }])).text()
+    assert.equal(store.events[0]?.action, 'passed')
+  })
+
+  it('需要还原的非流式回复超过上限时失败关闭', async () => {
+    respond = () => new Response(new ReadableStream({
+      start(controller) {
+        for (let index = 0; index < 34; index += 1) controller.enqueue(new Uint8Array(1024 * 1024))
+        controller.close()
+      },
+    }), { headers: { 'content-type': 'application/json' } })
+    await assert.rejects(chat([{ role: 'user', content: PHONE }], 'external', { stream: false }).then(response => response.text()))
+  })
+
+  it('遮盖期间 DSH 断开：不发往厂商，留下中止记录', async () => {
+    const log = new MemoryModelGatewayRequestLog()
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    const service = new DataProtectionService(store, masterKey)
+    const slow = new ModelGateway({
+      log,
+      dataProtection: { mask: async (...args) => { await held; return service.mask(...args) }, recordGatewayEvent: event => service.recordGatewayEvent(event) },
+      credentials: { readSecret: async () => 'vendor-key' },
+      fetch: async () => { upstream.push('sent'); return new Response('') },
+    })
+    const root = await slow.start()
+    const controller = new AbortController()
+    const pending = fetch(`${root}/v1/chat/completions`, {
+      method: 'POST', signal: controller.signal, headers: { authorization: `Bearer ${slow.issueToken(binding())}` },
+      body: JSON.stringify({ model: 'm1', messages: [{ role: 'user', content: 'x' }] }),
+    }).catch(() => undefined)
+    await new Promise(resolve => setTimeout(resolve, 50))
+    controller.abort()
+    await pending
+    await new Promise(resolve => setTimeout(resolve, 50))
+    release()
+    for (let index = 0; index < 100 && log.records.length === 0; index += 1) await new Promise(resolve => setTimeout(resolve, 10))
+    assert.equal(upstream.length, 0)
+    assert.equal(log.records[0]?.outcome, 'aborted')
+    await slow.stop()
+  })
+
   it('审计写入失败不影响转发', async () => {
     store.recordGatewayEvent = async () => { throw new Error('db down') }
     assert.equal((await chat([{ role: 'user', content: '你好' }])).status, 200)

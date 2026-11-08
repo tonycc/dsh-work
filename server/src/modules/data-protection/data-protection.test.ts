@@ -13,7 +13,7 @@ const term = (value: string, caseSensitive = false, wholeWord = false) => ({ val
 describe('识别规则', () => {
   const secrets: [string, string][] = [
     ['OpenAI 风格密钥', 'key sk-abcdefghijklmnopqrstuvwx1234'],
-    ['AWS', 'AKIAIOSFODNN7EXAMPLE'],
+    ['AWS', 'AKIAIOSFODNN7ABC1234'],
     ['GitHub', 'ghp_abcdefghijklmnopqrstuvwxyz0123456789'],
     ['JWT', 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.abcdefghijkl'],
     ['私钥块', '-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----'],
@@ -69,6 +69,84 @@ describe('识别规则', () => {
 
   it('白名单整值放行，不区分大小写', () => {
     assert.equal(mask(['a.b@example.com'], { allowlist: ['A.B@EXAMPLE.COM'] }).counts.personal, 0)
+  })
+})
+
+describe('评审修复', () => {
+  const secretCount = (text: string) => mask([text]).counts.secret
+  const blocked = (text: string) => inspectMessageForSecrets(text, policy).secretCount
+
+  it('大文本保持线性耗时', () => {
+    for (const text of ['{"a":"b",'.repeat(40_000), 'a.'.repeat(100_000), 'x://'.repeat(50_000), 'a-'.repeat(100_000)]) {
+      const started = performance.now()
+      mask([text])
+      assert.ok(performance.now() - started < 2000, text.slice(0, 10))
+    }
+  })
+
+  it('句末标点不进取值，同一个值在别处也遮盖', () => {
+    const result = mask(['password: Abc#2026x.', '刚才的 Abc#2026x 不对', '(password=Abc2026xy)'])
+    assert.equal(result.texts[1]!.includes('Abc#2026x'), false)
+    assert.equal([...result.placeholders.values()].includes('Abc2026xy'), true)
+  })
+
+  it('连接串：短密码不算，密码取到最后一个 @，支持空用户名和 / ', () => {
+    assert.equal(maskOne('http://u:a@host.local banana'), 'http://u:a@host.local banana')
+    assert.match(maskOne('postgres://app:p@ssw0rd@db.local/x'), /^postgres:\/\/app:\{\{SECRET_[a-z2-7]{10}\}\}@db\.local\/x$/)
+    assert.equal(secretCount('redis://:p4ssw0rd99@cache.local:6379'), 1)
+    assert.equal(secretCount('postgres://app:pa/ss99wd@db.local/x'), 1)
+    assert.equal(secretCount('https://example.com:8080/a@v1'), 0, '端口不是密码')
+  })
+
+  it('全文替换保留边界和整词语义', () => {
+    assert.equal(maskOne('mysql://admin:admin@db administrator').endsWith('administrator'), true)
+    assert.equal(maskOne('password=123456 91234567').endsWith('91234567'), true)
+    assert.equal(mask(['falcon falcons'], { terms: [term('falcon', false, true)] }).texts[0]!.endsWith(' falcons'), true)
+    assert.equal(maskOne('13812345678 order13812345678x').endsWith('order13812345678x'), true)
+  })
+
+  it('明显不是取值的形态既不拦截也不遮盖', () => {
+    for (const text of ['invalid token: expired', 'password: incorrect', 'token: number', 'apiKey: boolean', 'api_key: Optional[str]', 'const token = getToken()', 'secret = os.environ["X"]', 'password: undefined)', 'input_token: 102400', '我们的密钥是 AES-256', '密钥为 RSA-2048', 'OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx', 'sk-your-api-key-here-1234567890', 'sk-learn-preprocessing-pipeline', 'use bearer authentication/authorization']) {
+      assert.equal(blocked(text), 0, text)
+    }
+  })
+
+  it('普通单词形态的取值只遮盖、不拦截', () => {
+    assert.equal(secretCount('password: abcdefgh'), 1)
+    assert.equal(blocked('password: abcdefgh'), 0)
+    assert.equal(blocked('password: Abc#2026x'), 1)
+  })
+
+  it('驼峰和常见键名', () => {
+    for (const name of ['clientSecret', 'appSecret', 'accessToken', 'dbPassword', 'SecretAccessKey', 'AccessKeySecret', 'secretKey', 'SECRET_KEY', 'private_key']) {
+      assert.equal(secretCount(`${name}=Abc2026xyQ`), 1, name)
+    }
+  })
+
+  it('带引号的取值完整匹配，前缀排除不误伤真实密码', () => {
+    assert.match(maskOne('"password":"Ab,c1234xyz"'), /^"password":"\{\{SECRET_/)
+    assert.equal(maskOne('password: "a b c d e f g h"').includes('a b c'), false)
+    assert.equal(maskOne('password: abcdef,ghij1').includes('ghij1'), false)
+    for (const text of ['password: $ecret2026', 'password: %Abc2026', 'password: YourSecret2026']) assert.equal(secretCount(text), 1, text)
+  })
+
+  it('PGP 私钥和只贴一半的私钥', () => {
+    assert.equal(secretCount('-----BEGIN PGP PRIVATE KEY BLOCK-----\nabc\n-----END PGP PRIVATE KEY BLOCK-----'), 1)
+    assert.equal(maskOne('前文\n-----BEGIN RSA PRIVATE KEY-----\nabc').includes('abc'), false)
+  })
+
+  it('手机号的国际前缀和分隔格式', () => {
+    for (const text of ['+8613812345678', '008613812345678', '138-1234-5678', '138 1234 5678']) assert.equal(mask([text]).counts.personal, 1, text)
+  })
+
+  it('跨文本时类别按规则优先级，与出现顺序无关', () => {
+    assert.deepEqual(mask(['13812345678', 'password=13812345678']).counts, { secret: 2, personal: 0, term: 0 })
+  })
+
+  it('contexts 只参与识别：JSON 键名让取值在正文里也被遮盖', () => {
+    const result = maskTexts(['Abc#2026xQ'], { tenantKey, policy, contexts: ['{"password":"Abc#2026xQ"}'] })
+    assert.equal(result.counts.secret, 1)
+    assert.equal(result.texts[0]!.includes('Abc#2026xQ'), false)
   })
 })
 

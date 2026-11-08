@@ -1,6 +1,6 @@
 import { createHmac, hkdfSync } from 'node:crypto'
 
-import { detectInto, detectSecrets, identifierRanges, isIdentifierFragment } from './data-protection-detectors.ts'
+import { detectSecrets, detectValues, escapeRegExp, identifierRanges, isIdentifierFragment, type ValueBoundary } from './data-protection-detectors.ts'
 import {
   DataProtectionUnavailableError,
   type DataProtectionCategory,
@@ -51,50 +51,62 @@ export interface MaskResult {
   counts: DataProtectionCounts
 }
 
+const BOUNDARY_WRAP: Record<ValueBoundary, [string, string]> = {
+  alnum: ['(?<![A-Za-z0-9])', '(?![A-Za-z0-9])'],
+  word: ['(?<![A-Za-z0-9_])', '(?![A-Za-z0-9_])'],
+  none: ['', ''],
+}
+
 /**
  * 请求内全文遮盖（方案 5.4）：先在全部文本上收集命中值，再统一替换。一个值只要在任一位置被识别，
- * 它在所有位置都遮盖，即使别处的周围文字不再触发规则。
+ * 它在所有位置都遮盖，即使别处的周围文字不再触发规则；替换沿用识别时的边界。
+ * contexts 只参与识别、不写回（如工具参数的完整 JSON：键名是字段规则的上下文）。
  */
-export function maskTexts(input: readonly string[], options: MaskOptions): MaskResult {
-  const found = new Map<string, DataProtectionCategory | 'literal'>()
-  const detected = new Map<string, DataProtectionCategory>()
+export function maskTexts(input: readonly string[], options: MaskOptions & { contexts?: readonly string[] }): MaskResult {
   try {
+    const found = new Map<string, { category: DataProtectionCategory | 'literal'; boundary: ValueBoundary }>()
     for (const text of input) {
-      for (const match of text.matchAll(PLACEHOLDER_PATTERN)) found.set(match[0], 'literal')
-      detectInto(text, options.policy, detected)
+      for (const match of text.matchAll(PLACEHOLDER_PATTERN)) found.set(match[0], { category: 'literal', boundary: 'none' })
     }
+    for (const [value, info] of detectValues([...input, ...(options.contexts ?? [])], options.policy)) {
+      if (!found.has(value)) found.set(value, info)
+    }
+
+    const placeholders = new Map<string, string>()
+    const replacements = new Map<string, { placeholder: string; category: DataProtectionCategory | 'literal' }>()
+    const shortCode = options.shortCode ?? ((value: string) => hmacShortCode(options.tenantKey, value))
+    for (const [value, { category }] of found) {
+      const placeholder = `{{${category === 'literal' ? LITERAL_PREFIX : CATEGORY_PREFIX[category]}_${shortCode(value)}}}`
+      // 错误信息不带任何取值或占位符。
+      if (placeholders.has(placeholder)) throw new DataProtectionUnavailableError('数据防护短码碰撞')
+      placeholders.set(placeholder, value)
+      replacements.set(value, { placeholder, category })
+    }
+
+    const counts: DataProtectionCounts = { secret: 0, personal: 0, term: 0 }
+    if (found.size === 0) return { texts: [...input], placeholders, counts }
+    const alternation = new RegExp(
+      [...found].sort(([a], [b]) => b.length - a.length).map(([value, { boundary }]) => {
+        const [before, after] = BOUNDARY_WRAP[boundary]
+        return `${before}${escapeRegExp(value)}${after}`
+      }).join('|'),
+      'gu',
+    )
+    const texts = input.map(text => {
+      const ranges = identifierRanges(text)
+      return text.replace(alternation, (match: string, offset: number) => {
+        if (isIdentifierFragment(ranges, offset, offset + match.length)) return match
+        const replacement = replacements.get(match)!
+        if (replacement.category !== 'literal') counts[replacement.category] += 1
+        return replacement.placeholder
+      })
+    })
+    return { texts, placeholders, counts }
   } catch (error) {
+    if (error instanceof DataProtectionUnavailableError) throw error
+    // 只带错误类型：引擎的错误消息可能含由原值拼成的表达式。
     throw new DataProtectionUnavailableError(`数据防护识别失败：${error instanceof Error ? error.name : 'unknown'}`)
   }
-  for (const [value, category] of detected) found.set(value, category)
-
-  const placeholders = new Map<string, string>()
-  const replacements = new Map<string, { placeholder: string; category: DataProtectionCategory | 'literal' }>()
-  const shortCode = options.shortCode ?? ((value: string) => hmacShortCode(options.tenantKey, value))
-  for (const [value, category] of found) {
-    const placeholder = `{{${category === 'literal' ? LITERAL_PREFIX : CATEGORY_PREFIX[category]}_${shortCode(value)}}}`
-    // 错误信息不带任何取值或占位符。
-    if (placeholders.has(placeholder)) throw new DataProtectionUnavailableError('数据防护短码碰撞')
-    placeholders.set(placeholder, value)
-    replacements.set(value, { placeholder, category })
-  }
-
-  const counts: DataProtectionCounts = { secret: 0, personal: 0, term: 0 }
-  if (found.size === 0) return { texts: [...input], placeholders, counts }
-  const alternation = new RegExp(
-    [...found.keys()].sort((a, b) => b.length - a.length).map(value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'),
-    'gu',
-  )
-  const texts = input.map(text => {
-    const ranges = identifierRanges(text)
-    return text.replace(alternation, (match: string, offset: number) => {
-      if (isIdentifierFragment(ranges, offset, offset + match.length)) return match
-      const replacement = replacements.get(match)!
-      if (replacement.category !== 'literal') counts[replacement.category] += 1
-      return replacement.placeholder
-    })
-  })
-  return { texts, placeholders, counts }
 }
 
 /**

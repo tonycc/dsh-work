@@ -101,10 +101,10 @@ export class DataProtectionService {
     this.masterKey = masterKey
   }
 
-  async mask(tenantId: string, texts: readonly string[]) {
+  async mask(tenantId: string, texts: readonly string[], contexts: readonly string[] = []) {
     if (!this.masterKey) throw new DataProtectionUnavailableError('未配置数据防护主密钥')
     const policy = await this.store.loadPolicy(tenantId)
-    const result = maskTexts(texts, { tenantKey: deriveTenantKey(this.masterKey, tenantId), policy })
+    const result = maskTexts(texts, { tenantKey: deriveTenantKey(this.masterKey, tenantId), policy, contexts })
     return {
       texts: result.texts,
       counts: result.counts,
