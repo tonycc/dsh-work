@@ -4,11 +4,15 @@ import type { AddressInfo } from 'node:net'
 
 import { DEEPSEEK_WEB_SEARCH_MODEL, deepSeekSearchEndpoint, isDeepSeekOfficialBaseUrl } from '../../domain/deepseek-official.ts'
 import { classifyAttemptModelFailure, type ModelFailureCode } from './model-gateway-failure.ts'
+import { SseResponseRestorer, applyRequestTexts, collectRequestTexts, requestHasImage, restoreJsonResponse } from './model-gateway-redaction.ts'
 import { UsageAccumulator } from './model-gateway-usage.ts'
 import type {
   ModelGatewayBinding,
   ModelGatewayCredentialResolver,
+  ModelGatewayDataProtection,
   ModelGatewayEndpoint,
+  ModelGatewayMaskCounts,
+  ModelGatewayMaskResult,
   ModelGatewayOrigin,
   ModelGatewayOutcome,
   ModelGatewayRejectionCode,
@@ -22,6 +26,7 @@ type FetchLike = (input: string, init: RequestInit) => Promise<Response>
 export interface ModelGatewayOptions {
   credentials: ModelGatewayCredentialResolver
   log: ModelGatewayRequestLog
+  dataProtection: ModelGatewayDataProtection
   /** 只对本机或执行网络开放（数据防护方案 5.2）；默认 127.0.0.1。 */
   host?: string
   /** 0 表示由系统分配端口。 */
@@ -44,8 +49,8 @@ export const GATEWAY_ORIGIN_HEADER = 'x-dshw-origin'
 
 /**
  * 平台模型网关（DLP-S1 最小链路）：校验 Attempt 令牌与请求模型，用平台加密保存的厂商密钥转发，
- * 记录用量与结果。只转发、不改造：保持厂商协议原样，不做协议互转、不回退、不重试（重试由 DSH 的
- * retryPolicy 按状态码决定）。遮盖与还原在 DLP-S2 叠加。
+ * 记录用量与结果，对外部厂商遮盖请求并还原回复（DLP-S2）。保持厂商协议原样，不做协议互转、不回退、
+ * 不重试（重试由 DSH 的 retryPolicy 按状态码决定）。
  */
 export class ModelGateway {
   private readonly options: ModelGatewayOptions
@@ -236,6 +241,40 @@ export class ModelGateway {
       return
     }
 
+    // 外部厂商遮盖后转发；识别、读词表任何一步失败都拒绝转发，不降级（方案 5.6.2）。内部部署不处理（D5）。
+    const parsedBody = JSON.parse(body.toString('utf8')) as Record<string, unknown>
+    let outbound: Buffer = body
+    let masked: ModelGatewayMaskResult | undefined
+    let counts: ModelGatewayMaskCounts = { secret: 0, personal: 0, term: 0 }
+    if (binding.route.trustLevel === 'external') {
+      try {
+        masked = await this.options.dataProtection.mask(binding.tenantId, collectRequestTexts(parsedBody))
+        counts = masked.counts
+        if (masked.hasPlaceholders) outbound = Buffer.from(JSON.stringify(applyRequestTexts(parsedBody, masked.texts)), 'utf8')
+      } catch (error) {
+        this.options.onError?.(`model gateway data protection failed: ${error instanceof Error ? error.name : 'unknown'}`)
+        await rejectRecorded(403, 'DATA_POLICY_UNAVAILABLE', '数据防护暂时不可用，本轮未发送给模型', modelKey)
+        return
+      }
+    }
+    try {
+      await this.options.dataProtection.recordGatewayEvent({
+        tenantId: binding.tenantId,
+        runId: binding.runId,
+        attemptId: binding.attemptId,
+        providerKey: binding.route.providerKey,
+        modelKey,
+        endpoint,
+        trustLevel: binding.route.trustLevel,
+        counts,
+        action: masked?.hasPlaceholders ? 'masked' : 'passed',
+        hasImage: requestHasImage(parsedBody['messages']),
+      })
+    } catch (error) {
+      this.options.onError?.(`model gateway data protection audit failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    const restoring = masked?.hasPlaceholders ? masked : undefined
+
     const target = endpoint === 'chat' ? `${binding.route.baseUrl.replace(/\/+$/, '')}/chat/completions` : deepSeekSearchEndpoint(binding.route.baseUrl)
     const headers: Record<string, string> = {
       'content-type': 'application/json',
@@ -261,7 +300,7 @@ export class ModelGateway {
     const headersTimer = setTimeout(() => controller.abort(), this.options.upstreamHeadersTimeoutMs ?? DEFAULT_HEADERS_TIMEOUT_MS)
     let upstream: Response
     try {
-      upstream = await this.fetchImpl(target, { method: 'POST', headers, body: new Uint8Array(body), signal: controller.signal, redirect: 'error' })
+      upstream = await this.fetchImpl(target, { method: 'POST', headers, body: new Uint8Array(outbound), signal: controller.signal, redirect: 'error' })
     } catch {
       clearTimeout(headersTimer)
       if (clientGone) {
@@ -293,6 +332,7 @@ export class ModelGateway {
     const streaming = (upstream.headers.get('content-type') ?? '').includes('text/event-stream')
     response.writeHead(upstream.status, passthroughHeaders(upstream))
     const decoder = new TextDecoder()
+    const sseRestorer = streaming && restoring ? new SseResponseRestorer(encode => restoring.createRestorer(encode)) : undefined
     const jsonChunks: Buffer[] = []
     let jsonBytes = 0
     let outcome: ModelGatewayOutcome = 'succeeded'
@@ -300,19 +340,34 @@ export class ModelGateway {
     try {
       if (upstream.body) {
         for await (const chunk of upstream.body as unknown as AsyncIterable<Uint8Array>) {
-          if (streaming) usage.acceptSseChunk(decoder.decode(chunk, { stream: true }))
-          else if (jsonBytes < 8 * 1024 * 1024) {
+          const text = streaming ? decoder.decode(chunk, { stream: true }) : ''
+          if (streaming) usage.acceptSseChunk(text)
+          else if (restoring || jsonBytes < 8 * 1024 * 1024) {
             jsonChunks.push(Buffer.from(chunk))
             jsonBytes += chunk.byteLength
           }
-          if (!response.write(chunk)) await waitForDrain(response)
+          // 需要还原的非流式回复读完后一次写出，不能先把含占位符的原文发给 DSH。
+          if (!streaming && restoring) continue
+          const outgoing = sseRestorer ? sseRestorer.push(text) : chunk
+          if (outgoing.length > 0 && !response.write(outgoing)) await waitForDrain(response)
         }
       }
+      if (sseRestorer) {
+        const rest = sseRestorer.finish()
+        if (rest) response.write(rest)
+      }
       if (!streaming && jsonBytes) {
+        const replyText = Buffer.concat(jsonChunks).toString('utf8')
+        let reply: unknown
         try {
-          usage.acceptJson(JSON.parse(Buffer.concat(jsonChunks).toString('utf8')))
+          reply = JSON.parse(replyText)
+          usage.acceptJson(reply)
         } catch {
-          // 非 JSON 回复不计量。
+          // 非 JSON 回复不计量，也没有可还原的字段，原样放行。
+        }
+        if (restoring) {
+          const isObject = reply !== null && typeof reply === 'object' && !Array.isArray(reply)
+          response.write(isObject ? JSON.stringify(restoreJsonResponse(reply as Record<string, unknown>, encode => restoring.createRestorer(encode))) : replyText)
         }
       }
     } catch {
