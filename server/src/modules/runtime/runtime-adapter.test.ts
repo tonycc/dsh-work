@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, it } from 'node:test'
 import { DataProtectionService, MemoryDataProtectionStore } from '../data-protection/data-protection-service.ts'
-import { maskTexts } from '../data-protection/data-protection-masking.ts'
+import { PlaceholderRestorer, maskTexts } from '../data-protection/data-protection-masking.ts'
 import { AcpJsonRpcClient, buildAcpChildEnvironment } from './acp-json-rpc-client.ts'
 import {
   diagnoseMcpAuthenticationFailure,
@@ -247,6 +247,15 @@ describe('Runtime Manifest compiler', () => {
     const result = maskTexts([PLACEHOLDER_INSTRUCTION], { tenantKey: Buffer.alloc(32, 1), policy: { terms: [], allowlist: [] } })
     assert.equal(result.texts[0], PLACEHOLDER_INSTRUCTION)
     assert.equal(result.placeholders.size, 0)
+  })
+
+  it('a confidential term that happens to appear in the instruction is masked and still restores', () => {
+    const term = { value: '真实值', caseSensitive: false, wholeWord: false }
+    const result = maskTexts([PLACEHOLDER_INSTRUCTION], { tenantKey: Buffer.alloc(32, 1), policy: { terms: [term], allowlist: [] } })
+    assert.notEqual(result.texts[0], PLACEHOLDER_INSTRUCTION)
+    assert.equal(result.texts[0]!.includes('真实值'), false)
+    const restorer = new PlaceholderRestorer(result.placeholders)
+    assert.equal(restorer.push(result.texts[0]!) + restorer.flush(), PLACEHOLDER_INSTRUCTION)
   })
 
   it('renders the retrieved enterprise knowledge as reference material, not authorization (weknora 4.5)', () => {

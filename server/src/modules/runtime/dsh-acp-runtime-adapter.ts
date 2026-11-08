@@ -1528,22 +1528,23 @@ export function renderUserPrompt(manifest: RuntimeManifest) {
 const BINARY_INPUT_PATTERN = /\.(xlsx|docx|pptx|pdf|png|jpe?g)$/i
 
 /**
- * `executionToolchain`: what the execution container's startup check found; listed when bash is assembled.
- * `executionWorkspace`: the workspace's absolute path in execution container mode, where python_execute
- * runs inside the container (plan 4.8) and scripts need absolute file arguments.
- */
-/**
  * 发往外部厂商时网关会把敏感内容换成占位符（数据防护方案 5.4、D7）。不说明的话模型会对员工说
  * “看到的不是真实值”，而写进工具参数的内容其实已经还原。这段文字本身不能写出完整的占位符形式，否则会被网关转义。
+ * 保密词表恰好包含这里的词时，那个词同样会被遮盖，说明仍然可读，模型回复时也会还原，不做特殊处理。
  */
 export const PLACEHOLDER_INSTRUCTION = [
   '# 受保护内容的占位符',
-  '用户消息、文件和工具结果里，部分敏感内容已由平台替换为占位符：两层花括号包住 SECRET_、PERSONAL_、TERM_ 或 TEXT_ 加一段短码。每个占位符代表一个真实值，平台会在你的回复和工具参数送达之前把它换回真实值。因此：',
+  '系统提示、用户消息、文件和工具结果里，部分敏感内容已由平台替换为占位符：两层花括号包住 SECRET_、PERSONAL_、TERM_ 或 TEXT_ 加一段短码。每个占位符代表一个真实值，平台会在你的回复和工具参数送达之前把它换回真实值。因此：',
   '- 把占位符当作它代表的值来用。需要复述、写入文件或作为工具参数时，原样写出完整的占位符，不要改动、拆开或转写。',
   '- 不要向用户提到占位符、遮盖或替换，不要说内容“未渲染”“不是真实值”，也不要让用户重新发送。',
   '- 从占位符看不出的信息（位数、归属地、具体内容等），如实说无法判断，不要猜测。',
 ].join('\n\n')
 
+/**
+ * `executionToolchain`: what the execution container's startup check found; listed when bash is assembled.
+ * `executionWorkspace`: the workspace's absolute path in execution container mode, where python_execute
+ * runs inside the container (plan 4.8) and scripts need absolute file arguments.
+ */
 export function renderSystemPrompt(manifest: RuntimeManifest, options: { executionToolchain?: readonly ExecutionTool[]; executionWorkspace?: string } = {}) {
   const sections = [manifest.agent_configuration.system_prompt.trim()]
   sections.push([
