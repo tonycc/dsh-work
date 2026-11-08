@@ -510,18 +510,17 @@ export class AdminQueryService {
   }
 
   async getOperationsSummary(): Promise<OperationsSummary> {
-    const [tasks, auditEvents, usageToday, artifacts] = await Promise.all([
+    const [tasks, auditEvents, modelTokens24h, artifacts] = await Promise.all([
       this.repository.read('tasks'),
       this.repository.read('auditEvents'),
-      // 冒烟数据按相对时间生成，刚过零点时“今天”可能没有数据，这里取近 7 天保持确定。
-      this.modelUsage.getOverview({ range: '7d' }),
+      Promise.resolve(this.modelUsage.tokensInLast24Hours()),
       this.repository.read('artifacts'),
     ])
     return {
       runs24h: tasks.length,
       successfulRuns24h: tasks.filter(task => task.status === 'succeeded').length,
       failedRuns24h: tasks.filter(task => task.status === 'failed').length,
-      modelTokens24h: usageToday.totals.totalTokens,
+      modelTokens24h,
       toolCalls24h: auditEvents.filter(event => event.category === 'tool').length,
       artifacts24h: artifacts.length,
       attentionEvents24h: auditEvents.filter(event => event.status === 'failed' || event.status === 'blocked').length,

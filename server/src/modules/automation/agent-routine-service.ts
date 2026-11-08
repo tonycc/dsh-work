@@ -442,6 +442,15 @@ export class AgentRoutineService {
     cursor: { expectedCursor: string; nextCursor: string | null; scheduleRevision: number } | null,
     triggerEvidence: AgentRoutineExecution['triggerEvidence'] = {},
   ): Promise<AgentRoutineExecution> {
+    // 触发时再查一次：预检要用连接池的其他连接，必须在事务之前，不能持有行锁等待。
+    // 不可用时向上抛出，不写执行记录、游标不动，下个 tick 重试。
+    const before = this.inputPolicy ? await this.get(id) : null
+    const checked = before?.status === 'enabled' ? {
+      prompt: before.inputTemplate.prompt,
+      blocked: (await this.inputPolicy!.check({
+        userId: before.recipientUserId, entry: 'routine-trigger', sessionId: null, text: before.inputTemplate.prompt, dedupeKey: triggerId,
+      })).blocked,
+    } : null
     const result = await this.database.begin(async tx => {
       const [locked] = await tx<RoutineRow[]>`
         select ${tx.unsafe(routineColumns)} from agent_routines where tenant_id = ${tenantId} and id = ${id} for update
@@ -485,11 +494,9 @@ export class AgentRoutineService {
            and r.status in ('queued', 'running', 'waiting', 'cancel_requested') limit 1
       `
       if (overlap) return insert('overlap')
-      // 触发时再查一次：放在全局锁之前，预检要用连接池的其他连接。不可用时向上抛出，下个 tick 重试。
-      const policy = await this.inputPolicy?.check({
-        userId: routine.recipientUserId, entry: 'routine-trigger', sessionId: null, text: routine.inputTemplate.prompt, dedupeKey: triggerId,
-      })
-      if (policy?.blocked) return insert('data_policy_blocked')
+      // 预检之后提示词变了就不能放行未检查的内容，按状态冲突处理，下次触发重新预检。
+      if (this.inputPolicy && checked?.prompt !== routine.inputTemplate.prompt) throw conflict('任务提示词已变化')
+      if (checked?.blocked) return insert('data_policy_blocked')
       // Share one admission lock with employee automations so the combined
       // global pending quota cannot be oversubscribed by concurrent triggers.
       await tx`select pg_advisory_xact_lock(hashtext('dsh-work-automation-global-admission'))`

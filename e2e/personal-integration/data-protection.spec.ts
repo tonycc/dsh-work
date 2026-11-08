@@ -31,12 +31,14 @@ test('P1: a message with a secret in an existing conversation is kept and marked
 
 test('P1: a secret in the first message leaves no conversation behind', async ({ page }) => {
   const prompt = secretPrompt()
+  const sessionsBody = async () => (await page.request.get('/api/workbench/v1/sessions?limit=50')).text()
   await page.goto('/workbench')
   await send(page, prompt)
   await expect(page.getByText(blockedText).first()).toBeVisible()
   await expect(page).toHaveURL(/\/workbench/)
   await expect(page.getByLabel('对话输入')).toHaveValue(prompt)
 
-  const sessions = await (await page.request.get('/api/workbench/v1/sessions?limit=50')).text()
-  expect(sessions).not.toContain(prompt.slice(0, 12))
+  // 后端拦截时把标题改成“未发送的对话”，随后由前端删除；删除失败时列表里会留下这个标题。
+  await expect.poll(sessionsBody).not.toContain('未发送的对话')
+  expect(await sessionsBody()).not.toContain(prompt.slice(0, 12))
 })
