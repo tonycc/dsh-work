@@ -1,3 +1,4 @@
+import type { AttemptModelUsageLine } from '../../run/model-usage-meter-port.ts'
 import { randomUUID } from 'node:crypto'
 
 import { normalizeDisabledTools } from '../../runtime/builtin-tools.ts'
@@ -783,20 +784,40 @@ export class PostgresOperationsService {
   }
 
   async recordModelUsage(input: {
-    run: RunRecord; attempt: RunAttemptRecord; prompt: string; output: string; status: 'success' | 'failed'; traceId: string;
-    inputTokens?: number; outputTokens?: number
+    run: RunRecord; attempt: RunAttemptRecord; prompt: string; output: string; status: 'success' | 'failed' | 'cancelled'; traceId: string;
+    inputTokens?: number; outputTokens?: number; gatewayUsage?: readonly AttemptModelUsageLine[]
   }) {
     const route = input.attempt.modelRouteSnapshot
     const started = input.attempt.startedAt ? new Date(input.attempt.startedAt).getTime() : Date.now()
+    const latencyMs = Math.max(0, Date.now() - started)
+    // 模型网关计量（MR-S3）：对话与联网搜索各一行，记录实际模型、请求次数与缓存读写。
+    if (input.gatewayUsage && input.gatewayUsage.length > 0) {
+      for (const line of input.gatewayUsage) {
+        await this.database`
+          insert into model_usage_events (
+            id, tenant_id, run_id, attempt_id, provider, model, input_tokens, output_tokens,
+            latency_ms, cost_amount, cost_currency, status, trace_id, estimated, occurred_at,
+            endpoint, measurement, cache_read_tokens, cache_write_tokens, request_count, failed_request_count
+          ) values (
+            ${line.endpoint === 'chat' ? `usage-${input.attempt.id}` : `usage-${input.attempt.id}-${line.endpoint}`},
+            ${tenantId}, ${input.run.id}, ${input.attempt.id}, ${line.providerKey}, ${line.modelKey},
+            ${line.inputTokens}, ${line.outputTokens}, ${latencyMs}, 0, 'CNY', ${input.status}, ${input.traceId}, false, now(),
+            ${line.endpoint}, 'gateway', ${line.cacheReadTokens}, ${line.cacheWriteTokens}, ${line.requests}, ${line.failedRequests}
+          ) on conflict (id) do nothing
+        `
+      }
+      return
+    }
+    const estimated = input.inputTokens === undefined || input.outputTokens === undefined
     await this.database`
       insert into model_usage_events (
         id, tenant_id, run_id, attempt_id, provider, model, input_tokens, output_tokens,
-        latency_ms, cost_amount, cost_currency, status, trace_id, estimated, occurred_at
+        latency_ms, cost_amount, cost_currency, status, trace_id, estimated, occurred_at, endpoint, measurement
       ) values (
         ${`usage-${input.attempt.id}`}, ${tenantId}, ${input.run.id}, ${input.attempt.id},
         ${String(route['providerKey'] ?? 'dsh-default')}, ${String(route['modelKey'] ?? 'dsh-default')},
-        ${input.inputTokens ?? estimateTokens(input.prompt)}, ${input.outputTokens ?? estimateTokens(input.output)}, ${Math.max(0, Date.now() - started)},
-        0, 'CNY', ${input.status}, ${input.traceId}, ${input.inputTokens === undefined || input.outputTokens === undefined}, now()
+        ${input.inputTokens ?? estimateTokens(input.prompt)}, ${input.outputTokens ?? estimateTokens(input.output)}, ${latencyMs},
+        0, 'CNY', ${input.status}, ${input.traceId}, ${estimated}, now(), 'chat', ${estimated ? 'estimated' : 'session-log'}
       ) on conflict (id) do nothing
     `
   }

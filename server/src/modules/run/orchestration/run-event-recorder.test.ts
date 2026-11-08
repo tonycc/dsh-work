@@ -114,3 +114,37 @@ test('写入期间 Attempt 被平台结束时补标 late（P1-8）', async () =>
   assert.deepEqual(marked, ['event-1'])
   assert.deepEqual(transitions, [])
 })
+
+test('MR-S3：网关计量同时交给预算与用量；取消的运行有网关记录时也记用量，汇总失败时退回原计量', async () => {
+  const line = {
+    endpoint: 'chat' as const, providerKey: 'deepseek-official', modelKey: 'deepseek-v4-pro', requests: 2, failedRequests: 0,
+    inputTokens: 500, outputTokens: 40, cacheReadTokens: 200, cacheWriteTokens: null,
+  }
+  const usage: Array<{ status: string; gatewayUsage?: unknown }> = []
+  const settled: unknown[] = []
+  let meterFails = false
+  const deps = permissive<OrchestrationDependencies>({
+    runs: permissive({
+      getRun: async () => run,
+      getAttempt: async () => ({ id: 'attempt-1', status: 'running' }),
+    }),
+    conversations: permissive({ getRunPrompt: async () => '提示' }),
+    operations: permissive({ recordModelUsage: async (input: { status: string; gatewayUsage?: unknown }) => { usage.push(input) } }),
+    modelUsage: { summarizeAttempt: async () => { if (meterFails) throw new Error('数据库不可用'); return [line] } },
+    sessionSummaries: undefined,
+    persistentWait: undefined,
+    projectArchivist: undefined,
+  })
+  const budget = permissive<AttemptBudget>({ settle: async (...args: unknown[]) => { settled.push(args[3]) } })
+  const recorder = new RunEventRecorder(deps, budget)
+
+  recorder.record(run, event(1, 'run.cancelled'))
+  await recorder.flush(run.id)
+  assert.deepEqual(usage.map(item => [item.status, item.gatewayUsage]), [['cancelled', [line]]])
+  assert.deepEqual(settled, [[line]], '预算用同一组网关数字')
+
+  meterFails = true
+  recorder.record(run, event(2, 'run.completed'))
+  await recorder.flush(run.id)
+  assert.deepEqual(usage.at(-1)?.gatewayUsage, [], '汇总失败不影响收尾，按会话日志或估算记录')
+})
