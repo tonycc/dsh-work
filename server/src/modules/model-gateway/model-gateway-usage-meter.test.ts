@@ -27,7 +27,7 @@ describe('模型网关用量汇总（MR-S3）', () => {
     ])
     assert.deepEqual(lines, [{
       endpoint: 'chat', providerKey: 'deepseek-official', modelKey: 'deepseek-v4-pro', requests: 4, failedRequests: 2,
-      inputTokens: 2200, outputTokens: 170, cacheReadTokens: 1300, cacheWriteTokens: null,
+      succeededRequests: 2, usageReported: true, inputTokens: 2200, outputTokens: 170, cacheReadTokens: 1300, cacheWriteTokens: null,
     }])
   })
 
@@ -60,8 +60,24 @@ describe('模型网关用量汇总（MR-S3）', () => {
     ])
     assert.deepEqual(line, {
       endpoint: 'chat', providerKey: 'bailian', modelKey: 'qwen3.8-flash', requests: 2, failedRequests: 1,
-      inputTokens: 0, outputTokens: 0, cacheReadTokens: null, cacheWriteTokens: null,
+      succeededRequests: 0, usageReported: false, inputTokens: 0, outputTokens: 0, cacheReadTokens: null, cacheWriteTokens: null,
     })
+  })
+
+  it('没有成功请求时，实际模型取发到厂商的请求，而不是网关拒绝时记录的请求模型', () => {
+    const [line] = summarizeGatewayRequests([
+      record({ outcome: 'failed', httpStatus: 503, modelKey: 'qwen3.8-flash', inputTokens: null, outputTokens: null, cacheReadTokens: null }),
+      record({ origin: 'gateway', outcome: 'failed', httpStatus: 403, modelKey: 'wrong-model', inputTokens: null, outputTokens: null, cacheReadTokens: null }),
+    ])
+    assert.equal(line?.modelKey, 'qwen3.8-flash')
+  })
+
+  it('取消后先等待网关写入被中止请求的记录再汇总', async () => {
+    const log = new MemoryModelGatewayRequestLog()
+    const meter = new ModelGatewayUsageMeter(log, { cancelSettleMs: 50 })
+    const pending = meter.summarizeAttempt('tenant-dsh-work', 'attempt-late', { afterCancel: true })
+    await log.record(record({ attemptId: 'attempt-late', outcome: 'aborted', inputTokens: null, outputTokens: null, cacheReadTokens: null }))
+    assert.equal((await pending)[0]?.requests, 1)
   })
 
   it('没有网关记录时返回空数组（调用方沿用会话日志或估算）', async () => {
