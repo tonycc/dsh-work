@@ -52,7 +52,10 @@ const modelOptions = computed(() => providers.value.flatMap((provider) => provid
   disabled: provider.status !== 'active' || model.status !== 'active',
 }))))
 const loaded = ref(false)
-/** 路由目标当前能否被运行使用；与后端 resolveDefaultRoute 的拒绝条件一致。 */
+/**
+ * 路由目标当前能否被运行使用。比后端 resolveDefaultRoute 略严：旧的 DSH 受管引用后端会放行，
+ * 但模型网关只能用平台加密保存的密钥，运行必然失败，所以页面按实际可用性一并告警。
+ */
 function routeTargetIssue(route: ModelRoute): string | null {
   const provider = providers.value.find((item) => item.id === route.providerId)
   const model = provider?.models.find((item) => item.id === route.providerModelId)
@@ -62,10 +65,11 @@ function routeTargetIssue(route: ModelRoute): string | null {
   if (!usableCredential(provider)) return `Provider“${provider.name}”尚未录入 API Key`
   return null
 }
+const routeIssues = computed(() => new Map(routes.value.map((route) => [route.id, routeTargetIssue(route)])))
 const defaultRouteIssue = computed(() => {
   if (!loaded.value) return null
   if (!enabledRoute.value) return '没有启用的默认路由'
-  const issue = routeTargetIssue(enabledRoute.value)
+  const issue = routeIssues.value.get(enabledRoute.value.id)
   return issue ? `默认路由“${enabledRoute.value.name}”：${issue}` : null
 })
 const { currentPage: providerPage, pagedItems: pagedProviders } = useListPagination(providers)
@@ -81,6 +85,7 @@ async function load() {
     ])
     loaded.value = true
   } catch (cause) {
+    loaded.value = false
     error.value = cause instanceof Error ? cause.message : '模型治理数据加载失败'
   } finally {
     loading.value = false
@@ -381,7 +386,7 @@ onMounted(() => void load())
       <el-table v-else v-loading="loading" class="data-table" :data="pagedRoutes" empty-text="暂无模型路由">
         <el-table-column label="路由" min-width="230"><template #default="scope"><div class="stack-cell"><strong>{{ scope.row.name }}</strong><span>{{ scope.row.key }}</span></div></template></el-table-column>
         <el-table-column label="路由目标" min-width="280"><template #default="scope"><div class="stack-cell"><strong>{{ scope.row.modelName }}</strong><span>{{ scope.row.providerName }} / {{ scope.row.modelKey }}</span></div></template></el-table-column>
-        <el-table-column label="状态" min-width="200"><template #default="scope"><div class="stack-cell"><el-tag :type="scope.row.enabled ? (routeTargetIssue(scope.row) ? 'danger' : 'success') : 'info'" effect="plain">{{ scope.row.enabled ? (routeTargetIssue(scope.row) ? '当前默认 · 不可用' : '当前默认') : '停用' }}</el-tag><span v-if="routeTargetIssue(scope.row)" class="route-issue-text">{{ routeTargetIssue(scope.row) }}</span></div></template></el-table-column>
+        <el-table-column label="状态" min-width="200"><template #default="scope"><div class="stack-cell"><el-tag :type="scope.row.enabled ? (routeIssues.get(scope.row.id) ? 'danger' : 'success') : 'info'" effect="plain">{{ scope.row.enabled ? (routeIssues.get(scope.row.id) ? '当前默认 · 不可用' : '当前默认') : '停用' }}</el-tag><span v-if="routeIssues.get(scope.row.id)" :class="scope.row.enabled ? 'route-issue-text' : 'route-issue-text route-issue-text--muted'">{{ scope.row.enabled ? routeIssues.get(scope.row.id) : `设为默认前需处理：${routeIssues.get(scope.row.id)}` }}</span></div></template></el-table-column>
         <el-table-column label="更新于" min-width="180"><template #default="scope">{{ new Date(scope.row.updatedAt).toLocaleString('zh-CN') }}</template></el-table-column>
         <el-table-column v-if="authStore.canManage" label="操作" width="180" fixed="right"><template #default="scope"><el-button link type="primary" @click="openRouteDialog(scope.row)">编辑</el-button><el-button link :type="scope.row.enabled ? 'danger' : 'primary'" @click="toggleRoute(scope.row)">{{ scope.row.enabled ? '停用' : '设为默认' }}</el-button></template></el-table-column>
       </el-table>
@@ -449,6 +454,7 @@ onMounted(() => void load())
 .route-issue-alert { margin-bottom: 16px; }
 .route-issue-alert p { margin: 0 0 8px; }
 .route-issue-text { color: var(--el-color-danger); }
+.route-issue-text--muted { color: var(--color-text-secondary); }
 .catalog-field { display: flex; gap: 8px; width: 100%; }
 .catalog-field .catalog-select { flex: 1; min-width: 0; }
 .catalog-hint { margin-top: 4px; font-size: 12px; line-height: 1.5; color: var(--color-text-secondary); }

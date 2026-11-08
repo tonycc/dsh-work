@@ -47,7 +47,7 @@ test('the enabled default route is resolved by purpose, not by its key', async (
   assert.equal((await service.resolveDefaultRoute()).routeKey, 'primary-chat')
 
   await service.updateRoute({ routeId: created.id, name: '主力模型', providerModelId: provider.models[0]!.id, enabled: false, actor })
-  await assert.rejects(service.resolveDefaultRoute(), { code: 'MODEL_ROUTE_UNAVAILABLE', message: '没有可用的默认模型路由' })
+  await assert.rejects(service.resolveDefaultRoute(), { code: 'MODEL_ROUTE_NOT_READY', message: '没有可用的默认模型路由' })
 
   const seed = routes.find(item => item.key === 'default')!
   await service.updateRoute({ routeId: seed.id, name: '平台默认模型路由', providerModelId: seed.providerModelId, enabled: true, actor })
@@ -61,7 +61,7 @@ test('a disabled model makes its route unavailable instead of falling back', asy
   const updated = await service.setProviderModelStatus({ modelId: model.id, status: 'disabled', actor })
   assert.equal(updated.models[0]?.status, 'disabled')
   await assert.rejects(service.resolveDefaultRoute(), (error: RequestError) => {
-    assert.equal(error.code, 'MODEL_ROUTE_UNAVAILABLE')
+    assert.equal(error.code, 'MODEL_ROUTE_NOT_READY')
     assert.equal(error.status, 503)
     assert.match(error.message, /模型路由目标已停用：默认路由“平台默认模型路由”指向的模型.*（deepseek-v4-pro）已停用/)
     assert.match(error.suggestion ?? '', /模型配置 → 模型路由/)
