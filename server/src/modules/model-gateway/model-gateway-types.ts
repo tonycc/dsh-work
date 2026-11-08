@@ -101,6 +101,7 @@ export interface ModelGatewayDataProtectionEvent {
 
 /** 数据防护端口（方案 5.4、5.9）。mask 抛错时网关失败即关闭，不得直发。 */
 export interface ModelGatewayDataProtection {
-  mask(tenantId: string, texts: readonly string[]): Promise<ModelGatewayMaskResult>
+  /** contexts 只参与识别、不写回。 */
+  mask(tenantId: string, texts: readonly string[], contexts: readonly string[]): Promise<ModelGatewayMaskResult>
   recordGatewayEvent(event: ModelGatewayDataProtectionEvent): Promise<void>
 }

@@ -43,6 +43,8 @@ export interface ModelGatewayOptions {
 const DEFAULT_MAX_REQUEST_BYTES = 64 * 1024 * 1024
 const DEFAULT_HEADERS_TIMEOUT_MS = 120_000
 const MAX_ERROR_BODY_BYTES = 64 * 1024
+/** 需要还原的非流式回复要整体缓冲，超过此上限按失败处理。 */
+const MAX_RESTORED_JSON_BYTES = 32 * 1024 * 1024
 const TOKEN_PREFIX = 'dshwg_'
 /** 网关自身响应带此头，与厂商透传的同状态码错误区分（模型路由方案 4.7）。 */
 export const GATEWAY_ORIGIN_HEADER = 'x-dshw-origin'
@@ -211,6 +213,17 @@ export class ModelGateway {
       this.reject(response, status, code, message)
     }
 
+    // 读请求体之前就监听断开：遮盖耗时期间 DSH 断开时不再发往厂商，也要留下记录。
+    const controller = new AbortController()
+    let clientGone = false
+    const onClose = () => {
+      if (!response.writableFinished) {
+        clientGone = true
+        controller.abort()
+      }
+    }
+    response.on('close', onClose)
+
     const body = await readBody(request, this.options.maxRequestBytes ?? DEFAULT_MAX_REQUEST_BYTES)
     if (!body) {
       await rejectRecorded(413, 'MODEL_REQUEST_INVALID', '模型请求体过大', binding.route.modelKey)
@@ -248,7 +261,8 @@ export class ModelGateway {
     let counts: ModelGatewayMaskCounts = { secret: 0, personal: 0, term: 0 }
     if (binding.route.trustLevel === 'external') {
       try {
-        masked = await this.options.dataProtection.mask(binding.tenantId, collectRequestTexts(parsedBody))
+        const collected = collectRequestTexts(parsedBody)
+        masked = await this.options.dataProtection.mask(binding.tenantId, collected.texts, collected.contexts)
         counts = masked.counts
         if (masked.hasPlaceholders) outbound = Buffer.from(JSON.stringify(applyRequestTexts(parsedBody, masked.texts)), 'utf8')
       } catch (error) {
@@ -267,7 +281,7 @@ export class ModelGateway {
         endpoint,
         trustLevel: binding.route.trustLevel,
         counts,
-        action: masked?.hasPlaceholders ? 'masked' : 'passed',
+        action: counts.secret + counts.personal + counts.term > 0 ? 'masked' : 'passed',
         hasImage: requestHasImage(parsedBody['messages']),
       })
     } catch (error) {
@@ -288,15 +302,10 @@ export class ModelGateway {
       if (beta) headers['anthropic-beta'] = beta
     }
 
-    const controller = new AbortController()
-    let clientGone = false
-    const onClose = () => {
-      if (!response.writableFinished) {
-        clientGone = true
-        controller.abort()
-      }
+    if (clientGone) {
+      await save(record({ modelKey, origin: 'transport', outcome: 'aborted', httpStatus: null, errorCode: null }))
+      return
     }
-    response.on('close', onClose)
     const headersTimer = setTimeout(() => controller.abort(), this.options.upstreamHeadersTimeoutMs ?? DEFAULT_HEADERS_TIMEOUT_MS)
     let upstream: Response
     try {
@@ -342,7 +351,10 @@ export class ModelGateway {
         for await (const chunk of upstream.body as unknown as AsyncIterable<Uint8Array>) {
           const text = streaming ? decoder.decode(chunk, { stream: true }) : ''
           if (streaming) usage.acceptSseChunk(text)
-          else if (restoring || jsonBytes < 8 * 1024 * 1024) {
+          else if (restoring && jsonBytes + chunk.byteLength > MAX_RESTORED_JSON_BYTES) {
+            // 超限时失败关闭：不能把含占位符的原文发给 DSH。
+            throw new Error('restored response too large')
+          } else if (restoring || jsonBytes < 8 * 1024 * 1024) {
             jsonChunks.push(Buffer.from(chunk))
             jsonBytes += chunk.byteLength
           }
@@ -504,6 +516,11 @@ function passthroughHeaders(upstream: Response): Record<string, string> {
 
 function waitForDrain(response: ServerResponse): Promise<void> {
   return new Promise(resolve => {
+    // 连接已断开时 drain 和 close 都不会再来。
+    if (response.destroyed) {
+      resolve()
+      return
+    }
     const done = () => {
       response.off('drain', done)
       response.off('close', done)
