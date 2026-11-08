@@ -1904,7 +1904,7 @@ test('DLP-S2 输入预检：task-executions 接口命中密钥时不创建 Run',
     workspaceId: 'ws-personal-U00001',
     agentVersionId: 'agent-version-dsh-work-assistant-1',
     prompt: 'sk-abcdefghijklmnopqrstuvwx5555',
-    correlationKey,
+    correlationKey: randomUUID(),
     sourceType: 'api',
   }), { code: 'DATA_POLICY_BLOCKED' })
 })
