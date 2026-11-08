@@ -156,9 +156,9 @@ test('real PostgreSQL orchestration persists the assistant result without publis
 
 test('MR-S3：有网关计量时按对话、联网搜索各写一行，记录实际模型、请求次数与缓存，预算用同一组数字', async () => {
   meteredLines = [
-    { endpoint: 'chat', providerKey: 'bailian', modelKey: 'qwen3.8-flash', requests: 3, failedRequests: 1,
+    { endpoint: 'chat', providerKey: 'bailian', modelKey: 'qwen3.8-flash', requests: 3, failedRequests: 1, succeededRequests: 2, usageReported: true,
       inputTokens: 12000, outputTokens: 900, cacheReadTokens: 4000, cacheWriteTokens: null },
-    { endpoint: 'search', providerKey: 'deepseek-official', modelKey: 'deepseek-v4-flash', requests: 1, failedRequests: 0,
+    { endpoint: 'search', providerKey: 'deepseek-official', modelKey: 'deepseek-v4-flash', requests: 1, failedRequests: 0, succeededRequests: 1, usageReported: true,
       inputTokens: 1200, outputTokens: 300, cacheReadTokens: null, cacheWriteTokens: null },
   ]
   try {
@@ -190,6 +190,14 @@ test('MR-S3：有网关计量时按对话、联网搜索各写一行，记录实
         from attempt_budget_usage where run_id = ${created.id}
     `
     assert.deepEqual(budget, { inputTokens: 13200, outputTokens: 1200, tokenMeasurement: 'reported' }, '预算与用量按同一组网关数字结算')
+
+    // 运营事件视图每次执行只出现一条模型调用；会话 Token 合计包含联网搜索行
+    const [events] = await database<{ count: number }[]>`
+      select count(*)::integer as count from operational_events where run_id = ${created.id} and action = 'model.invoke'
+    `
+    assert.equal(events?.count, 1)
+    const sessions = await operations.getSessions({ query: session.id })
+    assert.equal(sessions.items.find(item => item.id === session.id)?.tokenUsage, 14400)
   } finally {
     meteredLines = []
   }
