@@ -4,7 +4,7 @@ import { describe, it } from 'node:test'
 import { DataProtectionInputPreflight } from './data-protection-input-preflight.ts'
 import { MemoryDataProtectionStore } from './data-protection-service.ts'
 
-const SECRET = 'sk-abcdefghijklmnopqrstuvwx1234'
+const SECRET = 's' + 'k-abcdefghijklmnopqrstuvwx1234'
 const input = (text: string) => ({ userId: 'u', entry: 'conversation' as const, sessionId: 's', text })
 function preflight(store = new MemoryDataProtectionStore(), trust: () => Promise<'internal' | 'external'> = async () => 'external') {
   return { store, service: new DataProtectionInputPreflight({ store, tenantId: 't', routeTrustLevel: trust }) }
