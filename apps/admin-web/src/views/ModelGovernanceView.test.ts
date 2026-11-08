@@ -246,4 +246,45 @@ describe('ModelGovernanceView', () => {
       expect(wrapper.text()).toContain('尚未录入 API Key，无法获取模型列表')
     })
   })
+
+  describe('默认路由不可用的提示', () => {
+    const credential = { id: 'c1', backend: 'postgres-encrypted' as const, externalRef: 'model-provider:deepseek-official:api-key', status: 'configured' as const, hint: 'wxyz', lastVerifiedAt: null, updatedAt: '2026-11-06T00:00:00.000Z' }
+
+    async function renderWith(providers: ModelProvider[], routes: ModelRoute[]) {
+      const pinia = createPinia()
+      setActivePinia(pinia)
+      useAuthStore().$patch({ permissions: ['admin:write'] })
+      vi.spyOn(adminApi, 'getModelProviders').mockResolvedValue(providers)
+      vi.spyOn(adminApi, 'getModelRoutes').mockResolvedValue(routes)
+      const wrapper = mount(ModelGovernanceView, { attachTo: document.body, global: { plugins: [pinia, ElementPlus], stubs: { teleport: true, ElSelect: { template: '<div><slot /></div>' }, ElOption: true } } })
+      wrappers.push(wrapper)
+      await flushPromises()
+      return wrapper
+    }
+
+    it('默认路由指向已停用的模型时，页面顶部告警并在路由列表标出原因', async () => {
+      const disabledModel: ModelProvider = { ...provider, credential, models: [{ ...provider.models[0]!, modelKey: 'qwen38flash', displayName: 'Qwen 旧标识', status: 'disabled' }] }
+      const wrapper = await renderWith([disabledModel], [{ ...route, modelKey: 'qwen38flash', modelName: 'Qwen 旧标识' }])
+      const alert = wrapper.find('.route-issue-alert')
+      expect(alert.exists()).toBe(true)
+      expect(alert.text()).toContain('默认路由当前不可用')
+      expect(alert.text()).toContain('默认路由“平台默认模型路由”：目标模型“Qwen 旧标识”（qwen38flash）已停用')
+      await buttonByText(wrapper, '查看模型路由').trigger('click')
+      await flushPromises()
+      expect(wrapper.text()).toContain('当前默认 · 不可用')
+      expect(wrapper.find('.route-issue-text').text()).toContain('已停用')
+    })
+
+    it('Provider 未录入密钥或没有启用的默认路由时同样告警', async () => {
+      const noKey = await renderWith([provider], [route])
+      expect(noKey.find('.route-issue-alert').text()).toContain('尚未录入 API Key')
+      const noRoute = await renderWith([{ ...provider, credential }], [{ ...route, enabled: false }])
+      expect(noRoute.find('.route-issue-alert').text()).toContain('没有启用的默认路由')
+    })
+
+    it('默认路由可用时不显示告警', async () => {
+      const wrapper = await renderWith([{ ...provider, credential }], [route])
+      expect(wrapper.find('.route-issue-alert').exists()).toBe(false)
+    })
+  })
 })
