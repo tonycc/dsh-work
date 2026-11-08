@@ -154,3 +154,10 @@ test('厂商模型目录：只对已录入平台密钥的 Provider 开放，并�
   const other = await withoutCatalog.createProvider({ key: 'vendor-catalog', name: '目录厂商', providerType: 'openai-completions', trustLevel: 'external', baseUrl: 'https://vendor.example.com/v1', apiKey: 'fake-model-key-0123456789abcd', actor })
   await assert.rejects(withoutCatalog.listProviderModelCatalog({ providerId: other.id }), /DSH_CREDENTIAL_MASTER_KEY/)
 })
+
+test('缺少模型标识或名称时返回校验错误而不是 500', async () => {
+  const service = new ModelGovernanceService(new MemoryModelGovernanceRepository())
+  const provider = (await service.listProviders())[0]!
+  assert.throws(() => service.createProviderModel({ providerId: provider.id, modelKey: undefined as unknown as string, displayName: '名称', capabilities: [], actor }), { status: 422 })
+  assert.throws(() => service.createProviderModel({ providerId: provider.id, modelKey: 'qwen-max', displayName: undefined as unknown as string, capabilities: [], actor }), { status: 422 })
+})

@@ -76,10 +76,10 @@ export class ModelGovernanceService {
 
   createProviderModel(input: CreateProviderModelInput) {
     assertActor(input.actor)
-    if (!isValidModelKey(input.modelKey.trim())) {
+    if (typeof input.modelKey !== 'string' || !isValidModelKey(input.modelKey.trim())) {
       throw invalidRequest('模型标识须与厂商的模型 id 一致：以字母或数字开头，可包含字母、数字和 . _ - : / @ +，最长 200 位')
     }
-    if (input.displayName.trim().length < 2) throw invalidRequest('模型名称至少需要 2 个字符')
+    if (typeof input.displayName !== 'string' || input.displayName.trim().length < 2) throw invalidRequest('模型名称至少需要 2 个字符')
     return this.repository.createProviderModel(this.tenantId, {
       ...input,
       modelKey: input.modelKey.trim(),

@@ -107,8 +107,9 @@ async function loadModelCatalog() {
     const result = await adminApi.listProviderModelCatalog({ providerId: provider.id })
     if (request !== catalogRequest) return
     catalogKeys.value = result.modelKeys
+    const addable = result.modelKeys.filter((key) => !existingModelKeys.value.has(key)).length
     catalogMessage.value = result.modelKeys.length
-      ? `已从厂商获取 ${result.modelKeys.length} 个模型，可搜索选择，也可直接输入`
+      ? `已从厂商获取 ${result.modelKeys.length} 个模型（${addable} 个未添加），点击输入框可搜索选择，也可直接输入`
       : '厂商没有返回可用模型，请手动填写模型标识'
   } catch (cause) {
     if (request !== catalogRequest) return
@@ -118,7 +119,17 @@ async function loadModelCatalog() {
   }
 }
 
-function onModelKeyChange(value: string) {
+/** 输入框建议：厂商返回且尚未添加的模型，按输入内容过滤（不区分大小写），最多 200 条。 */
+function suggestModelKeys(query: string, callback: (items: Array<{ value: string }>) => void) {
+  const keyword = (query ?? '').trim().toLowerCase()
+  callback(catalogKeys.value
+    .filter((key) => !existingModelKeys.value.has(key) && (!keyword || key.toLowerCase().includes(keyword)))
+    .slice(0, 200)
+    .map((value) => ({ value })))
+}
+
+function onModelKeySelect(item: Record<string, unknown>) {
+  const value = typeof item['value'] === 'string' ? item['value'] : ''
   // 名称为空或仍是上次自动填的值时，跟随所选模型标识。
   if (!modelForm.displayName.trim() || modelForm.displayName === autoDisplayName) {
     modelForm.displayName = value
@@ -175,6 +186,8 @@ async function createModel() {
     await adminApi.createProviderModel({
       providerId: selectedProvider.value.id,
       ...modelForm,
+      modelKey: (modelForm.modelKey ?? '').trim(),
+      displayName: (modelForm.displayName ?? '').trim(),
     })
     modelDialogOpen.value = false
     ElMessage.success('模型已添加')
@@ -368,9 +381,7 @@ onMounted(() => void load())
     <el-dialog v-model="modelDialogOpen" :title="`为 ${selectedProvider?.name ?? ''} 添加模型`" width="600px" destroy-on-close>
       <el-form label-position="top" :model="modelForm"><div class="form-grid"><el-form-item label="模型标识" required>
         <div class="catalog-field">
-          <el-select v-model="modelForm.modelKey" class="catalog-select" filterable allow-create default-first-option clearable :loading="catalogLoading" placeholder="选择或输入，例如：deepseek-v4-pro" aria-label="模型标识" @change="onModelKeyChange">
-            <el-option v-for="key in catalogKeys" :key="key" :label="existingModelKeys.has(key) ? `${key}（已添加）` : key" :value="key" :disabled="existingModelKeys.has(key)" />
-          </el-select>
+          <el-autocomplete v-model="modelForm.modelKey" class="catalog-select" :fetch-suggestions="suggestModelKeys" clearable placeholder="选择或输入，例如：deepseek-v4-pro" aria-label="模型标识" @select="onModelKeySelect" />
           <el-button :icon="Refresh" :loading="catalogLoading" :disabled="!providerHasPlatformKey(selectedProvider)" aria-label="重新获取模型列表" @click="loadModelCatalog" />
         </div>
         <div class="catalog-hint" role="status">{{ catalogLoading ? '正在从厂商获取模型列表…' : catalogMessage }}</div>
