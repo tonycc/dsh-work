@@ -513,7 +513,8 @@ export class AdminQueryService {
     const [tasks, auditEvents, usageToday, artifacts] = await Promise.all([
       this.repository.read('tasks'),
       this.repository.read('auditEvents'),
-      this.modelUsage.getOverview({ range: 'today' }),
+      // 冒烟数据按相对时间生成，刚过零点时“今天”可能没有数据，这里取近 7 天保持确定。
+      this.modelUsage.getOverview({ range: '7d' }),
       this.repository.read('artifacts'),
     ])
     return {

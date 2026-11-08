@@ -692,7 +692,7 @@ function normalizeAutomationName(name: string): string {
 }
 
 export interface AutomationInputPolicy {
-  check(input: { userId: string; entry: 'automation-save' | 'automation-trigger'; sessionId: string | null; text: string; dedupeKey?: string }): Promise<{ blocked: boolean }>
+  check(input: { userId: string; entry: 'automation-save' | 'automation-trigger' | 'routine-save' | 'routine-trigger'; sessionId: string | null; text: string; dedupeKey?: string }): Promise<{ blocked: boolean }>
   blockedError(): Error
 }
 
