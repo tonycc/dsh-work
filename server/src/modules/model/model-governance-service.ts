@@ -6,6 +6,7 @@ import {
   type CreateModelRouteInput,
   type CreateProviderInput,
   type CreateProviderModelInput,
+  type DeleteProviderModelInput,
   type ProviderStatus,
   type SetProviderApiKeyInput,
   type SetProviderModelStatusInput,
@@ -105,6 +106,12 @@ export class ModelGovernanceService {
     assertActor(input.actor)
     if (!['active', 'disabled'].includes(input.status)) throw invalidRequest('模型状态无效')
     return this.repository.setProviderModelStatus(this.tenantId, input)
+  }
+
+  deleteProviderModel(input: DeleteProviderModelInput) {
+    assertActor(input.actor)
+    assertId(input.modelId, '模型')
+    return this.repository.deleteProviderModel(this.tenantId, input)
   }
 
   listRoutes() {

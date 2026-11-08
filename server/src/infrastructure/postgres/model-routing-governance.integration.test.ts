@@ -234,3 +234,22 @@ test('API keys are encrypted at rest, rotated in place, never returned, and remo
   assert.ok(audit.some(row => row.action === 'model_provider.api_key.update'))
   assert.equal(JSON.stringify(audit).includes('fake-model-key'), false)
 })
+
+test('删除模型：被路由引用时 409 并列出路由；未引用时删除并记审计', async () => {
+  const provider = (await service.listProviders()).find(item => item.id === 'provider-deepseek-official')!
+  const used = provider.models[0]!
+  await assert.rejects(service.deleteProviderModel({ modelId: used.id, actor }), (error: { status?: number; message: string }) => {
+    assert.equal(error.status, 409)
+    assert.match(error.message, /正被模型路由“.+”使用，不能删除/)
+    return true
+  })
+  const added = await service.createProviderModel({ providerId: provider.id, modelKey: 'deepseek-delete-me', displayName: '待删除模型', capabilities: ['text'], actor })
+  const target = added.models.find(item => item.modelKey === 'deepseek-delete-me')!
+  const after = await service.deleteProviderModel({ modelId: target.id, actor })
+  assert.equal(after.models.some(item => item.id === target.id), false)
+  const [audit] = await database<{ count: number }[]>`
+    select count(*)::int as count from audit_events
+     where tenant_id = ${tenantId} and action = 'provider_model.delete' and object_id = ${target.id}
+  `
+  assert.equal(audit?.count, 1)
+})

@@ -6,6 +6,7 @@ import type {
   CreateModelRouteInput,
   CreateProviderInput,
   CreateProviderModelInput,
+  DeleteProviderModelInput,
   CredentialBackend,
   CredentialReference,
   CredentialStatus,
@@ -24,7 +25,7 @@ import type {
   UpdateProviderInput,
 } from './model-types.ts'
 import { invalidRequest, notFound, stateConflict } from '../../domain/request-errors.ts'
-import { noEnabledRoute, routeCredentialMissing, routeTargetDisabled } from './model-route-errors.ts'
+import { modelInUse, noEnabledRoute, routeCredentialMissing, routeTargetDisabled } from './model-route-errors.ts'
 import type { PostgresEncryptedCredentialStore } from '../tool/postgres-encrypted-credential-store.ts'
 
 interface ProviderRow {
@@ -202,6 +203,32 @@ export class PostgresModelGovernanceRepository implements ModelGovernanceReposit
     `
     await this.appendAudit(tenantId, input.actor, `provider_model.${input.status}`, input.modelId)
     return this.requireProvider(tenantId, row.providerId)
+  }
+
+  async deleteProviderModel(tenantId: string, input: DeleteProviderModelInput) {
+    const [model] = await this.database<{ providerId: string; displayName: string }[]>`
+      select provider_id as "providerId", display_name as "displayName"
+        from provider_models where tenant_id = ${tenantId} and id = ${input.modelId}
+    `
+    if (!model) throw notFound(`Provider 模型不存在：${input.modelId}`)
+    const routes = await this.database<{ name: string }[]>`
+      select name from model_routes
+       where tenant_id = ${tenantId} and provider_model_id = ${input.modelId}
+       order by priority asc, created_at asc
+    `
+    if (routes.length) throw modelInUse(model.displayName, routes.map((route) => route.name))
+    try {
+      await this.database.begin(async (transaction) => {
+        await transaction`delete from provider_models where tenant_id = ${tenantId} and id = ${input.modelId}`
+        await transaction`update model_providers set updated_at = now() where tenant_id = ${tenantId} and id = ${model.providerId}`
+      })
+    } catch (error) {
+      // 检查后、删除前有路由改为指向该模型：外键拒绝，按同一业务冲突返回。
+      if ((error as { code?: string }).code === '23503') throw modelInUse(model.displayName, [])
+      throw error
+    }
+    await this.appendAudit(tenantId, input.actor, 'provider_model.delete', input.modelId)
+    return this.requireProvider(tenantId, model.providerId)
   }
 
   async listRoutes(tenantId: string): Promise<ModelRoute[]> {

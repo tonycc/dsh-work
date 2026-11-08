@@ -5,6 +5,7 @@ import type {
   CreateModelRouteInput,
   CreateProviderInput,
   CreateProviderModelInput,
+  DeleteProviderModelInput,
   ModelProvider,
   ModelRoute,
   ModelRouteSnapshot,
@@ -15,7 +16,7 @@ import type {
   UpdateProviderInput,
 } from './model-types.ts'
 import { invalidRequest, notFound, stateConflict } from '../../domain/request-errors.ts'
-import { noEnabledRoute, routeCredentialMissing, routeTargetDisabled } from './model-route-errors.ts'
+import { modelInUse, noEnabledRoute, routeCredentialMissing, routeTargetDisabled } from './model-route-errors.ts'
 
 const clone = <T>(value: T): T => structuredClone(value)
 
@@ -95,6 +96,15 @@ export class MemoryModelGovernanceRepository implements ModelGovernanceRepositor
   async setProviderModelStatus(_tenantId: string, input: SetProviderModelStatusInput) {
     const { provider, model } = this.requireModel(input.modelId)
     model.status = input.status
+    provider.updatedAt = new Date().toISOString()
+    return clone(provider)
+  }
+
+  async deleteProviderModel(_tenantId: string, input: DeleteProviderModelInput) {
+    const { provider, model } = this.requireModel(input.modelId)
+    const routes = this.routes.filter((route) => route.providerModelId === model.id)
+    if (routes.length) throw modelInUse(model.displayName, routes.map((route) => route.name))
+    provider.models = provider.models.filter((item) => item.id !== model.id)
     provider.updatedAt = new Date().toISOString()
     return clone(provider)
   }
