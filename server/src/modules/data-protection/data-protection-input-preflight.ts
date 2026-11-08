@@ -1,8 +1,10 @@
+import { createHash, randomUUID } from 'node:crypto'
+
 import { RequestError } from '../../domain/request-errors.ts'
 import { inspectMessageForSecrets } from './data-protection-masking.ts'
 import type { DataProtectionStore } from './data-protection-service.ts'
 
-export type DataProtectionInputEntry = 'conversation' | 'automation-save' | 'automation-trigger'
+export type DataProtectionInputEntry = 'conversation' | 'task-execution' | 'automation-save' | 'automation-trigger'
 
 /** D7 固定说明：只说类别，不显示取值或位置。 */
 export const DATA_POLICY_BLOCKED_MESSAGE = '这条消息包含 密钥，按公司数据防护策略未发送给模型。请删除后重新发送。'
@@ -41,7 +43,7 @@ export class DataProtectionInputPreflight {
     return dataPolicyBlocked()
   }
 
-  async check(input: { userId: string; entry: DataProtectionInputEntry; sessionId: string | null; text: string }): Promise<{ blocked: boolean }> {
+  async check(input: { userId: string; entry: DataProtectionInputEntry; sessionId: string | null; text: string; dedupeKey?: string }): Promise<{ blocked: boolean }> {
     const trustLevel = await this.routeTrustLevel().catch(() => 'external' as const)
     if (trustLevel === 'internal') return { blocked: false }
     let secretCount: number
@@ -53,7 +55,11 @@ export class DataProtectionInputPreflight {
     }
     if (secretCount === 0) return { blocked: false }
     try {
-      await this.store.recordInputBlock({ tenantId: this.tenantId, userId: input.userId, entry: input.entry, sessionId: input.sessionId, secretCount })
+      // 同一次逻辑请求（重放、事务重试）只记一条。
+      const id = input.dedupeKey
+        ? `dpb-${createHash('sha256').update(JSON.stringify([this.tenantId, input.entry, input.sessionId, input.userId, input.dedupeKey])).digest('hex').slice(0, 32)}`
+        : `dpb-${randomUUID()}`
+      await this.store.recordInputBlock({ id, tenantId: this.tenantId, userId: input.userId, entry: input.entry, sessionId: input.sessionId, secretCount })
     } catch (error) {
       // 审计失败不放行：消息照样拦截。
       this.onError(`data protection input audit failed: ${error instanceof Error ? error.name : 'unknown'}`)

@@ -547,6 +547,17 @@ export class PostgresConversationRepository {
     })
   }
 
+  /**
+   * 会话标题默认取首条消息前 40 字。首条消息被数据防护拦截时换掉标题，
+   * 否则密钥会留在会话列表里（团队会话对全组可见）。用户自己改过的标题不动。
+   */
+  async scrubTitleDerivedFromPrompt(sessionId: string, prompt: string): Promise<void> {
+    await this.database`
+      update sessions set title = '未发送的对话'
+       where tenant_id = ${tenantId} and id = ${sessionId} and title = ${truncateTitle(prompt)}
+    `
+  }
+
   async getRunPrompt(runId: string) {
     const [row] = await this.database<{ content: string }[]>`
       select content from messages

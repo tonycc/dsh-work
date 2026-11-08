@@ -1868,3 +1868,43 @@ test('DLP-S2 输入预检：本条消息含密钥时不创建 Run，消息带标
     routeTrustLevel = 'external'
   }
 })
+
+test('DLP-S2 输入预检：首条被拦截不保存正文并清掉标题，已受理的请求重放不改判', async () => {
+  const secret = 'sk-abcdefghijklmnopqrstuvwx9876'
+  const prompt = `帮我看 ${secret}`
+  const session = await orchestration.createSession({ userId: 'U00001', title: prompt })
+  const key = randomUUID()
+  await assert.rejects(orchestration.startRun({ userId: 'U00001', sessionId: session.id, prompt, idempotencyKey: key }), { code: 'DATA_POLICY_BLOCKED' })
+  await assert.rejects(orchestration.startRun({ userId: 'U00001', sessionId: session.id, prompt, idempotencyKey: key }), { code: 'DATA_POLICY_BLOCKED' })
+  const stored = await database`select content from messages where session_id = ${session.id}`
+  assert.equal(stored.length, 0, '没有 Run 的会话不保存被拦截的正文')
+  const [row] = await database<{ title: string }[]>`select title from sessions where id = ${session.id}`
+  assert.equal(row!.title, '未发送的对话')
+  const blocks = await database`select id from data_protection_input_blocks where session_id = ${session.id}`
+  assert.equal(blocks.length, 1, '重放只记一条审计')
+
+  // 内部路由时受理，改成外部后同一幂等键重放返回原 Run。
+  const replaySession = await orchestration.createSession({ userId: 'U00001', title: '重放' })
+  const replayKey = randomUUID()
+  routeTrustLevel = 'internal'
+  let accepted
+  try {
+    accepted = await orchestration.startRun({ userId: 'U00001', sessionId: replaySession.id, prompt, idempotencyKey: replayKey })
+  } finally {
+    routeTrustLevel = 'external'
+  }
+  await waitForTask(accepted!.id, 'succeeded')
+  const replayed = await orchestration.startRun({ userId: 'U00001', sessionId: replaySession.id, prompt, idempotencyKey: replayKey })
+  assert.equal(replayed!.id, accepted!.id)
+})
+
+test('DLP-S2 输入预检：task-executions 接口命中密钥时不创建 Run', async () => {
+  await assert.rejects(orchestration.startTaskExecution({
+    userId: 'U00001',
+    workspaceId: 'ws-personal-U00001',
+    agentVersionId: 'agent-version-dsh-work-assistant-1',
+    prompt: 'sk-abcdefghijklmnopqrstuvwx5555',
+    correlationKey,
+    sourceType: 'api',
+  }), { code: 'DATA_POLICY_BLOCKED' })
+})

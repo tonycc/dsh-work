@@ -18,6 +18,7 @@ export interface DataProtectionGatewayEvent {
 }
 
 export interface DataProtectionInputBlock {
+  id: string
   tenantId: string
   userId: string
   entry: string
@@ -53,7 +54,8 @@ export class PostgresDataProtectionStore implements DataProtectionStore {
   async recordInputBlock(block: DataProtectionInputBlock): Promise<void> {
     await this.database`
       insert into data_protection_input_blocks (id, tenant_id, user_id, entry, session_id, secret_count)
-      values (${`dpb-${randomUUID()}`}, ${block.tenantId}, ${block.userId}, ${block.entry}, ${block.sessionId}, ${block.secretCount})
+      values (${block.id}, ${block.tenantId}, ${block.userId}, ${block.entry}, ${block.sessionId}, ${block.secretCount})
+      on conflict (id) do nothing
     `
   }
 
@@ -78,7 +80,7 @@ export class MemoryDataProtectionStore implements DataProtectionStore {
   readonly inputBlocks: DataProtectionInputBlock[] = []
 
   async recordInputBlock(block: DataProtectionInputBlock): Promise<void> {
-    this.inputBlocks.push(structuredClone(block))
+    if (!this.inputBlocks.some(existing => existing.id === block.id)) this.inputBlocks.push(structuredClone(block))
   }
 
   async loadPolicy(): Promise<DataProtectionPolicy> {

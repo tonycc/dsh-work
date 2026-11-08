@@ -7,7 +7,7 @@ create table data_protection_input_blocks (
   id text primary key,
   tenant_id text not null references tenants(id),
   user_id text not null,
-  entry text not null check (entry in ('conversation', 'automation-save', 'automation-trigger')),
+  entry text not null check (entry in ('conversation', 'task-execution', 'automation-save', 'automation-trigger')),
   session_id text,
   secret_count integer not null check (secret_count > 0),
   created_at timestamptz not null default now()

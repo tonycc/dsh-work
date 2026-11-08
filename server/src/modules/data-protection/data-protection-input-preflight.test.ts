@@ -14,7 +14,16 @@ describe('输入预检', () => {
   it('命中密钥时拦截，审计只记次数', async () => {
     const { store, service } = preflight()
     assert.deepEqual(await service.check(input(SECRET)), { blocked: true })
-    assert.deepEqual(store.inputBlocks, [{ tenantId: 't', userId: 'u', entry: 'conversation', sessionId: 's', secretCount: 1 }])
+    const { id, ...block } = store.inputBlocks[0]!
+    assert.match(id, /^dpb-/)
+    assert.deepEqual(block, { tenantId: 't', userId: 'u', entry: 'conversation', sessionId: 's', secretCount: 1 })
+  })
+
+  it('同一次逻辑请求重放时只记一条审计', async () => {
+    const { store, service } = preflight()
+    await service.check({ ...input(SECRET), dedupeKey: 'k' })
+    await service.check({ ...input(SECRET), dedupeKey: 'k' })
+    assert.equal(store.inputBlocks.length, 1)
   })
 
   it('个人信息不拦截', async () => {

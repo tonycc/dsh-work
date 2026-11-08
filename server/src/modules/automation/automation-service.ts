@@ -549,6 +549,10 @@ export class AutomationService {
       if (await this.automations.countUserPending(transaction, task.ownerUserId) >= this.config.userPendingLimit) {
         return skip(AutomationReasonCodes.userPendingLimit)
       }
+      // 触发时再查一次（方案 5.6.1）：词表可能变了；预检不可用时向上抛出，下个 tick 重试。
+      // 放在全局锁之前：预检要用连接池的其他连接，持锁等待会占满连接池。
+      const policy = await this.inputPolicy?.check({ userId: task.ownerUserId, entry: 'automation-trigger', sessionId: null, text: task.inputTemplate.prompt, dedupeKey: request.triggerId })
+      if (policy?.blocked) return skip(AutomationReasonCodes.dataPolicyBlocked)
       await transaction`select pg_advisory_xact_lock(hashtext('dsh-work-automation-global-admission'))`
       if (await this.automations.countGlobalPending(transaction) >= this.config.globalPendingLimit) {
         return skip(AutomationReasonCodes.globalPendingLimit)
@@ -564,9 +568,6 @@ export class AutomationService {
         if (!isAdmissionDenial(error)) throw error
         return skip(AutomationReasonCodes.subjectInvalid)
       }
-      // 触发时再查一次（方案 5.6.1）：词表可能变了；预检不可用时向上抛出，下个 tick 重试。
-      const policy = await this.inputPolicy?.check({ userId: task.ownerUserId, entry: 'automation-trigger', sessionId: null, text: task.inputTemplate.prompt })
-      if (policy?.blocked) return skip(AutomationReasonCodes.dataPolicyBlocked)
       let decision: RuntimeAuthorizationDecision
       try {
         decision = await this.authorizeExecution({
@@ -691,7 +692,7 @@ function normalizeAutomationName(name: string): string {
 }
 
 export interface AutomationInputPolicy {
-  check(input: { userId: string; entry: 'automation-save' | 'automation-trigger'; sessionId: string | null; text: string }): Promise<{ blocked: boolean }>
+  check(input: { userId: string; entry: 'automation-save' | 'automation-trigger'; sessionId: string | null; text: string; dedupeKey?: string }): Promise<{ blocked: boolean }>
   blockedError(): Error
 }
 

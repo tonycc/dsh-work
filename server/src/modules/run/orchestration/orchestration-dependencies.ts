@@ -31,7 +31,7 @@ export type { ExecutionToolCheckPort }
  * call time rather than copying them.
  */
 export interface RunInputPolicyPort {
-  check(input: { userId: string; entry: 'conversation'; sessionId: string | null; text: string }): Promise<{ blocked: boolean }>
+  check(input: { userId: string; entry: 'conversation' | 'task-execution'; sessionId: string | null; text: string; dedupeKey?: string }): Promise<{ blocked: boolean }>
   /** 拦截时返回给接口的错误（D7 固定说明）。 */
   blockedError(): Error
 }
