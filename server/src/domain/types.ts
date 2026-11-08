@@ -680,25 +680,6 @@ export interface UsagePoint {
   tokens: number
 }
 
-export interface ModelUsageRecord {
-  id: string
-  time: string
-  runId: string
-  agentId: string
-  employeeId: string
-  employeeName: string
-  department: string
-  provider: string
-  model: string
-  modelRoute: string
-  status: 'success' | 'failed' | 'blocked'
-  promptTokens: number
-  completionTokens: number
-  totalTokens: number
-  latencyMs: number
-  traceId: string
-}
-
 export interface ListPage<T> {
   items: T[]
   total: number

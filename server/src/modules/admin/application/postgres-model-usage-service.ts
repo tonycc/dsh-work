@@ -1,6 +1,7 @@
 import type { PendingQuery, Row } from 'postgres'
 import type { DatabaseClient } from '../../../infrastructure/postgres/database.ts'
 import {
+  MODEL_USAGE_BREAKDOWN_LIMIT,
   MODEL_USAGE_RANGE_DAYS,
   RELEASE_TRIAL_PURPOSE,
   RUN_SOURCE_BY_TASK_TYPE,
@@ -19,7 +20,6 @@ import {
 } from '../../../domain/model-usage.ts'
 
 const tenantId = 'tenant-dsh-work'
-const MAX_BREAKDOWN_ROWS = 200
 
 interface TotalsRow {
   totalTokens: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheInputTokens: number
@@ -53,25 +53,30 @@ export class PostgresModelUsageService implements ModelUsageQueryPort {
     const tz = this.timezone
     const days = MODEL_USAGE_RANGE_DAYS[filter.range]
     const hourly = filter.range === 'today'
-    const [window] = await this.database<{ today: string; from: string }[]>`
-      select to_char(now() at time zone ${tz}, 'YYYY-MM-DD') as today,
-             to_char(now() at time zone ${tz} - make_interval(days => ${days - 1}), 'YYYY-MM-DD') as "from"
-    `
-    const [totals] = await this.database<(TotalsRow & { employees: number })[]>`
-      ${this.filtered(filter)}
-      select ${this.totalsColumns()}, count(distinct employee_id)::integer as employees from filtered
-    `
-    const trendRows = await this.database<{ bucket: string; model: string; tokens: number; estimatedTokens: number }[]>`
-      ${this.filtered(filter)}
-      select to_char(occurred_at at time zone ${tz}, ${hourly ? 'HH24' : 'YYYY-MM-DD'}) as bucket, model,
-             coalesce(sum(input_tokens + output_tokens), 0)::float8 as tokens,
-             coalesce(sum(input_tokens + output_tokens) filter (where measurement = 'estimated'), 0)::float8 as "estimatedTokens"
-        from filtered group by 1, 2 order by 1, 2
-    `
-    const facets = await this.database<{ models: string[] | null; sources: RunSource[] | null }[]>`
-      ${this.usageRows(this.windowCondition(filter))}
-      select array_agg(distinct model order by model) as models, array_agg(distinct source order by source) as sources from usage_rows
-    `
+    // 四个查询互不依赖，并行执行。
+    const [windowRows, totalsRows, trendRows, facets] = await Promise.all([
+      this.database<{ today: string; from: string }[]>`
+        select to_char(now() at time zone ${tz}, 'YYYY-MM-DD') as today,
+               to_char(now() at time zone ${tz} - make_interval(days => ${days - 1}), 'YYYY-MM-DD') as "from"
+      `,
+      this.database<(TotalsRow & { employees: number })[]>`
+        ${this.filtered(filter)}
+        select ${this.totalsColumns()}, count(distinct employee_id)::integer as employees from filtered
+      `,
+      this.database<{ bucket: string; model: string; tokens: number; estimatedTokens: number }[]>`
+        ${this.filtered(filter)}
+        select to_char(occurred_at at time zone ${tz}, ${hourly ? 'HH24' : 'YYYY-MM-DD'}) as bucket, model,
+               coalesce(sum(input_tokens + output_tokens), 0)::float8 as tokens,
+               coalesce(sum(input_tokens + output_tokens) filter (where measurement = 'estimated'), 0)::float8 as "estimatedTokens"
+          from filtered group by 1, 2 order by 1, 2
+      `,
+      this.database<{ models: string[] | null; sources: RunSource[] | null }[]>`
+        ${this.usageRows(this.windowCondition(filter))}
+        select array_agg(distinct model order by model) as models, array_agg(distinct source order by source) as sources from usage_rows
+      `,
+    ])
+    const window = windowRows[0]
+    const totals = totalsRows[0]
     const buckets = hourly
       ? Array.from({ length: 24 }, (_, hour) => ({ bucket: String(hour).padStart(2, '0'), label: `${hour}时` }))
       : dayBuckets(window!.from, days)
@@ -107,23 +112,26 @@ export class PostgresModelUsageService implements ModelUsageQueryPort {
         from filtered
        group by 1
        order by "totalTokens" desc, 1
-       limit ${MAX_BREAKDOWN_ROWS}
+       limit ${MODEL_USAGE_BREAKDOWN_LIMIT}
     `
     return rows.map(row => ({ ...normalizeTotals(row), key: row.key, label: row.label, sub: row.sub ?? '' }))
   }
 
   async getExecutions(filter: ModelUsageFilter, page: number, pageSize: number): Promise<ModelUsageExecutionPage> {
     const offset = (page - 1) * pageSize
-    const [count] = await this.database<{ total: number }[]>`
-      ${this.filtered(filter)}
-      select count(distinct attempt_id)::integer as total from filtered
-    `
-    const attempts = await this.database<{ attemptId: string }[]>`
-      ${this.filtered(filter)}
-      select attempt_id as "attemptId" from filtered
-       group by attempt_id order by max(occurred_at) desc, attempt_id
-       limit ${pageSize} offset ${offset}
-    `
+    const [countRows, attempts] = await Promise.all([
+      this.database<{ total: number }[]>`
+        ${this.filtered(filter)}
+        select count(distinct attempt_id)::integer as total from filtered
+      `,
+      this.database<{ attemptId: string }[]>`
+        ${this.filtered(filter)}
+        select attempt_id as "attemptId" from filtered
+         group by attempt_id order by max(occurred_at) desc, attempt_id
+         limit ${pageSize} offset ${offset}
+      `,
+    ])
+    const count = countRows[0]
     const ids = attempts.map(row => row.attemptId)
     const details = ids.length === 0 ? [] : await this.database<DetailRow[]>`
       ${this.usageRows(this.database`mu.attempt_id = any(${ids})`)}
@@ -209,7 +217,10 @@ export class PostgresModelUsageService implements ModelUsageQueryPort {
           join runs r on r.tenant_id = mu.tenant_id and r.id = mu.run_id
           left join tasks t on t.tenant_id = r.tenant_id and t.id = r.task_id
           left join run_attempts ra on ra.tenant_id = mu.tenant_id and ra.id = mu.attempt_id
-          left join agent_versions av on av.tenant_id = ra.tenant_id and av.id = ra.manifest->>'agent_version_id'
+          left join sessions s on s.tenant_id = r.tenant_id and s.id = r.session_id
+          -- Agent 版本取自 Attempt Manifest；早期运行的 Manifest 没有该字段时，用会话固定的版本。
+          left join agent_versions av on av.tenant_id = r.tenant_id
+                 and av.id = coalesce(ra.manifest->>'agent_version_id', s.agent_version_id)
           left join agents ag on ag.tenant_id = av.tenant_id and ag.id = av.agent_id
           left join users u on u.tenant_id = r.tenant_id and u.id = r.requested_by
           left join model_providers mp on mp.tenant_id = mu.tenant_id and mp.key = mu.provider

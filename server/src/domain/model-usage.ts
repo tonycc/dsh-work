@@ -26,6 +26,9 @@ export function runSourceOf(sourceType: string | null, purpose: string | null): 
 }
 
 export type ModelUsageDimension = 'model' | 'agent' | 'employee' | 'department' | 'source'
+/** 按维度统计最多返回的项数（页面满额时提示缩小范围）。 */
+export const MODEL_USAGE_BREAKDOWN_LIMIT = 200
+
 export const modelUsageDimensions: readonly ModelUsageDimension[] = ['model', 'agent', 'employee', 'department', 'source']
 
 export type ModelUsageMeasurement = 'gateway' | 'session-log' | 'estimated'

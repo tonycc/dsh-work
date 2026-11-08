@@ -1,4 +1,5 @@
 import {
+  MODEL_USAGE_BREAKDOWN_LIMIT,
   MODEL_USAGE_RANGE_DAYS,
   type ModelUsageBreakdownRow,
   type ModelUsageDimension,
@@ -95,6 +96,7 @@ export class SmokeModelUsageService implements ModelUsageQueryPort {
     return [...groups.entries()]
       .map(([key, group]) => ({ key, label: group.label, sub: group.sub, ...aggregate(group.lines) }))
       .sort((left, right) => right.totalTokens - left.totalTokens || left.key.localeCompare(right.key))
+      .slice(0, MODEL_USAGE_BREAKDOWN_LIMIT)
   }
 
   async getExecutions(filter: ModelUsageFilter, page: number, pageSize: number): Promise<ModelUsageExecutionPage> {

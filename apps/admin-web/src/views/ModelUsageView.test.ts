@@ -131,4 +131,48 @@ describe('ModelUsageView', () => {
     expect(drawer.text()).toContain('联网搜索单独计量')
     expect(drawer.text()).toContain('用量来自模型网关逐次请求的计量')
   })
+
+  it('先后下钻 Agent 与员工时两个条件同时保留，可分别清除', async () => {
+    const { wrapper, executionsSpy, breakdownSpy } = await render()
+    breakdownSpy.mockImplementation(async (_filter, dimension) =>
+      dimension === 'agent' ? [row('inventory', '库存日报')] : [row('U00001', '林岚', { sub: '华东销售部' })])
+    await tab(wrapper, '按 Agent').trigger('click')
+    await flushPromises()
+    await wrapper.findAll('.usage-drill-link').find(item => item.text() === '库存日报')!.trigger('click')
+    await flushPromises()
+    await tab(wrapper, '按员工').trigger('click')
+    await flushPromises()
+    await wrapper.findAll('.usage-drill-link').find(item => item.text() === '林岚')!.trigger('click')
+    await flushPromises()
+    expect(executionsSpy).toHaveBeenLastCalledWith({ range: '7d', agent: 'inventory', employee: 'U00001' }, 1, 20)
+    const chips = wrapper.findAll('[data-testid="usage-drill"]')
+    expect(chips.map(chip => chip.text())).toEqual(['Agent：库存日报', '员工：林岚'])
+    await chips[0]!.find('.el-tag__close').trigger('click')
+    await flushPromises()
+    expect(executionsSpy).toHaveBeenLastCalledWith({ range: '7d', employee: 'U00001' }, 1, 20)
+  })
+
+  it('快速切换时间范围时，晚到的旧结果不覆盖新结果', async () => {
+    const { wrapper, overviewSpy } = await render()
+    let resolveSlow: (value: ModelUsageOverview) => void = () => undefined
+    overviewSpy
+      .mockImplementationOnce(() => new Promise(resolve => { resolveSlow = resolve }))
+      .mockImplementationOnce(async () => overview({ totalTokens: 3000, inputTokens: 2000, outputTokens: 1000 }))
+    const radio = (value: string) => wrapper.findAll('input[type="radio"]').find(item => (item.element as HTMLInputElement).value === value)!
+    await radio('30d').setValue(true)
+    await radio('today').setValue(true)
+    await flushPromises()
+    resolveSlow(overview({ totalTokens: 999999 }))
+    await flushPromises()
+    expect(wrapper.text()).toContain('3,000')
+    expect(wrapper.text()).not.toContain('100.0 万')
+  })
+
+  it('统计满 200 项时提示只显示前 200 项', async () => {
+    const { wrapper, breakdownSpy } = await render()
+    breakdownSpy.mockResolvedValue(Array.from({ length: 200 }, (_, index) => row(`model-${index}`, `model-${index}`)))
+    await tab(wrapper, '按 Agent').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('只显示用量最高的 200 项')
+  })
 })

@@ -15,13 +15,21 @@ import type {
 } from '@/types/domain'
 
 type ViewMode = ModelUsageDimension | 'executions'
+/** 与服务端一致：按维度统计最多返回 200 项。 */
+const BREAKDOWN_LIMIT = 200
 
 const router = useRouter()
 const range = ref<ModelUsageRange>('7d')
 const modelFilter = ref('')
 const sourceFilter = ref('')
-/** 从统计表下钻带出的条件（Agent、员工、部门）；模型与来源直接写入上方筛选。 */
-const drill = ref<{ dimension: 'agent' | 'employee' | 'department'; key: string; label: string } | null>(null)
+type DrillDimension = 'agent' | 'employee' | 'department'
+/** 从统计表下钻带出的条件（Agent、员工、部门可同时存在）；模型与来源直接写入上方筛选。 */
+const drills = ref<Partial<Record<DrillDimension, { key: string; label: string }>>>({})
+const drillList = computed(() => (Object.entries(drills.value) as Array<[DrillDimension, { key: string; label: string }]>)
+  .map(([dimension, item]) => ({ dimension, ...item })))
+/** 请求序号：快速切换筛选时只采用最新一次请求的结果。 */
+let overviewRequest = 0
+let tableRequest = 0
 const viewMode = ref<ViewMode>('model')
 const overview = ref<ModelUsageOverview>()
 const breakdown = ref<ModelUsageBreakdownRow[]>([])
@@ -64,10 +72,14 @@ const filter = computed<ModelUsageFilter>(() => ({
   range: range.value,
   ...(modelFilter.value ? { model: modelFilter.value } : {}),
   ...(sourceFilter.value ? { source: sourceFilter.value } : {}),
-  ...(drill.value ? { [drill.value.dimension]: drill.value.key } : {}),
+  ...Object.fromEntries(drillList.value.map(item => [item.dimension, item.key])),
 }))
 const totals = computed(() => overview.value?.totals)
-const models = computed(() => overview.value?.facets.models ?? [])
+/** 已选的模型即使在新范围里没有用量，也保留在选项中。 */
+const models = computed(() => {
+  const list = overview.value?.facets.models ?? []
+  return modelFilter.value && !list.includes(modelFilter.value) ? [modelFilter.value, ...list] : list
+})
 const sources = computed(() => overview.value?.facets.sources ?? [])
 /**
  * 颜色按首次看到时的用量从高到低分配（主力模型用第一种颜色），之后切换筛选不再变动，
@@ -110,32 +122,39 @@ const trendBars = computed(() => {
 const peakBucket = computed(() => trendBars.value.reduce((best, bar) => bar.total > best.total ? bar : best, { label: '', total: 0 }))
 
 async function loadOverview() {
+  const request = ++overviewRequest
   loading.overview = true
   try {
     const data = await adminApi.getModelUsageOverview(filter.value)
+    if (request !== overviewRequest) return
     rememberModelColors(data)
     overview.value = data
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : '模型用量加载失败'
+    if (request === overviewRequest) error.value = cause instanceof Error ? cause.message : '模型用量加载失败'
   } finally {
-    loading.overview = false
+    if (request === overviewRequest) loading.overview = false
   }
 }
 
 async function loadTable() {
+  const request = ++tableRequest
+  const mode = viewMode.value
   loading.table = true
   try {
-    if (viewMode.value === 'executions') {
+    if (mode === 'executions') {
       const page = await adminApi.getModelUsageExecutions(filter.value, executionPage.value, executionPageSize)
+      if (request !== tableRequest) return
       executions.value = page.items
       executionTotal.value = page.total
     } else {
-      breakdown.value = await adminApi.getModelUsageBreakdown(filter.value, viewMode.value)
+      const rows = await adminApi.getModelUsageBreakdown(filter.value, mode)
+      if (request !== tableRequest) return
+      breakdown.value = rows
     }
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : '模型用量加载失败'
+    if (request === tableRequest) error.value = cause instanceof Error ? cause.message : '模型用量加载失败'
   } finally {
-    loading.table = false
+    if (request === tableRequest) loading.table = false
   }
 }
 
@@ -163,14 +182,16 @@ function drillInto(row: ModelUsageBreakdownRow) {
   if (dimension === 'model') modelFilter.value = row.key
   else if (dimension === 'source') sourceFilter.value = row.key
   else if (dimension === 'agent' || dimension === 'employee' || dimension === 'department') {
-    drill.value = { dimension, key: row.key, label: `${dimensionLabels[dimension]}：${row.label}` }
+    drills.value = { ...drills.value, [dimension]: { key: row.key, label: `${dimensionLabels[dimension]}：${row.label}` } }
   }
   viewMode.value = 'executions'
   reload()
 }
 
-function clearDrill() {
-  drill.value = null
+function clearDrill(dimension: DrillDimension) {
+  const next = { ...drills.value }
+  delete next[dimension]
+  drills.value = next
   reload()
 }
 
@@ -237,7 +258,15 @@ onMounted(reload)
       <el-select v-model="sourceFilter" class="usage-filters__select" clearable placeholder="全部来源" aria-label="筛选来源" @change="reload">
         <el-option v-for="source in sources" :key="source" :label="sourceLabels[source]" :value="source" />
       </el-select>
-      <el-tag v-if="drill" closable type="primary" effect="light" data-testid="usage-drill" @close="clearDrill">{{ drill.label }}</el-tag>
+      <el-tag
+        v-for="item in drillList"
+        :key="item.dimension"
+        closable
+        type="primary"
+        effect="light"
+        data-testid="usage-drill"
+        @close="clearDrill(item.dimension)"
+      >{{ item.label }}</el-tag>
       <span class="usage-filters__note">{{ rangeNote }}</span>
     </section>
 
@@ -299,7 +328,7 @@ onMounted(reload)
       </div>
 
       <template v-if="viewMode !== 'executions'">
-        <p class="usage-hint">点击名称，带着该条件查看执行明细。</p>
+        <p class="usage-hint">点击名称，带着该条件查看执行明细。<template v-if="breakdown.length >= BREAKDOWN_LIMIT">只显示用量最高的 {{ BREAKDOWN_LIMIT }} 项，可先用上方条件缩小范围。</template></p>
         <el-table v-loading="loading.table" class="data-table" :data="breakdown" empty-text="当前筛选范围内没有用量">
           <el-table-column :label="dimensionLabels[viewMode]" min-width="200">
             <template #default="scope">

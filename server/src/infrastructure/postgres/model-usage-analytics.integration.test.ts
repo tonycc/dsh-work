@@ -46,6 +46,8 @@ async function seedExecution(input: {
   daysAgo?: number
   automation?: boolean
   status?: 'success' | 'failed' | 'cancelled'
+  /** 早期运行的 Manifest 没有 agent_version_id。 */
+  legacyManifest?: boolean
   lines: Line[]
 }) {
   const userId = input.userId ?? 'U00001'
@@ -74,7 +76,7 @@ async function seedExecution(input: {
     insert into run_attempts (id, tenant_id, run_id, attempt_no, manifest, manifest_sha256, model_route_snapshot, status)
     values (
       ${attemptId}, ${tenantId}, ${runId}, 1,
-      ${database.json({ agent_version_id: 'agent-version-dsh-work-assistant-1' })}, 'sha256-test',
+      ${database.json(input.legacyManifest ? {} : { agent_version_id: 'agent-version-dsh-work-assistant-1' })}, 'sha256-test',
       ${database.json({ routeId: 'route-default', routeKey: 'default', providerKey: 'deepseek-official', modelKey: 'deepseek-v4-pro' })},
       'succeeded'
     )
@@ -181,4 +183,12 @@ test('分页：按最近时间倒序，total 按执行去重', async () => {
   assert.equal(first.items.length, 2)
   assert.equal(second.items.length, 1)
   assert.equal(second.items[0]?.measurement, 'estimated')
+})
+
+test('早期运行的 Manifest 没有 Agent 版本时，按会话固定的版本归属 Agent，不落到“系统”', async () => {
+  const legacy = await seedExecution({ daysAgo: 2, legacyManifest: true, lines: [{ input: 10, output: 1 }] })
+  const page = await usage.getExecutions({ range: '7d' }, 1, 50)
+  const row = page.items.find(item => item.runId === legacy.runId)
+  assert.equal(row?.agentName, 'dsh-work 助手')
+  assert.equal(row?.agentId, 'agent-dsh-work-assistant')
 })

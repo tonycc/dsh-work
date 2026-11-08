@@ -1,3 +1,4 @@
+import { SmokeModelUsageService } from './model-usage-service.ts'
 import { randomUUID } from 'node:crypto'
 
 import { assertAgentSpecLimits } from '../../modules/agent/agent-spec.ts'
@@ -45,8 +46,11 @@ export class AdminQueryService {
   /** 冒烟服务直接加载仓库中的内置 Skill，与正式服务同一份内容。 */
   private readonly builtinSkills = loadBuiltinSkillCatalog(fileURLToPath(new URL('../../../config/builtin-skills', import.meta.url)))
 
-  constructor(repository: SmokeRepository) {
+  private readonly modelUsage: SmokeModelUsageService
+
+  constructor(repository: SmokeRepository, modelUsage: SmokeModelUsageService = new SmokeModelUsageService()) {
     this.repository = repository
+    this.modelUsage = modelUsage
   }
 
   getSession() {
@@ -506,17 +510,17 @@ export class AdminQueryService {
   }
 
   async getOperationsSummary(): Promise<OperationsSummary> {
-    const [tasks, auditEvents, modelUsage, artifacts] = await Promise.all([
+    const [tasks, auditEvents, usageToday, artifacts] = await Promise.all([
       this.repository.read('tasks'),
       this.repository.read('auditEvents'),
-      this.repository.read('modelUsage'),
+      this.modelUsage.getOverview({ range: 'today' }),
       this.repository.read('artifacts'),
     ])
     return {
       runs24h: tasks.length,
       successfulRuns24h: tasks.filter(task => task.status === 'succeeded').length,
       failedRuns24h: tasks.filter(task => task.status === 'failed').length,
-      modelTokens24h: modelUsage.reduce((total, record) => total + record.totalTokens, 0),
+      modelTokens24h: usageToday.totals.totalTokens,
       toolCalls24h: auditEvents.filter(event => event.category === 'tool').length,
       artifacts24h: artifacts.length,
       attentionEvents24h: auditEvents.filter(event => event.status === 'failed' || event.status === 'blocked').length,

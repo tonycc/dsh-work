@@ -66,8 +66,9 @@ export function createSmokeRouter() {
   })
   // 冒烟只有一个测试身份：授权直接通过，成员与归档口径由 PostgreSQL 集成测试覆盖。
   registerWorkspaceTimelineRoutes(router, new MemoryWorkspaceTimeline(repository), { authorizeWorkbench: async () => undefined as never }, 'prototype-memory')
-  registerAdminRoutes(router, new AdminQueryService(repository))
-  registerModelUsageRoutes(router, new SmokeModelUsageService(), 'prototype-memory')
+  const modelUsage = new SmokeModelUsageService()
+  registerAdminRoutes(router, new AdminQueryService(repository, modelUsage))
+  registerModelUsageRoutes(router, modelUsage, 'prototype-memory')
   registerModelGovernanceRoutes(router, new ModelGovernanceService(new MemoryModelGovernanceRepository()))
   registerOrganizationRoutes(router, new MemoryOrganizationStore(), 'prototype-memory')
   registerKnowledgeAdminRoutes(router, new MemoryKnowledgeAdminStore(), 'prototype-memory')
