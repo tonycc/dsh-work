@@ -100,6 +100,7 @@ export class RunOrchestrationService {
       builtinSkills?: OrchestrationDependencies['builtinSkills']
       /** 模型网关计量（MR-S3）；未接线时用量沿用会话日志或估算。 */
       modelUsage?: OrchestrationDependencies['modelUsage']
+      inputPolicy?: OrchestrationDependencies['inputPolicy']
     },
   ) {
     this.deps = {
@@ -115,6 +116,7 @@ export class RunOrchestrationService {
       projectArchive: options?.projectArchive,
       builtinSkills: options?.builtinSkills,
       modelUsage: options?.modelUsage,
+      inputPolicy: options?.inputPolicy,
     }
     const budget = new AttemptBudget(this.deps)
     const events = new RunEventRecorder(this.deps, budget)
@@ -369,6 +371,20 @@ export class RunOrchestrationService {
       ).agentVersionId
     }
     if (!agentVersionId) throw requestInvalid('Session 未绑定 Agent，无法发起执行')
+    if (!input.scheduled) {
+      const policy = await this.deps.inputPolicy?.check({ userId: input.userId, entry: 'conversation', sessionId: session.id, text: prompt })
+      if (policy?.blocked) {
+        // 个人会话保留消息供本人查看；团队会话其他成员都能看到消息，含密钥的正文不落库。
+        if (session.workspaceType !== 'team') {
+          const keyHash = createHash('sha256').update(JSON.stringify([tenantId, session.id, input.userId, input.idempotencyKey])).digest('hex').slice(0, 32)
+          await this.deps.conversations.appendMessage({
+            sessionId: session.id, role: 'user', content: prompt, senderUserId: input.userId,
+            messageId: `message-blocked-${session.id}-${keyHash}`, notSentToModel: true,
+          })
+        }
+        throw this.deps.inputPolicy!.blockedError()
+      }
+    }
     const additionalSkillReferences = session.selectedSkillReference
       ? [session.selectedSkillReference]
       : []

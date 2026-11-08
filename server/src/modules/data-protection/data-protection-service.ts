@@ -17,9 +17,18 @@ export interface DataProtectionGatewayEvent {
   hasImage: boolean
 }
 
+export interface DataProtectionInputBlock {
+  tenantId: string
+  userId: string
+  entry: string
+  sessionId: string | null
+  secretCount: number
+}
+
 export interface DataProtectionStore {
   loadPolicy(tenantId: string): Promise<DataProtectionPolicy>
   recordGatewayEvent(event: DataProtectionGatewayEvent): Promise<void>
+  recordInputBlock(block: DataProtectionInputBlock): Promise<void>
 }
 
 export class PostgresDataProtectionStore implements DataProtectionStore {
@@ -41,6 +50,13 @@ export class PostgresDataProtectionStore implements DataProtectionStore {
     return { terms: [...terms], allowlist: allowlist.map(row => row.value) }
   }
 
+  async recordInputBlock(block: DataProtectionInputBlock): Promise<void> {
+    await this.database`
+      insert into data_protection_input_blocks (id, tenant_id, user_id, entry, session_id, secret_count)
+      values (${`dpb-${randomUUID()}`}, ${block.tenantId}, ${block.userId}, ${block.entry}, ${block.sessionId}, ${block.secretCount})
+    `
+  }
+
   async recordGatewayEvent(event: DataProtectionGatewayEvent): Promise<void> {
     await this.database`
       insert into data_protection_gateway_events (
@@ -59,6 +75,11 @@ export class PostgresDataProtectionStore implements DataProtectionStore {
 export class MemoryDataProtectionStore implements DataProtectionStore {
   policy: DataProtectionPolicy = { terms: [], allowlist: [] }
   readonly events: DataProtectionGatewayEvent[] = []
+  readonly inputBlocks: DataProtectionInputBlock[] = []
+
+  async recordInputBlock(block: DataProtectionInputBlock): Promise<void> {
+    this.inputBlocks.push(structuredClone(block))
+  }
 
   async loadPolicy(): Promise<DataProtectionPolicy> {
     return this.policy

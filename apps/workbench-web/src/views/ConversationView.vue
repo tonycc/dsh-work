@@ -760,6 +760,12 @@ async function submitFollowUp(payload: { prompt: string; files: File[]; workspac
     }
     await nextTick(() => scrollToBottom())
   } catch (error) {
+    // 个人对话中被拦截的消息已保留并带“未发送给模型”说明，刷新后展示，不再弹失败提示。
+    if ((error as { code?: string }).code === 'DATA_POLICY_BLOCKED' && task.value.workspaceType !== 'team') {
+      await taskStore.loadTask(task.value.id).catch(() => undefined)
+      payload.confirm?.()
+      return
+    }
     notifyActionFailure('发送消息', `对话“${task.value.title}”`, error, '检查输入和附件后重试；已有对话内容不会丢失。')
   }
 }

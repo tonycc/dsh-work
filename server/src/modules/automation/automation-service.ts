@@ -99,6 +99,7 @@ export class AutomationService {
   private readonly content: PostgresContentService
   private readonly operations?: AuditTrail
   private readonly config: AutomationModuleConfig
+  private readonly inputPolicy?: AutomationInputPolicy
 
   constructor(
     database: DatabaseClient,
@@ -111,6 +112,7 @@ export class AutomationService {
     content: PostgresContentService,
     operations: AuditTrail | undefined,
     config: AutomationModuleConfig,
+    inputPolicy?: AutomationInputPolicy,
   ) {
     this.database = database
     this.automations = automations
@@ -122,6 +124,13 @@ export class AutomationService {
     this.content = content
     this.operations = operations
     this.config = config
+    this.inputPolicy = inputPolicy
+  }
+
+  /** 保存时预检（方案 5.6.1）：含密钥的任务输入不允许保存。 */
+  private async assertPromptAllowed(ownerUserId: string, prompt: string): Promise<void> {
+    const policy = await this.inputPolicy?.check({ userId: ownerUserId, entry: 'automation-save', sessionId: null, text: prompt })
+    if (policy?.blocked) throw this.inputPolicy!.blockedError()
   }
 
   async create(
@@ -132,6 +141,7 @@ export class AutomationService {
     const name = normalizeAutomationName(input.name)
     const schedule = normalizeSchedule(input.schedule)
     const template = normalizeInputTemplate(input.inputTemplate)
+    await this.assertPromptAllowed(ownerUserId, template.prompt)
     // 创建即钉版本：业务 Agent → 当前已发布版本；同时校验对象准入。
     const agentVersionId = await this.agents.resolveWorkbenchAgentVersion(input.agentId, ownerUserId, sessionRoleIds)
     await this.authorizeExecution({
@@ -162,6 +172,7 @@ export class AutomationService {
     const name = patch.name !== undefined ? normalizeAutomationName(patch.name) : undefined
     const schedule = patch.schedule ? normalizeSchedule(patch.schedule) : undefined
     const template = patch.inputTemplate ? normalizeInputTemplate(patch.inputTemplate) : undefined
+    if (template) await this.assertPromptAllowed(ownerUserId, template.prompt)
     const agentVersionId = patch.agentId !== undefined
       ? await this.agents.resolveWorkbenchAgentVersion(patch.agentId, ownerUserId, sessionRoleIds)
       : undefined
@@ -553,6 +564,9 @@ export class AutomationService {
         if (!isAdmissionDenial(error)) throw error
         return skip(AutomationReasonCodes.subjectInvalid)
       }
+      // 触发时再查一次（方案 5.6.1）：词表可能变了；预检不可用时向上抛出，下个 tick 重试。
+      const policy = await this.inputPolicy?.check({ userId: task.ownerUserId, entry: 'automation-trigger', sessionId: null, text: task.inputTemplate.prompt })
+      if (policy?.blocked) return skip(AutomationReasonCodes.dataPolicyBlocked)
       let decision: RuntimeAuthorizationDecision
       try {
         decision = await this.authorizeExecution({
@@ -674,6 +688,11 @@ function normalizeAutomationName(name: string): string {
     throw invalidRequest('任务名称长度必须为 1～120 个字符')
   }
   return normalized
+}
+
+export interface AutomationInputPolicy {
+  check(input: { userId: string; entry: 'automation-save' | 'automation-trigger'; sessionId: string | null; text: string }): Promise<{ blocked: boolean }>
+  blockedError(): Error
 }
 
 function normalizeInputTemplate(input: AutomationInputTemplate): AutomationInputTemplate {
