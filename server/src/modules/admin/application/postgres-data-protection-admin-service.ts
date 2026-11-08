@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 
-import type { DatabaseClient } from '../../../infrastructure/postgres/database.ts'
+import type { DatabaseClient, DatabaseTransaction as TransactionSql } from '../../../infrastructure/postgres/database.ts'
 import { stateConflict } from '../../../domain/request-errors.ts'
 import {
   DATA_PROTECTION_MAX_TERMS,
@@ -122,7 +122,16 @@ export class PostgresDataProtectionAdminService implements DataProtectionAdminPo
     return rows.map(row => ({ ...row, createdAt: row.createdAt.toISOString() }))
   }
 
-  async addTerms(terms: DataProtectionTermInput[]): Promise<{ added: number; skipped: number }> {
+  /** 变更和审计同一事务提交；审计只记条数，不记词条内容（方案 5.8）。 */
+  private async audit(transaction: TransactionSql, actorId: string, action: string, detail: string) {
+    await transaction`
+      insert into audit_events (id, tenant_id, actor_type, actor_id, action, object_type, object_id, result, trace_id, safe_context)
+      values (${`audit-${randomUUID()}`}, ${tenantId}, 'user', ${actorId}, ${action}, 'data_protection', 'data-protection', 'success',
+              ${`trace-data-protection-${randomUUID()}`}, ${transaction.json({ detail })})
+    `
+  }
+
+  async addTerms(terms: DataProtectionTermInput[], actorId: string): Promise<{ added: number; skipped: number }> {
     return this.database.begin(async (transaction) => {
       // 串行化同租户的导入，上限校验才可靠。
       await transaction`select pg_advisory_xact_lock(hashtext(${`data-protection-terms:${tenantId}`}))`
@@ -137,12 +146,18 @@ export class PostgresDataProtectionAdminService implements DataProtectionAdminPo
       `
       const [count] = await transaction<{ total: number }[]>`select count(*)::int as total from data_protection_terms where tenant_id = ${tenantId}`
       if (count!.total > DATA_PROTECTION_MAX_TERMS) throw stateConflict(`保密词表最多 ${DATA_PROTECTION_MAX_TERMS} 条`)
-      return { added: inserted.length, skipped: terms.length - inserted.length }
+      const skipped = terms.length - inserted.length
+      await this.audit(transaction, actorId, 'data-protection.terms.add', `新增 ${inserted.length} 条，跳过 ${skipped} 条`)
+      return { added: inserted.length, skipped }
     })
   }
 
-  async removeTerm(id: string): Promise<void> {
-    await this.database`delete from data_protection_terms where tenant_id = ${tenantId} and id = ${id}`
+  async removeTerm(id: string, actorId: string): Promise<{ removed: boolean }> {
+    return this.database.begin(async (transaction) => {
+      const result = await transaction`delete from data_protection_terms where tenant_id = ${tenantId} and id = ${id}`
+      if (result.count > 0) await this.audit(transaction, actorId, 'data-protection.terms.remove', '删除 1 条')
+      return { removed: result.count > 0 }
+    })
   }
 
   async listAllowlist(): Promise<DataProtectionAllowRecord[]> {
@@ -153,18 +168,25 @@ export class PostgresDataProtectionAdminService implements DataProtectionAdminPo
     return rows.map(row => ({ ...row, createdAt: row.createdAt.toISOString() }))
   }
 
-  async addAllow(value: string): Promise<{ added: boolean }> {
-    const inserted = await this.database<{ id: string }[]>`
-      insert into data_protection_allowlist (id, tenant_id, value)
-      values (${`dpa-${randomUUID()}`}, ${tenantId}, ${value})
-      on conflict (tenant_id, value) do nothing
-      returning id
-    `
-    return { added: inserted.length > 0 }
+  async addAllow(value: string, actorId: string): Promise<{ added: boolean }> {
+    return this.database.begin(async (transaction) => {
+      const inserted = await transaction<{ id: string }[]>`
+        insert into data_protection_allowlist (id, tenant_id, value)
+        values (${`dpa-${randomUUID()}`}, ${tenantId}, ${value})
+        on conflict (tenant_id, value) do nothing
+        returning id
+      `
+      if (inserted.length > 0) await this.audit(transaction, actorId, 'data-protection.allowlist.add', '新增 1 条')
+      return { added: inserted.length > 0 }
+    })
   }
 
-  async removeAllow(id: string): Promise<void> {
-    await this.database`delete from data_protection_allowlist where tenant_id = ${tenantId} and id = ${id}`
+  async removeAllow(id: string, actorId: string): Promise<{ removed: boolean }> {
+    return this.database.begin(async (transaction) => {
+      const result = await transaction`delete from data_protection_allowlist where tenant_id = ${tenantId} and id = ${id}`
+      if (result.count > 0) await this.audit(transaction, actorId, 'data-protection.allowlist.remove', '删除 1 条')
+      return { removed: result.count > 0 }
+    })
   }
 
   /** 用真实引擎和当前词表预览，只返回给页面，不写审计。占位符用一次性密钥，不需要环境主密钥。 */

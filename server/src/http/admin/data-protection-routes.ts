@@ -1,6 +1,6 @@
 import { accessDenied } from '../../domain/request-errors.ts'
-import type { AuditTrail } from '../../domain/audit-trail.ts'
 import {
+  DATA_PROTECTION_TERMS_BODY_BYTES,
   DATA_PROTECTION_TERMS_PERMISSION,
   normalizeAllowValue,
   normalizePreviewText,
@@ -24,14 +24,8 @@ function requireTermAccess(context: RouteContext) {
 export function registerDataProtectionRoutes(
   router: Router,
   service: DataProtectionAdminPort,
-  audit: AuditTrail | undefined,
   adapter: 'postgres' | 'prototype-memory' = 'postgres',
 ) {
-  // 变更只记谁在何时增删了多少条，不记词条内容（方案 5.8）。
-  const record = async (actorId: string, action: string, detail: string) => {
-    await audit?.appendAudit(actorId, action, 'data-protection', 'success', `trace-data-protection-${Date.now()}`, detail, 'data_protection')
-  }
-
   router.get(`${basePath}/overview`, async (_request, context) =>
     envelope('admin', await service.getOverview(parseDataProtectionFilter(context.url.searchParams)), adapter))
   router.get(`${basePath}/records`, async (_request, context) => {
@@ -52,16 +46,12 @@ export function registerDataProtectionRoutes(
   })
   router.post(`${basePath}/terms`, async (request, context) => {
     const identity = requireTermAccess(context)
-    const body = await readJsonBody<{ terms?: unknown } | null>(request)
-    const result = await service.addTerms(normalizeTermInputs(body?.terms))
-    await record(identity.userId, 'data-protection.terms.add', `新增 ${result.added} 条，跳过 ${result.skipped} 条`)
-    return envelope('admin', result, adapter)
+    const body = await readJsonBody<{ terms?: unknown } | null>(request, DATA_PROTECTION_TERMS_BODY_BYTES)
+    return envelope('admin', await service.addTerms(normalizeTermInputs(body?.terms), identity.userId), adapter)
   })
   router.delete(`${basePath}/terms/:id`, async (_request, context) => {
     const identity = requireTermAccess(context)
-    await service.removeTerm(context.params['id'] ?? '')
-    await record(identity.userId, 'data-protection.terms.remove', '删除 1 条')
-    return envelope('admin', { removed: true }, adapter)
+    return envelope('admin', await service.removeTerm(context.params['id'] ?? '', identity.userId), adapter)
   })
 
   router.get(`${basePath}/allowlist`, async (_request, context) => {
@@ -71,15 +61,11 @@ export function registerDataProtectionRoutes(
   router.post(`${basePath}/allowlist`, async (request, context) => {
     const identity = requireTermAccess(context)
     const body = await readJsonBody<{ value?: unknown } | null>(request)
-    const result = await service.addAllow(normalizeAllowValue(body?.value))
-    await record(identity.userId, 'data-protection.allowlist.add', result.added ? '新增 1 条' : '已存在，未新增')
-    return envelope('admin', result, adapter)
+    return envelope('admin', await service.addAllow(normalizeAllowValue(body?.value), identity.userId), adapter)
   })
   router.delete(`${basePath}/allowlist/:id`, async (_request, context) => {
     const identity = requireTermAccess(context)
-    await service.removeAllow(context.params['id'] ?? '')
-    await record(identity.userId, 'data-protection.allowlist.remove', '删除 1 条')
-    return envelope('admin', { removed: true }, adapter)
+    return envelope('admin', await service.removeAllow(context.params['id'] ?? '', identity.userId), adapter)
   })
 }
 

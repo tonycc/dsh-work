@@ -71,7 +71,7 @@ export function createSmokeRouter() {
   const modelUsage = new SmokeModelUsageService()
   registerAdminRoutes(router, new AdminQueryService(repository, modelUsage))
   registerModelUsageRoutes(router, modelUsage, 'prototype-memory')
-  registerDataProtectionRoutes(router, new SmokeDataProtectionService(), undefined, 'prototype-memory')
+  registerDataProtectionRoutes(router, new SmokeDataProtectionService(), 'prototype-memory')
   registerModelGovernanceRoutes(router, new ModelGovernanceService(new MemoryModelGovernanceRepository()))
   registerOrganizationRoutes(router, new MemoryOrganizationStore(), 'prototype-memory')
   registerKnowledgeAdminRoutes(router, new MemoryKnowledgeAdminStore(), 'prototype-memory')

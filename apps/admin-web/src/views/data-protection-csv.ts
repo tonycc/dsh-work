@@ -28,6 +28,15 @@ function parseLine(line: string): string[] {
 
 const truthy = (value: string | undefined) => ['是', 'true', '1', 'yes', 'y'].includes((value ?? '').toLowerCase())
 
+/** Excel 另存的中文 CSV 常是 GBK：先按 UTF-8 严格解码，失败再按 GB18030（兼容 GBK）。 */
+export function decodeCsv(buffer: ArrayBuffer): string {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(buffer)
+  } catch {
+    return new TextDecoder('gb18030').decode(buffer)
+  }
+}
+
 /** 每行一个词条，第二、三列可选（区分大小写、整词匹配）。首行是表头时跳过。 */
 export function parseTermsCsv(text: string): ParsedTerm[] {
   const lines = (text.charCodeAt(0) === 0xfeff ? text.slice(1) : text).split(/\r?\n/).filter(line => line.trim())

@@ -7,6 +7,8 @@ export const DATA_PROTECTION_MAX_TERMS = 5000
 export const DATA_PROTECTION_MAX_TERM_LENGTH = 200
 export const DATA_PROTECTION_MAX_ALLOW_LENGTH = 500
 export const DATA_PROTECTION_MAX_PREVIEW_LENGTH = 20_000
+/** 5000 条 × 200 字（UTF-8 每字 3 字节）加 JSON 外壳，一次导入放得下。 */
+export const DATA_PROTECTION_TERMS_BODY_BYTES = 4 * 1024 * 1024
 
 export type DataProtectionHitCategory = 'secret' | 'personal' | 'term'
 export type DataProtectionAction = 'masked' | 'blocked'
@@ -89,11 +91,12 @@ export interface DataProtectionAdminPort {
   getOverview(filter: DataProtectionFilter): Promise<DataProtectionOverview>
   getRecords(filter: DataProtectionFilter, page: number, pageSize: number): Promise<DataProtectionRecordPage>
   listTerms(): Promise<DataProtectionTermRecord[]>
-  addTerms(terms: DataProtectionTermInput[]): Promise<{ added: number; skipped: number }>
-  removeTerm(id: string): Promise<void>
+  /** 词表变更与审计在同一事务内；审计只记条数，不记词条内容。 */
+  addTerms(terms: DataProtectionTermInput[], actorId: string): Promise<{ added: number; skipped: number }>
+  removeTerm(id: string, actorId: string): Promise<{ removed: boolean }>
   listAllowlist(): Promise<DataProtectionAllowRecord[]>
-  addAllow(value: string): Promise<{ added: boolean }>
-  removeAllow(id: string): Promise<void>
+  addAllow(value: string, actorId: string): Promise<{ added: boolean }>
+  removeAllow(id: string, actorId: string): Promise<{ removed: boolean }>
   preview(text: string): Promise<DataProtectionPreview>
 }
 
@@ -113,19 +116,16 @@ export function parseDataProtectionFilter(params: URLSearchParams): DataProtecti
   }
 }
 
-/** 校验并规范一批词条；同一批内的重复只保留第一条。 */
+/** 校验并规范一批词条。重复项保留，由写入时跳过，“跳过”的数字才包含同一批内的重复。 */
 export function normalizeTermInputs(input: unknown): DataProtectionTermInput[] {
   if (!Array.isArray(input) || input.length === 0) throw invalidRequest('词条不能为空')
   if (input.length > DATA_PROTECTION_MAX_TERMS) throw invalidRequest(`一次最多导入 ${DATA_PROTECTION_MAX_TERMS} 条`)
-  const seen = new Set<string>()
   const terms: DataProtectionTermInput[] = []
   for (const item of input) {
     const record = (item ?? {}) as Record<string, unknown>
     const value = typeof record['value'] === 'string' ? record['value'].trim() : ''
     if (!value) throw invalidRequest('词条不能为空')
     if (value.length > DATA_PROTECTION_MAX_TERM_LENGTH) throw invalidRequest(`单个词条不能超过 ${DATA_PROTECTION_MAX_TERM_LENGTH} 字`)
-    if (seen.has(value)) continue
-    seen.add(value)
     terms.push({ value, caseSensitive: record['caseSensitive'] === true, wholeWord: record['wholeWord'] === true })
   }
   return terms

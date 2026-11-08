@@ -14,7 +14,7 @@ import type {
   ModelUsageRange,
   RunSource,
 } from '@/types/domain'
-import { parseTermsCsv } from './data-protection-csv'
+import { decodeCsv, parseTermsCsv } from './data-protection-csv'
 
 type TabName = 'records' | 'rules' | 'terms' | 'allow' | 'preview'
 
@@ -66,7 +66,21 @@ function fail(cause: unknown, fallback: string) {
   error.value = cause instanceof Error ? cause.message : fallback
 }
 
+let overviewRequest = 0
+
+/** 概况只随时间范围变化；翻页和其他筛选不重新请求。 */
+async function loadOverview() {
+  const request = ++overviewRequest
+  try {
+    const next = await adminApi.getDataProtectionOverview({ range: range.value })
+    if (request === overviewRequest) overview.value = next
+  } catch (cause) {
+    if (request === overviewRequest) fail(cause, '命中概况加载失败')
+  }
+}
+
 async function loadRecords() {
+  error.value = ''
   const request = ++recordsRequest
   const filter = {
     range: range.value,
@@ -76,12 +90,8 @@ async function loadRecords() {
   }
   recordsLoading.value = true
   try {
-    const [nextOverview, nextRecords] = await Promise.all([
-      adminApi.getDataProtectionOverview(filter),
-      adminApi.getDataProtectionRecords(filter, page.value, pageSize),
-    ])
+    const nextRecords = await adminApi.getDataProtectionRecords(filter, page.value, pageSize)
     if (request !== recordsRequest) return
-    overview.value = nextOverview
     records.value = nextRecords.items
     total.value = nextRecords.total
     expanded.value = []
@@ -95,6 +105,11 @@ async function loadRecords() {
 function reloadFromFirstPage() {
   page.value = 1
   void loadRecords()
+}
+
+function onRangeChange() {
+  void loadOverview()
+  reloadFromFirstPage()
 }
 
 function toggleRow(row: DataProtectionRecord) {
@@ -149,7 +164,19 @@ async function loadProviders() {
 
 const terms = ref<DataProtectionTermRecord[]>([])
 const allowlist = ref<DataProtectionAllowRecord[]>([])
-const listLoading = ref(false)
+const termsLoading = ref(false)
+const allowLoading = ref(false)
+const termSearch = ref('')
+const termPage = ref(1)
+const termPageSize = 20
+let termsRequest = 0
+let allowRequest = 0
+
+const matchedTerms = computed(() => {
+  const keyword = termSearch.value.trim().toLowerCase()
+  return keyword ? terms.value.filter(term => term.value.toLowerCase().includes(keyword)) : terms.value
+})
+const visibleTerms = computed(() => matchedTerms.value.slice((termPage.value - 1) * termPageSize, termPage.value * termPageSize))
 const termDraft = ref('')
 const draftCase = ref(false)
 const draftWhole = ref(false)
@@ -157,30 +184,38 @@ const allowDraft = ref('')
 const fileInput = ref<HTMLInputElement>()
 
 async function loadTerms() {
-  listLoading.value = true
+  const request = ++termsRequest
+  termsLoading.value = true
   try {
-    terms.value = await adminApi.getDataProtectionTerms()
+    const next = await adminApi.getDataProtectionTerms()
+    if (request !== termsRequest) return
+    terms.value = next
+    // 删除后当前页可能已经不存在。
+    termPage.value = Math.min(termPage.value, Math.max(1, Math.ceil(matchedTerms.value.length / termPageSize)))
   } catch (cause) {
-    fail(cause, '保密词表加载失败')
+    if (request === termsRequest) fail(cause, '保密词表加载失败')
   } finally {
-    listLoading.value = false
+    if (request === termsRequest) termsLoading.value = false
   }
 }
 
 async function loadAllowlist() {
-  listLoading.value = true
+  const request = ++allowRequest
+  allowLoading.value = true
   try {
-    allowlist.value = await adminApi.getDataProtectionAllowlist()
+    const next = await adminApi.getDataProtectionAllowlist()
+    if (request === allowRequest) allowlist.value = next
   } catch (cause) {
-    fail(cause, '白名单加载失败')
+    if (request === allowRequest) fail(cause, '白名单加载失败')
   } finally {
-    listLoading.value = false
+    if (request === allowRequest) allowLoading.value = false
   }
 }
 
 async function addTerm() {
   const value = termDraft.value.trim()
   if (!value) return
+  error.value = ''
   try {
     const result = await adminApi.addDataProtectionTerms([{ value, caseSensitive: draftCase.value, wholeWord: draftWhole.value }])
     if (result.added === 0) {
@@ -202,8 +237,9 @@ async function importCsv(event: Event) {
   const file = input.files?.[0]
   input.value = ''
   if (!file) return
+  error.value = ''
   try {
-    const parsed = parseTermsCsv(await file.text())
+    const parsed = parseTermsCsv(decodeCsv(await file.arrayBuffer()))
     if (parsed.length === 0) {
       ElMessage.warning('文件里没有词条')
       return
@@ -227,6 +263,7 @@ async function confirmRemove(subject: string) {
 
 async function removeTerm(row: DataProtectionTermRecord) {
   if (!(await confirmRemove('这个词条'))) return
+  error.value = ''
   try {
     await adminApi.removeDataProtectionTerm(row.id)
     ElMessage.success('已删除')
@@ -239,6 +276,7 @@ async function removeTerm(row: DataProtectionTermRecord) {
 async function addAllow() {
   const value = allowDraft.value.trim()
   if (!value) return
+  error.value = ''
   try {
     const result = await adminApi.addDataProtectionAllow(value)
     allowDraft.value = ''
@@ -252,6 +290,7 @@ async function addAllow() {
 
 async function removeAllow(row: DataProtectionAllowRecord) {
   if (!(await confirmRemove('这个放行值'))) return
+  error.value = ''
   try {
     await adminApi.removeDataProtectionAllow(row.id)
     ElMessage.success('已从白名单删除')
@@ -275,6 +314,7 @@ const previewVerdict = computed(() => {
 async function runPreview() {
   if (!previewText.value.trim()) return
   previewing.value = true
+  error.value = ''
   try {
     previewResult.value = await adminApi.previewDataProtection(previewText.value)
   } catch (cause) {
@@ -291,7 +331,10 @@ function onTabChange(name: string | number) {
   if (name === 'allow' && auth.canAccessDataProtectionTerms) void loadAllowlist()
 }
 
-onMounted(() => { void loadRecords() })
+onMounted(() => {
+  void loadOverview()
+  void loadRecords()
+})
 </script>
 
 <template>
@@ -310,7 +353,7 @@ onMounted(() => { void loadRecords() })
 
     <template v-if="activeTab === 'records'">
       <section class="content-panel data-protection-filters" aria-label="筛选">
-        <el-radio-group v-model="range" aria-label="时间范围" @change="reloadFromFirstPage">
+        <el-radio-group v-model="range" aria-label="时间范围" @change="onRangeChange">
           <el-radio-button v-for="option in rangeOptions" :key="option.value" :value="option.value">{{ option.label }}</el-radio-button>
         </el-radio-group>
         <el-select v-model="category" class="data-protection-select" clearable placeholder="全部类别" aria-label="类别" @change="reloadFromFirstPage">
@@ -399,7 +442,7 @@ onMounted(() => { void loadRecords() })
       <p class="page-note">词表和白名单是机密内容，需要“数据防护词表”权限。请联系平台管理员授权。</p>
     </section>
 
-    <section v-else-if="activeTab === 'terms'" v-loading="listLoading" class="content-panel content-panel--flush" aria-label="保密词表">
+    <section v-else-if="activeTab === 'terms'" v-loading="termsLoading" class="content-panel content-panel--flush" aria-label="保密词表">
       <form v-if="auth.canManage" class="data-protection-form" @submit.prevent="addTerm">
         <el-input v-model="termDraft" class="data-protection-input" maxlength="200" placeholder="项目代号、客户名、内部域名等" aria-label="词条" />
         <el-checkbox v-model="draftCase">区分大小写</el-checkbox>
@@ -409,7 +452,10 @@ onMounted(() => { void loadRecords() })
         <input ref="fileInput" class="data-protection-file" type="file" accept=".csv,text/csv" aria-label="选择 CSV 文件" @change="importCsv">
         <span class="page-note data-protection-note">{{ terms.length }} / 5000 条</span>
       </form>
-      <el-table class="data-table" :data="terms" empty-text="还没有词条">
+      <div class="data-protection-search">
+        <el-input v-model="termSearch" class="data-protection-input" clearable placeholder="查找词条" aria-label="查找" @input="termPage = 1" />
+      </div>
+      <el-table class="data-table" :data="visibleTerms" :empty-text="termSearch.trim() ? '没有匹配的词条' : '还没有词条'">
         <el-table-column label="词条" prop="value" min-width="240" />
         <el-table-column label="区分大小写" width="120"><template #default="{ row }">{{ row.caseSensitive ? '是' : '否' }}</template></el-table-column>
         <el-table-column label="整词匹配" width="120"><template #default="{ row }">{{ row.wholeWord ? '是' : '否' }}</template></el-table-column>
@@ -418,10 +464,13 @@ onMounted(() => { void loadRecords() })
           <template #default="{ row }"><el-button link type="danger" :aria-label="`删除词条 ${row.value}`" @click="removeTerm(row)">删除</el-button></template>
         </el-table-column>
       </el-table>
+      <div v-if="matchedTerms.length > termPageSize" class="data-protection-pager">
+        <el-pagination v-model:current-page="termPage" background layout="prev, pager, next" :total="matchedTerms.length" :page-size="termPageSize" />
+      </div>
       <p class="page-note data-protection-foot">词表命中的内容会被遮盖，不会拦截消息。保存后立即对之后的请求生效。CSV 每行一个词条，可选第二、三列表示区分大小写和整词匹配（是/否）。变更只记谁在何时增删了多少条，不记词条内容。</p>
     </section>
 
-    <section v-else-if="activeTab === 'allow'" v-loading="listLoading" class="content-panel content-panel--flush" aria-label="白名单">
+    <section v-else-if="activeTab === 'allow'" v-loading="allowLoading" class="content-panel content-panel--flush" aria-label="白名单">
       <form v-if="auth.canManage" class="data-protection-form" @submit.prevent="addAllow">
         <el-input v-model="allowDraft" class="data-protection-input" maxlength="500" placeholder="例如公司对外客服邮箱" aria-label="放行的值" />
         <el-button type="primary" native-type="submit">添加</el-button>
@@ -478,6 +527,7 @@ onMounted(() => { void loadRecords() })
 .data-protection-providers { display: flex; flex-wrap: wrap; gap: 8px 24px; padding: 0 var(--spacing-card) var(--spacing-card); }
 .data-protection-locked { padding-block: 48px; text-align: center; }
 .data-protection-form { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: var(--spacing-card); }
+.data-protection-search { padding: 0 var(--spacing-card) 12px; }
 .data-protection-file { display: none; }
 .data-protection-foot { padding: 10px var(--spacing-card); border-top: 1px solid var(--color-bg-subtle); }
 .data-protection-preview { display: flex; flex-direction: column; gap: 12px; }

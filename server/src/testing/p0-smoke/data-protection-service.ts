@@ -46,12 +46,17 @@ export class SmokeDataProtectionService implements DataProtectionAdminPort {
   async listTerms() { return this.terms }
 
   async addTerms(terms: DataProtectionTermInput[]) {
-    const fresh = terms.filter(term => !this.terms.some(existing => existing.value === term.value))
+    const seen = new Set(this.terms.map(term => term.value))
+    const fresh = terms.filter(term => !seen.has(term.value) && Boolean(seen.add(term.value)))
     this.terms = [...fresh.map(term => ({ ...term, id: `term-new-${(this.sequence += 1)}`, createdAt: new Date().toISOString() })), ...this.terms]
     return { added: fresh.length, skipped: terms.length - fresh.length }
   }
 
-  async removeTerm(id: string) { this.terms = this.terms.filter(term => term.id !== id) }
+  async removeTerm(id: string) {
+    const removed = this.terms.some(term => term.id === id)
+    this.terms = this.terms.filter(term => term.id !== id)
+    return { removed }
+  }
 
   async listAllowlist() { return this.allow }
 
@@ -61,7 +66,11 @@ export class SmokeDataProtectionService implements DataProtectionAdminPort {
     return { added: true }
   }
 
-  async removeAllow(id: string) { this.allow = this.allow.filter(item => item.id !== id) }
+  async removeAllow(id: string) {
+    const removed = this.allow.some(item => item.id === id)
+    this.allow = this.allow.filter(item => item.id !== id)
+    return { removed }
+  }
 
   async preview(text: string): Promise<DataProtectionPreview> {
     const policy = { terms: this.terms, allowlist: this.allow.map(item => item.value) }

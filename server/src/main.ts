@@ -699,7 +699,7 @@ async function start() {
   registerWorkspaceAgentMemberRoutes(router, workspaceAgentMembers, authorization)
   registerProjectRoutes(router, projects, authorization, projectArchive)
   registerOperationsRoutes(router, operations, new PostgresGrantReconciliationService(database, operations))
-  registerDataProtectionRoutes(router, new PostgresDataProtectionAdminService(database, resolvePlatformTimezone(process.env.DSH_WORK_TIMEZONE)), operations)
+  registerDataProtectionRoutes(router, new PostgresDataProtectionAdminService(database, resolvePlatformTimezone(process.env.DSH_WORK_TIMEZONE)))
   registerModelUsageRoutes(router, new PostgresModelUsageService(database, resolvePlatformTimezone(process.env.DSH_WORK_TIMEZONE)))
   registerAgentRoutes(router, agents, new PostgresAgentAccessService(database))
   const agentValidation = new PostgresAgentValidationService(database, agents, skills, orchestration, mcpService)
