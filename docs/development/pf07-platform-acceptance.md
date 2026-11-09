@@ -36,6 +36,8 @@ PF-07 是**平台能力门禁**，在受控的参考环境中证明能力实现�
 
 **拒绝类场景：** `mcp-connector/credential-failure` 与 `session-neutral-task/revocation` 在创建 Run 之前拒绝，“没有 Run”正是要验证的结果。矩阵用 `p2RejectedBeforeRun` 显式列出这类场景，它们可以不填 Run/Attempt，但仍须有通过结论和 traceId、execution 等证据引用；其他场景仍必须有 Run/Attempt。
 
+**后续修复后的重跑：** `115888e` 之后合入了 MCP 中断审计修复（#105）和结果未知的显示与对账（#106），影响中断时的审计语义。2026-11-09 在 `40d9fdb`（合入后为 `46951ba`）的本机专用一次性库上重跑 `mcp-connector` 的 5 个场景并经验收人确认通过，记录单独保存，不修改 `115888e` 的 `verified` 记录。其余 14 个场景未在新版本重跑，下次发布前按“影响执行语义的变更后重跑受影响场景”评估。修复验证覆盖了取消、Run 超时和单次调用超时时审计记为未知、重试被拦、管理员对账后放行。
+
 **外部动作口径：** `external-action` 按平台写工具的 Task Operation（`task_operations`）验收；MCP 调用不产生 Operation，其回执与 `mcp_invocation_audits` 归入 `mcp-connector`。
 
 ## 目标环境部署验收
