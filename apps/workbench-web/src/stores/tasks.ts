@@ -87,11 +87,12 @@ export const useTaskStore = defineStore('tasks', () => {
     return tasks.value.find((task) => task.id === id)
   }
 
-  async function loadTask(id: string) {
+  async function loadTask(id: string, onlyTerminal = false) {
     const current = generation
     try {
       const task = await workbenchApi.getRun(id)
       requireGeneration(current)
+      if (onlyTerminal && !isTerminal(task.status)) return null
       upsert(task)
       if (!isTerminal(task.status)) subscribe(task.id)
       return task
@@ -264,7 +265,8 @@ export const useTaskStore = defineStore('tasks', () => {
     const current = generation
     const task = await workbenchApi.cancelRun(id)
     requireGeneration(current)
-    upsert(task)
+    // 停止接口可能先于 Run 落库返回“运行中”；终态事件已到时不能用它把页面改回执行中。
+    if (isTerminal(task.status) || !isTerminal(getTask(id)?.status)) upsert(task)
     return task
   }
 
@@ -499,8 +501,17 @@ export const useTaskStore = defineStore('tasks', () => {
     if (isTerminal(task.status)) {
       await wait(100)
       if (current !== generation) return
-      await refreshRun(task.id)
+      await loadTerminalSnapshot(task.id, current)
       closeStream(task.id)
+    }
+  }
+
+  // 终态事件可能早于 Run 状态落库。只接受终态快照，否则事件流关闭后页面会停在执行中；
+  // 等不到时保留事件给出的终态。
+  async function loadTerminalSnapshot(runId: string, current: number) {
+    for (let attempt = 0; attempt < TERMINAL_SNAPSHOT_ATTEMPTS; attempt += 1) {
+      if (attempt > 0) await wait(TERMINAL_SNAPSHOT_RETRY_MS)
+      if (current !== generation || await loadTask(runId, true)) return
     }
   }
 
@@ -584,6 +595,9 @@ function eventStepStatus(eventType: string) {
   if (eventType === 'run.completed') return 'succeeded' as const
   return 'running' as const
 }
+
+const TERMINAL_SNAPSHOT_ATTEMPTS = 20
+const TERMINAL_SNAPSHOT_RETRY_MS = 250
 
 function isTerminal(status: RunStatus | undefined) {
   return status !== undefined && ['succeeded', 'failed', 'cancelled'].includes(status)
