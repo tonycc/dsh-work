@@ -34,6 +34,9 @@ export function validateMatrix(matrix, scripts) {
         new Set(capability.p2Scenarios).size !== capability.p2Scenarios.length) {
       errors.push(`${capability.id}: P2 场景缺失或重复`)
     }
+    for (const id of capability.p2RejectedBeforeRun ?? []) {
+      if (!capability.p2Scenarios?.includes(id)) errors.push(`${capability.id}: 拒绝类场景 ${id} 不在 P2 场景中`)
+    }
   }
   for (const id of expectedIds) if (!seen.has(id)) errors.push(`缺少能力: ${id}`)
   for (const item of matrix.deferred ?? []) {
@@ -73,10 +76,12 @@ export function validateP2(record, matrix) {
     }
     for (const id of expected.p2Scenarios) {
       const scenario = scenarios.get(id)
+      // 创建 Run 之前就拒绝的场景，“没有 Run”正是要验证的结果，仍须有 traceId 或 execution 等证据引用。
+      const rejectedBeforeRun = expected.p2RejectedBeforeRun?.includes(id)
       if (!scenario || scenario.result !== 'passed' || !Array.isArray(scenario.evidenceRefs) ||
           !scenario.evidenceRefs.length || scenario.evidenceRefs.some(ref => typeof ref !== 'string' || !ref.trim()) ||
-          !Array.isArray(scenario.runIds) || !scenario.runIds.length ||
-          !Array.isArray(scenario.attemptIds) || !scenario.attemptIds.length) {
+          (!rejectedBeforeRun && (!Array.isArray(scenario.runIds) || !scenario.runIds.length ||
+          !Array.isArray(scenario.attemptIds) || !scenario.attemptIds.length))) {
         errors.push(`${expected.id}/${id}: 缺少通过结论、Run/Attempt 或可审计证据引用`)
       }
     }

@@ -21,6 +21,28 @@ test('deferred items need a reason and cannot stay inside the gate', () => {
   assert.match(validateMatrix({ ...matrix, deferred: [unexplained] }, scripts).join(' '), /缺少移出原因/)
 })
 
+test('only declared rejected-before-run scenarios may omit run evidence', () => {
+  const record = createP2Template(matrix)
+  Object.assign(record, { status: 'verified', knownLimitations: [] })
+  for (const field of ['codeRevision', 'deploymentVersion', 'environment', 'executedAt', 'actor', 'dshVersion', 'adapterVersion', 'model', 'approvedCapabilities', 'reviewer', 'conclusion']) record[field] = 'value'
+  for (const capability of record.capabilities) {
+    for (const scenario of capability.scenarios) Object.assign(scenario, { result: 'passed', runIds: ['run-id'], attemptIds: ['attempt-id'], evidenceRefs: ['audit-ref'] })
+  }
+  const find = (capability, id) => record.capabilities.find(item => item.id === capability).scenarios.find(item => item.id === id)
+  Object.assign(find('mcp-connector', 'credential-failure'), { runIds: [], attemptIds: [], evidenceRefs: ['trace-id'] })
+  assert.deepEqual(validateP2(record, matrix), [])
+  find('mcp-connector', 'credential-failure').evidenceRefs = []
+  assert.match(validateP2(record, matrix).join(' '), /credential-failure/)
+  find('mcp-connector', 'credential-failure').evidenceRefs = ['trace-id']
+  Object.assign(find('mcp-connector', 'catalog-change'), { runIds: [], attemptIds: [] })
+  assert.match(validateP2(record, matrix).join(' '), /catalog-change/)
+})
+
+test('rejected-before-run entries must be matrix scenarios', () => {
+  const capabilities = [{ ...matrix.capabilities[0], p2RejectedBeforeRun: ['missing'] }, ...matrix.capabilities.slice(1)]
+  assert.match(validateMatrix({ ...matrix, capabilities }, scripts).join(' '), /拒绝类场景 missing/)
+})
+
 test('P2 gate rejects declarations without complete run evidence', () => {
   assert.match(validateP2(createP2Template(matrix), matrix).join(' '), /verified/)
   const record = {

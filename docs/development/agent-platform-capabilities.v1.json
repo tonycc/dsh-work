@@ -7,7 +7,8 @@
       "package": "PF-01",
       "p0": ["pnpm test:m1"],
       "p1": ["pnpm test:m3:integration"],
-      "p2Scenarios": ["real-dsh-task-result", "revocation", "runtime-failure"]
+      "p2Scenarios": ["real-dsh-task-result", "revocation", "runtime-failure"],
+      "p2RejectedBeforeRun": ["revocation"]
     },
     {
       "id": "external-action",
@@ -28,7 +29,8 @@
       "package": "PF-03",
       "p0": ["pnpm test:m1"],
       "p1": ["pnpm test:mcp:integration", "pnpm test:e2e:mcp-admin"],
-      "p2Scenarios": ["real-discovery-and-call", "credential-failure", "catalog-change", "disable-and-delete", "secret-boundary"]
+      "p2Scenarios": ["real-discovery-and-call", "credential-failure", "catalog-change", "disable-and-delete", "secret-boundary"],
+      "p2RejectedBeforeRun": ["credential-failure"]
     },
     {
       "id": "controlled-memory",

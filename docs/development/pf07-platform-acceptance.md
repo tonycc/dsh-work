@@ -28,7 +28,7 @@
 
 **受控记忆口径：** 员工端受控记忆已按产品决定移除（`MEMORY-EMPLOYEE-REMOVAL`），经验由管理员审核后按组织可见发布。`identity-and-role-change` 按现行模型验收：其他 Agent 不召回；Agent 岗位角色变化、来源员工停用、经验版本停用后不再使用；员工失去工作台权限时拒绝运行。
 
-**检查器限制：** `credential-failure` 与 `session-neutral-task/revocation` 在创建 Run 之前拒绝，只有 traceId 或 execution 记录，`pf07.mjs` 仍要求 Run/Attempt，需要调整检查规则或改用能留下 Run 的做法。
+**拒绝类场景：** `mcp-connector/credential-failure` 与 `session-neutral-task/revocation` 在创建 Run 之前拒绝，“没有 Run”正是要验证的结果。矩阵用 `p2RejectedBeforeRun` 显式列出这类场景，它们可以不填 Run/Attempt，但仍须有通过结论和 traceId、execution 等证据引用；其他场景仍必须有 Run/Attempt。
 
 **外部动作口径：** `external-action` 按平台写工具的 Task Operation（`task_operations`）验收；MCP 调用不产生 Operation，其回执与 `mcp_invocation_audits` 归入 `mcp-connector`。
 
