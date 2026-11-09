@@ -344,17 +344,19 @@ P1 每例准备独立任务、Session、测试用户与数据，结束后清理�
 
 **spec：** 受控发布环境验收记录（不纳入普通 CI）
 
-1. 使用真实 DSH 与显式声明 `propose_memory@1.0.0` 的 Agent 完成提案、来源 Attempt、员工同意、管理员审核和匹配查询，留存工具调用、Manifest 固定版本、`memory.md` 投影、运行输出引用与审计证据；发布试运行只返回 `trial_only`。
+1. 使用真实 DSH 完成 `propose_memory` 提案（平台自动装配给非主动任务的 Run，无需 Agent 声明）、来源 Attempt、管理员在“经验迭代”审核和匹配查询，留存工具调用、Manifest 固定版本、`memory.md` 投影、运行输出引用与审计证据；发布试运行只返回 `trial_only`。
 2. 分别变化员工身份、团队成员关系、角色、同一 Agent 定义版本和目标 Agent 身份，确认跨用户、跨空间、跨角色及跨 Agent 被阻断，同一 Agent 的新定义版本只有通过当前 ACL 复核才能使用旧记忆。
 3. 在运行领取前和持久化等待期间撤回授权，确认 Runtime 不继续执行；已完成结果仍显示当时实际引用的版本。
 
 **验收：** 真实身份、DSH Prompt、Run/Attempt 固定引用、撤回和审计证据形成闭环。一次性 PostgreSQL、组件测试与合成 Runtime 绿灯不能替代本层。
 
-**现状（2026-11-09，`115888e`）：** 员工同意与私人记忆已移除（见 `MEMORY-EMPLOYEE-REMOVAL`），经验提案由管理员在“经验迭代”审核后按组织可见发布；`propose_memory` 自动装配给非主动任务的 Run，无需 Agent 声明；真实 Agent 审批固定为 `never`，第 3 步的持久化等待撤回暂不可执行。详见 [PF-07 验收手册](../../docs/development/pf07-platform-acceptance.md)。
+**前提：** 员工同意与私人记忆已移除（见 `MEMORY-EMPLOYEE-REMOVAL`），经验按组织可见发布，第 2 步的跨用户阻断需按现行模型重新定义；第 3 步的持久化等待撤回依赖真实 Agent 开放审批。执行状态见 [PF-07 验收手册](../../docs/development/pf07-platform-acceptance.md)。
 
 ## AE-04 Agent 主动记忆提案
 
 ### AE-MEMORY-01 提案、人工确认和只读投影
+
+> 历史说明：员工确认步骤已随 `MEMORY-EMPLOYEE-REMOVAL` 移除，`propose_memory` 由平台自动装配，无需 Agent 显式引用；现行流程见 `EXPERIENCE-ITERATION-01`。以下保留为原实现记录，不作为当前验收入口。
 
 **优先级：** P0/P1 · **角色：** Agent 执行身份、发起员工、平台管理员 · **运行层级：** 原型浏览器冒烟、一次性 PostgreSQL、受控 ACP Runtime 和前端组件<br>
 **前置数据：** 已发布且显式引用 `propose_memory@1.0.0` 的 Agent；本人可访问的成功 Attempt 与隔离管理员<br>
