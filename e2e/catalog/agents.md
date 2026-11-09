@@ -350,6 +350,8 @@ P1 每例准备独立任务、Session、测试用户与数据，结束后清理�
 
 **验收：** 真实身份、DSH Prompt、Run/Attempt 固定引用、撤回和审计证据形成闭环。一次性 PostgreSQL、组件测试与合成 Runtime 绿灯不能替代本层。
 
+**现状（2026-11-09，`115888e`）：** 员工同意与私人记忆已移除（见 `MEMORY-EMPLOYEE-REMOVAL`），经验提案由管理员在“经验迭代”审核后按组织可见发布；`propose_memory` 自动装配给非主动任务的 Run，无需 Agent 声明；真实 Agent 审批固定为 `never`，第 3 步的持久化等待撤回暂不可执行。详见 [PF-07 验收手册](../../docs/development/pf07-platform-acceptance.md)。
+
 ## AE-04 Agent 主动记忆提案
 
 ### AE-MEMORY-01 提案、人工确认和只读投影

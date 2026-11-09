@@ -16,6 +16,12 @@
 
 **当前证据状态：** PF-01～PF-05 代码级记录已存在。2026-09-23 的双账号隔离环境进度记录了真实 OIDC 的 MCP 写入、审计与回执，以及私人受控记忆的发布、检索和撤回；另一账号的实际 Run、审批与预算等场景仍未完成，不能当作全量 P2。较早的本地真实链路核对使用现有开发库和单身份，也不能代替专用环境验收。此前 P2 只有口头结论，未提供版本、身份、环境和 Run/Attempt 等原始记录；它发生在当前平台能力形成之前，不能作为 PF-07 的 P2 证据。2026-09-14 的真实 DSH 验收使用合成身份，也早于 PF-01～PF-06。PF-07 应按当前目标版本逐场景执行并留证，发布门禁仍未通过。
 
+2026-11-09 在本机专用一次性数据库（`115888e`，真实 DSH `0.1.2-rc.1`、DeepSeek `deepseek-v4-pro`、本地独立账号，非 OIDC）执行一轮：P0（`pnpm test:pf07:matrix`、`pnpm test:m1`、`pnpm test:review:unit`）与 P1（`pnpm test:pf07:p1`、`pnpm test:e2e:mcp-admin`）通过，其中 `test:m1` 有 4 个真实 Docker 用例因缺镜像跳过。P2 共 25 个场景，均未签署通过：15 个待验收人复核，2 个部分覆盖（`secret-boundary`、`identity-and-role-change`），5 个产品能力阻塞，3 个未执行。证据只代表该本机环境，不代表 Mac mini 或生产部署，记录保存在 Git 工作区外的受控位置。
+
+**当前阻塞：** 真实 Agent 的 `approvalMode` 固定为 `never`（[postgres-agent-service.ts](../../server/src/modules/agent/postgres-agent-service.ts)），真实 Run 进不了持久化等待，`persistent-wait` 全部 4 个场景与 `controlled-memory/revocation-while-waiting` 在开放审批前无法执行。`real-oidc-task` 未验证（AI Hub 登录计划删除）；删除前该场景保持未通过，删除时同步修改矩阵与本手册。员工端受控记忆已按产品决定移除（`MEMORY-EMPLOYEE-REMOVAL`），经验由管理员审核后按组织可见发布，因此矩阵 `identity-and-role-change` 的跨用户阻断需要按现行经验模型重新定义。
+
+**外部动作口径：** `external-action` 按平台写工具的 Task Operation（`task_operations`）验收；MCP 调用不产生 Operation，其回执与 `mcp_invocation_audits` 归入 `mcp-connector`。
+
 ## 可丢弃 MCP 写动作靶场
 
 `pnpm test:pf07:fixture` 检查本地 Streamable HTTP MCP 的 Bearer 拒绝、工具清单、幂等写入、冲突与超时后权威回执；这一层只验证测试靶场自身。`pnpm probe:pf07:mcp` 从 `.env` 解析当前锁定的真实 DSH，临时启动仅监听 `127.0.0.1` 的靶场，执行发现及一次真实模型驱动的 MCP 写入和回执查询，最后销毁靶场与 Attempt 工作目录。脚本只输出工具名、临时 Run/Attempt ID、回执 ID 和脱敏调用结果，不输出临时 Bearer Token。
