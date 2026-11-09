@@ -104,6 +104,7 @@ export class RunRevocationSweep {
       if (this.closing) return
       try {
         await this.processPendingEvents(workspace.id)
+        if (this.closing) return
         // team_auth_revision changed → full re-check of the workspace's active
         // runs. This is the catch-all for deduped events: a mutation whose
         // event row was swallowed by the payload_hash unique key still bumps

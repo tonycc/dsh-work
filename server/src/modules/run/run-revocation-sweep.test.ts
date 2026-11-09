@@ -42,6 +42,33 @@ test('close waits for the in-flight pass and no new pass starts', async () => {
   assert.equal(queries, queriesAtClose, '关闭后不得再访问数据库')
 })
 
+test('closing during event processing leaves later events pending and skips the workspace re-check', async () => {
+  const processed: unknown[] = []
+  let rechecks = 0
+  const database = (strings: TemplateStringsArray, ...values: unknown[]) => {
+    const sql = strings.join('')
+    if (sql.includes('team_auth_revision')) return Promise.resolve([{ id: 'workspace-1', revision: 1 }])
+    if (sql.includes('order by created_at')) {
+      return Promise.resolve(['event-1', 'event-2'].map(id => ({ id, userId: 'user-1', kind: 'member_removed', payload: {} })))
+    }
+    if (sql.includes("set status = 'processed'")) {
+      processed.push(values[1])
+      return sweep.close().then(() => [])
+    }
+    return Promise.resolve([])
+  }
+  const sweep: RunRevocationSweep = sweepWith(database, {
+    listActiveRunsInWorkspace: async () => {
+      rechecks += 1
+      return []
+    },
+  })
+
+  await sweep.sweepOnce()
+  assert.deepEqual(processed, ['event-1'], '关闭后未处理的事件必须保持 pending')
+  assert.equal(rechecks, 0, '关闭后不得再复核整个空间')
+})
+
 test('a closing sweep finishes the current workspace and skips the rest', async () => {
   const swept: string[] = []
   const database = (strings: TemplateStringsArray) => Promise.resolve(
