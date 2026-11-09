@@ -286,6 +286,15 @@ export class PostgresMcpConnectorService implements McpScopePort {
                approval_status = 'approved', reviewed_by = ${actor.id}, reviewed_at = now(), updated_at = now()
          where tenant_id = ${tenantId} and connector_id = ${input.connectorId}
       `
+      // 确认不是一次连通性检查：沿用最近一次的状态与时延，只更新页面展示的说明。
+      await transaction`
+        insert into connector_health_checks (id, tenant_id, connector_id, status, latency_ms, message, checked_by)
+        select ${`connector-check-${randomUUID()}`}, tenant_id, connector_id, status, latency_ms,
+               ${`已确认 MCP 能力清单，共 ${approvedCount} 个 Tool 生效`}, ${actor.id}
+          from connector_health_checks
+         where tenant_id = ${tenantId} and connector_id = ${input.connectorId}
+         order by checked_at desc, id desc limit 1
+      `
     })
     await this.audit(actor.id, 'connector.mcp.capabilities.approve', input.connectorId, 'success', `确认 MCP 能力清单，共 ${approvedCount} 个 Tool 生效`)
     return this.requireConnector(input.connectorId)

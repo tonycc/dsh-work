@@ -428,6 +428,8 @@ test('PF-03 resolves only the Connectors an Agent Version selected and confirms 
   const approved = await service.approveMcpCapabilities({ connectorId, capabilityDigest: added.mcp!.capabilityDigest!, actor: 'U00008' })
   assert.equal(approved.mcp?.approvalStatus, 'approved')
   assert.equal(approved.mcp?.capabilityCount, 3)
+  assert.equal(approved.lastHealthMessage, '已确认 MCP 能力清单，共 3 个 Tool 生效')
+  assert.equal(approved.status, added.status, 'confirming the list is not a connectivity check')
   assert.deepEqual(approved.mcp?.pendingCapabilities, [])
   await assert.rejects(service.assertPinnedConnections(pins), /生效能力已变化/,
     'an already prepared Attempt stays pinned to the list it started with')
