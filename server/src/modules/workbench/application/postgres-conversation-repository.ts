@@ -1473,6 +1473,14 @@ export class PostgresConversationRepository {
              and attempt_id = ${row.currentAttemptId} and result = 'unknown' and resolved_result is null
         `
       : []
+    const appliedOperations = row.currentAttemptId
+      ? await this.database<Array<{ id: string; actionRef: string }>>`
+          select id, concat('MCP ', capability_name, ' (', connector_id, ')') as "actionRef"
+            from mcp_invocation_audits
+           where tenant_id = ${tenantId} and run_id = ${row.id}
+             and attempt_id = ${row.currentAttemptId} and result = 'unknown' and resolved_result = 'success'
+        `
+      : []
     return {
       run: { id: row.id, status: row.status, updatedAt: row.updatedAt },
       attemptId: row.currentAttemptId,
@@ -1480,6 +1488,7 @@ export class PostgresConversationRepository {
       committedMessageIds,
       artifacts: artifacts.map(artifact => mapArtifactEvidenceRow(artifact, row.id)),
       unknownOperations,
+      appliedOperations,
       sources: sources.map(source => ({
         id: source.id,
         type: 'knowledge' as const,

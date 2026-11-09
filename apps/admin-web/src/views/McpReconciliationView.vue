@@ -12,8 +12,8 @@ type Status = 'pending' | 'resolved'
 const NOTE_LIMIT = 1000
 
 const auth = useAuthStore()
-/** 登记接口要求平台管理员（admin:*），普通管理写权限不够。 */
-const canResolve = computed(() => auth.canManageIdentity)
+/** 与服务端平台管理员口径（F-04）一致：admin:* 或 admin:write。 */
+const canResolve = computed(() => auth.canManage)
 
 const status = ref<Status>('pending')
 const connectorId = ref('all')
@@ -138,7 +138,7 @@ onMounted(load)
 
 <template>
   <div class="ops-page reconciliation-page">
-    <el-alert v-if="!canResolve" type="info" show-icon :closable="false" title="当前账号可以查看对账记录。登记结论仅限平台管理员。" />
+    <el-alert v-if="!canResolve" type="info" show-icon :closable="false" title="当前账号可以查看对账记录。登记结论需要平台管理权限。" />
 
     <section class="content-panel filter-panel">
       <p class="reconciliation-intro">这些调用已发出但没有等到响应，外部写入可能已经发生。先到外部系统核实，再登记结论。</p>
@@ -196,7 +196,7 @@ onMounted(load)
         <el-table-column v-else label="操作" width="130" fixed="right">
           <template #default="{ row }">
             <el-button v-if="canResolve" link type="primary" @click="openDialog(row)">登记结论</el-button>
-            <span v-else class="reconciliation-muted">仅平台管理员</span>
+            <span v-else class="reconciliation-muted">需要管理权限</span>
           </template>
         </el-table-column>
       </el-table>

@@ -44,11 +44,19 @@ describe('MCP call reconciliation', () => {
     wrapper.unmount()
   })
 
+  it('offers registration to admin:write holders, matching the server rule', async () => {
+    vi.spyOn(adminApi, 'getMcpReconciliation').mockResolvedValue(pendingPage)
+    const wrapper = render(['admin:write'])
+    await flushPromises()
+    expect(wrapper.findAll('button').some(button => button.text() === '登记结论')).toBe(true)
+    wrapper.unmount()
+  })
+
   it('keeps read-only administrators from registering', async () => {
     vi.spyOn(adminApi, 'getMcpReconciliation').mockResolvedValue(pendingPage)
     const wrapper = render(['admin:read'])
     await flushPromises()
-    expect(wrapper.text()).toContain('登记结论仅限平台管理员')
+    expect(wrapper.text()).toContain('登记结论需要平台管理权限')
     expect(wrapper.findAll('button').some(button => button.text() === '登记结论')).toBe(false)
     wrapper.unmount()
   })
