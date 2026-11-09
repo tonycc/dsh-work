@@ -1,12 +1,12 @@
 # PF-07 平台能力验收与运行手册
 
-**矩阵版本：** `agent-platform-capabilities/v1`，代码基线 `3217cbb`。矩阵在 [agent-platform-capabilities.v1.json](agent-platform-capabilities.v1.json)；基线只是能力实现的起点，实际验收必须填写所部署的精确提交和版本。六项能力包括无 Session 任务、外部动作回执、累计预算、MCP、持久化等待和受控记忆（Agent 委派已于 2026-10-16 删除）。Token/成本硬预算、MCP Resources/Prompts/stdio、原 ACP Session 恢复及通用外部异步写连接器仍不在可发布能力之列。
+**矩阵版本：** `agent-platform-capabilities/v1`，代码基线 `3217cbb`。矩阵在 [agent-platform-capabilities.v1.json](agent-platform-capabilities.v1.json)；基线只是能力实现的起点，实际验收必须填写所部署的精确提交和版本。门禁内的五项能力包括无 Session 任务、外部动作回执、累计预算、MCP 和受控记忆（Agent 委派已于 2026-10-16 删除）。持久化等待已于 2026-11-09 移出门禁（原因与恢复条件见矩阵 `deferred`）。Token/成本硬预算、MCP Resources/Prompts/stdio、原 ACP Session 恢复、持久化等待及通用外部异步写连接器仍不在可发布能力之列。
 
 ## 分层执行
 
 1. **P0 契约：** 在代码版本固定后运行 `pnpm test:pf07:matrix`、`pnpm test:m1` 和 `pnpm test:review:unit`。矩阵检查确保能力有 P0/P1 命令和 P2 场景；它不运行能力测试。
 2. **P1 服务：** 只用专用可丢弃 PostgreSQL 运行 `pnpm test:pf07:p1`。MCP 管理的 P1 浏览器旅程另运行 `pnpm test:e2e:mcp-admin`；个人任务、审批与记忆的前端旅程按 [TEST-CATALOG](../../e2e/TEST-CATALOG.md) 选用现有 P0/P1 套件。记录每条命令、提交、运行环境、退出结果和失败日志引用。CI 执行 PF-01～PF-05 的服务集成套件；浏览器套件按对应配置单独执行。
-3. **P2 真实链路：** 先固定目标部署、OIDC 身份、DSH Lock、Adapter、模型和批准连接。按矩阵逐场景执行真实 Run/Attempt，记录操作回执、审计/成果引用以及故障和撤权后的拒绝结果。MCP、等待及记忆的具体动作见验收目录的 `PF-MCP-P2`、`PF-WAIT-P2`（[管理端与平台](../../e2e/catalog/admin-platform.md)）与 `PF-MEMORY-P2`（[Agent](../../e2e/catalog/agents.md)）。无 Session、外部动作和预算按矩阵场景逐项执行。
+3. **P2 真实链路：** 先固定目标部署、OIDC 身份、DSH Lock、Adapter、模型和批准连接。按矩阵逐场景执行真实 Run/Attempt，记录操作回执、审计/成果引用以及故障和撤权后的拒绝结果。MCP 及记忆的具体动作见验收目录的 `PF-MCP-P2`（[管理端与平台](../../e2e/catalog/admin-platform.md)）与 `PF-MEMORY-P2`（[Agent](../../e2e/catalog/agents.md)）；`PF-WAIT-P2` 随持久化等待移出门禁，恢复时再执行。`pnpm test:pf07:p1` 继续运行 PF-04 集成套件，作为代码回归，不构成该能力的发布依据。无 Session、外部动作和预算按矩阵场景逐项执行。
 
 ## P2 记录与发布门禁
 
@@ -16,16 +16,18 @@
 
 **当前证据状态：** PF-01～PF-05 代码级记录已存在。2026-09-23 的双账号隔离环境进度记录了真实 OIDC 的 MCP 写入、审计与回执，以及私人受控记忆的发布、检索和撤回；另一账号的实际 Run、审批与预算等场景仍未完成，不能当作全量 P2。较早的本地真实链路核对使用现有开发库和单身份，也不能代替专用环境验收。此前 P2 只有口头结论，未提供版本、身份、环境和 Run/Attempt 等原始记录；它发生在当前平台能力形成之前，不能作为 PF-07 的 P2 证据。2026-09-14 的真实 DSH 验收使用合成身份，也早于 PF-01～PF-06。PF-07 应按当前目标版本逐场景执行并留证，发布门禁仍未通过。
 
-2026-11-09 在本机专用一次性数据库（`115888e`，真实 DSH `0.1.2-rc.1`、DeepSeek `deepseek-v4-pro`、本地独立账号，非 OIDC）执行一轮：P0（`pnpm test:pf07:matrix`、`pnpm test:m1`、`pnpm test:review:unit`）与 P1（`pnpm test:pf07:p1`、`pnpm test:e2e:mcp-admin`）通过，其中 `test:m1` 有 4 个真实 Docker 用例因缺镜像跳过。P2 共 25 个场景，验收人（max）已确认其中 15 个，整体门禁未通过，分类如下。证据只代表该本机环境，不代表 Mac mini 或生产部署，记录保存在 Git 工作区外的受控位置。
+2026-11-09 在本机专用一次性数据库（`115888e`，真实 DSH `0.1.2-rc.1`、DeepSeek `deepseek-v4-pro`、本地独立账号，非 OIDC）执行一轮：P0（`pnpm test:pf07:matrix`、`pnpm test:m1`、`pnpm test:review:unit`）与 P1（`pnpm test:pf07:p1`、`pnpm test:e2e:mcp-admin`）通过，其中 `test:m1` 有 4 个真实 Docker 用例因缺镜像跳过。该轮执行时矩阵共 25 个场景；其中 5 个随后移出门禁，门禁内现为 20 个，验收人（max）已确认其中 15 个，整体门禁未通过，分类如下。证据只代表该本机环境，不代表 Mac mini 或生产部署，记录保存在 Git 工作区外的受控位置。
 
 | 分类 | 数量 | 场景 |
 |---|---|---|
 | 验收人已确认（本地账号） | 15 | `session-neutral-task`：`real-dsh-task-result`、`revocation`、`runtime-failure`；`external-action`：`accepted-receipt`、`duplicate-delivery`；`cumulative-budget`：全部 4 项；`mcp-connector`：`real-discovery-and-call`、`credential-failure`、`catalog-change`、`disable-and-delete`；`controlled-memory`：`real-recall`、`version-isolation` |
 | 部分覆盖 | 2 | `mcp-connector/secret-boundary`、`controlled-memory/identity-and-role-change` |
-| 产品能力阻塞 | 5 | `persistent-wait`：全部 4 项；`controlled-memory/revocation-while-waiting` |
 | 未执行 | 3 | `session-neutral-task/real-oidc-task`；`external-action`：`unknown-reconciliation`、`revocation` |
+| 已移出门禁（未通过，不计入） | 5 | `persistent-wait`：全部 4 项；`controlled-memory/revocation-while-waiting` |
 
-**当前阻塞：** 真实 Agent 的 `approvalMode` 固定为 `never`（[postgres-agent-service.ts](../../server/src/modules/agent/postgres-agent-service.ts)），真实 Run 进不了持久化等待，`persistent-wait` 全部 4 个场景与 `controlled-memory/revocation-while-waiting` 在开放审批前无法执行。`real-oidc-task` 未验证（AI Hub 登录计划删除）；删除前该场景保持未通过，删除时同步修改矩阵与本手册。员工端受控记忆已按产品决定移除（`MEMORY-EMPLOYEE-REMOVAL`），经验由管理员审核后按组织可见发布，因此矩阵 `identity-and-role-change` 的跨用户阻断需要按现行经验模型重新定义。
+**移出门禁的原因：** 真实 Agent 的 `approvalMode` 固定为 `never`（[postgres-agent-service.ts](../../server/src/modules/agent/postgres-agent-service.ts)），真实 Run 进不了持久化等待，当前也没有需要人工审批的业务动作。这些场景没有通过，只是不再属于本门禁；持久化等待不得开放给 Agent 发布，首个需要人工审批的动作准入时恢复并在该版本重跑 P0、P1、P2。
+
+**当前未完成：** `real-oidc-task` 未验证（AI Hub 登录计划删除）；删除前该场景保持未通过，删除时同步修改矩阵与本手册。员工端受控记忆已按产品决定移除（`MEMORY-EMPLOYEE-REMOVAL`），经验由管理员审核后按组织可见发布，因此矩阵 `identity-and-role-change` 的跨用户阻断需要按现行经验模型重新定义。
 
 **外部动作口径：** `external-action` 按平台写工具的 Task Operation（`task_operations`）验收；MCP 调用不产生 Operation，其回执与 `mcp_invocation_audits` 归入 `mcp-connector`。
 

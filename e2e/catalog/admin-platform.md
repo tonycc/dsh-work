@@ -249,7 +249,9 @@
 
 ### PF-WAIT-P2 真实 DSH 与撤权验收
 
-**优先级：** P0（发布门禁）
+> 已移出 PF-07 门禁：真实 Agent 审批固定为 `never`，暂不可执行。首个需要人工审批的动作准入时恢复，原因见[能力矩阵](../../docs/development/agent-platform-capabilities.v1.json)的 `deferred`。
+
+**优先级：** P0（恢复后的发布门禁）
 
 **角色：** 真实员工、平台管理员、安全管理员
 

@@ -4,8 +4,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = resolve(import.meta.dirname, '../..')
 const expectedIds = new Set([
-  'session-neutral-task', 'external-action', 'cumulative-budget', 'mcp-connector',
-  'persistent-wait', 'controlled-memory'
+  'session-neutral-task', 'external-action', 'cumulative-budget', 'mcp-connector', 'controlled-memory'
 ])
 const requiredEvidence = [
   'matrixVersion', 'codeRevision', 'deploymentVersion', 'environment', 'executedAt', 'actor',
@@ -37,6 +36,15 @@ export function validateMatrix(matrix, scripts) {
     }
   }
   for (const id of expectedIds) if (!seen.has(id)) errors.push(`缺少能力: ${id}`)
+  for (const item of matrix.deferred ?? []) {
+    const label = `移出项 ${item?.capability}`
+    if (!item?.reason?.trim() || !item?.reentry?.trim()) errors.push(`${label}: 缺少移出原因或恢复条件`)
+    if (!Array.isArray(item?.scenarios) || !item.scenarios.length) { errors.push(`${label}: 缺少场景`); continue }
+    const active = matrix.capabilities.find(capability => capability.id === item.capability)
+    for (const scenario of item.scenarios) {
+      if (active?.p2Scenarios?.includes(scenario)) errors.push(`${label}: 场景 ${scenario} 同时在门禁内`)
+    }
+  }
   return errors
 }
 

@@ -31,18 +31,29 @@
       "p2Scenarios": ["real-discovery-and-call", "credential-failure", "catalog-change", "disable-and-delete", "secret-boundary"]
     },
     {
-      "id": "persistent-wait",
-      "package": "PF-04",
-      "p0": ["pnpm test:m1"],
-      "p1": ["pnpm test:pf04:integration"],
-      "p2Scenarios": ["real-approval-and-resume", "revocation-while-waiting", "restart-and-replay", "unknown-action"]
-    },
-    {
       "id": "controlled-memory",
       "package": "PF-05",
       "p0": ["pnpm test:m1"],
       "p1": ["pnpm test:pf05:integration"],
-      "p2Scenarios": ["real-recall", "identity-and-role-change", "revocation-while-waiting", "version-isolation"]
+      "p2Scenarios": ["real-recall", "identity-and-role-change", "version-isolation"]
+    }
+  ],
+  "deferred": [
+    {
+      "capability": "persistent-wait",
+      "package": "PF-04",
+      "scenarios": ["real-approval-and-resume", "revocation-while-waiting", "restart-and-replay", "unknown-action"],
+      "deferredAt": "2026-11-09",
+      "reason": "真实 Agent 的 approvalMode 固定为 never，真实 Run 不能进入持久化等待；当前没有需要人工审批的业务动作",
+      "reentry": "首个需要人工审批的动作准入时，恢复本能力并在该版本重跑 P0、P1、P2；在此之前不得开放给 Agent 发布"
+    },
+    {
+      "capability": "controlled-memory",
+      "package": "PF-05",
+      "scenarios": ["revocation-while-waiting"],
+      "deferredAt": "2026-11-09",
+      "reason": "依赖持久化等待，真实 Run 不可达",
+      "reentry": "随 persistent-wait 一起恢复"
     }
   ]
 }

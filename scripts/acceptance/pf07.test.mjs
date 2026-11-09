@@ -14,6 +14,13 @@ test('PF-07 matrix references every platform capability and existing test comman
   assert.match(validateMatrix({ ...matrix, capabilities: [{ ...matrix.capabilities[0], p1: ['pnpm test:missing'] }, ...matrix.capabilities.slice(1)] }, scripts).join(' '), /未定义测试命令/)
 })
 
+test('deferred items need a reason and cannot stay inside the gate', () => {
+  const item = { capability: 'controlled-memory', scenarios: ['real-recall'], reason: 'why', reentry: 'when' }
+  assert.match(validateMatrix({ ...matrix, deferred: [item] }, scripts).join(' '), /同时在门禁内/)
+  const unexplained = { capability: 'persistent-wait', scenarios: ['unknown-action'], reason: '', reentry: 'when' }
+  assert.match(validateMatrix({ ...matrix, deferred: [unexplained] }, scripts).join(' '), /缺少移出原因/)
+})
+
 test('P2 gate rejects declarations without complete run evidence', () => {
   assert.match(validateP2(createP2Template(matrix), matrix).join(' '), /verified/)
   const record = {
