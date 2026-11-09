@@ -2071,16 +2071,18 @@ export async function readSessionEvidence(root: string, mcpServerNames: string[]
   const observedCalls: Array<{ callId: string; toolName: string }> = []
   for (const path of paths) {
     const content = await readFile(path, 'utf8')
-    // 本轮已返回错误的调用：轮次被中断时，错误只说明响应没回来，不能说明外部动作没发生。
-    let failedInTurn: string[] = []
+    // 中断时的错误只说明响应没回来，不能说明外部动作没发生；只针对中断所在步的 MCP 调用。
+    let failedInTurn: Array<{ callId: string; step: number | undefined }> = []
+    let currentStep: number | undefined
     for (const line of content.split('\n')) {
       if (!line) continue
       const event = JSON.parse(line) as unknown
       if (!isRecord(event) || typeof event['type'] !== 'string') continue
       if (event['type'] === 'turn/end') {
-        if (isAbortedTurnEnd(event['data'])) for (const callId of failedInTurn) toolResults.set(callId, 'unknown')
+        if (isAbortedTurnEnd(event['data'])) markInterruptedCalls(toolResults, failedInTurn, currentStep)
         failedInTurn = []
       }
+      if (isRecord(event['data']) && typeof event['data']['step'] === 'number') currentStep = event['data']['step']
       if (event['type'] === 'tool/call') {
         toolCallCount += 1
         const data = isRecord(event['data']) ? event['data'] : undefined
@@ -2096,8 +2098,11 @@ export async function readSessionEvidence(root: string, mcpServerNames: string[]
         toolResultCount += 1
         const result = readToolResult(event['data'])
         if (result) {
-          toolResults.set(result.callId, result.failed ? 'failed' : 'success')
-          if (result.failed) failedInTurn.push(result.callId)
+          const outcome = toolResultOutcome(result)
+          toolResults.set(result.callId, outcome)
+          if (outcome === 'failed' && !result.notDispatched && mcpCalls.has(result.callId)) {
+            failedInTurn.push({ callId: result.callId, step: currentStep })
+          }
         }
       }
       if (event['type'] !== 'assistant/message' || !isRecord(event['data'])) continue
@@ -2107,6 +2112,8 @@ export async function readSessionEvidence(root: string, mcpServerNames: string[]
       inputTokens += usage['inputTokens']
       outputTokens += usage['outputTokens']
     }
+    // 文件结束仍未闭合的轮次视同中断（Worker 被强制关闭时 turn/end 可能来不及写入）。
+    markInterruptedCalls(toolResults, failedInTurn, currentStep)
   }
   const mcpInvocations = [...mcpCalls].flatMap(([callId, call]) => {
     const parsed = parseMcpPublicToolName(call.name, mcpServerNames)
@@ -2136,14 +2143,37 @@ function isAbortedTurnEnd(value: unknown): boolean {
   return isRecord(value) && isRecord(value['reason']) && value['reason']['kind'] === 'aborted'
 }
 
-function readToolResult(value: unknown): { callId: string; failed: boolean } | undefined {
+/** MCP SDK 的 RequestTimeout：请求已发出但响应没有回来，超时和取消都走这个错误。 */
+const MCP_NO_RESPONSE_ERROR = /MCP error -32001\b/
+
+function toolResultOutcome(result: { failed: boolean; notDispatched: boolean; text: string }): 'success' | 'failed' | 'unknown' {
+  if (!result.failed) return 'success'
+  if (result.notDispatched) return 'failed'
+  return MCP_NO_RESPONSE_ERROR.test(result.text) ? 'unknown' : 'failed'
+}
+
+function markInterruptedCalls(
+  toolResults: Map<string, 'success' | 'failed' | 'unknown'>,
+  failed: ReadonlyArray<{ callId: string; step: number | undefined }>,
+  currentStep: number | undefined,
+): void {
+  for (const call of failed) if (call.step === currentStep) toolResults.set(call.callId, 'unknown')
+}
+
+function toolResultText(block: Record<string, unknown>): string {
+  if (!Array.isArray(block['content'])) return ''
+  return block['content'].flatMap(item => isRecord(item) && typeof item['text'] === 'string' ? [item['text']] : []).join('\n')
+}
+
+function readToolResult(value: unknown): { callId: string; failed: boolean; notDispatched: boolean; text: string } | undefined {
   if (!isRecord(value)) return undefined
-  if (typeof value['callId'] === 'string') return { callId: value['callId'], failed: value['isError'] === true }
+  const notDispatched = isRecord(value['error']) && value['error']['code'] === 'ABORTED_BEFORE_DISPATCH'
+  if (typeof value['callId'] === 'string') return { callId: value['callId'], failed: value['isError'] === true, notDispatched, text: '' }
   const message = isRecord(value['message']) ? value['message'] : undefined
   const content = Array.isArray(message?.['content']) ? message['content'] : []
   for (const block of content) {
     if (isRecord(block) && block['type'] === 'tool-result' && typeof block['toolCallId'] === 'string') {
-      return { callId: block['toolCallId'], failed: block['isError'] === true }
+      return { callId: block['toolCallId'], failed: block['isError'] === true, notDispatched, text: toolResultText(block) }
     }
   }
   return undefined

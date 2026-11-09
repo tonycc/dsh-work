@@ -464,26 +464,44 @@ describe('Runtime Manifest compiler', () => {
 })
 
 describe('DSH ACP Runtime Adapter', () => {
-  it('audits an MCP call interrupted mid-response as unknown, not failed', async () => {
+  it('audits MCP calls that may have taken effect as unknown, by each tool result', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-work-mcp-evidence-'))
-    const line = (type: string, data: unknown) => JSON.stringify({ type, data })
-    const call = (callId: string) => line('tool/call', { callId, name: 'mcp__crm__put', arguments: {} })
-    const result = (callId: string, isError: boolean) => line('tool/result', { callId, isError })
-    const aborted = line('turn/end', { turn: 2, reason: { kind: 'aborted', reason: { kind: 'user' } } })
-    await mkdir(join(root, 'session-1'), { recursive: true })
-    await writeFile(join(root, 'session-1', 'session.jsonl'), [
-      call('real-error'), result('real-error', true), line('turn/end', { turn: 1, reason: { kind: 'stop' } }),
-      call('completed'), result('completed', false),
-      call('interrupted'), result('interrupted', true),
-      call('no-result'), aborted, '',
-    ].join('\n'))
-    const evidence = await readSessionEvidence(root, ['crm'])
-    assert.deepEqual(
-      Object.fromEntries(evidence!.mcpInvocations.map(item => [item.callId, item.result])),
-      { 'real-error': 'failed', completed: 'success', interrupted: 'unknown', 'no-result': 'unknown' },
-    )
-    assert.equal(evidence!.toolCalls.find(item => item.callId === 'interrupted')?.status, 'unknown')
-    await rm(root, { recursive: true, force: true })
+    try {
+      const line = (type: string, data: unknown) => JSON.stringify({ type, data })
+      const call = (step: number, callId: string) => line('tool/call', { turn: 1, step, callId, name: 'mcp__crm__put', arguments: {} })
+      const result = (step: number, callId: string, text: string, isError: boolean, error?: unknown) => line('tool/result', {
+        turn: 1, step, ...(error ? { error } : {}),
+        message: { content: [{ type: 'tool-result', toolCallId: callId, isError, content: [{ type: 'text', text }] }] },
+      })
+      const end = (kind: string) => line('turn/end', { turn: 1, reason: { kind, reason: { kind: 'user' } } })
+      const noResponse = 'Error: MCP error -32001: [object Object]'
+      const write = async (name: string, lines: string[]) => {
+        await mkdir(join(root, name), { recursive: true })
+        await writeFile(join(root, name, 'session.jsonl'), [...lines, ''].join('\n'))
+      }
+      await write('completed-turn', [
+        call(1, 'denied'), result(1, 'denied', 'Error: forbidden', true),
+        call(2, 'tool-timeout'), result(2, 'tool-timeout', 'Error: MCP error -32001: Request timed out', true),
+        call(3, 'ok'), result(3, 'ok', '{}', false), end('completed'),
+      ])
+      await write('aborted-turn', [
+        call(1, 'earlier-denied'), result(1, 'earlier-denied', 'Error: forbidden', true),
+        call(2, 'interrupted'), result(2, 'interrupted', noResponse, true),
+        call(2, 'other-error'), result(2, 'other-error', 'Error: connection reset', true),
+        call(2, 'skipped'), result(2, 'skipped', 'Error: tool call aborted before dispatch', true, { name: 'AbortError', code: 'ABORTED_BEFORE_DISPATCH' }),
+        call(2, 'no-result'), end('aborted'),
+      ])
+      await write('unclosed-turn', [call(1, 'unclosed'), result(1, 'unclosed', 'Error: connection reset', true)])
+      const evidence = await readSessionEvidence(root, ['crm'])
+      assert.deepEqual(Object.fromEntries(evidence!.mcpInvocations.map(item => [item.callId, item.result])), {
+        denied: 'failed', 'tool-timeout': 'unknown', ok: 'success',
+        'earlier-denied': 'failed', interrupted: 'unknown', 'other-error': 'unknown', skipped: 'failed', 'no-result': 'unknown',
+        unclosed: 'unknown',
+      })
+      assert.equal(evidence!.toolCalls.find(item => item.callId === 'interrupted')?.status, 'unknown')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
   it('rejects unverified model requirements before creating files or starting a Worker', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-work-model-admission-'))
