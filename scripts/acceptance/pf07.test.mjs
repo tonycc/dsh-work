@@ -5,7 +5,7 @@ import test from 'node:test'
 import { createP2Template, validateMatrix, validateP2 } from './pf07.mjs'
 
 const root = resolve(import.meta.dirname, '../..')
-const matrix = JSON.parse(readFileSync(resolve(root, 'docs/development/agent-platform-capabilities.v1.json'), 'utf8'))
+const matrix = JSON.parse(readFileSync(resolve(root, 'docs/development/agent-platform-capabilities.v2.json'), 'utf8'))
 const scripts = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')).scripts
 
 test('PF-07 matrix references every platform capability and existing test commands', () => {
@@ -21,16 +21,40 @@ test('deferred items need a reason and cannot stay inside the gate', () => {
   assert.match(validateMatrix({ ...matrix, deferred: [unexplained] }, scripts).join(' '), /缺少移出原因/)
 })
 
+test('a capability outside the gate needs a deferred record and may return', () => {
+  const deferred = matrix.deferred.filter(item => item.capability !== 'persistent-wait')
+  assert.match(validateMatrix({ ...matrix, deferred }, scripts).join(' '), /缺少能力: persistent-wait/)
+  const restored = { id: 'persistent-wait', package: 'PF-04', p0: ['pnpm test:m1'], p1: ['pnpm test:pf04:integration'], p2Scenarios: ['real-approval-and-resume'] }
+  assert.deepEqual(validateMatrix({ ...matrix, deferred, capabilities: [...matrix.capabilities, restored] }, scripts), [])
+  assert.match(validateMatrix({ ...matrix, capabilities: [...matrix.capabilities, { ...restored, id: 'other' }] }, scripts).join(' '), /能力 ID 无效/)
+})
+
+test('deferred and removed entries are validated without crashing', () => {
+  assert.match(validateMatrix({ ...matrix, deferred: [{ capability: 'persistent-wait', scenarios: ['x'], reason: 42, reentry: 'when' }] }, scripts).join(' '), /缺少移出原因/)
+  assert.match(validateMatrix({ ...matrix, deferred: 'none' }, scripts).join(' '), /deferred 必须是数组/)
+  assert.match(validateMatrix({ ...matrix, removed: [{ capability: 'session-neutral-task', scenario: 'revocation', reason: 'why' }] }, scripts).join(' '), /仍在门禁内/)
+  assert.match(validateMatrix({ ...matrix, removed: [{ capability: 'session-neutral-task', scenario: 'gone', reason: '' }] }, scripts).join(' '), /删除项.*缺少/)
+})
+
 test('only declared rejected-before-run scenarios may omit run evidence', () => {
   const record = createP2Template(matrix)
   Object.assign(record, { status: 'verified', knownLimitations: [] })
   for (const field of ['codeRevision', 'deploymentVersion', 'environment', 'executedAt', 'actor', 'dshVersion', 'adapterVersion', 'model', 'approvedCapabilities', 'reviewer', 'conclusion']) record[field] = 'value'
   for (const capability of record.capabilities) {
-    for (const scenario of capability.scenarios) Object.assign(scenario, { result: 'passed', runIds: ['run-id'], attemptIds: ['attempt-id'], evidenceRefs: ['audit-ref'] })
+    const expected = matrix.capabilities.find(item => item.id === capability.id)
+    for (const scenario of capability.scenarios) {
+      const rejected = expected.p2RejectedBeforeRun?.includes(scenario.id)
+      Object.assign(scenario, { result: 'passed', runIds: rejected ? [] : ['run-id'], attemptIds: rejected ? [] : ['attempt-id'], evidenceRefs: ['audit-ref'] })
+    }
   }
   const find = (capability, id) => record.capabilities.find(item => item.id === capability).scenarios.find(item => item.id === id)
-  Object.assign(find('mcp-connector', 'credential-failure'), { runIds: [], attemptIds: [], evidenceRefs: ['trace-id'] })
+  Object.assign(find('mcp-connector', 'credential-failure'), { evidenceRefs: ['trace-id'] })
   assert.deepEqual(validateP2(record, matrix), [])
+  find('mcp-connector', 'credential-failure').runIds = ['run-id']
+  assert.match(validateP2(record, matrix).join(' '), /credential-failure/)
+  find('mcp-connector', 'credential-failure').runIds = 'none'
+  assert.match(validateP2(record, matrix).join(' '), /credential-failure/)
+  find('mcp-connector', 'credential-failure').runIds = []
   find('mcp-connector', 'credential-failure').evidenceRefs = []
   assert.match(validateP2(record, matrix).join(' '), /credential-failure/)
   find('mcp-connector', 'credential-failure').evidenceRefs = ['trace-id']
@@ -55,11 +79,16 @@ test('P2 gate rejects declarations without complete run evidence', () => {
     capabilities: matrix.capabilities.map(capability => ({
       id: capability.id,
       scenarios: capability.p2Scenarios.map(id => ({
-        id, result: 'passed', runIds: ['run-id'], attemptIds: ['attempt-id'], evidenceRefs: ['audit-ref']
+        id, result: 'passed', evidenceRefs: ['audit-ref'],
+        runIds: capability.p2RejectedBeforeRun?.includes(id) ? [] : ['run-id'],
+        attemptIds: capability.p2RejectedBeforeRun?.includes(id) ? [] : ['attempt-id'],
       }))
     }))
   }
   assert.deepEqual(validateP2(record, matrix), [])
+  record.capabilities[0].scenarios.push({ id: 'unlisted', result: 'failed', runIds: [], attemptIds: [], evidenceRefs: [] })
+  assert.match(validateP2(record, matrix).join(' '), /未定义场景 unlisted/)
+  record.capabilities[0].scenarios.pop()
   record.capabilities[0].scenarios[0].evidenceRefs = []
   assert.match(validateP2(record, matrix).join(' '), /缺少通过结论/)
   record.status = 'evidence_pending'

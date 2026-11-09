@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "agent-platform-capabilities/v1",
+  "schemaVersion": "agent-platform-capabilities/v2",
   "baseline": "PF-01 through PF-05 implementation at 3217cbb (PF-06 Agent delegation removed 2026-10-16); P2 evidence is assessed separately",
   "capabilities": [
     {

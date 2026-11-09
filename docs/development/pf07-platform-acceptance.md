@@ -1,6 +1,6 @@
 # PF-07 平台能力验收与运行手册
 
-**矩阵版本：** `agent-platform-capabilities/v1`，代码基线 `3217cbb`。矩阵在 [agent-platform-capabilities.v1.json](agent-platform-capabilities.v1.json)；基线只是能力实现的起点，实际验收必须填写所部署的精确提交和版本。门禁内的五项能力包括无 Session 任务、外部动作回执、累计预算、MCP 和受控记忆（Agent 委派已于 2026-10-16 删除）。持久化等待已于 2026-11-09 移出门禁（原因与恢复条件见矩阵 `deferred`）。Token/成本硬预算、MCP Resources/Prompts/stdio、原 ACP Session 恢复、持久化等待及通用外部异步写连接器仍不在可发布能力之列。
+**矩阵版本：** `agent-platform-capabilities/v2`，代码基线 `3217cbb`。矩阵在 [agent-platform-capabilities.v2.json](agent-platform-capabilities.v2.json)；基线只是能力实现的起点，实际验收必须填写所部署的精确提交和版本。门禁内的五项能力包括无 Session 任务、外部动作回执、累计预算、MCP 和受控记忆（Agent 委派已于 2026-10-16 删除）。持久化等待已于 2026-11-09 移出门禁（原因与恢复条件见矩阵 `deferred`）。Token/成本硬预算、MCP Resources/Prompts/stdio、原 ACP Session 恢复、持久化等待及通用外部异步写连接器仍不在可发布能力之列。
 
 ## 分层执行
 
@@ -16,7 +16,7 @@
 
 **当前证据状态：** PF-01～PF-05 代码级记录已存在。2026-09-23 的双账号隔离环境进度记录了真实 OIDC 的 MCP 写入、审计与回执，以及私人受控记忆的发布、检索和撤回；另一账号的实际 Run、审批与预算等场景仍未完成，不能当作全量 P2。较早的本地真实链路核对使用现有开发库和单身份，也不能代替专用环境验收。此前 P2 只有口头结论，未提供版本、身份、环境和 Run/Attempt 等原始记录；它发生在当前平台能力形成之前，不能作为 PF-07 的 P2 证据。2026-09-14 的真实 DSH 验收使用合成身份，也早于 PF-01～PF-06。PF-07 应按当前目标版本逐场景执行并留证，上述记录均不构成门禁通过；最新结论见下文。
 
-2026-11-09 在本机专用一次性数据库（`115888e`，真实 DSH `0.1.2-rc.1`、DeepSeek `deepseek-v4-pro`、本地独立账号，非 OIDC）执行一轮：P0（`pnpm test:pf07:matrix`、`pnpm test:m1`、`pnpm test:review:unit`）与 P1（`pnpm test:pf07:p1`、`pnpm test:e2e:mcp-admin`）通过，其中 `test:m1` 有 4 个真实 Docker 用例因缺镜像跳过。该轮执行时矩阵共 25 个场景；其中 5 个随后移出门禁，`real-oidc-task` 已从矩阵删除（AI Hub/OIDC 登录计划删除，未验证），门禁内现为 19 个。验收人（max）已确认全部 19 个（其中 4 个在同一运行代码的第二个专用一次性库补测）；证据记录已由验收人标记 `verified`，本机环境的 PF-07 门禁通过，分类如下。这一结论不代表 Mac mini 或生产部署、OIDC、企业 MCP，目标环境的验收需另行记录。证据只代表该本机环境，不代表 Mac mini 或生产部署，记录保存在 Git 工作区外的受控位置。
+2026-11-09 在本机专用一次性数据库（`115888e`，真实 DSH `0.1.2-rc.1`、DeepSeek `deepseek-v4-pro`、本地独立账号，非 OIDC）执行一轮：P0（`pnpm test:pf07:matrix`、`pnpm test:m1`、`pnpm test:review:unit`）与 P1（`pnpm test:pf07:p1`、`pnpm test:e2e:mcp-admin`）通过，`test:m1` 首次有 4 个真实 Docker 用例因缺镜像跳过，拉取 `python:3.12-slim` 后重跑 209 个用例全部通过。该轮执行时矩阵共 25 个场景；其中 5 个随后移出门禁，`real-oidc-task` 已从矩阵删除（AI Hub/OIDC 登录计划删除，未验证），门禁内现为 19 个。验收人（max）已确认全部 19 个（其中 4 个在同一运行代码的第二个专用一次性库补测）；证据记录已由验收人标记 `verified`，本机环境的 PF-07 门禁通过，分类如下。这一结论不代表 Mac mini 或生产部署、OIDC、企业 MCP，目标环境的验收需另行记录。证据只代表该本机环境，不代表 Mac mini 或生产部署，记录保存在 Git 工作区外的受控位置。
 
 | 分类 | 数量 | 场景 |
 |---|---|---|
@@ -40,4 +40,4 @@
 
 单独长时间运行靶场时，先在 Git 工作区外建立权限为 `0600` 的 Token 文件，设置 `PF07_MCP_TEST_TOKEN_FILE`，再运行 `node scripts/acceptance/pf07-mcp-fixture.mjs`；可设置 `PF07_MCP_TEST_PORT` 固定回环端口、`PF07_MCP_RECEIPTS_PATH` 保存权威写入 JSONL，以及 `PF07_MCP_CATALOG_VERSION=2` 模拟新增工具。不要把 Token 或回执文件提交到仓库。完成后停止服务，并清理一次性连接器、数据库和记录。
 
-直接的 DSH Adapter 探针绕过了 dsh-work 的 Connector 数据库、加密存储、当前授权复核及持久化 Run/Attempt；隔离数据库探针虽补齐了这些链路，但使用合成身份与测试审批。因此**不能**把它们记录为矩阵中 `real-discovery-and-call` 或 `accepted-receipt` 的完整 P2 通过。P2 仍需在专用可丢弃数据库中通过管理端登记该靶场，使用真实 OIDC 身份创建 Run，由平台解析 Connector 并检查保留的 `mcp_invocation_audits` 与靶场回执；再在相同目标版本上执行凭据错误、清单漂移、停用删除、审批、撤权、未知回执等矩阵场景。生产企业 MCP 的行为还需单独验收。
+直接的 DSH Adapter 探针绕过了 dsh-work 的 Connector 数据库、加密存储、当前授权复核及持久化 Run/Attempt；隔离数据库探针虽补齐了这些链路，但使用合成身份与测试审批。因此**不能**把它们记录为矩阵中 `real-discovery-and-call` 的完整 P2 通过。P2 仍需在专用可丢弃数据库中通过管理端登记该靶场，使用真实登录身份创建 Run，由平台解析 Connector 并检查保留的 `mcp_invocation_audits` 与靶场回执；再在相同目标版本上执行凭据错误、清单漂移、停用删除和密钥边界等矩阵场景。外部动作的受理回执按平台写工具的 Task Operation 单独验收。生产企业 MCP 的行为还需单独验收。
