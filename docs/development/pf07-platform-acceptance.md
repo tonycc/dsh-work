@@ -16,12 +16,12 @@
 
 **当前证据状态：** PF-01～PF-05 代码级记录已存在。2026-09-23 的双账号隔离环境进度记录了真实 OIDC 的 MCP 写入、审计与回执，以及私人受控记忆的发布、检索和撤回；另一账号的实际 Run、审批与预算等场景仍未完成，不能当作全量 P2。较早的本地真实链路核对使用现有开发库和单身份，也不能代替专用环境验收。此前 P2 只有口头结论，未提供版本、身份、环境和 Run/Attempt 等原始记录；它发生在当前平台能力形成之前，不能作为 PF-07 的 P2 证据。2026-09-14 的真实 DSH 验收使用合成身份，也早于 PF-01～PF-06。PF-07 应按当前目标版本逐场景执行并留证，发布门禁仍未通过。
 
-2026-11-09 在本机专用一次性数据库（`115888e`，真实 DSH `0.1.2-rc.1`、DeepSeek `deepseek-v4-pro`、本地独立账号，非 OIDC）执行一轮：P0（`pnpm test:pf07:matrix`、`pnpm test:m1`、`pnpm test:review:unit`）与 P1（`pnpm test:pf07:p1`、`pnpm test:e2e:mcp-admin`）通过，其中 `test:m1` 有 4 个真实 Docker 用例因缺镜像跳过。该轮执行时矩阵共 25 个场景；其中 5 个随后移出门禁，`real-oidc-task` 已从矩阵删除（AI Hub/OIDC 登录计划删除，未验证），门禁内现为 19 个。验收人（max）已确认其中 15 个，其余 4 个已在同一运行代码的第二个专用一次性库补测，待复核；整体门禁未通过，分类如下。证据只代表该本机环境，不代表 Mac mini 或生产部署，记录保存在 Git 工作区外的受控位置。
+2026-11-09 在本机专用一次性数据库（`115888e`，真实 DSH `0.1.2-rc.1`、DeepSeek `deepseek-v4-pro`、本地独立账号，非 OIDC）执行一轮：P0（`pnpm test:pf07:matrix`、`pnpm test:m1`、`pnpm test:review:unit`）与 P1（`pnpm test:pf07:p1`、`pnpm test:e2e:mcp-admin`）通过，其中 `test:m1` 有 4 个真实 Docker 用例因缺镜像跳过。该轮执行时矩阵共 25 个场景；其中 5 个随后移出门禁，`real-oidc-task` 已从矩阵删除（AI Hub/OIDC 登录计划删除，未验证），门禁内现为 19 个。验收人（max）已确认全部 19 个（其中 4 个在同一运行代码的第二个专用一次性库补测）；证据记录的整体状态尚未标记 `verified`，发布门禁未关闭，分类如下。证据只代表该本机环境，不代表 Mac mini 或生产部署，记录保存在 Git 工作区外的受控位置。
 
 | 分类 | 数量 | 场景 |
 |---|---|---|
 | 验收人已确认（本地账号） | 15 | `session-neutral-task`：`real-dsh-task-result`、`revocation`、`runtime-failure`；`external-action`：`accepted-receipt`、`duplicate-delivery`；`cumulative-budget`：全部 4 项；`mcp-connector`：`real-discovery-and-call`、`credential-failure`、`catalog-change`、`disable-and-delete`；`controlled-memory`：`real-recall`、`version-isolation` |
-| 已补测，待验收人复核 | 4 | `mcp-connector/secret-boundary`；`external-action`：`unknown-reconciliation`、`revocation`；`controlled-memory/identity-and-role-change` |
+| 验收人已确认（补测，本地账号） | 4 | `mcp-connector/secret-boundary`；`external-action`：`unknown-reconciliation`、`revocation`；`controlled-memory/identity-and-role-change` |
 | 已移出门禁（未通过，不计入） | 5 | `persistent-wait`：全部 4 项；`controlled-memory/revocation-while-waiting` |
 
 **移出门禁的原因：** 真实 Agent 的 `approvalMode` 固定为 `never`（[postgres-agent-service.ts](../../server/src/modules/agent/postgres-agent-service.ts)），真实 Run 进不了持久化等待，当前也没有需要人工审批的业务动作。这些场景没有通过，只是不再属于本门禁；持久化等待不得开放给 Agent 发布，首个需要人工审批的动作准入时恢复并在该版本重跑 P0、P1、P2。
