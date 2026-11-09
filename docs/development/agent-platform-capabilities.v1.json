@@ -7,7 +7,7 @@
       "package": "PF-01",
       "p0": ["pnpm test:m1"],
       "p1": ["pnpm test:m3:integration"],
-      "p2Scenarios": ["real-oidc-task", "real-dsh-task-result", "revocation", "runtime-failure"]
+      "p2Scenarios": ["real-dsh-task-result", "revocation", "runtime-failure"]
     },
     {
       "id": "external-action",
@@ -36,6 +36,14 @@
       "p0": ["pnpm test:m1"],
       "p1": ["pnpm test:pf05:integration"],
       "p2Scenarios": ["real-recall", "identity-and-role-change", "version-isolation"]
+    }
+  ],
+  "removed": [
+    {
+      "capability": "session-neutral-task",
+      "scenario": "real-oidc-task",
+      "removedAt": "2026-11-09",
+      "reason": "AI Hub/OIDC 登录计划删除，不再作为发布门禁场景；未验证，不代表 OIDC 下通过"
     }
   ],
   "deferred": [
