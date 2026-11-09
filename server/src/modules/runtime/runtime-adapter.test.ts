@@ -18,6 +18,7 @@ import {
   renderUserPrompt,
   parsePsTime,
   type DurablePermissionContext,
+  readSessionEvidence,
 } from './dsh-acp-runtime-adapter.ts'
 import { createManagedDshAcpProcessConfiguration } from './dsh-acp-process-configuration.ts'
 import { prepareMcpProcess } from './dsh-attempt-patch.ts'
@@ -463,6 +464,27 @@ describe('Runtime Manifest compiler', () => {
 })
 
 describe('DSH ACP Runtime Adapter', () => {
+  it('audits an MCP call interrupted mid-response as unknown, not failed', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-work-mcp-evidence-'))
+    const line = (type: string, data: unknown) => JSON.stringify({ type, data })
+    const call = (callId: string) => line('tool/call', { callId, name: 'mcp__crm__put', arguments: {} })
+    const result = (callId: string, isError: boolean) => line('tool/result', { callId, isError })
+    const aborted = line('turn/end', { turn: 2, reason: { kind: 'aborted', reason: { kind: 'user' } } })
+    await mkdir(join(root, 'session-1'), { recursive: true })
+    await writeFile(join(root, 'session-1', 'session.jsonl'), [
+      call('real-error'), result('real-error', true), line('turn/end', { turn: 1, reason: { kind: 'stop' } }),
+      call('completed'), result('completed', false),
+      call('interrupted'), result('interrupted', true),
+      call('no-result'), aborted, '',
+    ].join('\n'))
+    const evidence = await readSessionEvidence(root, ['crm'])
+    assert.deepEqual(
+      Object.fromEntries(evidence!.mcpInvocations.map(item => [item.callId, item.result])),
+      { 'real-error': 'failed', completed: 'success', interrupted: 'unknown', 'no-result': 'unknown' },
+    )
+    assert.equal(evidence!.toolCalls.find(item => item.callId === 'interrupted')?.status, 'unknown')
+    await rm(root, { recursive: true, force: true })
+  })
   it('rejects unverified model requirements before creating files or starting a Worker', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-work-model-admission-'))
     const adapter = new DshAcpRuntimeAdapter({

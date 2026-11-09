@@ -2059,7 +2059,7 @@ async function waitForSessionEvidence(root: string, mcpServerNames: string[]): P
   return undefined
 }
 
-async function readSessionEvidence(root: string, mcpServerNames: string[]): Promise<SessionEvidence | undefined> {
+export async function readSessionEvidence(root: string, mcpServerNames: string[]): Promise<SessionEvidence | undefined> {
   const paths = await findSessionLogs(root)
   let inputTokens = 0
   let outputTokens = 0
@@ -2067,14 +2067,20 @@ async function readSessionEvidence(root: string, mcpServerNames: string[]): Prom
   let toolCallCount = 0
   let toolResultCount = 0
   const mcpCalls = new Map<string, { name: string; parameterDigest: string }>()
-  const toolResults = new Map<string, 'success' | 'failed'>()
+  const toolResults = new Map<string, 'success' | 'failed' | 'unknown'>()
   const observedCalls: Array<{ callId: string; toolName: string }> = []
   for (const path of paths) {
     const content = await readFile(path, 'utf8')
+    // 本轮已返回错误的调用：轮次被中断时，错误只说明响应没回来，不能说明外部动作没发生。
+    let failedInTurn: string[] = []
     for (const line of content.split('\n')) {
       if (!line) continue
       const event = JSON.parse(line) as unknown
       if (!isRecord(event) || typeof event['type'] !== 'string') continue
+      if (event['type'] === 'turn/end') {
+        if (isAbortedTurnEnd(event['data'])) for (const callId of failedInTurn) toolResults.set(callId, 'unknown')
+        failedInTurn = []
+      }
       if (event['type'] === 'tool/call') {
         toolCallCount += 1
         const data = isRecord(event['data']) ? event['data'] : undefined
@@ -2089,7 +2095,10 @@ async function readSessionEvidence(root: string, mcpServerNames: string[]): Prom
       if (event['type'] === 'tool/result') {
         toolResultCount += 1
         const result = readToolResult(event['data'])
-        if (result) toolResults.set(result.callId, result.failed ? 'failed' : 'success')
+        if (result) {
+          toolResults.set(result.callId, result.failed ? 'failed' : 'success')
+          if (result.failed) failedInTurn.push(result.callId)
+        }
       }
       if (event['type'] !== 'assistant/message' || !isRecord(event['data'])) continue
       const usage = event['data']['usage']
@@ -2118,9 +2127,13 @@ async function readSessionEvidence(root: string, mcpServerNames: string[]): Prom
     mcpInvocations,
     toolCalls: observedCalls.map(call => {
       const result = toolResults.get(call.callId)
-      return { ...call, status: result === undefined ? 'unknown' : result === 'failed' ? 'failed' : 'succeeded' }
+      return { ...call, status: result === undefined || result === 'unknown' ? 'unknown' : result === 'failed' ? 'failed' : 'succeeded' }
     }),
   } : undefined
+}
+
+function isAbortedTurnEnd(value: unknown): boolean {
+  return isRecord(value) && isRecord(value['reason']) && value['reason']['kind'] === 'aborted'
 }
 
 function readToolResult(value: unknown): { callId: string; failed: boolean } | undefined {
