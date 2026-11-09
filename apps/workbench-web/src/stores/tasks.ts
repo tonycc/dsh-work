@@ -87,12 +87,21 @@ export const useTaskStore = defineStore('tasks', () => {
     return tasks.value.find((task) => task.id === id)
   }
 
-  async function loadTask(id: string, onlyTerminal = false) {
+  function followsAttempt(runId: string, attemptId: string) {
+    const localAttemptId = getTask(runId)?.attemptId
+    return localAttemptId === null || localAttemptId === attemptId
+  }
+
+  async function loadTask(id: string, terminalAttemptId?: string) {
     const current = generation
     try {
       const task = await workbenchApi.getRun(id)
       requireGeneration(current)
-      if (onlyTerminal && !isTerminal(task.status)) return null
+      if (terminalAttemptId !== undefined && (
+        !isTerminal(task.status)
+        || task.attemptId !== terminalAttemptId
+        || !followsAttempt(id, terminalAttemptId)
+      )) return null
       upsert(task)
       if (!isTerminal(task.status)) subscribe(task.id)
       return task
@@ -501,17 +510,19 @@ export const useTaskStore = defineStore('tasks', () => {
     if (isTerminal(task.status)) {
       await wait(100)
       if (current !== generation) return
-      await loadTerminalSnapshot(task.id, current)
-      closeStream(task.id)
+      await loadTerminalSnapshot(task.id, event.attempt_id, current)
+      // 等待期间员工可能已重试：同一 Run 的事件流此时属于新 Attempt，不能关闭。
+      if (current === generation && followsAttempt(task.id, event.attempt_id)) closeStream(task.id)
     }
   }
 
-  // 终态事件可能早于 Run 状态落库。只接受终态快照，否则事件流关闭后页面会停在执行中；
-  // 等不到时保留事件给出的终态。
-  async function loadTerminalSnapshot(runId: string, current: number) {
+  // 终态事件可能早于 Run 状态落库。只接受这个 Attempt 的终态快照，否则事件流关闭后
+  // 页面会停在执行中；等不到时保留事件给出的终态。
+  async function loadTerminalSnapshot(runId: string, attemptId: string, current: number) {
     for (let attempt = 0; attempt < TERMINAL_SNAPSHOT_ATTEMPTS; attempt += 1) {
       if (attempt > 0) await wait(TERMINAL_SNAPSHOT_RETRY_MS)
-      if (current !== generation || await loadTask(runId, true)) return
+      if (current !== generation || !followsAttempt(runId, attemptId)) return
+      if (await loadTask(runId, attemptId)) return
     }
   }
 

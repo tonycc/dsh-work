@@ -371,6 +371,42 @@ describe('task store', () => {
     api.getRun.mockReset()
   })
 
+  it('keeps the new Attempt and its stream when retry happens during the terminal snapshot wait', async () => {
+    const { useTaskStore } = await import('./tasks')
+    const running = { ...structuredClone(baseTask), status: 'running' as const }
+    const retrying = { ...structuredClone(baseTask), status: 'queued' as const, attemptId: 'attempt-002' }
+    let resolveSnapshot: (task: TaskRun) => void = () => {}
+    api.getTasks.mockResolvedValue([structuredClone(running)])
+    api.getRun.mockReset()
+    api.getRun.mockImplementationOnce(() => new Promise<TaskRun>((resolve) => { resolveSnapshot = resolve }))
+    api.retryRun.mockResolvedValue(retrying)
+    const store = useTaskStore()
+    await store.load()
+    store.subscribe(baseTask.id, true)
+
+    FakeEventSource.instances.at(-1)?.emit('run.cancelled', {
+      event_id: 'event-terminal-before-retry',
+      run_id: baseTask.id,
+      attempt_id: 'attempt-001',
+      sequence: 3,
+      event_type: 'run.cancelled',
+      occurred_at: new Date().toISOString(),
+      display_message: '已取消',
+      safe_metadata: {},
+      trace_id: 'trace-terminal',
+    })
+    await vi.waitFor(() => expect(api.getRun).toHaveBeenCalledTimes(1), { timeout: 1000 })
+
+    await store.retryTask(baseTask.id)
+    const retryStream = FakeEventSource.instances.at(-1)
+    resolveSnapshot({ ...structuredClone(running), status: 'cancelled' })
+    await new Promise(resolve => setTimeout(resolve, 350))
+
+    expect(store.tasks[0]).toMatchObject({ status: 'queued', attemptId: 'attempt-002' })
+    expect(retryStream?.closed).toBe(false)
+    expect(api.getRun).toHaveBeenCalledTimes(1)
+  })
+
   it('ignores terminal events from an old Attempt after retry and follows the new Attempt', async () => {
     const { useTaskStore } = await import('./tasks')
     const cancelled = { ...structuredClone(baseTask), status: 'cancelled' as const }
