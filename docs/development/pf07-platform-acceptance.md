@@ -16,11 +16,11 @@
 
 **当前证据状态：** PF-01～PF-05 代码级记录已存在。2026-09-23 的双账号隔离环境进度记录了真实 OIDC 的 MCP 写入、审计与回执，以及私人受控记忆的发布、检索和撤回；另一账号的实际 Run、审批与预算等场景仍未完成，不能当作全量 P2。较早的本地真实链路核对使用现有开发库和单身份，也不能代替专用环境验收。此前 P2 只有口头结论，未提供版本、身份、环境和 Run/Attempt 等原始记录；它发生在当前平台能力形成之前，不能作为 PF-07 的 P2 证据。2026-09-14 的真实 DSH 验收使用合成身份，也早于 PF-01～PF-06。PF-07 应按当前目标版本逐场景执行并留证，发布门禁仍未通过。
 
-2026-11-09 在本机专用一次性数据库（`115888e`，真实 DSH `0.1.2-rc.1`、DeepSeek `deepseek-v4-pro`、本地独立账号，非 OIDC）执行一轮：P0（`pnpm test:pf07:matrix`、`pnpm test:m1`、`pnpm test:review:unit`）与 P1（`pnpm test:pf07:p1`、`pnpm test:e2e:mcp-admin`）通过，其中 `test:m1` 有 4 个真实 Docker 用例因缺镜像跳过。P2 共 25 个场景，均未签署通过，分类如下。证据只代表该本机环境，不代表 Mac mini 或生产部署，记录保存在 Git 工作区外的受控位置。
+2026-11-09 在本机专用一次性数据库（`115888e`，真实 DSH `0.1.2-rc.1`、DeepSeek `deepseek-v4-pro`、本地独立账号，非 OIDC）执行一轮：P0（`pnpm test:pf07:matrix`、`pnpm test:m1`、`pnpm test:review:unit`）与 P1（`pnpm test:pf07:p1`、`pnpm test:e2e:mcp-admin`）通过，其中 `test:m1` 有 4 个真实 Docker 用例因缺镜像跳过。P2 共 25 个场景，验收人（max）已确认其中 15 个，整体门禁未通过，分类如下。证据只代表该本机环境，不代表 Mac mini 或生产部署，记录保存在 Git 工作区外的受控位置。
 
 | 分类 | 数量 | 场景 |
 |---|---|---|
-| 待验收人复核 | 15 | `session-neutral-task`：`real-dsh-task-result`、`revocation`、`runtime-failure`；`external-action`：`accepted-receipt`、`duplicate-delivery`；`cumulative-budget`：全部 4 项；`mcp-connector`：`real-discovery-and-call`、`credential-failure`、`catalog-change`、`disable-and-delete`；`controlled-memory`：`real-recall`、`version-isolation` |
+| 验收人已确认（本地账号） | 15 | `session-neutral-task`：`real-dsh-task-result`、`revocation`、`runtime-failure`；`external-action`：`accepted-receipt`、`duplicate-delivery`；`cumulative-budget`：全部 4 项；`mcp-connector`：`real-discovery-and-call`、`credential-failure`、`catalog-change`、`disable-and-delete`；`controlled-memory`：`real-recall`、`version-isolation` |
 | 部分覆盖 | 2 | `mcp-connector/secret-boundary`、`controlled-memory/identity-and-role-change` |
 | 产品能力阻塞 | 5 | `persistent-wait`：全部 4 项；`controlled-memory/revocation-while-waiting` |
 | 未执行 | 3 | `session-neutral-task/real-oidc-task`；`external-action`：`unknown-reconciliation`、`revocation` |
