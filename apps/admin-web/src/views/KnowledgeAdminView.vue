@@ -43,13 +43,15 @@ const modelIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 const connection = computed(() => overview.value?.connection)
 const attentionOf = (base: KnowledgeAdminBase) => !base.ownerDepartmentActive || base.grants.length === 0 || base.needsRebuild
   || base.status === 'unavailable' || base.summaryModelConfigured === true
-const activeBaseCount = computed(() => baseList.value.items.filter(base => base.status === 'active').length)
+const activeBases = computed(() => baseList.value.items.filter(base => base.status === 'active'))
+const activeBaseCount = computed(() => activeBases.value.length)
+// 分项只统计有效的知识库：“原连接已更换”的单列一项，不再重复计入其他分项（PR 116 评审）。
 const counts = computed(() => ({
-  noGrant: baseList.value.items.filter(base => base.grants.length === 0).length,
-  ownerDeleted: baseList.value.items.filter(base => !base.ownerDepartmentActive).length,
-  rebuild: baseList.value.items.filter(base => base.needsRebuild).length,
+  noGrant: activeBases.value.filter(base => base.grants.length === 0).length,
+  ownerDeleted: activeBases.value.filter(base => !base.ownerDepartmentActive).length,
+  rebuild: activeBases.value.filter(base => base.needsRebuild).length,
   moved: baseList.value.items.filter(base => base.status === 'unavailable').length,
-  summary: baseList.value.items.filter(base => base.summaryModelConfigured === true).length,
+  summary: activeBases.value.filter(base => base.summaryModelConfigured === true).length,
   attention: baseList.value.items.filter(attentionOf).length,
   documents: baseList.value.items.reduce((sum, base) => sum + (base.documentCount ?? 0), 0),
 }))
@@ -411,7 +413,7 @@ onMounted(load)
                 <span class="knowledge-admin__hint">WeKnora 模型管理中嵌入模型的 ID（UUID），不是模型名称；查看方法见部署手册。新建知识库时自动带上，员工不选择。须是在内网运行的模型。</span>
               </el-form-item>
               <el-alert v-if="modelChanged" type="warning" :closable="false" show-icon
-                :title="`更换嵌入模型只影响之后新建的知识库。现有 ${baseList.items.length} 个知识库仍按原模型检索，将标为“需重建”；原模型从 WeKnora 删除前它们都能正常使用。`" />
+                :title="`更换嵌入模型只影响之后新建的知识库。现有 ${activeBaseCount} 个知识库仍按原模型检索，将标为“需重建”；原模型从 WeKnora 删除前它们都能正常使用。`" />
               <el-form-item>
                 <el-checkbox v-model="connectionForm.enabled">启用企业知识库</el-checkbox>
               </el-form-item>

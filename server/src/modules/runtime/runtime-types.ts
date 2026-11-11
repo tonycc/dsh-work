@@ -144,6 +144,8 @@ export interface RuntimeManifest {
    * 只用于回答页脚，不进入提示词。只与 knowledge_status = skipped 同时出现。
    */
   knowledge_skipped_reason?: 'agent_not_permitted'
+  /** 所选但因更换连接地址标为“原连接已更换”而跳过的知识库名称（优化方案 O9）；只用于回答页脚，不进入提示词。 */
+  knowledge_moved_bases?: string[]
   /** PF-05 reviewed, ACL-filtered memory versions fixed for this Attempt. */
   memory_context?: RuntimeControlledMemory[]
   /**

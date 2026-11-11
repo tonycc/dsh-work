@@ -25,6 +25,8 @@ interface SelectedBaseRow {
   externalId: string
   name: string
   visible: boolean
+  /** 知识库因更换连接地址标为“原连接已更换”（优化方案 O9）。 */
+  moved: boolean
 }
 
 /**
@@ -85,7 +87,8 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
 
     const selected = await this.database<SelectedBaseRow[]>`
       select kb.id, kb.external_id as "externalId", kb.name,
-             (kb.status = 'active' and kb.id in (${visibleBaseIdsSql(this.database, input.userId)})) as visible
+             (kb.status = 'active' and kb.id in (${visibleBaseIdsSql(this.database, input.userId)})) as visible,
+             kb.status = 'unavailable' as moved
         from session_knowledge_bases skb
         join external_knowledge_bases kb on kb.tenant_id = skb.tenant_id and kb.id = skb.knowledge_base_id
        where skb.tenant_id = ${tenantId} and skb.session_id = ${input.sessionId}
@@ -110,8 +113,11 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
     if (!levels.agent) return { status: 'skipped', ...empty, skippedReason: 'agent_not_permitted' }
 
     const scope = selected.filter(base => base.visible)
-    const skippedBases = names(selected.filter(base => !base.visible))
-    if (!scope.length) return { status: 'skipped', documents: [], citations: [], skippedBases }
+    // 原连接已更换的知识库单独提示，不说成“你已无权查看”，避免员工误以为被收回了权限。
+    const skippedBases = names(selected.filter(base => !base.visible && !base.moved))
+    const movedBases = names(selected.filter(base => !base.visible && base.moved))
+    const skips = { skippedBases, ...(movedBases.length ? { movedBases } : {}) }
+    if (!scope.length) return { status: 'skipped', documents: [], citations: [], ...skips }
 
     let retrieved: Awaited<ReturnType<WeKnoraKnowledgeProvider['retrieve']>>
     try {
@@ -120,7 +126,7 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
       if (!(error instanceof WeKnoraUnavailableError || error instanceof WeKnoraRequestError)) throw error
       const failureReason = error instanceof WeKnoraUnavailableError ? error.reason : 'protocol'
       await this.recordFailure(failureReason)
-      return { status: 'unavailable', documents: [], citations: [], skippedBases, failureReason }
+      return { status: 'unavailable', documents: [], citations: [], ...skips, failureReason }
     }
     // 优化方案 O3：本次提问没有结果时，再用“上一条提问 + 本次提问”检索一次，追问也能命中；两次结果不合并。
     // 第二次失败时保留第一次“没有找到”的结果，不算不可用。
@@ -136,12 +142,13 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
       }
     }
     await this.recordSuccess(retrieved.rerankOutcome)
-    return { status: 'ok', documents: retrieved.documents, citations: retrieved.citations, skippedBases }
+    return { status: 'ok', documents: retrieved.documents, citations: retrieved.citations, ...skips }
   }
 
   async addCitationFooter(attemptId: string, answer: string): Promise<string> {
-    const [attempt] = await this.database<{ status: string | null; skipped: string[] | null; reason: string | null }[]>`
+    const [attempt] = await this.database<{ status: string | null; skipped: string[] | null; moved: string[] | null; reason: string | null }[]>`
       select manifest->>'knowledge_status' as status, manifest->'knowledge_skipped_bases' as skipped,
+             manifest->'knowledge_moved_bases' as moved,
              manifest->>'knowledge_skipped_reason' as reason
         from run_attempts where tenant_id = ${tenantId} and id = ${attemptId}
     `
@@ -163,6 +170,7 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
       sections.push('当前 AI 同事未开通企业知识，本次未使用所添加的知识库。')
     }
     for (const name of attempt?.skipped ?? []) sections.push(`知识库“${name}”你已无权查看，本次未使用。`)
+    for (const name of attempt?.moved ?? []) sections.push(`知识库“${name}”的连接已更换，暂不可用，本次未使用；如需继续使用请联系管理员。`)
     if (attempt?.status === 'unavailable') sections.push('企业知识库暂不可用，本次回答未引用企业知识。')
     return sections.length ? `${answer.trim()}\n\n${sections.join('\n\n')}` : answer
   }

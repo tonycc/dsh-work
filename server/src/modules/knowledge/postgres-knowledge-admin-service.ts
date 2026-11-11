@@ -119,11 +119,18 @@ export class PostgresKnowledgeAdminService {
 
   async overview(): Promise<KnowledgeAdminOverview> {
     const row = await this.row()
+    // 不可用次数按失败审计统计：连接被停用或 Key 读不出（not_configured）时执行也记为 unavailable，但不是检索故障，
+    // 不写审计，也不计入检索与不可用次数（优化方案 O2）。
     const [health] = await this.database<{ retrievals: number; unavailable: number }[]>`
-      select count(*) filter (where manifest->>'knowledge_status' in ('ok', 'unavailable'))::int as retrievals,
-             count(*) filter (where manifest->>'knowledge_status' = 'unavailable')::int as unavailable
-        from run_attempts
-       where tenant_id = ${tenantId} and created_at > now() - interval '24 hours'
+      with unavailable as (
+        select count(*)::int as count from audit_events
+         where tenant_id = ${tenantId} and action = 'knowledge.retrieve.unavailable' and result = 'failed'
+           and occurred_at > now() - interval '24 hours'
+      )
+      select (select count(*)::int from run_attempts
+               where tenant_id = ${tenantId} and created_at > now() - interval '24 hours'
+                 and manifest->>'knowledge_status' = 'ok') + (select count from unavailable) as retrievals,
+             (select count from unavailable) as unavailable
     `
     return {
       connection: {

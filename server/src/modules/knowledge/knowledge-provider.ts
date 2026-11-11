@@ -21,6 +21,8 @@ export interface KnowledgeResolution {
   citations: KnowledgeCitation[]
   /** Names of selected knowledge bases skipped because they were deleted or are no longer visible. */
   skippedBases: string[]
+  /** 所选但因更换连接地址标为“原连接已更换”而跳过的知识库名称（优化方案 O9）。 */
+  movedBases?: string[]
   /** 优化方案 O2：会话添加了知识库，但当前 Agent 不具备查看级别。 */
   skippedReason?: 'agent_not_permitted'
   /** 不可用原因分类（第 7 节），只在 unavailable 时出现；不含 API Key 与请求正文。 */

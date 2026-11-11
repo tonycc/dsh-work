@@ -339,12 +339,12 @@ test('AI Hub 账号不检索也不提示；停用的连接在会话添加了知�
     const disabled = await ask(sessionId, '安全库存？')
     assert.equal(disabled.manifest.knowledge_status, 'unavailable')
     assert.match(disabled.answer, /企业知识库暂不可用，本次回答未引用企业知识/)
-    const [audit] = await database<{ detail: string }[]>`
-      select safe_context::text as detail from audit_events
+    // 管理员主动停用不是 WeKnora 故障：不写失败审计（不计入健康状态的不可用次数），也不写连接的失败记录。
+    const audits = await database`
+      select 1 from audit_events
        where tenant_id = ${tenantId} and action = 'knowledge.retrieve.unavailable' and object_id = ${disabled.runId}
     `
-    assert.match(audit?.detail ?? '', /not_configured/)
-    // 管理员主动停用不是 WeKnora 故障，不写连接的失败记录。
+    assert.equal(audits.length, 0)
     const [after] = await database<{ reason: string | null; at: Date | null }[]>`
       select last_failure_reason as reason, last_failure_at as at from external_knowledge_connections where tenant_id = ${tenantId}
     `
@@ -399,6 +399,22 @@ test('Agent 岗位角色不具备查看级别时不检索，会话添加了知�
   assert.doesNotMatch(result.answer, /你已无权查看/)
   const plain = await ask(await session([], versionId), '安全库存？')
   assert.equal(plain.manifest.knowledge_status, undefined)
+  assert.equal(searches().length, 0)
+})
+
+test('原连接已更换的知识库在页脚单独提示，不说成无权查看（优化方案 O9，评审 #116）', async () => {
+  const sessionId = await session(['kb-supply', 'kb-finance'])
+  await database`update external_knowledge_bases set status = 'unavailable' where tenant_id = ${tenantId} and id = 'kb-supply'`
+  try {
+    const result = await ask(sessionId, '安全库存？')
+    assert.equal(result.manifest.knowledge_status, 'skipped')
+    assert.deepEqual(result.manifest.knowledge_moved_bases, ['供应链制度库'])
+    assert.deepEqual(result.manifest.knowledge_skipped_bases, ['财务制度库'])
+    assert.match(result.answer, /知识库“供应链制度库”的连接已更换，暂不可用，本次未使用/)
+    assert.doesNotMatch(result.answer, /“供应链制度库”你已无权查看/)
+  } finally {
+    await database`update external_knowledge_bases set status = 'active' where tenant_id = ${tenantId} and id = 'kb-supply'`
+  }
   assert.equal(searches().length, 0)
 })
 

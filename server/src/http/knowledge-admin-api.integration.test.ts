@@ -279,6 +279,14 @@ test('KB-ADM-05 配置提示：摘要模型标记、重排序结果，管理员�
   const overview = await ok('GET', adminBase)
   assert.equal(overview.connection.lastRerankOutcome, 'model_unavailable')
   assert.ok(overview.connection.lastRerankAt)
+  // 不可用次数按失败审计统计（连接停用不写该审计，评审 #116）。
+  await database`
+    insert into audit_events (id, tenant_id, actor_type, actor_id, action, object_type, object_id, result, trace_id)
+    values ('audit-kb-unavailable-1', ${tenantId}, 'user', ${EMPLOYEE}, 'knowledge.retrieve.unavailable', 'run', 'run-x', 'failed', 'trace-x')
+  `
+  const counted = await ok('GET', adminBase)
+  assert.equal(counted.health.unavailable24h, overview.health.unavailable24h + 1)
+  assert.equal(counted.health.retrievals24h, overview.health.retrievals24h + 1)
 
   // 员工授予的授权被管理员再次授予（含相同或不同的“含下级”）后归管理员，员工不能再撤销。
   await database`

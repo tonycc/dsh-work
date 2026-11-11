@@ -127,7 +127,8 @@ export class AttemptDispatcher {
           fallbackQuery: knowledgeQuery(input.prompt, input.history),
         })
       : null
-    if (knowledge?.status === 'unavailable') {
+    // 连接被停用或 API Key 读不出（not_configured）是管理员的配置状态，不是检索故障：只提示，不写失败审计（优化方案 O2）。
+    if (knowledge?.status === 'unavailable' && knowledge.failureReason !== 'not_configured') {
       await this.deps.operations?.appendAudit(
         input.userId, 'knowledge.retrieve.unavailable', run.id, 'failed', `trace-${run.id}`,
         `企业知识库不可用，本次执行未注入知识（${knowledge.failureReason ?? 'unknown'}）`,
@@ -257,6 +258,7 @@ export class AttemptDispatcher {
       knowledge_context: knowledge?.documents ?? [],
       ...(knowledge && knowledge.status !== 'not_applicable' ? { knowledge_status: knowledge.status } : {}),
       ...(knowledge?.skippedBases.length ? { knowledge_skipped_bases: knowledge.skippedBases } : {}),
+      ...(knowledge?.movedBases?.length ? { knowledge_moved_bases: knowledge.movedBases } : {}),
       ...(knowledge?.skippedReason ? { knowledge_skipped_reason: knowledge.skippedReason } : {}),
       ...(memoryContext.length ? { memory_context: memoryContext.map(memory => ({
         memoryVersionId: memory.memoryVersionId,
