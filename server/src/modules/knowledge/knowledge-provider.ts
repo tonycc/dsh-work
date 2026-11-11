@@ -21,6 +21,8 @@ export interface KnowledgeResolution {
   citations: KnowledgeCitation[]
   /** Names of selected knowledge bases skipped because they were deleted or are no longer visible. */
   skippedBases: string[]
+  /** 优化方案 O2：会话添加了知识库，但当前 Agent 不具备查看级别。 */
+  skippedReason?: 'agent_not_permitted'
   /** 不可用原因分类（第 7 节），只在 unavailable 时出现；不含 API Key 与请求正文。 */
   failureReason?: string
 }
@@ -34,7 +36,10 @@ export interface KnowledgeProvider {
     sessionId: string
     userId: string
     agentVersionId: string
+    /** 本次提问（优化方案 O3：先只用它检索）。 */
     query: string
+    /** 本次提问没有结果时再试一次的查询词：同一会话上一条提问加本次提问；与 query 相同或缺省时不重试。 */
+    fallbackQuery?: string
   }): Promise<KnowledgeResolution>
   addCitationFooter(attemptId: string, answer: string): Promise<string>
 }

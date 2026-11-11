@@ -122,7 +122,9 @@ export class AttemptDispatcher {
           sessionId: run.sessionId,
           userId: input.userId,
           agentVersionId: input.agentVersionId,
-          query: knowledgeQuery(input.prompt, input.history),
+          // 优化方案 O3：先只用本次提问检索，没有结果时再带上一条提问。
+          query: input.prompt.trim(),
+          fallbackQuery: knowledgeQuery(input.prompt, input.history),
         })
       : null
     if (knowledge?.status === 'unavailable') {
@@ -255,6 +257,7 @@ export class AttemptDispatcher {
       knowledge_context: knowledge?.documents ?? [],
       ...(knowledge && knowledge.status !== 'not_applicable' ? { knowledge_status: knowledge.status } : {}),
       ...(knowledge?.skippedBases.length ? { knowledge_skipped_bases: knowledge.skippedBases } : {}),
+      ...(knowledge?.skippedReason ? { knowledge_skipped_reason: knowledge.skippedReason } : {}),
       ...(memoryContext.length ? { memory_context: memoryContext.map(memory => ({
         memoryVersionId: memory.memoryVersionId,
         title: memory.title,
@@ -350,8 +353,8 @@ export class AttemptDispatcher {
 const previousQuestionChars = 500
 
 /**
- * 检索查询词（WK4、4.3）：同一会话中员工的上一条提问加本次提问，让“那第二条呢”这类追问也能
- * 检索到。由平台拼接，不调用模型改写。
+ * 补充检索的查询词（WK4、4.3，优化方案 O3）：同一会话中员工的上一条提问加本次提问，让“那第二条呢”这类追问
+ * 也能检索到。只在本次提问没有结果时使用；由平台拼接，不调用模型改写。
  */
 export function knowledgeQuery(
   prompt: string,
