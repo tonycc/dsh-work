@@ -52,7 +52,7 @@ before(async () => {
   conversations = new PostgresConversationRepository(database)
   const connection = new PostgresKnowledgeConnection(database, { bootstrap: { baseUrl, apiKey: double.apiKey, embeddingModelId: 'embed-1', timeoutMs: 500 } })
   await connection.ensureBootstrap()
-  provider = new WeKnoraKnowledgeProvider(database, connection)
+  provider = new WeKnoraKnowledgeProvider(database, connection, operations)
   runtime = new CapturingRuntime()
   orchestration = new RunOrchestrationService(
     new PostgresRunRepository(database), conversations,
@@ -434,6 +434,106 @@ test('员工已不具备查看级别时，所选知识库按“你已无权查�
     `
   }
   assert.equal(searches().length, 0)
+})
+
+// Agent 知识检索工具方案（KO9）：装配条件、实时复核、引用续编与审计。
+const toolInput = (result: { runId: string; attemptId: string; manifest: RuntimeManifest }, query: string, callNumber = 1, knowledgeBaseNames?: string[]) => ({
+  runId: result.runId, attemptId: result.attemptId, sessionId: result.manifest.session_id!, userId: EMPLOYEE,
+  agentVersionId: result.manifest.agent_version_id!, traceId: `trace-${result.runId}`, query, callNumber,
+  ...(knowledgeBaseNames ? { knowledgeBaseNames } : {}),
+})
+const toolError = (code: string) => (error: { code?: string }) => error.code === code
+
+test('知识检索工具只在个人对话且执行前检索为 ok 时装配（KO9，KS2）', async () => {
+  const ok = await ask(await session(['kb-supply']), '安全库存怎么算？')
+  assert.ok(ok.manifest.tools.some(tool => tool.id === 'knowledge_search'))
+  const notSelected = await ask(await session([]), '安全库存怎么算？')
+  assert.ok(!notSelected.manifest.tools.some(tool => tool.id === 'knowledge_search'))
+  const skipped = await ask(await session(['kb-finance']), '报销期限？')
+  assert.equal(skipped.manifest.knowledge_status, 'skipped')
+  assert.ok(!skipped.manifest.tools.some(tool => tool.id === 'knowledge_search'))
+})
+
+test('知识检索工具续编引用序号，同一分段沿用原序号，页脚列出全部资料（KO9，KS5）', async () => {
+  const result = await ask(await session(['kb-supply']), '安全库存怎么算？')
+  assert.deepEqual(result.manifest.knowledge_context.map(document => document.documentId), ['weknora:doc-safety'])
+  double.documents.push({ id: 'doc-count', knowledgeBaseId: 'kb-ext-supply', title: '盘点规范', fileName: '盘点规范.pdf', updatedAt: '2026-05-01T00:00:00Z' })
+  double.chunks.push({ id: 'c5', knowledgeId: 'doc-count', content: '每月最后一个工作日盘点。', score: 0.8 })
+  const output = await provider.searchForTool(toolInput(result, '库存盘点与安全库存的规定'))
+  assert.deepEqual(output.documents.map(document => [document.ordinal, document.title]), [[1, '库存安全水位规范'], [2, '盘点规范']])
+  assert.equal(output.documents[1]?.updatedDate, '2026-05-01')
+  assert.equal(output.remainingCalls, 2)
+  const rows = await database<{ ordinal: number; source: string }[]>`
+    select ordinal, source from run_knowledge_citations where tenant_id = ${tenantId} and attempt_id = ${result.attemptId} order by ordinal
+  `
+  assert.deepEqual(rows.map(row => [row.ordinal, row.source]), [[1, 'pre_retrieval'], [2, 'tool']])
+  // 再查一次同样的内容：不新增引用行。
+  await provider.searchForTool(toolInput(result, '库存盘点与安全库存的规定', 2))
+  const [count] = await database<{ count: number }[]>`
+    select count(*)::int as count from run_knowledge_citations where tenant_id = ${tenantId} and attempt_id = ${result.attemptId}
+  `
+  assert.equal(count?.count, 2)
+  const footer = await provider.addCitationFooter(result.attemptId, '回答')
+  assert.match(footer, /本次检索到的资料\n- 【1】库存安全水位规范（更新于 2026-08-01）\n- 【2】盘点规范（更新于 2026-05-01）/)
+  // 审计只有长度与命中，不含检索词与摘录。
+  const audits = await database<{ text: string; result: string }[]>`
+    select safe_context::text as text, result from audit_events
+     where tenant_id = ${tenantId} and action = 'knowledge.search.tool' and object_id = ${result.runId}
+  `
+  assert.equal(audits.length, 2)
+  assert.ok(audits.every(audit => audit.result === 'success' && !audit.text.includes('库存盘点') && !audit.text.includes('每月最后')))
+})
+
+test('执行前检索没有结果、工具检索到时，页脚列出资料而不提示没有找到（KO9）', async () => {
+  double.chunks = double.chunks.map(chunk => ({ ...chunk, matchQuery: '水位' }))
+  const result = await ask(await session(['kb-supply']), '那个规定是什么？')
+  assert.equal(result.manifest.knowledge_status, 'ok')
+  assert.deepEqual(result.manifest.knowledge_context, [])
+  assert.ok(result.manifest.tools.some(tool => tool.id === 'knowledge_search'))
+  const output = await provider.searchForTool(toolInput(result, '库存安全水位规定'))
+  assert.deepEqual(output.documents.map(document => document.ordinal), [1])
+  const footer = await provider.addCitationFooter(result.attemptId, '回答')
+  assert.match(footer, /【1】库存安全水位规范/)
+  assert.doesNotMatch(footer, /没有找到相关内容/)
+})
+
+test('知识检索工具的次数上限、范围收窄与实时复核（KO9，KS3）', async () => {
+  const result = await ask(await session(['kb-supply', 'kb-finance']), '安全库存怎么算？')
+  await assert.rejects(provider.searchForTool(toolInput(result, '安全库存', 4)), toolError('TOOL_PRECONDITION_FAILED'))
+  await assert.rejects(provider.searchForTool(toolInput(result, '安全库存', 1, ['不存在的库'])), toolError('TOOL_PRECONDITION_FAILED'))
+  // 只能在所选范围内收窄：财务制度库所选但不可见，按名称收窄到它时范围为空。
+  await assert.rejects(provider.searchForTool(toolInput(result, '报销', 1, ['财务制度库'])), toolError('TOOL_PRECONDITION_FAILED'))
+  const narrowed = await provider.searchForTool(toolInput(result, '安全库存', 1, ['供应链制度库']))
+  assert.deepEqual(narrowed.skippedBases, [])
+  const all = await provider.searchForTool(toolInput(result, '安全库存', 2))
+  assert.deepEqual(all.skippedBases, ['财务制度库'])
+  assert.deepEqual((searches().at(-1)?.body as { knowledge_base_ids: string[] }).knowledge_base_ids, ['kb-ext-supply'])
+  // 执行中途收回部门：下一次调用即不再检索。
+  await database`delete from org_department_members where tenant_id = ${tenantId} and user_id = ${EMPLOYEE}`
+  try {
+    await assert.rejects(provider.searchForTool(toolInput(result, '安全库存', 3)), toolError('TOOL_PRECONDITION_FAILED'))
+  } finally {
+    await database`
+      insert into org_department_members (tenant_id, department_id, user_id, is_primary)
+      values (${tenantId}, 'dept-plan', ${EMPLOYEE}, true) on conflict (tenant_id, department_id, user_id) do nothing
+    `
+  }
+})
+
+test('知识检索工具调用时 WeKnora 不可用：工具报错、记连接失败，不计入健康状态的不可用次数（KO9，KS7）', async () => {
+  const result = await ask(await session(['kb-supply']), '安全库存怎么算？')
+  double.failWith = 503
+  await assert.rejects(provider.searchForTool(toolInput(result, '安全库存')), toolError('TOOL_UNAVAILABLE'))
+  double.failWith = null
+  const [connection] = await database<{ reason: string | null }[]>`
+    select last_failure_reason as reason from external_knowledge_connections where tenant_id = ${tenantId}
+  `
+  assert.equal(connection?.reason, 'server')
+  const actions = await database<{ action: string; result: string }[]>`
+    select action, result from audit_events where tenant_id = ${tenantId} and object_id = ${result.runId}
+       and action in ('knowledge.search.tool', 'knowledge.retrieve.unavailable')
+  `
+  assert.deepEqual(actions.map(row => [row.action, row.result]), [['knowledge.search.tool', 'failed']])
 })
 
 async function waitForTask(runId: string) {

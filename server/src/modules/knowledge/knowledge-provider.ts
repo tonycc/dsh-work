@@ -29,6 +29,13 @@ export interface KnowledgeResolution {
   failureReason?: string
 }
 
+/** Agent 知识检索工具的返回（Agent 知识检索工具方案 4.1）。 */
+export interface KnowledgeToolResult {
+  documents: Array<{ ordinal: number; title: string; knowledgeBaseName: string; updatedDate: string; excerpt: string }>
+  skippedBases: string[]
+  remainingCalls: number
+}
+
 /**
  * 企业知识端口（weknora-knowledge-plan 第 6 节）：执行前按会话所选、员工可见的知识库检索，
  * 回答完成后按引用快照追加页脚。只在个人空间的员工对话中调用（一期，2.1）。
@@ -44,4 +51,16 @@ export interface KnowledgeProvider {
     fallbackQuery?: string
   }): Promise<KnowledgeResolution>
   addCitationFooter(attemptId: string, answer: string): Promise<string>
+  /** Agent 知识检索工具（KO9）：只在个人对话、执行前检索为 ok 时装配后调用。 */
+  searchForTool?(input: {
+    runId: string
+    attemptId: string
+    sessionId: string
+    userId: string
+    agentVersionId: string
+    traceId: string
+    query: string
+    knowledgeBaseNames?: string[]
+    callNumber: number
+  }): Promise<KnowledgeToolResult>
 }

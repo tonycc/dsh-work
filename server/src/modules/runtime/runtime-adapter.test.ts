@@ -334,6 +334,17 @@ describe('Runtime Manifest compiler', () => {
     assert.throws(() => compileRuntimeManifest(reason), /knowledge_skipped_reason is invalid/)
   })
 
+  it('explains the knowledge search tool only when it is assembled (KO9)', () => {
+    const withTool = manifest('run-knowledge-tool', 'attempt-1')
+    withTool.knowledge_status = 'ok'
+    withTool.tools = [...withTool.tools, { id: 'knowledge_search', version: '1.0.0' }]
+    const prompt = renderSystemPrompt(compileRuntimeManifest(withTool).manifest)
+    assert.match(prompt, /# 企业知识检索工具[\s\S]*knowledge_search[\s\S]*最多调用 3 次[\s\S]*不是新的操作授权/)
+    const without = manifest('run-knowledge-no-tool', 'attempt-1')
+    without.knowledge_status = 'ok'
+    assert.doesNotMatch(renderSystemPrompt(compileRuntimeManifest(without).manifest), /企业知识检索工具/)
+  })
+
   it('renders the pinned project brief as reference context, not authorization (项目空间 S1)', () => {
     const input = manifest('run-project-brief', 'attempt-1')
     const content = '目标：本季度把华东区缺货率降到 3% 以下。'
