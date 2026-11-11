@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { platformToolContracts } from './platform-tool-contracts.ts'
 import { test } from 'node:test'
 import {
   knowledgeSearchToolNames,
@@ -63,4 +64,6 @@ test('knowledge search tool assembles only for personal conversations whose pre-
   assert.equal(builtinTool('knowledge_search')?.assembly, 'personal-conversation')
   assert.equal(builtinTool('knowledge_search')?.effect, 'read')
   assert.deepEqual(invalidSkillToolReferences(['knowledge_search@1.0.0']), ['knowledge_search@1.0.0'], 'Skills cannot declare it')
+  // 读工具：平台工具桥只为写工具登记 task_operations，检索词与结果不会写入（KS6）。
+  assert.equal(platformToolContracts.knowledge_search.effect, 'read')
 })

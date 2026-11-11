@@ -6,6 +6,7 @@ import { PostgresAgentService } from '../../modules/agent/postgres-agent-service
 import { PostgresOperationsService } from '../../modules/admin/application/postgres-operations-service.ts'
 import { PostgresAuthorizationService } from '../../modules/authorization/postgres-authorization-service.ts'
 import { PostgresKnowledgeConnection } from '../../modules/knowledge/knowledge-connection.ts'
+import { PostgresKnowledgeAdminService } from '../../modules/knowledge/postgres-knowledge-admin-service.ts'
 import { minimumRelevanceScore, WeKnoraKnowledgeProvider } from '../../modules/knowledge/weknora-knowledge-provider.ts'
 import { ModelGovernanceService } from '../../modules/model/model-governance-service.ts'
 import { PostgresModelGovernanceRepository } from '../../modules/model/postgres-model-governance-repository.ts'
@@ -38,6 +39,7 @@ let throwaway: ThrowawayDatabase
 let agents: PostgresAgentService
 let conversations: PostgresConversationRepository
 let provider: WeKnoraKnowledgeProvider
+let knowledgeAdmin: PostgresKnowledgeAdminService
 let orchestration: RunOrchestrationService
 let runtime: CapturingRuntime
 let agentVersionId: string
@@ -53,6 +55,7 @@ before(async () => {
   const connection = new PostgresKnowledgeConnection(database, { bootstrap: { baseUrl, apiKey: double.apiKey, embeddingModelId: 'embed-1', timeoutMs: 500 } })
   await connection.ensureBootstrap()
   provider = new WeKnoraKnowledgeProvider(database, connection, operations)
+  knowledgeAdmin = new PostgresKnowledgeAdminService(database, operations, connection)
   runtime = new CapturingRuntime()
   orchestration = new RunOrchestrationService(
     new PostgresRunRepository(database), conversations,
@@ -522,9 +525,11 @@ test('知识检索工具的次数上限、范围收窄与实时复核（KO9，KS
 
 test('知识检索工具调用时 WeKnora 不可用：工具报错、记连接失败，不计入健康状态的不可用次数（KO9，KS7）', async () => {
   const result = await ask(await session(['kb-supply']), '安全库存怎么算？')
+  const before = (await knowledgeAdmin.overview()).health
   double.failWith = 503
   await assert.rejects(provider.searchForTool(toolInput(result, '安全库存')), toolError('TOOL_UNAVAILABLE'))
   double.failWith = null
+  assert.deepEqual((await knowledgeAdmin.overview()).health, before, '工具失败不计入健康状态的检索与不可用次数')
   const [connection] = await database<{ reason: string | null }[]>`
     select last_failure_reason as reason from external_knowledge_connections where tenant_id = ${tenantId}
   `
@@ -534,6 +539,51 @@ test('知识检索工具调用时 WeKnora 不可用：工具报错、记连接�
        and action in ('knowledge.search.tool', 'knowledge.retrieve.unavailable')
   `
   assert.deepEqual(actions.map(row => [row.action, row.result]), [['knowledge.search.tool', 'failed']])
+})
+
+test('同一文档的另一个分段续编序号，页脚合并为一行（评审 PR 118）', async () => {
+  double.chunks = [
+    { id: 'c1', knowledgeId: 'doc-safety', content: '可用库存低于安全库存时应进入预警。', score: 0.91, matchQuery: '预警' },
+    { id: 'c2', knowledgeId: 'doc-safety', content: '安全库存按七天用量计算。', score: 0.85, matchQuery: '七天' },
+  ]
+  const result = await ask(await session(['kb-supply']), '低于多少要预警？')
+  assert.equal(result.manifest.knowledge_context[0]?.excerpt, '可用库存低于安全库存时应进入预警。')
+  const output = await provider.searchForTool(toolInput(result, '安全库存按七天还是几天计算'))
+  assert.deepEqual(output.documents.map(document => document.ordinal), [2])
+  const footer = await provider.addCitationFooter(result.attemptId, '回答')
+  assert.match(footer, /本次检索到的资料\n- 【1】【2】库存安全水位规范（更新于 2026-08-01）$/)
+})
+
+test('知识检索工具：中途收回 Agent 岗位权限后拒绝；原连接已更换与无权查看分开返回（评审 PR 118）', async () => {
+  const versionId = await publishedAgent(['role-employee'])
+  const result = await ask(await session(['kb-supply', 'kb-finance', 'kb-supply-only'], versionId), '安全库存怎么算？')
+  await database`update external_knowledge_bases set status = 'unavailable' where tenant_id = ${tenantId} and id = 'kb-supply-only'`
+  try {
+    const output = await provider.searchForTool({ ...toolInput(result, '安全库存'), agentVersionId: versionId })
+    assert.deepEqual(output.skippedBases, ['财务制度库'])
+    assert.deepEqual(output.movedBases, ['供应链部内部库'])
+  } finally {
+    await database`update external_knowledge_bases set status = 'active' where tenant_id = ${tenantId} and id = 'kb-supply-only'`
+  }
+  await database`
+    delete from agent_principal_role_grants g using agent_versions av, execution_principals ep
+     where av.tenant_id = ${tenantId} and av.id = ${versionId} and ep.tenant_id = av.tenant_id and ep.agent_id = av.agent_id
+       and ep.kind = 'agent' and g.tenant_id = ep.tenant_id and g.principal_id = ep.id
+  `
+  await assert.rejects(provider.searchForTool({ ...toolInput(result, '安全库存'), agentVersionId: versionId }), toolError('TOOL_PRECONDITION_FAILED'))
+})
+
+test('知识检索工具被取消后不写入引用与审计（评审 PR 118）', async () => {
+  const result = await ask(await session(['kb-supply']), '安全库存怎么算？')
+  double.documents.push({ id: 'doc-count', knowledgeBaseId: 'kb-ext-supply', title: '盘点规范', fileName: '盘点规范.pdf', updatedAt: '2026-05-01T00:00:00Z' })
+  double.chunks.push({ id: 'c5', knowledgeId: 'doc-count', content: '每月最后一个工作日盘点。', score: 0.8 })
+  const controller = new AbortController()
+  controller.abort()
+  await assert.rejects(provider.searchForTool({ ...toolInput(result, '盘点'), signal: controller.signal }))
+  const [rows] = await database<{ count: number }[]>`
+    select count(*)::int as count from run_knowledge_citations where tenant_id = ${tenantId} and attempt_id = ${result.attemptId} and source = 'tool'
+  `
+  assert.equal(rows?.count, 0)
 })
 
 async function waitForTask(runId: string) {

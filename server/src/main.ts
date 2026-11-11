@@ -399,7 +399,7 @@ async function start() {
         ? agentRecommendationsRef.current.listColleagues(manifest, signal)
         : agentRecommendationsRef.current.recommend(manifest, input, signal)
     },
-    knowledgeSearchTool: async (input, manifest, callNumber) => {
+    knowledgeSearchTool: async (input, manifest, callNumber, signal) => {
       const provider = knowledgeToolRef.current
       if (!provider?.searchForTool) throw new Error('企业知识检索服务尚未就绪')
       if (!manifest.session_id || !manifest.agent_version_id) throw new Error('知识检索工具只用于员工个人对话')
@@ -409,6 +409,7 @@ async function start() {
         query: String(input['query'] ?? ''),
         ...(Array.isArray(input['knowledgeBaseNames']) ? { knowledgeBaseNames: input['knowledgeBaseNames'] as string[] } : {}),
         callNumber,
+        signal,
       })
     },
     skillCreationTool: async (name, input, manifest, workspaceDirectory) => {

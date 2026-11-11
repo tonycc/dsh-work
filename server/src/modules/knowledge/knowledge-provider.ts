@@ -32,7 +32,10 @@ export interface KnowledgeResolution {
 /** Agent 知识检索工具的返回（Agent 知识检索工具方案 4.1）。 */
 export interface KnowledgeToolResult {
   documents: Array<{ ordinal: number; title: string; knowledgeBaseName: string; updatedDate: string; excerpt: string }>
+  /** 已删除或已无权查看而跳过的知识库名称。 */
   skippedBases: string[]
+  /** 因更换连接地址标为“原连接已更换”而跳过的知识库名称（与无权查看分开，避免误导员工）。 */
+  movedBases: string[]
   remainingCalls: number
 }
 
@@ -62,5 +65,6 @@ export interface KnowledgeProvider {
     query: string
     knowledgeBaseNames?: string[]
     callNumber: number
+    signal?: AbortSignal
   }): Promise<KnowledgeToolResult>
 }

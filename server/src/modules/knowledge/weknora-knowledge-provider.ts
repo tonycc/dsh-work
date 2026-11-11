@@ -179,6 +179,7 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
     query: string
     knowledgeBaseNames?: string[]
     callNumber: number
+    signal?: AbortSignal
   }): Promise<KnowledgeToolResult> {
     if (input.callNumber > maxKnowledgeToolCalls) {
       throw toolPreconditionFailed(`本次回答的知识检索次数已用完（每次回答最多 ${maxKnowledgeToolCalls} 次），请依据已有资料回答或如实说明`)
@@ -203,8 +204,12 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
       candidates = selected.filter(base => wanted.has(base.name.trim()))
     }
     const scope = candidates.filter(base => base.visible)
-    const skippedBases = candidates.filter(base => !base.visible).map(base => base.name.trim()).filter(Boolean).slice(0, maxSkippedBases)
+    const names = (bases: SelectedBaseRow[]) => bases.map(base => base.name.trim()).filter(Boolean).slice(0, maxSkippedBases)
+    const skippedBases = names(candidates.filter(base => !base.visible && !base.moved))
+    const movedBases = names(candidates.filter(base => !base.visible && base.moved))
     if (!scope.length) throw toolPreconditionFailed('所选知识库当前都不可用（已删除、已无权查看或连接已更换）')
+    input.signal?.throwIfAborted()
+    const auditTarget = `Attempt ${input.attemptId}`
 
     let retrieved: Awaited<ReturnType<WeKnoraKnowledgeProvider['retrieve']>>
     try {
@@ -214,13 +219,15 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
       const reason = error instanceof WeKnoraUnavailableError ? error.reason : 'protocol'
       await this.recordFailure(reason)
       await this.audit?.appendAudit(input.userId, 'knowledge.search.tool', input.runId, 'failed', input.traceId,
-        `知识检索工具调用失败（${reason}），检索词 ${query.length} 字`, 'run')
+        `${auditTarget}：知识检索工具调用失败（${reason}），检索词 ${query.length} 字`, 'run')
       throw toolUnavailable('企业知识库暂不可用，本次检索未完成')
     }
     await this.recordSuccess(retrieved.rerankOutcome)
+    // 工具超时或 Attempt 取消后不再写入引用：模型没有拿到的资料不能出现在页脚（评审 PR 118）。
+    input.signal?.throwIfAborted()
     const ordinals = await this.appendToolCitations(input, retrieved.citations)
     await this.audit?.appendAudit(input.userId, 'knowledge.search.tool', input.runId, 'success', input.traceId,
-      `知识检索工具（第 ${input.callNumber} 次），检索词 ${query.length} 字，知识库 ${scope.map(base => base.id).join('、')}，`
+      `${auditTarget}：知识检索工具（第 ${input.callNumber} 次），检索词 ${query.length} 字，知识库 ${scope.map(base => base.id).join('、')}，`
         + `命中 ${retrieved.citations.map(citation => `${citation.externalDocumentId}:${citation.relevanceScore.toFixed(3)}`).join('、') || '无'}`,
       'run')
     return {
@@ -232,6 +239,7 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
         excerpt: citation.excerpt,
       })),
       skippedBases,
+      movedBases,
       remainingCalls: maxKnowledgeToolCalls - input.callNumber,
     }
   }
@@ -284,17 +292,24 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
              manifest->>'knowledge_skipped_reason' as reason
         from run_attempts where tenant_id = ${tenantId} and id = ${attemptId}
     `
-    const citations = await this.database<{ title: string; updatedAt: Date }[]>`
-      select title, document_updated_at as "updatedAt"
+    const citations = await this.database<{ ordinal: number; documentId: string; title: string; updatedAt: Date }[]>`
+      select ordinal, external_document_id as "documentId", title, document_updated_at as "updatedAt"
         from run_knowledge_citations
        where tenant_id = ${tenantId} and attempt_id = ${attemptId}
        order by ordinal
     `
     const sections: string[] = []
     if (citations.length) {
-      // 优化方案 O6：列出的是本次注入的全部资料，不代表模型都引用了。
-      sections.push(['本次检索到的资料', ...citations.map((row, index) =>
-        `- 【${index + 1}】${row.title}（更新于 ${formatDate(row.updatedAt)}）`)].join('\n'))
+      // 优化方案 O6：列出的是本次注入的全部资料，不代表模型都引用了。同一篇文档的多个分段合并为一行，
+      // 列出它的全部序号（评审 PR 118：检索工具可能取到同一文档的另一个分段）。
+      const documents = new Map<string, { ordinals: number[]; title: string; updatedAt: Date }>()
+      for (const row of citations) {
+        const entry = documents.get(row.documentId)
+        if (entry) entry.ordinals.push(row.ordinal)
+        else documents.set(row.documentId, { ordinals: [row.ordinal], title: row.title, updatedAt: row.updatedAt })
+      }
+      sections.push(['本次检索到的资料', ...[...documents.values()].map(document =>
+        `- ${document.ordinals.map(ordinal => `【${ordinal}】`).join('')}${document.title}（更新于 ${formatDate(document.updatedAt)}）`)].join('\n'))
     } else if (attempt?.status === 'ok') {
       sections.push('已查询所添加的知识库，没有找到相关内容，本次回答未引用企业知识。')
     }
