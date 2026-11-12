@@ -331,24 +331,41 @@ export class AttemptExecutionContainers {
 }
 
 /**
- * What the model reads when no command can run (plan 4.7). Space does not come back within one
- * Attempt, so the text tells the model to stop retrying and answer: with “请稍后重试” it kept
- * calling bash until the Attempt timed out and the employee got an empty reply.
+ * What the model reads when the data volume is low (plan 4.7). Every tool that runs in the execution
+ * container goes through the same check — bash, the ripgrep behind glob and grep, python_execute.
+ * Only bash and python_execute carry this text to the model: DSH's search tools replace a refused or
+ * stopped ripgrep with their own generic error (“could not start its search command”, “killed by
+ * signal”), so the text explains that those errors have the same cause.
+ * With “请稍后重试” the model kept calling bash until the Attempt timed out and the employee got an
+ * empty reply; the text therefore asks it to stop calling them and answer. Giving up on recovery
+ * within the Attempt is deliberate: space may come back when other Attempts end, and the employee can
+ * simply send the message again. This is guidance for the model, not a program stop: a model that
+ * ignores it can still run into the Attempt timeout.
  */
-export const DISK_LOW_GUIDANCE = '本次运行内不要再调用运行命令的工具（重试不会成功），也不要改用其他工具代替命令。'
-  + '请立即结束并答复用户：不需要运行命令就能完成的部分照常完成；需要运行命令的部分（处理或生成表格、文档、图片等文件）说明本次没有完成，'
-  + '原因是服务器存储空间不足、需要平台管理员处理后再试。不要声称已经完成，也不要编造结果。'
+const DISK_LOW_TOOLS = '本次运行内不要再调用 bash、文件搜索（glob、grep）和 python_execute（以本次运行实际提供的为准）：'
+  + '它们都受同一限制，再次调用仍会被拒绝；文件搜索此时报出的“无法启动搜索”或“被终止”也是这个原因。'
+  + '不要用其他工具写脚本或以其他方式代替它们。其余不受此限制的工具仍可使用，不依赖上述工具就能完成的部分照常完成；'
+  + '服务器存储空间紧张，不要再生成大文件。'
+const DISK_LOW_ANSWER = '然后答复用户：哪些已经完成；哪些没有完成（例如处理或生成表格、文档、图片等文件），'
+  + '原因是服务器存储空间不足，需要平台管理员处理后再试。答复用日常说法，不要出现工具名、目录名、文件路径，'
+  + '也不要出现“命令”“工具”等技术用语；没有完成的部分不要说成已经完成，也不要编造结果。'
 
 function diskLowError() {
   return new PlatformToolError({
     status: 503, code: 'EXECUTION_DISK_LOW',
-    message: `服务器磁盘剩余空间不足，现在不能运行命令。${DISK_LOW_GUIDANCE}`,
+    message: `服务器磁盘剩余空间不足，本次调用没有执行。${DISK_LOW_TOOLS}${DISK_LOW_ANSWER}`,
   })
 }
 
 /** What the model reads when the platform stopped a command (plan 4.7). */
 function limitNotice(limit: 'workspace' | 'disk', usage: WorkspaceUsage) {
-  if (limit === 'disk') return `命令已终止：服务器磁盘剩余空间不足。${DISK_LOW_GUIDANCE}`
+  if (limit === 'disk') {
+    // A stopped command may leave a half-written file in output/, which is still collected if its header is valid.
+    return `命令已终止：服务器磁盘剩余空间不足。${DISK_LOW_TOOLS}`
+      + '此前已经完整生成的成果可以照常交付。如果被终止的这条命令当时正在写某个文件，该文件可能不完整：在答复中说明它不可用，不要把它当作成果介绍；'
+      + '这条命令没有写文件时不必提及。'
+      + DISK_LOW_ANSWER
+  }
   const used = usage.truncated ? `超过 ${WORKSPACE_LIMITS.maxEntries} 个文件和目录` : `已用 ${formatBytes(usage.bytes)}`
   return `命令已终止：工作区${used}，超过上限 ${formatBytes(WORKSPACE_LIMITS.maxBytes)}。请删除不需要的中间文件（例如 rm -rf work/临时目录）后再继续；删除文件的命令不受影响。`
 }
