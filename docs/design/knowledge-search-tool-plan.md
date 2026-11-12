@@ -1,7 +1,7 @@
 # Agent 知识检索工具方案（KO9）
 
 **状态：** 决策 KS1～KS8 已确认（2026-11-11，全部按建议）；KS-S1 已于 2026-11-11 实施并合入（#118）；KS-S2 已完成：追问场景已于同日在本机真实 DSH 中验收（第 10 节），第 6 节要求的装配与不装配工具的对比于 2026-11-12 与 KO8 一起用真实长文档完成（[优化方案第 11 节](weknora-knowledge-optimization-plan.md#11-ko8-与-ko9-对比记录2026-11-12)），工具补齐了执行前检索漏掉的章节，KO8 不实施；执行详情区分来源不做（现有展示已列出全部资料）。[企业知识库接入 WeKnora 方案](weknora-knowledge-plan.md)（下称“原方案”）WK4 已按 KS8 修订。<br>
-**更新日期：** 2026-11-11<br>
+**更新日期：** 2026-11-12<br>
 **依据：** [企业知识库优化方案](weknora-knowledge-optimization-plan.md)第 9 节与 KO9（2026-11-11 确认）；现有代码：平台工具契约 `platform-tool-contracts.ts`、内置工具清单 `builtin-tools.ts`、平台工具桥 `platform-tool-bridge.ts`（只有 `effect: 'write'` 的工具把调用参数与结果写入 `task_operations` 并按 callId 防重放，读工具不登记）、DSH 适配器的平台工具注册（`dsh-acp-runtime-adapter.ts`）、调度器的工具装配（`attempt-dispatcher.ts`）、知识检索 `weknora-knowledge-provider.ts`、引用快照 `run_knowledge_citations`。
 
 ## 1. 要解决的问题
