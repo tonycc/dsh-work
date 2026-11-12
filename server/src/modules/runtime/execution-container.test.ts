@@ -307,13 +307,22 @@ test('free space: no command starts on a low data volume, and a running one is s
   assert.equal(result.limit, 'disk')
   assert.match(result.stderr, /服务器磁盘剩余空间不足/)
 
-  // Both notices tell the model to stop and answer: “稍后重试” made it call bash until the Attempt timed out.
+  // Both notices tell the model to stop calling container tools and answer: “稍后重试” made it call bash until the Attempt timed out.
   const refusal = await low.exec('a1', '/ws', command(), new AbortController().signal).then(() => '', (error: unknown) => (error as Error).message)
   for (const notice of [refusal, result.stderr]) {
-    assert.match(notice, /不要再调用运行命令的工具/)
-    assert.match(notice, /立即结束并答复用户/)
-    assert.doesNotMatch(notice, /稍后重试/)
+    // every tool behind the same check is named, and the remaining tools stay usable
+    assert.match(notice, /不要再调用 bash、文件搜索（glob、grep）和 python_execute/)
+    assert.match(notice, /不要用 write 等工具写脚本/)
+    assert.match(notice, /其余工具仍可使用/)
+    assert.match(notice, /答复用户：哪些已经完成；哪些没有完成/)
+    assert.match(notice, /服务器存储空间不足，需要平台管理员处理后再试/)
+    assert.match(notice, /不要出现“命令”“工具”、bash 等技术用语/)
+    assert.match(notice, /不要声称已经完成，也不要编造结果/)
+    assert.doesNotMatch(notice, /稍后重试|立即结束|重试不会成功/)
   }
+  // only a stopped command can leave a half-written file behind
+  assert.match(result.stderr, /被终止的这条命令正在写的文件可能不完整/)
+  assert.doesNotMatch(refusal, /可能不完整/)
 })
 
 test('admission: only plain reads may run alongside other tools; bash and writes must be exclusive', () => {
