@@ -11,6 +11,7 @@ import { artifactTextPreviewColumns, withTextPreview, type ArtifactTextPreviewSt
 import { stateConflict } from '../../../domain/request-errors.ts'
 import type { ContextMessage, MessagePosition, StoredConversationSummary } from '../../../domain/conversation-context.ts'
 import { recordMentionNotifications } from '../../notification/user-notification-writer.ts'
+import { stripCitationFooters } from '../../../domain/citation-footer.ts'
 
 const tenantId = 'tenant-dsh-work'
 const conversationHistoryMessageLimit = 12
@@ -617,6 +618,8 @@ export class PostgresConversationRepository {
     `
     let remaining = conversationHistoryCharacterLimit
     return recent.map(message => {
+      // 平台追加的资料页脚不发回模型（domain/citation-footer）。
+      if (message.role === 'assistant') message = { ...message, content: stripCitationFooters(message.content) }
       const prefix = message.team && message.role === 'user' && message.senderName
         ? `${message.senderName}：`
         : ''
