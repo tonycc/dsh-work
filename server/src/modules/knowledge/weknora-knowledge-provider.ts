@@ -8,7 +8,7 @@ import { knowledgeViewLevel, visibleBaseIdsSql } from './knowledge-access.ts'
 import type { KnowledgeCitation, KnowledgeProvider, KnowledgeResolution, KnowledgeToolResult } from './knowledge-provider.ts'
 import type { PostgresKnowledgeConnection } from './knowledge-connection.ts'
 import { WeKnoraRequestError, WeKnoraUnavailableError, type WeKnoraClient, type WeKnoraFailureReason } from './weknora-client.ts'
-import { knowledgeFooterHeading, knowledgeFooterNotes, stripKnowledgeFooter } from '../../domain/citation-footer.ts'
+import { knowledgeFooterHeading, knowledgeFooterNotes } from '../../domain/citation-footer.ts'
 
 const tenantId = 'tenant-dsh-work'
 const maxContextDocuments = 3
@@ -321,9 +321,7 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
     for (const name of attempt?.moved ?? []) sections.push(knowledgeFooterNotes.moved(name))
     if (attempt?.status === 'unavailable') sections.push(knowledgeFooterNotes.unavailable)
     if (!sections.length) return answer
-    // 模型照抄历史格式写在末尾的资料段落去掉，只保留平台追加的一份（domain/citation-footer）。
-    const body = stripKnowledgeFooter(answer).trim() || answer.trim()
-    return `${body}\n\n${sections.join('\n\n')}`
+    return answer.trim() ? `${answer.trim()}\n\n${sections.join('\n\n')}` : sections.join('\n\n')
   }
 
   private async retrieve(client: WeKnoraClient, query: string, scope: SelectedBaseRow[]): Promise<{

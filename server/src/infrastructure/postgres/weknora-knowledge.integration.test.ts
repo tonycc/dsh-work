@@ -552,9 +552,6 @@ test('同一文档的另一个分段续编序号，页脚合并为一行（评�
   assert.deepEqual(output.documents.map(document => document.ordinal), [2])
   const footer = await provider.addCitationFooter(result.attemptId, '回答')
   assert.match(footer, /本次检索到的资料\n- 【1】【2】库存安全水位规范（更新于 2026-08-01）$/)
-  // 模型照抄历史写在末尾的资料段落去掉，只保留平台追加的一份（KO8/KO9 对比中的重复页脚）。
-  const copied = await provider.addCitationFooter(result.attemptId, '回答\n\n本次检索到的资料\n- 【1】库存安全水位规范（更新于 2026-08-01）')
-  assert.equal(copied, '回答\n\n本次检索到的资料\n- 【1】【2】库存安全水位规范（更新于 2026-08-01）')
 })
 
 test('知识检索工具：中途收回 Agent 岗位权限后拒绝；原连接已更换与无权查看分开返回（评审 PR 118）', async () => {

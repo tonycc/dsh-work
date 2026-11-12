@@ -618,8 +618,11 @@ export class PostgresConversationRepository {
     `
     let remaining = conversationHistoryCharacterLimit
     return recent.map(message => {
-      // 平台追加的资料页脚不发回模型（domain/citation-footer）。
-      if (message.role === 'assistant') message = { ...message, content: stripCitationFooters(message.content) }
+      // 平台追加的资料页脚不发回模型（domain/citation-footer）；整条只有页脚时保留原文。
+      if (message.role === 'assistant') {
+        const stripped = stripCitationFooters(message.content)
+        if (stripped.trim()) message = { ...message, content: stripped }
+      }
       const prefix = message.team && message.role === 'user' && message.senderName
         ? `${message.senderName}：`
         : ''
