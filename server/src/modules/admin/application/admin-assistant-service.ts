@@ -467,7 +467,7 @@ export class AdminAssistantService {
   async cancel(userId: string, runId: string) {
     const owned = await this.requireRun(userId, runId)
     if (owned.purpose === 'admin-skill-install') return this.installation.cancel(userId, runId)
-    await this.authorization.requireAdminRunPurpose(userId, owned.purpose ?? 'admin-assistant')
+    await this.authorization.requireAdminRunPurpose(userId, owned.purpose ?? 'admin-skill-install')
     await this.orchestration.cancelAdminRun(runId, userId)
     await this.database`update admin_assistant_task_proposals set status = 'cancelled', resolved_at = now() where tenant_id = ${tenantId} and run_id = ${runId} and status = 'pending'`
     await this.database`update admin_assistant_action_plans set status = 'cancelled', resolved_at = now(), updated_at = now() where tenant_id = ${tenantId} and run_id = ${runId} and status = 'pending'`
@@ -478,7 +478,7 @@ export class AdminAssistantService {
   async retry(userId: string, runId: string) {
     const owned = await this.requireRun(userId, runId)
     if (owned.purpose === 'admin-skill-install') return this.installation.retry(userId, runId)
-    await this.authorization.requireAdminRunPurpose(userId, owned.purpose ?? 'admin-assistant')
+    await this.authorization.requireAdminRunPurpose(userId, owned.purpose ?? 'admin-skill-install')
     await this.database`delete from admin_assistant_task_proposals where tenant_id = ${tenantId} and run_id = ${runId} and status <> 'confirmed'`
     await this.database`delete from admin_assistant_action_plans where tenant_id = ${tenantId} and run_id = ${runId} and status <> 'executed'`
     await this.orchestration.retryAdminRun(runId, userId)

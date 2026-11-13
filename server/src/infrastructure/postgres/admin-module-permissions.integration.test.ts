@@ -227,3 +227,18 @@ test('存量清单：列出由非平台管理员授出、超出其当前权限�
   assert.equal(legacy.grantedBy, ids.orgAdmin)
   assert.ok(!report.some(item => item.grantedBy === ids.platformAdmin), '平台管理员授出的不列入')
 })
+
+test('Agent 创建与重新启用：执行授权与开放能力同样不超过操作人', async () => {
+  const agents = new PostgresAgentService(database)
+  const draft = (id: string, actor: string, executionRoleIds: string[]) => agents.createAgent({
+    id, name: '创建授权测试', description: '验证创建时的执行授权上限。', owner: 'Agent 管理员', department: '平台治理',
+    visibleRoleIds: ['role-employee'], welcomeMessage: '', examplePrompts: ['整理这段文字'],
+    systemPrompt: '你是文本整理 Agent，只使用当前输入。', maxOutputBytes: 65536, maxToolCalls: 20, timeoutSeconds: 300,
+    skills: [], changeSummary: '创建测试草稿', actor, executionRoleIds,
+  })
+  await assert.rejects(draft(`agent-amp-c-${randomUUID().slice(0, 16)}`, ids.agentAdmin, [roles.sales]), /缺少权限 knowledge:docs/)
+  const allowedId = `agent-amp-c-${randomUUID().slice(0, 16)}`
+  await draft(allowedId, ids.agentAdmin, [roles.basic])
+  await database`insert into agent_principal_role_grants (tenant_id, principal_id, role_id) values (${tenantId}, ${`principal-agent-${allowedId}`}, ${roles.sales})`
+  await assert.rejects(agents.setStatus({ agentId: allowedId, status: 'published', actor: ids.agentAdmin }), /超出了你自己的授权/)
+})

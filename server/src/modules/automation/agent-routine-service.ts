@@ -217,7 +217,8 @@ export class AgentRoutineService {
     const current = await this.get(id)
     if (current.agentId !== agentId) throw missing()
     if (!['draft', 'paused'].includes(current.status) || current.revision !== patch.expectedRevision) throw conflict('任务修订或状态已变化')
-    if (patch.recipientUserId !== undefined && patch.recipientUserId !== current.recipientUserId) {
+    if ((patch.recipientUserId !== undefined && patch.recipientUserId !== current.recipientUserId)
+      || (patch.workspaceId !== undefined && patch.workspaceId !== current.workspaceId)) {
       await assertAgentCapabilityWithinActor(this.database, actorUserId, agentId)
     }
     const versionId = patch.agentVersionId ?? current.agentVersionId
