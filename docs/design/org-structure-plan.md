@@ -88,7 +88,7 @@
 ### 6.4 现有代码需要修改的地方
 
 - **角色读取点的来源过滤。** 计算有效权限的查询改为同时接受 `local` 和 `department:%`：`identity/session-repository.ts`（解析会话权限）、`authorization/postgres-authorization-service.ts`（身份、角色指纹与项目空间公共数据范围）、`workbench/application/postgres-workspace-member-service.ts`（员工端访问资格）、`identity/administration-service.ts`（已授权人数与角色人数）。
-- **保持只认直接授予的地方。** 平台管理员与管理写权限的判定（`authorization/platform-admin-actor.ts`、`skill/admin-skill-installation-service.ts`、`admin/application/postgres-grant-reconciliation-service.ts`、`identity/local-auth-service.ts`、`administration-service.ts` 的最后一位管理员保护）仍只认 `local`：管理类角色不能授给部门（OD8），这里保持只认直接授予作为第二道防线。管理员直接授予和撤销角色仍然只操作 `local` 来源的行。
+- **保持只认直接授予的地方。** 平台管理员与管理写权限的判定（`authorization/admin-actor.ts`，2026-11-13 起按模块判定、仍只认 `local`、`skill/admin-skill-installation-service.ts`、`admin/application/postgres-grant-reconciliation-service.ts`、`identity/local-auth-service.ts`、`administration-service.ts` 的最后一位管理员保护）仍只认 `local`：管理类角色不能授给部门（OD8），这里保持只认直接授予作为第二道防线。管理员直接授予和撤销角色仍然只操作 `local` 来源的行。
 - **员工列表。** “员工与权限”的员工角色分为直接授予（`roles`，可移除）和来自部门（`departmentRoles`，注明部门，只能在组织架构中修改）。
 
 ## 7. 已确认的默认值

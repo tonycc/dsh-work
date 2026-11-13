@@ -9,7 +9,7 @@ import type { AgentRuntimePort, McpConnectionSnapshot, McpRuntimeConnection, Run
 import { normalizeAgentMcpScope } from './agent-mcp-scope.ts'
 import { mcpCapabilityDigest, mergeMcpCapabilities, normalizeMcpCapabilities, pendingMcpCapabilities, type McpCapability } from './mcp-capabilities.ts'
 import { normalizeBearerToken, type PostgresEncryptedCredentialStore } from './postgres-encrypted-credential-store.ts'
-import { requirePlatformAdminActor } from '../authorization/platform-admin-actor.ts'
+import { requireAdminModuleActor } from '../authorization/admin-actor.ts'
 
 const tenantId = 'tenant-dsh-work'
 
@@ -113,7 +113,7 @@ export class PostgresMcpConnectorService implements McpScopePort {
   }
 
   async testMcpConnection(input: TestMcpConnectionInput): Promise<McpConnectionTestResult> {
-    const actor = await requirePlatformAdminActor(this.database, input.actor)
+    const actor = await requireAdminModuleActor(this.database, input.actor, 'connector', 'write')
     try {
       const inspected = await this.inspectRegistrationInput(input)
       await this.audit(
@@ -140,7 +140,7 @@ export class PostgresMcpConnectorService implements McpScopePort {
 
   /** 登记前再次通过 DSH 发现；登记时看到的完整清单即为首个生效清单。 */
   async registerMcpConnector(input: RegisterMcpConnectorInput): Promise<ConnectorDefinition> {
-    const actor = await requirePlatformAdminActor(this.database, input.actor)
+    const actor = await requireAdminModuleActor(this.database, input.actor, 'connector', 'write')
     const id = `connector-mcp-${randomUUID()}`
     if (!input.scopeDescription.trim()) throw stateConflict('整体权限范围不能为空')
     const inspected = await this.inspectRegistrationInput(input, id)
@@ -193,7 +193,7 @@ export class PostgresMcpConnectorService implements McpScopePort {
    * Tool 立即下线；新增或 Schema 变化的 Tool 进入待确认，须管理员确认后才生效。
    */
   async checkMcpConnector(input: { connectorId: string; actor: string }): Promise<ConnectorDefinition> {
-    const actor = await requirePlatformAdminActor(this.database, input.actor)
+    const actor = await requireAdminModuleActor(this.database, input.actor, 'connector', 'write')
     const checkedCredential = await this.readCredentialRevision(this.database, input.connectorId)
     const started = performance.now()
     let status: 'healthy' | 'offline' = 'offline'
@@ -265,7 +265,7 @@ export class PostgresMcpConnectorService implements McpScopePort {
 
   /** 把当前发现清单整体确认为生效清单；清单已再次变化时返回冲突，要求刷新后再确认。 */
   async approveMcpCapabilities(input: { connectorId: string; capabilityDigest: string; actor: string }): Promise<ConnectorDefinition> {
-    const actor = await requirePlatformAdminActor(this.database, input.actor)
+    const actor = await requireAdminModuleActor(this.database, input.actor, 'connector', 'write')
     let approvedCount = 0
     await this.database.begin(async transaction => {
       const [profile] = await transaction<{ capabilityDigest: string | null; capabilitySnapshot: McpCapability[] }[]>`
@@ -294,7 +294,7 @@ export class PostgresMcpConnectorService implements McpScopePort {
 
   /** 受控软删除：后续解析立即排除该连接器；独占密文删除，治理证据与调用审计保留。 */
   async deleteMcpConnector(input: { connectorId: string; actor: string }): Promise<McpConnectorDeletionResult> {
-    const actor = await requirePlatformAdminActor(this.database, input.actor)
+    const actor = await requireAdminModuleActor(this.database, input.actor, 'connector', 'write')
     let credentialDestroyed = false
     await this.database.begin(async transaction => {
       const [connector] = await transaction<{ credentialRefId: string | null }[]>`
@@ -327,7 +327,7 @@ export class PostgresMcpConnectorService implements McpScopePort {
   }
 
   async rotateMcpCredential(input: { connectorId: string; bearerToken: string; actor: string }): Promise<ConnectorDefinition> {
-    const actor = await requirePlatformAdminActor(this.database, input.actor)
+    const actor = await requireAdminModuleActor(this.database, input.actor, 'connector', 'write')
     if (!this.credentialSecrets) throw mcpCredentialStoreUnavailable()
     const secrets = this.credentialSecrets
     await this.database.begin(async transaction => {
@@ -383,7 +383,7 @@ export class PostgresMcpConnectorService implements McpScopePort {
   }
 
   async setMcpConnectorStatus(input: { connectorId: string; status: 'enabled' | 'disabled'; actor: string }): Promise<ConnectorDefinition> {
-    const actor = await requirePlatformAdminActor(this.database, input.actor)
+    const actor = await requireAdminModuleActor(this.database, input.actor, 'connector', 'write')
     await this.database.begin(async transaction => {
       const [connector] = await transaction<{ authType: string; credentialBackend: string | null; credentialVersion: number | null }[]>`
         select c.auth_type as "authType", cr.backend as "credentialBackend", cs.version as "credentialVersion"
@@ -478,7 +478,7 @@ export class PostgresMcpConnectorService implements McpScopePort {
     note: string
     actor: string
   }): Promise<void> {
-    const actor = await requirePlatformAdminActor(this.database, input.actor)
+    const actor = await requireAdminModuleActor(this.database, input.actor, 'connector', 'write')
     if (input.result !== 'success' && input.result !== 'failed') throw invalidRequest('result 仅支持 success 或 failed')
     const note = typeof input.note === 'string' ? input.note.trim() : ''
     if (!note || note.length > 1000) throw invalidRequest('请填写 1～1000 字的核对依据')

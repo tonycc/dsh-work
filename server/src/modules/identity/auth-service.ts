@@ -18,6 +18,7 @@ import type {
   VerifiedToken,
 } from './types.ts'
 import { LOCAL_PERMISSIONS } from './types.ts'
+import { hasAdminAudienceAccess, hasModuleAdministrationAccess } from '../../domain/admin-permissions.ts'
 
 const bootstrapScope = 'platform.application.bootstrap'
 
@@ -474,14 +475,10 @@ function toExternalIdentity(user: CurrentPlatformUser) {
   }
 }
 
-function hasAdminAccess(permissions: string[]) {
-  const granted = new Set(permissions)
-  return granted.has(LOCAL_PERMISSIONS.adminAll)
-    || granted.has(LOCAL_PERMISSIONS.adminRead)
-    || granted.has(LOCAL_PERMISSIONS.adminWrite)
-    || granted.has(LOCAL_PERMISSIONS.auditRead)
-}
-
+/**
+ * 会话层只判断能否进入管理端：读请求需要任一管理端准入权限（模块管理、全模块或审计读取），
+ * 写请求需要任一模块管理权限。具体模块与级别由路由对照表判定（管理端模块权限方案第 6 节）。
+ */
 export function assertAudienceAccess(audience: ApiAudience, permissions: string[], unsafe: boolean) {
   const granted = new Set(permissions)
   if (audience === 'workbench') {
@@ -491,12 +488,12 @@ export function assertAudienceAccess(audience: ApiAudience, permissions: string[
     return
   }
   if (unsafe) {
-    if (!granted.has(LOCAL_PERMISSIONS.adminAll) && !granted.has(LOCAL_PERMISSIONS.adminWrite)) {
+    if (!hasModuleAdministrationAccess(granted)) {
       throw new IdentityAccessError(403, 'permission_denied', '当前用户没有管理写权限')
     }
     return
   }
-  if (!hasAdminAccess(permissions)) {
+  if (!hasAdminAudienceAccess(granted)) {
     throw new IdentityAccessError(403, 'permission_denied', '当前用户没有管理后台访问权限')
   }
 }

@@ -262,7 +262,7 @@ flowchart LR
 ## 9. 身份、安全与数据边界
 
 - 正式认证始终支持独立账号密码，AI Hub 接入配置有效时自动提供附加登录入口，不提供管理端登录模式设置；两类账号不绑定或合并。独立密码以加盐 scrypt 保存，OIDC Token 加密保存在服务端 Session。两类账号复用本地授权机制，Cookie 与 Session 按提供方隔离，生产均要求 HTTPS 和 Secure Cookie；
-- Workbench 与 Admin 分别校验 Audience；每次 API 请求从 PostgreSQL 解析当前本地角色、权限、数据范围和授权版本；
+- Workbench 与 Admin 分别校验 Audience；每次 API 请求从 PostgreSQL 解析当前本地角色、权限、数据范围和授权版本；管理端按模块校验查看与修改权限，路由入口对照表默认拒绝、服务层只认本地授予，非平台管理员授出的权限不能超过本人（[功能规则第 13 节](feature-rules.md#13-管理端模块权限amp-s1)）；
 - AI Hub 环境中明确指定的初始管理员只可一次性初始化首位本地平台管理员；应用负责人和平台登记人不因此获权，之后所有授权在 dsh-work 管理端维护；
 - API 不信任浏览器提交的 `actor`、用户 ID、角色或数据范围；
 - Workspace、Agent、Skill、Tool、Connector、文件和 Artifact 都在服务端执行对象级授权；

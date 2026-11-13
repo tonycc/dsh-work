@@ -1,4 +1,4 @@
-import type { RegisterMcpConnectorInput, TestMcpConnectionInput } from '../../domain/types.ts'
+import type { ConnectorDefinition, RegisterMcpConnectorInput, TestMcpConnectionInput } from '../../domain/types.ts'
 import type { PostgresMcpConnectorService } from '../../modules/tool/postgres-mcp-connector-service.ts'
 import type { BuiltinToolStatus } from '../../modules/runtime/builtin-tools.ts'
 import { envelope, readJsonBody, requireRequestIdentity, type Router } from '../router.ts'
@@ -8,7 +8,11 @@ const basePath = '/api/admin/v1'
 /** MCP Connector 管理与内置工具只读展示；内置工具本身由代码注册表管理。 */
 export function registerToolRoutes(router: Router, mcp: PostgresMcpConnectorService, builtinToolStatus: () => Promise<BuiltinToolStatus>) {
   router.get(`${basePath}/runtimes/builtin-tools`, async () => envelope('admin', await builtinToolStatus(), 'postgres'))
-  router.get(`${basePath}/connectors`, async () => envelope('admin', await mcp.getMcpConnectors(), 'postgres'))
+  router.get(`${basePath}/connectors`, async (_request, context) => {
+    const connectors = await mcp.getMcpConnectors()
+    // 只凭 Agent 修改权限读取时（管理端模块权限方案 5.2）不返回地址、凭据引用与待确认能力。
+    return envelope('admin', context.adminView === 'selector' ? connectors.map(connectorSelectorView) : connectors, 'postgres')
+  })
   router.get(`${basePath}/connectors/mcp/invocations`, async (_request, context) => envelope(
     'admin',
     await mcp.listMcpInvocationAudits(context.url.searchParams.get('connector_id') ?? ''),
@@ -80,4 +84,12 @@ export function registerToolRoutes(router: Router, mcp: PostgresMcpConnectorServ
       actor: requireRequestIdentity(context, 'admin').userId,
     }), 'postgres')
   })
+}
+
+function connectorSelectorView(connector: ConnectorDefinition) {
+  const { id, name, system, status, toolCount, protocol, scopeDescription, mcp } = connector
+  return {
+    id, name, system, status, toolCount, protocol, scopeDescription,
+    ...(mcp ? { mcp: { serverName: mcp.serverName, approvalStatus: mcp.approvalStatus, capabilityCount: mcp.capabilityCount, capabilities: mcp.capabilities } } : {}),
+  }
 }

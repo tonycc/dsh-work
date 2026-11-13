@@ -205,7 +205,7 @@ test('待审核列表与详情：未试运行不能发布；试运行通过后�
   assert.match(script.content, /openpyxl/)
 
   await assert.rejects(reviews.approve(ADMIN, submitted.submissionId, { versionId: submitted.versionId, visibleRoleIds: null }), /严格试运行/)
-  await assert.rejects(reviews.startTrial(EMPLOYEE, submitted.submissionId, submitted.versionId), /不是平台管理员/)
+  await assert.rejects(reviews.startTrial(EMPLOYEE, submitted.submissionId, submitted.versionId), /没有.*的修改权限/)
   const trial = await reviews.startTrial(ADMIN, submitted.submissionId, submitted.versionId)
   assert.equal(trial.status, 'passed', trial.resultSummary)
   assert.equal((await reviews.getDetail(submitted.submissionId)).trial.status, 'passed')

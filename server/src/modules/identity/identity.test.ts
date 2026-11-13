@@ -346,7 +346,7 @@ test('admin API read permissions are enforced per route', () => {
   ))
   assert.throws(
     () => assertApiRouteAccess(auditIdentity, '/api/admin/v1/agents', 'GET'),
-    /管理读取权限/,
+    /没有Agent的查看权限/,
   )
 
   const adminReadIdentity = adminIdentity([LOCAL_PERMISSIONS.adminRead])
@@ -361,7 +361,7 @@ test('admin API read permissions are enforced per route', () => {
   )
   assert.throws(
     () => assertApiRouteAccess(adminReadIdentity, '/api/admin/v1/agents', 'POST'),
-    /管理写权限/,
+    /没有Agent的修改权限/,
   )
 })
 

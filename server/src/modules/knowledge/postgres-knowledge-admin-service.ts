@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import type { DatabaseClient } from '../../infrastructure/postgres/database.ts'
 import type { AuditTrail } from '../../domain/audit-trail.ts'
 import { dependencyUnavailable, invalidRequest, notFound, RequestError, stateConflict } from '../../domain/request-errors.ts'
-import { requirePlatformAdminActor } from '../authorization/platform-admin-actor.ts'
+import { requireAdminModuleActor } from '../authorization/admin-actor.ts'
 import type { PostgresEncryptedCredentialStore } from '../tool/postgres-encrypted-credential-store.ts'
 import { knowledgeCredentialRefId, normalizeApiKey, normalizeBaseUrl, sameBaseUrl, type PostgresKnowledgeConnection } from './knowledge-connection.ts'
 import { WeKnoraRequestError, WeKnoraUnavailableError, type WeKnoraClient } from './weknora-client.ts'
@@ -159,7 +159,7 @@ export class PostgresKnowledgeAdminService {
     embeddingModelId?: string | null
     enabled: boolean
   }): Promise<KnowledgeAdminOverview> {
-    await requirePlatformAdminActor(this.database, actorId)
+    await requireAdminModuleActor(this.database, actorId, 'knowledge', 'write')
     const baseUrl = normalizeBaseUrl(input.baseUrl)
     const embeddingModelId = input.embeddingModelId?.trim() || null
     if (embeddingModelId && embeddingModelId.length > 128) throw invalidRequest('嵌入模型 ID 不能超过 128 个字符')
@@ -225,7 +225,7 @@ export class PostgresKnowledgeAdminService {
 
   /** 用填写的（或已保存的）地址与 Key 调用 WeKnora 的知识库列表接口，只返回结果与原因分类。 */
   async testConnection(actorId: string, input: { baseUrl?: string; apiKey?: string }): Promise<{ ok: boolean; reason: string | null }> {
-    await requirePlatformAdminActor(this.database, actorId)
+    await requireAdminModuleActor(this.database, actorId, 'knowledge', 'write')
     const baseUrl = input.baseUrl ? normalizeBaseUrl(input.baseUrl) : undefined
     const apiKey = normalizeApiKey(input.apiKey)
     const probe = await this.connection.probeClient({ ...(baseUrl ? { baseUrl } : {}), ...(apiKey ? { apiKey } : {}) })
@@ -309,7 +309,7 @@ export class PostgresKnowledgeAdminService {
   }
 
   async createBase(actorId: string, input: { name: string; description?: string; ownerDepartmentId: string }): Promise<KnowledgeAdminBaseList> {
-    await requirePlatformAdminActor(this.database, actorId)
+    await requireAdminModuleActor(this.database, actorId, 'knowledge', 'write')
     const name = input.name.trim()
     if (!name || name.length > 60) throw invalidRequest('名称长度为 1～60 个字')
     const description = (input.description ?? '').trim()
@@ -344,7 +344,7 @@ export class PostgresKnowledgeAdminService {
   }
 
   async updateOwner(actorId: string, knowledgeBaseId: string, ownerDepartmentId: string): Promise<KnowledgeAdminBaseList> {
-    await requirePlatformAdminActor(this.database, actorId)
+    await requireAdminModuleActor(this.database, actorId, 'knowledge', 'write')
     const base = await this.requireBase(knowledgeBaseId)
     const owner = await this.requireDepartment(ownerDepartmentId, { allowRoot: false })
     await this.database`
@@ -356,7 +356,7 @@ export class PostgresKnowledgeAdminService {
   }
 
   async addGrant(actorId: string, knowledgeBaseId: string, input: { departmentId: string; includeDescendants?: boolean }): Promise<KnowledgeAdminBaseList> {
-    await requirePlatformAdminActor(this.database, actorId)
+    await requireAdminModuleActor(this.database, actorId, 'knowledge', 'write')
     const base = await this.requireBase(knowledgeBaseId)
     const department = await this.requireDepartment(input.departmentId, { allowRoot: true })
     // 已有有效授权时按本次选择更新“含下级”；完全相同时不写入也不记审计。
@@ -379,7 +379,7 @@ export class PostgresKnowledgeAdminService {
 
   /** 平台管理员可以撤销任何授权，包括员工授予的，也可以撤到没有任何授权（员工都看不到）。 */
   async revokeGrant(actorId: string, knowledgeBaseId: string, grantId: string): Promise<KnowledgeAdminBaseList> {
-    await requirePlatformAdminActor(this.database, actorId)
+    await requireAdminModuleActor(this.database, actorId, 'knowledge', 'write')
     const base = await this.requireBase(knowledgeBaseId)
     const [revoked] = await this.database<{ departmentName: string }[]>`
       with revoked as (
@@ -396,7 +396,7 @@ export class PostgresKnowledgeAdminService {
   }
 
   async deleteBase(actorId: string, knowledgeBaseId: string): Promise<KnowledgeAdminBaseList> {
-    await requirePlatformAdminActor(this.database, actorId)
+    await requireAdminModuleActor(this.database, actorId, 'knowledge', 'write')
     const base = await this.requireBase(knowledgeBaseId)
     const client = await this.requireClient()
     try {
@@ -418,7 +418,7 @@ export class PostgresKnowledgeAdminService {
    * 用于把地址改回原实例，或新地址只是同一实例的另一个访问地址。
    */
   async restoreBase(actorId: string, knowledgeBaseId: string): Promise<KnowledgeAdminBaseList> {
-    await requirePlatformAdminActor(this.database, actorId)
+    await requireAdminModuleActor(this.database, actorId, 'knowledge', 'write')
     const base = await this.requireBase(knowledgeBaseId)
     if (base.status !== 'unavailable') throw stateConflict('知识库不需要恢复')
     const client = await this.requireClient()

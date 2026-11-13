@@ -9,13 +9,14 @@ import {
   type DataProtectionAdminPort,
 } from '../../domain/data-protection.ts'
 import { envelope, readJsonBody, requireRequestIdentity, type Router, type RouteContext } from '../router.ts'
+import { isPlatformAdmin } from '../../domain/admin-permissions.ts'
 
 const basePath = '/api/admin/v1/data-protection'
 
 /** 词表和白名单是机密内容：查看也需要单独授权，不默认给所有管理员（方案 5.8）。 */
 function requireTermAccess(context: RouteContext) {
   const identity = requireRequestIdentity(context, 'admin')
-  if (!identity.permissions.includes('admin:*') && !identity.permissions.includes(DATA_PROTECTION_TERMS_PERMISSION)) {
+  if (!isPlatformAdmin(identity.permissions) && !identity.permissions.includes(DATA_PROTECTION_TERMS_PERMISSION)) {
     throw accessDenied('当前用户没有数据防护词表权限')
   }
   return identity

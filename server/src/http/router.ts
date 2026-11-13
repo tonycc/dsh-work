@@ -9,6 +9,7 @@ import type {
   RequestIdentity,
 } from '../modules/identity/types.ts'
 import { invalidRequest, stateConflict } from '../domain/request-errors.ts'
+import { decideAdminRouteAccess, type AdminRouteView } from '../domain/admin-permissions.ts'
 
 export interface ApiMeta {
   api: 'workbench' | 'admin' | 'system'
@@ -25,6 +26,8 @@ export interface RouteContext {
   params: Record<string, string>
   url: URL
   identity?: RequestIdentity
+  /** 管理端读取的数据视图（管理端模块权限方案 5.2）；未设置等同 `full`。 */
+  adminView?: AdminRouteView
 }
 
 export interface HttpResult {
@@ -135,8 +138,8 @@ export class Router {
       const identity = audience && this.authenticateApi
         ? await this.authenticateApi(request, audience)
         : undefined
-      if (identity) assertApiRouteAccess(identity, url.pathname, request.method)
-      const result = await route.handler(request, { params, url, identity }, response)
+      const adminView = identity ? assertApiRouteAccess(identity, url.pathname, request.method) : 'full'
+      const result = await route.handler(request, { params, url, identity, adminView }, response)
       if (response.headersSent || response.writableEnded) return
       if (isHttpResult(result)) {
         if (result.status >= 400 && result.status <= 599) logErrorResult(result, method, route.path)
@@ -264,42 +267,20 @@ export function sessionAuthorizationContext(identity: RequestIdentity) {
   }
 }
 
+/**
+ * 管理端路由入口的模块权限判定（管理端模块权限方案 5.1）。对照表与判定在
+ * `domain/admin-permissions.ts`；未登记的管理端路径一律拒绝。返回本次请求的数据视图：
+ * 只凭 Agent 修改权限读取跨模块候选列表时为 `selector`，处理函数只返回精简字段。
+ */
 export function assertApiRouteAccess(
   identity: RequestIdentity,
   path: string,
   method: string | undefined,
-) {
-  if (identity.audience !== 'admin') return
-  const permissions = new Set(identity.permissions)
-  const isPlatformAdmin = permissions.has('admin:*')
-  if (path === '/api/admin/v1/session') return
-  if (!['GET', 'HEAD', 'OPTIONS'].includes(method ?? 'GET')) {
-    const isAssistantConversationCommand = path === '/api/admin/v1/assistant/messages'
-      || /^\/api\/admin\/v1\/assistant\/runs\/[^/]+\/(cancel|retry)$/.test(path)
-    if (path.startsWith('/api/admin/v1/identity/') && !isPlatformAdmin) {
-      throw routePermissionDenied('只有平台管理员可以修改员工授权和身份同步配置')
-    }
-    if (!isPlatformAdmin
-      && !permissions.has('admin:write')
-      && !(isAssistantConversationCommand && permissions.has('admin:read'))) {
-      throw routePermissionDenied('当前用户没有管理写权限')
-    }
-    return
-  }
-  const auditRoute = path === '/api/admin/v1/audit-events'
-    || path === '/api/admin/v1/operations/summary'
-    || path.startsWith('/api/admin/v1/operations/runs/')
-  const allowed = auditRoute
-    ? isPlatformAdmin
-      || permissions.has('audit:read')
-    : isPlatformAdmin
-      || permissions.has('admin:read')
-      || permissions.has('admin:write')
-  if (!allowed) {
-    throw routePermissionDenied(
-      auditRoute ? '当前用户没有审计读取权限' : '当前用户没有管理读取权限',
-    )
-  }
+): AdminRouteView {
+  if (identity.audience !== 'admin') return 'full'
+  const decision = decideAdminRouteAccess(identity.permissions, path, method)
+  if (!decision.allowed) throw routePermissionDenied(decision.message)
+  return decision.view
 }
 
 export async function readJsonBody<T>(request: IncomingMessage, limitBytes = 1024 * 1024): Promise<T> {

@@ -1,6 +1,6 @@
 # 管理端模块权限方案
 
-**状态：** 决策已确认（AP1～AP10，2026-11-13），未实施。本文能力在实施并通过第 9 节验收前均不可用，现行规则仍以[功能规则](../development/feature-rules.md)和代码为准。<br>
+**状态：** 决策已确认（AP1～AP10，2026-11-13）。AMP-S1（服务端）已达到代码级，P1 集成测试覆盖 5.3 子集规则与管理 Run 用途；AMP-S2（管理端前端）未实施，P0/P2 未验收。其余能力在实施并通过第 9 节验收前均不可用，现行规则仍以[功能规则](../development/feature-rules.md)和代码为准。<br>
 **更新日期：** 2026-11-13（初稿）；2026-11-13（按 PR 评审修订：补“授出不超过自身”原则，堵住组织架构与 Agent 岗位权限两条提权路径；定义三类管理员；钉钉与独立账号保持只限平台管理员；补管理助手读取范围与 Run 内校验；更正现状描述）；2026-11-13（AP1～AP10 按建议确认：模块不合并，Session 摘要归运营查看）<br>
 **依据：** 当前身份与授权实现（`server/src/modules/identity`、`server/src/modules/authorization`、`server/src/http/router.ts`）、[管理端 OpenAPI](../development/openapi-admin.json)、[数据模型第 1 节](data-model.md#1-租户身份与授权)。<br>
 **关联：** [架构总览第 9 节](../development/overview.md#9-身份安全与数据边界)、[功能规则第 8 节 Agent 岗位权限](../development/feature-rules.md#8-agent-岗位权限)、[企业组织架构方案](org-structure-plan.md)（部门授权）、[发往模型的数据防护方案](model-data-protection-plan.md)（`data-protection:terms`）。
@@ -89,7 +89,7 @@
 
 **判定规则：** 请求 `admin:<m>:read` 时，持有 `admin:*`、`admin:read`、`admin:write`、`admin:<m>:read`、`admin:<m>:write` 任一即通过；请求 `admin:<m>:write` 时，持有 `admin:*`、`admin:write`、`admin:<m>:write` 任一即通过。“平台管理员专属”的范围只认 `admin:*`。
 
-判定集中在一个模块（建议 `server/src/modules/identity/admin-permissions.ts`）：
+判定集中在两个文件：纯函数与路由对照表在 `server/src/domain/admin-permissions.ts`，服务层数据库复核在 `server/src/modules/authorization/admin-actor.ts`：
 
 - `hasAdminModuleAccess(permissions, module, level)`：基于请求身份的纯函数，供路由与前端摘要使用；
 - `requireAdminModuleActor(sql, userId, module, level)`：服务层在事务内复核，只认本地授予、有效期内的启用角色，替代现有 `requirePlatformAdminActor`、`requirePlatformAdmin`、`requireAdminReader` 的模块类用途；
@@ -166,7 +166,7 @@
 | --- | --- | --- |
 | [router.ts](../../server/src/http/router.ts) `assertApiRouteAccess` | 按 GET/非 GET 区分 `admin:read` / `admin:write`；`/identity/` 写操作限 `admin:*`；审计路径限 `audit:read`；助手发消息与 Run 取消、重试对 `admin:read` 放行 | 改为“路径前缀 → 模块 + 读写级别”对照表，未登记路径拒绝；保留 identity、审计特例；钉钉改为平台管理员专属；助手按 5.5 |
 | [auth-service.ts](../../server/src/modules/identity/auth-service.ts) `hasAdminAccess`、`assertAudienceAccess` | 准入接受 `admin:*`、`admin:read`、`admin:write`、`audit:read`（不含 `data-protection:terms`）；写请求要求 `admin:*` 或 `admin:write` | 准入改为持有任一管理权限码（含模块码）；写请求的模块级判定交给路由对照表，会话层不再按全局写权限拒绝；只持 `data-protection:terms` 不构成准入 |
-| [platform-admin-actor.ts](../../server/src/modules/authorization/platform-admin-actor.ts) `requirePlatformAdminActor`、`findPlatformAdminActor` | 本地授予的 `admin:*` 或 `admin:write`；Agent、组织、知识库、MCP、授权等服务复用 | 请求类用途改为 `requireAdminModuleActor`；后台以管理员身份执行的场景（如预置 Skill 创建专家的 `findPlatformAdminActor`）不属于请求授权，保留全模块写口径 |
+| [admin-actor.ts](../../server/src/modules/authorization/admin-actor.ts)（原 `platform-admin-actor.ts`）`requirePlatformAdminActor`、`findPlatformAdminActor` | 本地授予的 `admin:*` 或 `admin:write`；Agent、组织、知识库、MCP、授权等服务复用 | 请求类用途改为 `requireAdminModuleActor`；后台以管理员身份执行的场景（如预置 Skill 创建专家的 `findPlatformAdminActor`）不属于请求授权，保留全模块写口径 |
 | `postgres-authorization-service.ts` `requirePlatformAdmin`、`requireAdminReader`（约 812 行） | 前者本地 `admin:*` 或 `admin:write`；后者本地 `admin:*`、`admin:write` 或 `admin:read` | 两者被经验、审批、Skill 安装、管理助手、员工端 task-execution 等路由与服务调用，逐处改为模块判定 |
 | `postgres-skill-service.ts`、`admin-skill-installation-service.ts`、`postgres-operations-service.ts`、`postgres-grant-reconciliation-service.ts` 中的 SQL | 各自写了 `r.permissions ? 'admin:*' or ... 'admin:write'` | 改为调用共用判定：Skill 两处归 Skill 模块，运行治理归审计或对应模块，授权对账归工具与连接 |
 | `skill-submission-review-service.ts` | `requirePlatformAdmin` | `admin:skill:write` |

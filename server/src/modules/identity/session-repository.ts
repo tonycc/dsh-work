@@ -5,6 +5,7 @@ import type { DatabaseClient, DatabaseTransaction } from '../../infrastructure/p
 import type { ApiAudience } from './types.ts'
 import { authorizationDenied } from '../../domain/authorization-errors.ts'
 import { invalidRequest, notFound, stateConflict } from '../../domain/request-errors.ts'
+import { hasModuleAdministrationAccess } from '../../domain/admin-permissions.ts'
 
 const tenantId = 'tenant-dsh-work'
 
@@ -441,7 +442,7 @@ export class IdentitySessionRepository {
       profile: {
         id: user.id,
         name: user.name,
-        title: roleTitle(role),
+        title: roleTitle(role, user.permissions),
         department: user.department,
         avatarText: [...user.name][0] ?? '用',
         role,
@@ -668,6 +669,8 @@ function primaryRole(roleCodes: string[], permissions: string[]): UserRole {
     return 'auditor'
   }
   if (granted.has('admin:write') || granted.has('admin:read')) return 'business_admin'
+  // 只持有模块权限码（管理端模块权限方案 5.1）的管理员同样归入业务管理员，标题显示“模块管理员”。
+  if (hasModuleAdministrationAccess(granted)) return 'business_admin'
   if (granted.has('audit:read')) return 'auditor'
   if (roles.has('department_manager') || granted.has('workbench:manage')) {
     return 'department_manager'
@@ -675,7 +678,8 @@ function primaryRole(roleCodes: string[], permissions: string[]): UserRole {
   return 'employee'
 }
 
-function roleTitle(role: UserRole) {
+function roleTitle(role: UserRole, permissions: string[]) {
+  if (role === 'business_admin' && !permissions.includes('admin:read') && !permissions.includes('admin:write')) return '模块管理员'
   if (role === 'platform_admin') return 'AI 平台管理员'
   if (role === 'business_admin') return '业务管理员'
   if (role === 'auditor') return '安全审计员'

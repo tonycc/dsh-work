@@ -19,7 +19,7 @@ import type { McpScopePort } from '../tool/postgres-mcp-connector-service.ts'
 import { agentBuiltinToolNames, parseBuiltinToolReference, unavailableSkillTools } from '../runtime/builtin-tools.ts'
 import type { McpConnectionSnapshot } from '../runtime/runtime-types.ts'
 import { authorizationDenied } from '../../domain/authorization-errors.ts'
-import { requirePlatformAdminActor } from '../authorization/platform-admin-actor.ts'
+import { requireAdminModuleActor } from '../authorization/admin-actor.ts'
 import { agentSpecFromConfiguration, assembleAgentInstructions, assertAgentSpecContent, type AgentSpec } from './agent-spec.ts'
 import { normalizeAgentMcpScope } from '../tool/agent-mcp-scope.ts'
 import { RequestError, accessDenied, dependencyUnavailable, invalidRequest, notFound, stateConflict } from '../../domain/request-errors.ts'
@@ -867,7 +867,7 @@ export class PostgresAgentService {
   }
 
   private async requireActor(userId: string, sql: DatabaseClient | DatabaseTransaction = this.database) {
-    return requirePlatformAdminActor(sql, userId)
+    return requireAdminModuleActor(sql, userId, 'agent', 'write')
   }
 
   private async readAgentRows(agentId?: string): Promise<AgentRow[]> {

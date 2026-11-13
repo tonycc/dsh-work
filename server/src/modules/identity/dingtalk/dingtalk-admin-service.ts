@@ -5,7 +5,9 @@ import { recordUserNotification } from '../../notification/user-notification-wri
 import { IdentityAccessError } from '../auth-service.ts'
 import { hashOpaque, randomOpaque } from '../secure-values.ts'
 import { IdentitySessionRepository } from '../session-repository.ts'
-import { LOCAL_PERMISSIONS } from '../types.ts'
+import { requirePlatformAdminOnly } from '../../authorization/admin-actor.ts'
+import { isManagementPermission } from '../../../domain/admin-permissions.ts'
+import { isAuthorizationDenial } from '../../../domain/authorization-errors.ts'
 import { DINGTALK_CHANNEL, invalidateUserBindings, revokeBindingSessions } from './dingtalk-bindings.ts'
 import type { DingTalkConfiguration } from './dingtalk-config.ts'
 import { DingTalkDirectoryError } from './dingtalk-directory.ts'
@@ -14,8 +16,6 @@ import type { DingTalkSettingsInput, DingTalkSettingsManager, DingTalkSettingsPr
 const tenantId = 'tenant-dsh-work'
 /** 代绑确认凭证有效期（4.2 方式二：单次有效、短时过期）。 */
 const confirmationTtlSeconds = 5 * 60
-/** 管理类权限：拥有任一项的账号只能本人在钉钉内登录绑定（4.2 方式二第 6 步）。 */
-const administrativePermissions: string[] = [LOCAL_PERMISSIONS.adminAll, LOCAL_PERMISSIONS.adminWrite, LOCAL_PERMISSIONS.adminRead, LOCAL_PERMISSIONS.auditRead]
 /** 离职检查：判为离职的比例超过该值时整批暂停（与组织架构方案附录 A 一致）。 */
 const departurePauseRatio = 0.1
 /** 离职检查异常：连续 3 次检查失败比例超过 5%。 */
@@ -598,7 +598,8 @@ export class DingTalkAdministrationService {
     `
     if (!user?.active) throw new IdentityAccessError(422, 'account_inactive', '该账号已停用，不能绑定钉钉')
     const authorization = await this.repository.resolveAuthorization(userId, transaction)
-    if (authorization.permissions.some(permission => administrativePermissions.includes(permission))) {
+    // 管理类权限（按前缀判定，含模块权限码）：拥有任一项的账号只能本人在钉钉内登录绑定（4.2 方式二第 6 步）。
+    if (authorization.permissions.some(isManagementPermission)) {
       throw new IdentityAccessError(422, 'dingtalk_admin_account', '拥有管理权限的账号只能由本人在钉钉内登录绑定')
     }
     await transaction`select pg_advisory_xact_lock(hashtext(${`dingtalk-admin-bind:${tenantId}:${actorId}`}))`
@@ -704,16 +705,14 @@ async function requireLocalUser(transaction: DatabaseTransaction, userId: string
   return user
 }
 
+/** 平台管理员专属范围（管理端模块权限方案 AP4、AP6）：只认本地授予的 `admin:*`。 */
 async function assertPlatformAdmin(transaction: DatabaseTransaction, userId: string) {
-  const [actor] = await transaction`
-    select u.id from users u join user_roles ur on ur.tenant_id = u.tenant_id and ur.user_id = u.id
-    join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id
-    join tenants t on t.id = u.tenant_id
-    where u.tenant_id = ${tenantId} and u.id = ${userId} and u.status = 'active' and u.business_user and t.status = 'active'
-      and ur.source_key = 'local' and r.status = 'active' and r.permissions ? 'admin:*' and (ur.valid_until is null or ur.valid_until > now())
-    limit 1
-  `
-  if (!actor) throw new IdentityAccessError(403, 'permission_denied', '只有平台管理员可以管理钉钉绑定')
+  try {
+    await requirePlatformAdminOnly(transaction, userId)
+  } catch (error) {
+    if (isAuthorizationDenial(error)) throw new IdentityAccessError(403, 'permission_denied', '只有平台管理员可以管理钉钉绑定')
+    throw error
+  }
 }
 
 async function adminAudit(transaction: DatabaseTransaction, actorId: string, action: string, result: 'success' | 'failed', objectId: string, context: Record<string, string>) {

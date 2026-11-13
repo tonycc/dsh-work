@@ -1,4 +1,4 @@
-import type { CreateSkillInput, PublishStatus, UpdateSkillInput } from '../../domain/types.ts'
+import type { CreateSkillInput, PublishStatus, SkillDefinition, UpdateSkillInput } from '../../domain/types.ts'
 import type { PostgresSkillService } from '../../modules/skill/postgres-skill-service.ts'
 import type { BuiltinSkillStatus } from '../../modules/skill/builtin-skills.ts'
 import { envelope, httpResult, readJsonBody, requireRequestIdentity, type Router } from '../router.ts'
@@ -6,7 +6,11 @@ import { envelope, httpResult, readJsonBody, requireRequestIdentity, type Router
 const basePath = '/api/admin/v1'
 
 export function registerSkillRoutes(router: Router, service: PostgresSkillService, builtinSkillStatus: () => Promise<BuiltinSkillStatus>) {
-  router.get(`${basePath}/skills`, async () => envelope('admin', await service.getSkills(), 'postgres'))
+  router.get(`${basePath}/skills`, async (_request, context) => {
+    const skills = await service.getSkills()
+    // 只凭 Agent 修改权限读取时（管理端模块权限方案 5.2）只返回选择器需要的字段，不含 Skill 正文。
+    return envelope('admin', context.adminView === 'selector' ? skills.map(skillSelectorView) : skills, 'postgres')
+  })
   // 平台内置 Skill 随代码发布，只读展示；可改的只有已安装 Skill 的覆盖场景与 Runtime 紧急停用。
   router.get(`${basePath}/skills/builtin`, async () => envelope('admin', await builtinSkillStatus(), 'postgres'))
   router.patch(`${basePath}/skills/builtin-coverage`, async (request, context) => {
@@ -86,4 +90,9 @@ export function registerSkillRoutes(router: Router, service: PostgresSkillServic
       actor: requireRequestIdentity(context, 'admin').userId,
     }), 'postgres')
   })
+}
+
+function skillSelectorView(skill: SkillDefinition) {
+  const { id, name, version, activeVersion, category, status, description, toolIds, visibleRoleIds, installationRole, dependencies, updatedAt } = skill
+  return { id, name, version, activeVersion, category, status, description, toolIds, visibleRoleIds, installationRole, dependencies, updatedAt }
 }
