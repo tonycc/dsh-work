@@ -21,7 +21,7 @@ import type { DatabaseClient, DatabaseTransaction } from '../../../infrastructur
 import type { RunAttemptRecord, RunRecord } from '../../run/run-types.ts'
 import type { AgentRuntimePort } from '../../runtime/runtime-types.ts'
 import type { PostgresAuthorizationService } from '../../authorization/postgres-authorization-service.ts'
-import { authorizationDenied } from '../../../domain/authorization-errors.ts'
+import { requireAdminModuleActor } from '../../authorization/admin-actor.ts'
 import { redactSensitiveText, sanitizeSafeMetadata } from '../../../security/safe-observability.ts'
 import { dependencyUnavailable, invalidRequest, notFound, stateConflict } from '../../../domain/request-errors.ts'
 
@@ -122,7 +122,7 @@ export class PostgresOperationsService {
   }
 
   async checkRuntime(input: { runtimeId: string; actor: string }) {
-    const actor = await this.requirePlatformAdmin(input.actor)
+    const actor = await this.requireConnectorAdmin(input.actor)
     await this.requireRuntime(input.runtimeId)
     const health = await this.runtime?.health()
     const status = health?.runtimeId === input.runtimeId ? health.status : 'offline'
@@ -149,7 +149,7 @@ export class PostgresOperationsService {
   }
 
   async updateRuntimeConfiguration(input: UpdateRuntimeConfigurationInput, expected?: RuntimeMutationSnapshot) {
-    const actor = await this.requirePlatformAdmin(input.actor)
+    const actor = await this.requireConnectorAdmin(input.actor)
     assertRuntimeConfiguration(input)
     let disabledTools: string[] | undefined
     try { disabledTools = input.disabledTools === undefined ? undefined : normalizeDisabledTools(input.disabledTools) }
@@ -672,22 +672,10 @@ export class PostgresOperationsService {
     `.then(() => undefined)
   }
 
-  private async requirePlatformAdmin(userId: string) {
-    if (this.authorization) return this.authorization.requirePlatformAdmin(userId)
-    const [actor] = await this.database<{ id: string; displayName: string }[]>`
-      select u.id, u.display_name as "displayName" from users u
-       where u.tenant_id = ${tenantId} and u.id = ${userId} and u.status = 'active'
-         and exists (
-           select 1 from user_roles ur
-           join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id
-            where ur.tenant_id = u.tenant_id and ur.user_id = u.id
-              and ur.source_key = 'local' and r.status = 'active'
-              and (ur.valid_until is null or ur.valid_until > now())
-              and (r.permissions ? 'admin:*' or r.permissions ? 'admin:write')
-         )
-    `
-    if (!actor) throw authorizationDenied(`操作人不存在、已停用或不是平台管理员：${userId}`)
-    return actor
+  /** Runtime 配置与检查属于“工具与连接”模块（管理端模块权限方案 5.1）。 */
+  private async requireConnectorAdmin(userId: string) {
+    if (this.authorization) return this.authorization.requireAdminModule(userId, 'connector', 'write')
+    return requireAdminModuleActor(this.database, userId, 'connector', 'write')
   }
 
   private async requireRuntime(runtimeId: string) {

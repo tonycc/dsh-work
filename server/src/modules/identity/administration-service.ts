@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 import type { DatabaseClient, DatabaseTransaction } from '../../infrastructure/postgres/database.ts'
 import { LOCAL_PERMISSIONS } from './types.ts'
+import { ADMIN_MODULE_LABELS, ADMIN_MODULES, adminModulePermission } from '../../domain/admin-permissions.ts'
 import { invalidRequest, notFound, stateConflict } from '../../domain/request-errors.ts'
 import { assertRoleDepartmentGrantable } from '../organization/postgres-organization-service.ts'
 
@@ -14,8 +15,12 @@ export const permissionCatalog = [
   { code: LOCAL_PERMISSIONS.knowledgeView, name: '查看企业知识库', category: '企业知识库', description: '浏览可见知识库与文档，对话中添加知识库后检索。' },
   { code: LOCAL_PERMISSIONS.knowledgeDocs, name: '管理知识库文档', category: '企业知识库', description: '包含查看；在归属本人所属部门的知识库中上传和维护文档。' },
   { code: LOCAL_PERMISSIONS.knowledgeBases, name: '管理知识库', category: '企业知识库', description: '包含文档管理；新建知识库，改名、删除和调整归属本人所属部门的知识库授权。' },
-  { code: LOCAL_PERMISSIONS.adminRead, name: '读取管理配置', category: '管理端', description: '查看非审计类管理页面与配置。' },
-  { code: LOCAL_PERMISSIONS.adminWrite, name: '变更管理配置', category: '管理端', description: '执行管理端写操作。' },
+  { code: LOCAL_PERMISSIONS.adminRead, name: '查看全部管理模块', category: '管理端', description: '查看全部管理模块的页面与配置（不含审计、钉钉与员工授权修改）。' },
+  { code: LOCAL_PERMISSIONS.adminWrite, name: '修改全部管理模块', category: '管理端', description: '修改全部管理模块的配置（不含钉钉与员工授权）；授出的权限不能超过本人。' },
+  ...ADMIN_MODULES.flatMap(module => [
+    { code: adminModulePermission(module, 'read'), name: `查看${ADMIN_MODULE_LABELS[module]}`, category: '管理端模块', description: `查看管理端“${ADMIN_MODULE_LABELS[module]}”模块。` },
+    ...(module === 'ops' ? [] : [{ code: adminModulePermission(module, 'write'), name: `修改${ADMIN_MODULE_LABELS[module]}`, category: '管理端模块', description: `包含查看；修改管理端“${ADMIN_MODULE_LABELS[module]}”模块，授出的权限不能超过本人。` }]),
+  ]),
   { code: LOCAL_PERMISSIONS.auditRead, name: '读取安全审计', category: '安全', description: '查看审计与运行治理信息。' },
   { code: LOCAL_PERMISSIONS.dataProtectionTerms, name: '数据防护词表', category: '安全', description: '查看和维护保密词表与白名单。词表是机密内容，不默认授予所有管理员。' },
   { code: LOCAL_PERMISSIONS.adminAll, name: '全部管理权限', category: '系统', description: '系统级管理通配权限，仅用于平台管理员。' },

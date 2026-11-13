@@ -1,6 +1,6 @@
 # 管理端模块权限方案
 
-**状态：** 决策已确认（AP1～AP10，2026-11-13），未实施。本文能力在实施并通过第 9 节验收前均不可用，现行规则仍以[功能规则](../development/feature-rules.md)和代码为准。<br>
+**状态：** 决策已确认（AP1～AP10，2026-11-13）。AMP-S1（服务端）已达到代码级，P1 集成测试覆盖 5.3 子集规则与管理 Run 用途；AMP-S2（管理端前端）未实施，P0/P2 未验收。其余能力在实施并通过第 9 节验收前均不可用，现行规则仍以[功能规则](../development/feature-rules.md)和代码为准。<br>
 **更新日期：** 2026-11-13（初稿）；2026-11-13（按 PR 评审修订：补“授出不超过自身”原则，堵住组织架构与 Agent 岗位权限两条提权路径；定义三类管理员；钉钉与独立账号保持只限平台管理员；补管理助手读取范围与 Run 内校验；更正现状描述）；2026-11-13（AP1～AP10 按建议确认：模块不合并，Session 摘要归运营查看）<br>
 **依据：** 当前身份与授权实现（`server/src/modules/identity`、`server/src/modules/authorization`、`server/src/http/router.ts`）、[管理端 OpenAPI](../development/openapi-admin.json)、[数据模型第 1 节](data-model.md#1-租户身份与授权)。<br>
 **关联：** [架构总览第 9 节](../development/overview.md#9-身份安全与数据边界)、[功能规则第 8 节 Agent 岗位权限](../development/feature-rules.md#8-agent-岗位权限)、[企业组织架构方案](org-structure-plan.md)（部门授权）、[发往模型的数据防护方案](model-data-protection-plan.md)（`data-protection:terms`）。
@@ -89,7 +89,7 @@
 
 **判定规则：** 请求 `admin:<m>:read` 时，持有 `admin:*`、`admin:read`、`admin:write`、`admin:<m>:read`、`admin:<m>:write` 任一即通过；请求 `admin:<m>:write` 时，持有 `admin:*`、`admin:write`、`admin:<m>:write` 任一即通过。“平台管理员专属”的范围只认 `admin:*`。
 
-判定集中在一个模块（建议 `server/src/modules/identity/admin-permissions.ts`）：
+判定集中在两个文件：纯函数与路由对照表在 `server/src/domain/admin-permissions.ts`，服务层数据库复核在 `server/src/modules/authorization/admin-actor.ts`：
 
 - `hasAdminModuleAccess(permissions, module, level)`：基于请求身份的纯函数，供路由与前端摘要使用；
 - `requireAdminModuleActor(sql, userId, module, level)`：服务层在事务内复核，只认本地授予、有效期内的启用角色，替代现有 `requirePlatformAdminActor`、`requirePlatformAdmin`、`requireAdminReader` 的模块类用途；
@@ -116,11 +116,11 @@
 | 授权路径 | 风险 | 规则 |
 | --- | --- | --- |
 | 员工、角色、角色权限、用户数据范围 | 直接给自己加权限 | 只限平台管理员（AP4，与现状一致） |
-| 部门角色授权（`grantRole`、撤销） | 给自己所在部门授任意非管理角色，间接给自己加权限 | 授予的角色的全部权限码与该角色附带的数据范围须是操作人自身的子集；管理类前缀（`admin:`、`audit:`、`data-protection:`）一律不可经部门授予（现有 `DEPARTMENT_FORBIDDEN_PERMISSIONS` 改为前缀规则） |
+| 部门角色授权（`grantRole`、撤销） | 给自己所在部门授任意非管理角色，间接给自己加权限 | 授权时即判定：授予的角色的全部权限码与该角色附带的数据范围须是操作人自身的子集（部门当前为空也一样，否则之后加入的成员会拿到超出授予人的角色）；管理类前缀（`admin:`、`audit:`、`data-protection:`）一律不可经部门授予（现有 `DEPARTMENT_FORBIDDEN_PERMISSIONS` 改为前缀规则） |
 | 部门成员变更（`addMembers`、移除、设主部门） | 把自己加入已有高权限授权的部门 | 不能变更自己的部门归属；把他人加入部门时，该部门（含 `includeDescendants` 继承）当前有效授权展开后的权限须是操作人自身的子集 |
 | 部门移动 | 把部门挪到带继承授权的上级之下，成员获得新权限 | 移动后成员新增的继承授权同样须是操作人自身的子集 |
 | Agent 岗位角色与数据范围 | 给 Agent 绑定自己没有的角色或范围，再经 Agent 间接访问 | 岗位角色的全部权限码与数据范围须是操作人自身的子集；管理类前缀角色只有平台管理员可授（`agent-access-service.ts` 现已按 `admin:%`、`audit:%` 识别，补 `data-protection:%`） |
-| Agent 可见角色、主动任务接收人 | 把能力超出自己的 Agent 开放给自己 | 由于岗位权限已受子集约束，Agent 能力不超过授权它的人；此外，非平台管理员不能把可见角色设为、或把接收人设为能力超出自身的 Agent 的使用范围——即修改可见角色或接收人时，Agent 当前岗位权限须是操作人自身的子集 |
+| Agent 可见角色、主动任务接收人 | 把能力超出自己的 Agent 开放给自己 | 由于岗位权限已受子集约束，Agent 能力不超过授权它的人；此外，非平台管理员不能把可见角色设为、或把接收人设为能力超出自身的 Agent 的使用范围——即新增可见角色、修改接收人或主动任务的工作空间、启用 / 立即执行 / 事件触发主动任务，以及发布或重新启用 Agent 时，Agent 当前岗位权限与数据范围须是操作人自身的子集；只移除可见角色不受限制 |
 
 平台管理员不受子集约束，保持现有风险提示。子集校验失败时拒绝并说明缺少的权限码，不做部分保存。
 
@@ -166,7 +166,7 @@
 | --- | --- | --- |
 | [router.ts](../../server/src/http/router.ts) `assertApiRouteAccess` | 按 GET/非 GET 区分 `admin:read` / `admin:write`；`/identity/` 写操作限 `admin:*`；审计路径限 `audit:read`；助手发消息与 Run 取消、重试对 `admin:read` 放行 | 改为“路径前缀 → 模块 + 读写级别”对照表，未登记路径拒绝；保留 identity、审计特例；钉钉改为平台管理员专属；助手按 5.5 |
 | [auth-service.ts](../../server/src/modules/identity/auth-service.ts) `hasAdminAccess`、`assertAudienceAccess` | 准入接受 `admin:*`、`admin:read`、`admin:write`、`audit:read`（不含 `data-protection:terms`）；写请求要求 `admin:*` 或 `admin:write` | 准入改为持有任一管理权限码（含模块码）；写请求的模块级判定交给路由对照表，会话层不再按全局写权限拒绝；只持 `data-protection:terms` 不构成准入 |
-| [platform-admin-actor.ts](../../server/src/modules/authorization/platform-admin-actor.ts) `requirePlatformAdminActor`、`findPlatformAdminActor` | 本地授予的 `admin:*` 或 `admin:write`；Agent、组织、知识库、MCP、授权等服务复用 | 请求类用途改为 `requireAdminModuleActor`；后台以管理员身份执行的场景（如预置 Skill 创建专家的 `findPlatformAdminActor`）不属于请求授权，保留全模块写口径 |
+| [admin-actor.ts](../../server/src/modules/authorization/admin-actor.ts)（原 `platform-admin-actor.ts`）`requirePlatformAdminActor`、`findPlatformAdminActor` | 本地授予的 `admin:*` 或 `admin:write`；Agent、组织、知识库、MCP、授权等服务复用 | 请求类用途改为 `requireAdminModuleActor`；后台以管理员身份执行的场景（如预置 Skill 创建专家的 `findPlatformAdminActor`）不属于请求授权，保留全模块写口径 |
 | `postgres-authorization-service.ts` `requirePlatformAdmin`、`requireAdminReader`（约 812 行） | 前者本地 `admin:*` 或 `admin:write`；后者本地 `admin:*`、`admin:write` 或 `admin:read` | 两者被经验、审批、Skill 安装、管理助手、员工端 task-execution 等路由与服务调用，逐处改为模块判定 |
 | `postgres-skill-service.ts`、`admin-skill-installation-service.ts`、`postgres-operations-service.ts`、`postgres-grant-reconciliation-service.ts` 中的 SQL | 各自写了 `r.permissions ? 'admin:*' or ... 'admin:write'` | 改为调用共用判定：Skill 两处归 Skill 模块，运行治理归审计或对应模块，授权对账归工具与连接 |
 | `skill-submission-review-service.ts` | `requirePlatformAdmin` | `admin:skill:write` |
@@ -191,8 +191,8 @@
 
 | 切片 | 内容 | 完成标准 |
 | --- | --- | --- |
-| AMP-S1 | 判定模块与模块清单；调用点盘点清单与收敛；路由对照表与默认拒绝；会话层准入；5.3 子集规则（组织架构、Agent）；管理助手读取过滤、确认与 Run 内复核；选择器精简读取；存量清单；架构检查；测试身份与集成测试 | 模块管理员越权读写返回 403；子集规则覆盖 5.3 全部路径；现有平台管理员、全模块管理员、审计员行为不变（取消提案放宽除外）；OpenAPI 覆盖测试与架构检查通过 |
-| AMP-S2 | 管理端可点击原型 → 路由与菜单按模块控制、写按钮控制、权限选择分组、岗位权限可选角色过滤、预置角色、E2E 分册与 spec | 原型确认；模块管理员只看到自己的模块；E2E 绿 |
+| AMP-S1 | 判定模块与模块清单；调用点盘点清单与收敛；路由对照表与默认拒绝；会话层准入；5.3 子集规则（组织架构、Agent 创建 / 岗位权限 / 发布 / 启用、主动任务接收人与工作空间）；管理助手读取过滤、确认与 Run 内复核；选择器精简读取；存量清单；架构检查；集成测试 | 模块管理员越权读写返回 403；子集规则覆盖 5.3 全部路径；平台管理员与审计员的读取行为不变；**有意的行为变化**：全模块管理员（`admin:write`）同样受“授出不超过自身”与“不能变更自己的部门归属”约束；持有 `admin:read` 的管理员（含安全审计员）可以使用管理助手（此前会话层拦截所有无 `admin:write` 的写请求；2026-11-13 确认保留）；取消自己的提案与计划放宽为任一管理权限；钉钉只读接口在路由层即拒绝非平台管理员；OpenAPI 覆盖测试与架构检查通过 |
+| AMP-S2 | 管理端可点击原型 → 路由与菜单按模块控制、写按钮控制、权限选择分组、岗位权限可选角色过滤、预置角色、模块管理员测试身份（`test-identity.ts`、P0 冒烟数据，原列于 AMP-S1）、当前会话返回模块权限摘要、E2E 分册与 spec | 原型确认；模块管理员只看到自己的模块；E2E 绿 |
 
 ## 9. 验收
 

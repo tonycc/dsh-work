@@ -19,7 +19,8 @@ import type { McpScopePort } from '../tool/postgres-mcp-connector-service.ts'
 import { agentBuiltinToolNames, parseBuiltinToolReference, unavailableSkillTools } from '../runtime/builtin-tools.ts'
 import type { McpConnectionSnapshot } from '../runtime/runtime-types.ts'
 import { authorizationDenied } from '../../domain/authorization-errors.ts'
-import { requirePlatformAdminActor } from '../authorization/platform-admin-actor.ts'
+import { requireAdminModuleActor } from '../authorization/admin-actor.ts'
+import { assertAgentAccessWithinActor, assertAgentCapabilityWithinActor } from './agent-access-service.ts'
 import { agentSpecFromConfiguration, assembleAgentInstructions, assertAgentSpecContent, type AgentSpec } from './agent-spec.ts'
 import { normalizeAgentMcpScope } from '../tool/agent-mcp-scope.ts'
 import { RequestError, accessDenied, dependencyUnavailable, invalidRequest, notFound, stateConflict } from '../../domain/request-errors.ts'
@@ -288,6 +289,11 @@ export class PostgresAgentService {
     const executionRoleIds = unique(input.executionRoleIds ?? [])
     const executionDataScopes = unique(input.executionDataScopes ?? [])
     await this.assertInitialAgentGrants(unique([...visibleRoleIds, ...executionRoleIds]))
+    // 授出不超过自身（管理端模块权限方案 5.3）：创建时的执行授权同样受约束。
+    await assertAgentAccessWithinActor(this.database, actor.id, {
+      roleIds: executionRoleIds, dataScopes: executionDataScopes,
+      widened: executionRoleIds.length > 0 || executionDataScopes.length > 0,
+    })
     await this.assertCapabilityReferences(configuration.skills, configuration.webSearchEnabled)
     await this.assertMcpConnectorSelection(configuration.mcpScope)
     const versionId = `agent-version-${randomUUID()}`
@@ -470,6 +476,8 @@ export class PostgresAgentService {
     const actor = await this.requireActor(input.actor)
     const [current] = await this.readAgentRows(input.agentId)
     if (!current) throw notFound(`Agent 不存在：${input.agentId}`)
+    // 重新启用等于把 Agent 的能力重新开放给可见角色：能力不能超过操作人（管理端模块权限方案 5.3）。
+    if (input.status === 'published') await assertAgentCapabilityWithinActor(this.database, actor.id, input.agentId)
 
     if (input.status === 'disabled') {
       const release = await this.database.begin(async transaction => {
@@ -867,7 +875,7 @@ export class PostgresAgentService {
   }
 
   private async requireActor(userId: string, sql: DatabaseClient | DatabaseTransaction = this.database) {
-    return requirePlatformAdminActor(sql, userId)
+    return requireAdminModuleActor(sql, userId, 'agent', 'write')
   }
 
   private async readAgentRows(agentId?: string): Promise<AgentRow[]> {

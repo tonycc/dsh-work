@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import type { DatabaseClient } from '../../infrastructure/postgres/database.ts'
-import { findPlatformAdminActor } from '../authorization/platform-admin-actor.ts'
+import { findPlatformAdminActor } from '../authorization/admin-actor.ts'
 import type { PostgresAgentValidationService } from './agent-validation-service.ts'
 import type { PostgresAgentService } from './postgres-agent-service.ts'
 

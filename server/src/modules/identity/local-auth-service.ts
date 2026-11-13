@@ -7,6 +7,8 @@ import {
   parseCookies, resolveRequestOrigin, serializeCookie, validateRequestOrigin,
 } from './auth-service.ts'
 import { assignNewAccountDepartment } from '../organization/postgres-organization-service.ts'
+import { requirePlatformAdminOnly } from '../authorization/admin-actor.ts'
+import { isAuthorizationDenial } from '../../domain/authorization-errors.ts'
 import { lockPlatformAdminInvariant, requireAnotherPlatformAdmin } from './administration-service.ts'
 import { hashPassword, normalizeUsername, verifyPassword } from './password.ts'
 import { loginAccountCandidates, normalizeLoginAccount } from './login-account.ts'
@@ -479,15 +481,14 @@ async function loginAccountExists(transaction: DatabaseTransaction, username: st
   return Boolean(existing)
 }
 
+/** 平台管理员专属范围（管理端模块权限方案 AP4、AP6）：只认本地授予的 `admin:*`。 */
 async function assertPlatformAdmin(transaction: DatabaseTransaction, userId: string) {
-  const [actor] = await transaction`
-    select u.id from users u join user_roles ur on ur.tenant_id = u.tenant_id and ur.user_id = u.id
-    join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id
-    join tenants t on t.id = u.tenant_id
-    where u.tenant_id = ${tenantId} and u.id = ${userId} and u.status = 'active' and u.business_user and t.status = 'active'
-      and ur.source_key = 'local' and r.status = 'active' and r.permissions ? 'admin:*' and (ur.valid_until is null or ur.valid_until > now())
-  `
-  if (!actor) throw new IdentityAccessError(403, 'permission_denied', '只有平台管理员可以管理独立账号')
+  try {
+    await requirePlatformAdminOnly(transaction, userId)
+  } catch (error) {
+    if (isAuthorizationDenial(error)) throw new IdentityAccessError(403, 'permission_denied', '只有平台管理员可以管理独立账号')
+    throw error
+  }
 }
 
 async function revokeUserSessions(transaction: DatabaseTransaction, userId: string) {

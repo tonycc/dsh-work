@@ -5,7 +5,8 @@ import { unavailableSkillTools } from '../runtime/builtin-tools.ts'
 import { redactSensitiveText } from '../../security/safe-observability.ts'
 import { authorizationDenied } from '../../domain/authorization-errors.ts'
 import { installedSkillReferences, type KnownBuiltinSkill } from '../../domain/builtin-skill-ref.ts'
-import { requirePlatformAdminActor } from './platform-admin-actor.ts'
+import { loadLocalAdminPermissions, requireAdminAccessActor, requireAdminModuleActor } from './admin-actor.ts'
+import { adminModuleForPurpose, type AdminLevel, type AdminModule } from '../../domain/admin-permissions.ts'
 import { resolveAudienceCeiling, type AudienceCeiling } from './agent-audience-ceiling.ts'
 import type { RuntimeManifest } from '../runtime/runtime-types.ts'
 import { invalidRequest, notFound } from '../../domain/request-errors.ts'
@@ -792,28 +793,30 @@ export class PostgresAuthorizationService {
     return row?.type ?? null
   }
 
-  async requirePlatformAdmin(userId: string) {
-    return requirePlatformAdminActor(this.database, userId)
+  /** 服务层模块权限复核（管理端模块权限方案 5.1），只认本地授予的角色。 */
+  async requireAdminModule(userId: string, module: AdminModule, level: AdminLevel) {
+    return requireAdminModuleActor(this.database, userId, module, level)
   }
 
-  async requireAdminReader(userId: string) {
-    const [row] = await this.database<{ id: string; displayName: string; department: string }[]>`
-      select u.id, u.display_name as "displayName",
-             coalesce(u.department_id, '未分配部门') as department
-        from users u
-       where u.tenant_id = ${tenantId} and u.id = ${userId}
-         and u.status = 'active'
-         and exists (
-           select 1 from user_roles ur
-           join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id
-            where ur.tenant_id = u.tenant_id and ur.user_id = u.id
-              and ur.source_key = 'local' and r.status = 'active'
-              and (ur.valid_until is null or ur.valid_until > now())
-              and (r.permissions ? 'admin:*' or r.permissions ? 'admin:write' or r.permissions ? 'admin:read')
-         )
-    `
-    if (!row) throw authorizationDenied(`操作人不存在、已停用或没有管理读取权限：${userId}`)
-    return row
+  /** 能使用管理端模块功能或管理助手（持有任一模块管理权限）。 */
+  async requireAdminAccess(userId: string) {
+    return requireAdminAccessActor(this.database, userId)
+  }
+
+  /** 本地授予的权限码，供按模块过滤读取结果（例如管理助手的状态查询）。 */
+  async localAdminPermissions(userId: string) {
+    return loadLocalAdminPermissions(this.database, userId)
+  }
+
+  /**
+   * 管理端 Run 的用途对应的权限（方案 5.5）：`admin-assistant` 只需能使用管理助手；
+   * 专用 Run 需要所属模块的修改权限。未知用途拒绝。
+   */
+  async requireAdminRunPurpose(userId: string, purpose: string) {
+    if (purpose === 'admin-assistant') return this.requireAdminAccess(userId)
+    const module = adminModuleForPurpose(purpose)
+    if (!module) throw authorizationDenied(`未登记权限归属的管理 Run 用途：${purpose}`)
+    return this.requireAdminModule(userId, module, 'write')
   }
 
   /**
