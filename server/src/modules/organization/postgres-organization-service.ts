@@ -306,6 +306,9 @@ export class PostgresOrganizationService {
       if (hasForbiddenPermission(role.permissions)) {
         throw stateConflict(`角色“${role.name}”含管理类权限，只能在“员工与权限”中单独授给个人`)
       }
+      // 授出不超过自身（管理端模块权限方案 5.3）：授权时就判定角色本身，部门当前为空也一样，
+      // 否则之后有人加入部门就会拿到超出授予人权限的角色。
+      assertWithinGrantCeiling(await loadGrantCeiling(transaction, input.actorId), await loadRoleGrants(transaction, [roleId]), `授给部门的角色“${role.name}”`)
       const [existing] = await transaction`
         select 1 from org_department_grants
          where tenant_id = ${tenantId} and department_id = ${department.id} and role_id = ${roleId} and status = 'active'

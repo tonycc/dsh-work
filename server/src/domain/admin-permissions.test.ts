@@ -61,6 +61,11 @@ test('routes: DingTalk stays platform-admin only, even for all-module admins and
   assert.ok(!allowed(['admin:read', 'admin:write'], 'dingtalk/overview'))
   assert.ok(!allowed(['admin:write'], 'dingtalk/settings', 'PUT'))
   assert.ok(allowed(['admin:*'], 'dingtalk/overview'))
+  // 员工的钉钉绑定挂在 identity 下，同样只限平台管理员。
+  assert.ok(!allowed(['admin:read'], 'identity/users/u1/dingtalk-binding'))
+  assert.ok(!allowed(['admin:write'], 'identity/users/u1/dingtalk-binding/confirm', 'POST'))
+  assert.ok(allowed(['admin:*'], 'identity/users/u1/dingtalk-binding'))
+  assert.ok(allowed(['admin:read'], 'identity/users'))
 })
 
 test('routes: audit needs audit:read; terms need the data-protection module (the route adds terms itself)', () => {

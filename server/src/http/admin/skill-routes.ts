@@ -12,7 +12,13 @@ export function registerSkillRoutes(router: Router, service: PostgresSkillServic
     return envelope('admin', context.adminView === 'selector' ? skills.map(skillSelectorView) : skills, 'postgres')
   })
   // 平台内置 Skill 随代码发布，只读展示；可改的只有已安装 Skill 的覆盖场景与 Runtime 紧急停用。
-  router.get(`${basePath}/skills/builtin`, async () => envelope('admin', await builtinSkillStatus(), 'postgres'))
+  router.get(`${basePath}/skills/builtin`, async (_request, context) => {
+    const status = await builtinSkillStatus()
+    // 选择器视图不含内置 Skill 正文与文件清单（管理端模块权限方案 5.2）。
+    return envelope('admin', context.adminView === 'selector'
+      ? { ...status, skills: status.skills.map(({ instructions: _instructions, files: _files, ...skill }) => skill) }
+      : status, 'postgres')
+  })
   router.patch(`${basePath}/skills/builtin-coverage`, async (request, context) => {
     const input = await readJsonBody<{ skillId: string; scenarios: unknown }>(request)
     return envelope('admin', await service.setCoveredBuiltinScenarios({

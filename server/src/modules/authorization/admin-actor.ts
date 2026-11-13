@@ -72,6 +72,10 @@ export async function requirePlatformAdminOnly(sql: Sql, userId: string, message
   return actor
 }
 
+/**
+ * 本地授予的 `admin:*`，与模块判定 `requireAdminModuleActor` 同一口径（不要求业务员工：
+ * 初始化的平台管理员可以不是业务员工）。只有钉钉与独立账号沿用原有的业务员工要求，见 `requirePlatformAdminOnly`。
+ */
 export async function isPlatformAdminActor(sql: Sql, userId: string): Promise<boolean> {
   const [actor] = await adminActors(sql, [PLATFORM_ADMIN_PERMISSION], { userId })
   return Boolean(actor)
@@ -126,9 +130,11 @@ export async function loadGrantCeiling(sql: Sql, userId: string): Promise<GrantC
      where u.tenant_id = ${tenantId} and u.id = ${userId} and u.status = 'active'
      group by u.id
   `
+  const platformAdmin = await isPlatformAdminActor(sql, userId)
   return {
-    platformAdmin: await isPlatformAdminActor(sql, userId),
-    permissions: row?.permissions ?? [],
+    platformAdmin,
+    // 平台管理员只按本地授予判定：非本地来源的 `admin:*` 不能让子集比较全部放行。
+    permissions: (row?.permissions ?? []).filter(code => platformAdmin || code !== PLATFORM_ADMIN_PERMISSION),
     dataScopes: row?.dataScopes ?? [],
   }
 }

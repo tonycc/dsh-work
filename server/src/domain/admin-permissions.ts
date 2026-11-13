@@ -233,6 +233,10 @@ export function adminRouteRule(path: string): AdminRouteRule | null {
   if (segment === 'data-protection' && (second === 'terms' || second === 'allowlist')) {
     return { kind: 'data-protection-terms' }
   }
+  // 员工的钉钉绑定（查看、代绑、解绑、解锁）属于钉钉集成，只限平台管理员（方案 AP6）。
+  if (segment === 'identity' && /^identity\/users\/[^/]+\/dingtalk-binding(\/|$)/.test(rest)) {
+    return { kind: 'platform-only' }
+  }
   return ROUTE_SEGMENT_RULES[segment ?? ''] ?? null
 }
 

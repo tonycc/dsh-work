@@ -10,6 +10,7 @@ import {
 } from '../../domain/data-protection.ts'
 import { envelope, readJsonBody, requireRequestIdentity, type Router, type RouteContext } from '../router.ts'
 import { isPlatformAdmin } from '../../domain/admin-permissions.ts'
+import type { PostgresAuthorizationService } from '../../modules/authorization/postgres-authorization-service.ts'
 
 const basePath = '/api/admin/v1/data-protection'
 
@@ -26,7 +27,10 @@ export function registerDataProtectionRoutes(
   router: Router,
   service: DataProtectionAdminPort,
   adapter: 'postgres' | 'prototype-memory' = 'postgres',
+  authorization?: Pick<PostgresAuthorizationService, 'requireAdminModule'>,
 ) {
+  // 服务层复核（管理端模块权限方案 5.1）：写操作按本地授予的 `admin:dlp:write` 再判定一次；冒烟服务不传入。
+  const recheckWrite = async (userId: string) => { await authorization?.requireAdminModule(userId, 'dlp', 'write') }
   router.get(`${basePath}/overview`, async (_request, context) =>
     envelope('admin', await service.getOverview(parseDataProtectionFilter(context.url.searchParams)), adapter))
   router.get(`${basePath}/records`, async (_request, context) => {
@@ -36,7 +40,7 @@ export function registerDataProtectionRoutes(
     return envelope('admin', await service.getRecords(parseDataProtectionFilter(params), page, pageSize), adapter)
   })
   router.post(`${basePath}/preview`, async (request, context) => {
-    requireRequestIdentity(context, 'admin')
+    await recheckWrite(requireRequestIdentity(context, 'admin').userId)
     const body = await readJsonBody<{ text?: unknown } | null>(request)
     return envelope('admin', await service.preview(normalizePreviewText(body?.text)), adapter)
   })
@@ -47,11 +51,13 @@ export function registerDataProtectionRoutes(
   })
   router.post(`${basePath}/terms`, async (request, context) => {
     const identity = requireTermAccess(context)
+    await recheckWrite(identity.userId)
     const body = await readJsonBody<{ terms?: unknown } | null>(request, DATA_PROTECTION_TERMS_BODY_BYTES)
     return envelope('admin', await service.addTerms(normalizeTermInputs(body?.terms), identity.userId), adapter)
   })
   router.delete(`${basePath}/terms/:id`, async (_request, context) => {
     const identity = requireTermAccess(context)
+    await recheckWrite(identity.userId)
     return envelope('admin', await service.removeTerm(context.params['id'] ?? '', identity.userId), adapter)
   })
 
@@ -61,11 +67,13 @@ export function registerDataProtectionRoutes(
   })
   router.post(`${basePath}/allowlist`, async (request, context) => {
     const identity = requireTermAccess(context)
+    await recheckWrite(identity.userId)
     const body = await readJsonBody<{ value?: unknown } | null>(request)
     return envelope('admin', await service.addAllow(normalizeAllowValue(body?.value), identity.userId), adapter)
   })
   router.delete(`${basePath}/allowlist/:id`, async (_request, context) => {
     const identity = requireTermAccess(context)
+    await recheckWrite(identity.userId)
     return envelope('admin', await service.removeAllow(context.params['id'] ?? '', identity.userId), adapter)
   })
 }

@@ -151,14 +151,14 @@ export class PostgresAgentAccessService {
         if (known.length !== new Set(added).size) throw invalidRequest('岗位权限包含无效或已停用的角色')
       }
       const status = input.principalStatus ?? principal.status
+      const visibleChange = diff(current!.visibleRoleIds, visibleRoleIds)
       await assertAgentAccessWithinActor(transaction, actor.id, {
         roleIds,
         dataScopes,
-        // 放宽（新增岗位角色、数据范围、改变可见角色或重新启用执行身份）时才复核，只收窄不受影响。
+        // 放宽（新增岗位角色、数据范围、新增可见角色或重新启用执行身份）时才复核；只移除不受影响。
         widened: roleIds.some(role => !current!.roleIds.includes(role))
           || dataScopes.some(scope => !current!.dataScopes.includes(scope))
-          || diff(current!.visibleRoleIds, visibleRoleIds).added.length > 0
-          || diff(current!.visibleRoleIds, visibleRoleIds).removed.length > 0
+          || visibleChange.added.length > 0
           || (principal.status === 'disabled' && status === 'active'),
       })
       await transaction`
@@ -178,7 +178,7 @@ export class PostgresAgentAccessService {
         `
       }
       const changes = {
-        visibleRoleIds: diff(current!.visibleRoleIds, visibleRoleIds),
+        visibleRoleIds: visibleChange,
         roleIds: diff(current!.roleIds, roleIds),
         dataScopes: diff(current!.dataScopes, dataScopes),
         ...(status !== principal.status ? { principalStatus: { from: principal.status, to: status } } : {}),

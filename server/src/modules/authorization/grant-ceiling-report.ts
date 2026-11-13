@@ -17,7 +17,7 @@ export interface GrantCeilingException {
 /**
  * 存量清单（管理端模块权限方案 5.3）：上线“授出不超过自身”之前，由非平台管理员授出、
  * 且超出其**当前**权限的部门授权与 Agent 岗位权限。只读，供平台管理员复核，不自动回收。
- * Agent 岗位权限的授予人取最近一次 `agent.access.update` 审计的操作人。
+ * Agent 岗位权限的授予人取最近一次 `agent.access.update` 审计的操作人，没有时取 Agent 创建人。
  */
 export async function listGrantCeilingExceptions(sql: DatabaseClient | DatabaseTransaction): Promise<GrantCeilingException[]> {
   const exceptions: GrantCeilingException[] = []
@@ -41,11 +41,12 @@ export async function listGrantCeilingExceptions(sql: DatabaseClient | DatabaseT
     if (ceiling.platformAdmin) continue
     const role = await loadRoleGrants(sql, [grant.roleId])
     const missing = missingPermissions(role.permissions, ceiling.permissions)
-    if (!missing.length) continue
+    const scopes = missingDataScopes(role.dataScopes, ceiling.dataScopes)
+    if (!missing.length && !scopes.length) continue
     exceptions.push({
       kind: 'department-grant', objectId: grant.id, objectName: `${grant.departmentName} · ${grant.roleId}`,
       grantedBy: grant.grantedBy, grantedByName: grant.grantedByName ?? grant.grantedBy,
-      missingPermissions: missing, missingDataScopes: [],
+      missingPermissions: missing, missingDataScopes: scopes,
     })
   }
 
@@ -58,10 +59,14 @@ export async function listGrantCeilingExceptions(sql: DatabaseClient | DatabaseT
       from agents a
       join execution_principals ep on ep.tenant_id = a.tenant_id and ep.kind = 'agent' and ep.agent_id = a.id
       join lateral (
-        select e.actor_id from audit_events e
-         where e.tenant_id = a.tenant_id and e.action = 'agent.access.update' and e.object_id = a.id and e.actor_type = 'user'
-         order by e.occurred_at desc, e.id desc limit 1
-      ) last on true
+        -- 授予人：最近一次修改岗位权限的人；从未修改过时为创建人（创建时可带执行授权）。
+        select coalesce(
+          (select e.actor_id from audit_events e
+            where e.tenant_id = a.tenant_id and e.action = 'agent.access.update' and e.object_id = a.id and e.actor_type = 'user'
+            order by e.occurred_at desc, e.id desc limit 1),
+          a.created_by
+        ) as actor_id
+      ) last on last.actor_id is not null
       left join users u on u.tenant_id = a.tenant_id and u.id = last.actor_id
      where a.tenant_id = ${tenantId}
      order by a.id

@@ -253,6 +253,8 @@ export class AgentRoutineService {
     await this.authorization.requireAdminModule(actorUserId, 'agent', 'write')
     const routine = await this.get(id)
     if (routine.agentId !== agentId) throw missing()
+    // 启用与执行把 Agent 的能力交付给接收人：能力不能超过操作人（管理端模块权限方案 5.3）。
+    await assertAgentCapabilityWithinActor(this.database, actorUserId, agentId)
     if (!['draft', 'paused'].includes(routine.status) || routine.revision !== approved.expectedRevision) {
       throw conflict('任务修订或状态已变化')
     }
@@ -362,6 +364,8 @@ export class AgentRoutineService {
     await this.authorization.requireAdminModule(actorUserId, 'agent', 'write')
     const routine = await this.get(id)
     if (routine.agentId !== agentId) throw missing()
+    // 启用与执行把 Agent 的能力交付给接收人：能力不能超过操作人（管理端模块权限方案 5.3）。
+    await assertAgentCapabilityWithinActor(this.database, actorUserId, agentId)
     if (routine.status !== 'enabled') throw conflict('Agent 主动任务未启用')
     if (typeof idempotencyKey !== 'string' || !idempotencyKey.trim() || idempotencyKey.length > 128) {
       throw requestInvalid('idempotencyKey 必须是 1～128 字符')
@@ -377,6 +381,8 @@ export class AgentRoutineService {
     await this.authorization.requireAdminModule(actorUserId, 'agent', 'write')
     const routine = await this.get(id)
     if (routine.agentId !== agentId) throw missing()
+    // 启用与执行把 Agent 的能力交付给接收人：能力不能超过操作人（管理端模块权限方案 5.3）。
+    await assertAgentCapabilityWithinActor(this.database, actorUserId, agentId)
     if (routine.status !== 'enabled') throw conflict('Agent 主动任务未启用')
     if (routine.schedule.kind !== 'event' || routine.schedule.eventType !== input.eventType) {
       throw requestInvalid('事件类型与已批准规则不匹配')

@@ -116,6 +116,12 @@ test('组织架构：授出不超过自身、不能变更自己的部门归属�
   const d1 = await createDepartment(ids.orgAdmin, `销售一部-${randomUUID().slice(0, 6)}`)
   await organization.addMembers({ departmentId: d1, userIds: [ids.employee], actorId: ids.orgAdmin })
 
+  // 空部门同样在授权时判定角色本身（PR #126 评审第 1 条）。
+  const empty = await createDepartment(ids.orgAdmin, `空部门-${randomUUID().slice(0, 6)}`)
+  await assert.rejects(
+    organization.grantRole({ departmentId: empty, roleId: roles.sales, actorId: ids.orgAdmin }),
+    /授给部门的角色.*超出了你自己的授权：缺少权限 knowledge:docs/,
+  )
   // 授给部门的角色不超过操作人：workbench:use 可以，knowledge:docs 不行。
   await organization.grantRole({ departmentId: d1, roleId: roles.basic, actorId: ids.orgAdmin })
   await assert.rejects(
@@ -206,6 +212,9 @@ test('Agent 岗位权限：非平台管理员授出不超过自身，管理类�
   await update(ids.platformAdmin, { roleIds: [roles.basic, roles.sales] })
   await assert.rejects(update(ids.agentAdmin, { visibleRoleIds: ['role-employee', roles.basic] }), /超出了你自己的授权/)
   await assert.rejects(assertAgentCapabilityWithinActor(database, ids.agentAdmin, agentId), /超出了你自己的授权/)
+  // 只移除可见角色是收窄，不受限制（PR #126 评审第 3 条）。
+  await update(ids.agentAdmin, { visibleRoleIds: [] })
+  await update(ids.platformAdmin, { visibleRoleIds: ['role-employee'] })
   await update(ids.agentAdmin, { roleIds: [roles.basic] })
   await update(ids.agentAdmin, { visibleRoleIds: ['role-employee', roles.basic] })
   await assertAgentCapabilityWithinActor(database, ids.agentAdmin, agentId)
@@ -226,6 +235,19 @@ test('存量清单：列出由非平台管理员授出、超出其当前权限�
   assert.deepEqual(legacy.missingPermissions, ['knowledge:docs'])
   assert.equal(legacy.grantedBy, ids.orgAdmin)
   assert.ok(!report.some(item => item.grantedBy === ids.platformAdmin), '平台管理员授出的不列入')
+
+  // 从未修改过岗位权限的 Agent，按创建人判定（创建时可带执行授权）。
+  const createdId = `agent-amp-r-${randomUUID().slice(0, 16)}`
+  await new PostgresAgentService(database).createAgent({
+    id: createdId, name: '存量清单测试', description: '验证存量清单按创建人判定授予人。', owner: 'Agent 管理员', department: '平台治理',
+    visibleRoleIds: ['role-employee'], welcomeMessage: '', examplePrompts: ['整理这段文字'],
+    systemPrompt: '你是文本整理 Agent，只使用当前输入。', maxOutputBytes: 65536, maxToolCalls: 20, timeoutSeconds: 300,
+    skills: [], changeSummary: '创建测试草稿', actor: ids.agentAdmin, executionRoleIds: [roles.basic],
+  })
+  await database`insert into agent_principal_role_grants (tenant_id, principal_id, role_id) values (${tenantId}, ${`principal-agent-${createdId}`}, ${roles.sales})`
+  const byCreator = (await listGrantCeilingExceptions(database)).find(item => item.objectId === createdId)
+  assert.equal(byCreator?.grantedBy, ids.agentAdmin)
+  assert.deepEqual(byCreator?.missingPermissions, ['knowledge:docs'])
 })
 
 test('Agent 创建与重新启用：执行授权与开放能力同样不超过操作人', async () => {
