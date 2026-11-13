@@ -62,8 +62,15 @@ export class Router {
   private readonly routes: RouteDefinition[] = []
   private readonly authenticateApi?: ApiAuthenticator
 
-  constructor(options: { authenticateApi?: ApiAuthenticator } = {}) {
+  /**
+   * 只供浏览器测试夹具使用：放行夹具自建的 `/api/admin/v1/test/...` 取证接口（管理端模块权限方案第 6 节的
+   * 默认拒绝不认识这些路径）。生产入口不得传入，架构检查会拦截。
+   */
+  private readonly testOnlyAdminPaths?: (path: string) => boolean
+
+  constructor(options: { authenticateApi?: ApiAuthenticator; testOnlyAdminPaths?: (path: string) => boolean } = {}) {
     this.authenticateApi = options.authenticateApi
+    this.testOnlyAdminPaths = options.testOnlyAdminPaths
   }
 
   get(path: string, handler: RouteHandler) {
@@ -138,7 +145,9 @@ export class Router {
       const identity = audience && this.authenticateApi
         ? await this.authenticateApi(request, audience)
         : undefined
-      const adminView = identity ? assertApiRouteAccess(identity, url.pathname, request.method) : 'full'
+      const adminView = !identity || this.testOnlyAdminPaths?.(url.pathname)
+        ? 'full'
+        : assertApiRouteAccess(identity, url.pathname, request.method)
       const result = await route.handler(request, { params, url, identity, adminView }, response)
       if (response.headersSent || response.writableEnded) return
       if (isHttpResult(result)) {

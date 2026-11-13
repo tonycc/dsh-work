@@ -98,7 +98,7 @@ async function seedSubmission(name: string, description: string, script: boolean
   return { submissionId, versionId }
 }
 
-const router = new Router({ authenticateApi: testApiAuthenticator })
+const router = new Router({ authenticateApi: testApiAuthenticator, testOnlyAdminPaths: path => path.startsWith('/api/admin/v1/test/') })
 const base = '/api/admin/v1'
 router.get(`${base}/session`, (_request, context) => {
   const identity = requireRequestIdentity(context, 'admin')

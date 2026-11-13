@@ -102,6 +102,7 @@ for (const path of await sourceFiles('server/src/')) {
   const content = await readFile(new URL(path, projectRoot), 'utf8')
   reject(path, content, /permissions\s*\?\|?\s*'admin|'admin:(\*|read|write)'/, '管理权限判定必须经 domain/admin-permissions.ts 或 authorization/admin-actor.ts（管理端模块权限方案第 6 节）')
   reject(path, content, /\b(requirePlatformAdminActor|requirePlatformAdmin|requireAdminReader)\b/, '已改为按模块判定，请使用 requireAdminModule / requireAdminModuleActor')
+  if (path !== 'server/src/http/router.ts') reject(path, content, /testOnlyAdminPaths/, '测试夹具专用的管理端放行选项不得出现在生产代码中')
 }
 
 violations.push(...await checkServerDependencies(fileURLToPath(projectRoot)))

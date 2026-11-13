@@ -75,7 +75,7 @@ const credentialSecrets = new PostgresEncryptedCredentialStore(database.client, 
 })
 const mcpService = new PostgresMcpConnectorService(database.client, runtime, undefined, credentialSecrets)
 const agents = new PostgresAgentService(database.client, undefined, undefined, mcpService)
-const router = new Router({ authenticateApi: testApiAuthenticator })
+const router = new Router({ authenticateApi: testApiAuthenticator, testOnlyAdminPaths: path => path.startsWith('/api/admin/v1/test/') })
 const base = '/api/admin/v1'
 
 router.get(`${base}/session`, (_request, context) => {
