@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { after, before, test } from 'node:test'
 
 import { PostgresAgentService } from '../../modules/agent/postgres-agent-service.ts'
+import { IdentityAdministrationService } from '../../modules/identity/administration-service.ts'
 import { assertAgentCapabilityWithinActor, PostgresAgentAccessService } from '../../modules/agent/agent-access-service.ts'
 import { loadLocalAdminPermissions } from '../../modules/authorization/admin-actor.ts'
 import { listGrantCeilingExceptions } from '../../modules/authorization/grant-ceiling-report.ts'
@@ -263,4 +264,41 @@ test('Agent 创建与重新启用：执行授权与开放能力同样不超过�
   await draft(allowedId, ids.agentAdmin, [roles.basic])
   await database`insert into agent_principal_role_grants (tenant_id, principal_id, role_id) values (${tenantId}, ${`principal-agent-${allowedId}`}, ${roles.sales})`
   await assert.rejects(agents.setStatus({ agentId: allowedId, status: 'published', actor: ids.agentAdmin }), /超出了你自己的授权/)
+})
+
+test('AMP-01 员工与权限模块：授出不超过自身、只读超出自身的角色、不能操作自己与权限更高的账号、编码系统生成', async () => {
+  const administration = new IdentityAdministrationService(database, false)
+  const hrRole = `role-amp-hr-${randomUUID().slice(0, 8)}`
+  await createRole(hrRole, ['admin:identity:write', 'workbench:use'])
+  const hr = await createUser('人事管理员', [hrRole, 'role-employee'])
+  const plain = await createUser('普通员工二', ['role-employee'])
+  const strong = await createUser('知识库文档员', ['role-employee', roles.sales])
+
+  // 新建角色：编码由系统生成；授出超出本人或 admin:* 被拒绝。
+  const created = await administration.createRole({ name: `人事助理-${randomUUID().slice(0, 6)}`, permissions: ['workbench:use'], actorId: hr })
+  assert.match(created.code, /^role_[0-9a-f]{8}$/)
+  await assert.rejects(administration.createRole({ name: '越权角色', permissions: ['knowledge:docs'], actorId: hr }), /缺少权限 knowledge:docs/)
+  await assert.rejects(administration.createRole({ name: '平台角色', permissions: ['admin:*'], actorId: hr }), /只有平台管理员可以授出/)
+
+  // 平台管理员角色与含超出权限的角色只读。
+  await assert.rejects(administration.updateRole({ roleId: 'role-platform-admin', name: '平台管理员', status: 'active', permissions: ['admin:*'], dataScopes: [], actorId: hr }), /平台管理员角色只有平台管理员可以修改/)
+  await assert.rejects(administration.updateRole({ roleId: roles.knowledgeAdmin, name: '知识库管理员', status: 'active', permissions: [], dataScopes: [], actorId: hr }), /这个角色现有的权限超出了你自己的授权/)
+  await administration.updateRole({ roleId: created.id, name: '人事助理（改名）', status: 'active', permissions: ['workbench:use'], dataScopes: [], actorId: hr })
+
+  // 分配角色与数据范围。
+  await administration.grantRole({ userId: plain, roleId: roles.basic, actorId: hr })
+  await assert.rejects(administration.grantRole({ userId: plain, roleId: roles.sales, actorId: hr }), /要分配的角色超出了你自己的授权/)
+  await assert.rejects(administration.replaceUserScopes({ userId: plain, dataScopes: ['region:east'], actorId: hr }), /员工的数据范围超出了你自己的授权/)
+
+  // 不能操作自己、平台管理员或权限比自己高的账号。
+  await assert.rejects(administration.grantRole({ userId: hr, roleId: roles.basic, actorId: hr }), /不能操作自己的账号/)
+  await assert.rejects(administration.revokeSessions({ userId: ids.platformAdmin, actorId: hr }), /不能操作平台管理员的账号/)
+  await assert.rejects(administration.revokeRole({ userId: strong, roleId: roles.sales, actorId: hr }), /对方的权限比你高/)
+  // 停用的平台管理员仍按其持有的授权判断，不能被“重新启用后接管”。
+  const dormant = await createUser('停用的平台管理员', ['role-platform-admin'])
+  await database`update users set status = 'disabled' where tenant_id = ${tenantId} and id = ${dormant}`
+  await assert.rejects(administration.revokeSessions({ userId: dormant, actorId: hr }), /不能操作平台管理员的账号/)
+
+  // 没有员工与权限修改权限的模块管理员被拒绝。
+  await assert.rejects(administration.createRole({ name: '知识库越权', permissions: [], actorId: ids.knowledgeAdmin }), /没有员工与权限的修改权限/)
 })

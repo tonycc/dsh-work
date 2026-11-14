@@ -5,6 +5,8 @@ import { LOCAL_PERMISSIONS } from './types.ts'
 import { ADMIN_MODULE_LABELS, ADMIN_MODULES, adminModulePermission } from '../../domain/admin-permissions.ts'
 import { invalidRequest, notFound, stateConflict } from '../../domain/request-errors.ts'
 import { assertRoleDepartmentGrantable } from '../organization/postgres-organization-service.ts'
+import { assertCanGrant, assertCanManageUser, isPlatformAdminActor, loadRoleGrants, requireAdminModuleActor } from '../authorization/admin-actor.ts'
+import { authorizationDenied } from '../../domain/authorization-errors.ts'
 
 const tenantId = 'tenant-dsh-work'
 const managedScopeCode = 'application'
@@ -251,8 +253,14 @@ export class IdentityAdministrationService {
     return permissionCatalog.map(item => ({ ...item }))
   }
 
+  /** 修改员工与权限的服务层复核（方案 AP11），供目录同步等没有目标账号的写操作使用。 */
+  async requireIdentityWriter(actorId: string) {
+    return requireAdminModuleActor(this.database, actorId, 'identity', 'write')
+  }
+
   async createRole(input: {
-    code: string
+    /** 已废弃：角色编码由系统生成（方案 AP14），传入的值被忽略。 */
+    code?: string
     name: string
     description?: string
     permissions?: string[]
@@ -262,6 +270,8 @@ export class IdentityAdministrationService {
     const normalized = normalizeRoleInput(input)
     const roleId = `role-${normalized.code}-${randomUUID().slice(0, 8)}`
     await this.database.begin(async (transaction) => {
+      await requireAdminModuleActor(transaction, input.actorId, 'identity', 'write')
+      await assertCanGrant(transaction, input.actorId, normalized, '新角色的权限')
       const [created] = await transaction<{ id: string }[]>`
         insert into roles (
           id, tenant_id, code, name, description, permissions, status
@@ -307,6 +317,13 @@ export class IdentityAdministrationService {
       // 先锁住角色行：与组织架构的 grantRole（对角色加 for share）互斥，避免检查之后、
       // 更新之前有人把这个角色授给部门，绕过“管理类角色不能授给部门”（OD8）。
       await transaction`select 1 from roles where tenant_id = ${tenantId} and id = ${input.roleId} for update`
+      await requireAdminModuleActor(transaction, input.actorId, 'identity', 'write')
+      // 防提权（方案 AP13 ②）：平台管理员角色只有平台管理员能改；含操作人没有的权限的角色对其只读。
+      if (input.roleId === 'role-platform-admin' && !(await isPlatformAdminActor(transaction, input.actorId))) {
+        throw authorizationDenied('平台管理员角色只有平台管理员可以修改')
+      }
+      await assertCanGrant(transaction, input.actorId, await loadRoleGrants(transaction, [input.roleId]), '这个角色现有的权限')
+      await assertCanGrant(transaction, input.actorId, { permissions, dataScopes }, '修改后的角色权限')
       await assertRoleDepartmentGrantable(transaction, input.roleId, permissions)
       const [role] = await transaction<{ id: string }[]>`
         update roles set name = ${name}, description = ${description}, status = ${input.status},
@@ -350,6 +367,9 @@ export class IdentityAdministrationService {
         select id from roles where tenant_id = ${tenantId} and id = ${input.roleId} and status = 'active'
       `
       if (!role) throw notFound(`角色不存在或已停用：${input.roleId}`)
+      await requireAdminModuleActor(transaction, input.actorId, 'identity', 'write')
+      await assertCanManageUser(transaction, input.actorId, input.userId)
+      await assertCanGrant(transaction, input.actorId, await loadRoleGrants(transaction, [input.roleId]), '要分配的角色')
       await transaction`
         insert into user_roles (
           tenant_id, user_id, role_id, source_key, valid_until, granted_by
@@ -376,6 +396,8 @@ export class IdentityAdministrationService {
 
   async revokeRole(input: { userId: string; roleId: string; actorId: string }) {
     await this.database.begin(async (transaction) => {
+      await requireAdminModuleActor(transaction, input.actorId, 'identity', 'write')
+      await assertCanManageUser(transaction, input.actorId, input.userId)
       if (input.roleId === 'role-platform-admin') {
         await lockPlatformAdminInvariant(transaction)
       }
@@ -422,6 +444,9 @@ export class IdentityAdministrationService {
           and business_user
       `
       if (!user) throw notFound(`用户不存在：${input.userId}`)
+      await requireAdminModuleActor(transaction, input.actorId, 'identity', 'write')
+      await assertCanManageUser(transaction, input.actorId, input.userId)
+      await assertCanGrant(transaction, input.actorId, { dataScopes: scopes }, '员工的数据范围')
       await replaceScopes(transaction, 'user', input.userId, scopes, input.actorId)
       await appendAdministrationAudit(transaction, {
         actorId: input.actorId,
@@ -441,6 +466,8 @@ export class IdentityAdministrationService {
           and (identity_provider = 'ai-hub' or (${this.localAccounts} and id in (select user_id from local_user_credentials where tenant_id = 'tenant-dsh-work')))
       `
       if (!user) throw notFound(`用户不存在：${input.userId}`)
+      await requireAdminModuleActor(transaction, input.actorId, 'identity', 'write')
+      await assertCanManageUser(transaction, input.actorId, input.userId)
       const revoked = await transaction<{ sessionHash: string }[]>`
         update authentication_sessions set revoked_at = now()
          where tenant_id = ${tenantId} and user_id = ${input.userId} and revoked_at is null
@@ -587,16 +614,13 @@ export async function lockPlatformAdminInvariant(transaction: DatabaseTransactio
 }
 
 function normalizeRoleInput(input: {
-  code: string
   name: string
   description?: string
   permissions?: string[]
   dataScopes?: string[]
 }) {
-  const code = input.code.trim()
-  if (!/^[a-z][a-z0-9_]{2,49}$/.test(code)) {
-    throw invalidRequest('角色编码必须为 3-50 位小写字母、数字或下划线')
-  }
+  // 角色编码由系统生成（方案 AP14）：创建后不变，用于审计与接口引用。
+  const code = `role_${randomUUID().replaceAll('-', '').slice(0, 8)}`
   return {
     code,
     name: requiredText(input.name, '角色名称', 80),
