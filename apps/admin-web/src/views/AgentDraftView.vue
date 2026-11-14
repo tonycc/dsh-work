@@ -35,7 +35,7 @@ const agent = computed(() => contentStore.agents.find(item => item.id === agentI
 const activeVersion = computed(() => activeVersionOf(agent.value))
 const pendingVersion = computed(() => pendingVersionOf(agent.value, contentStore.agentVersions))
 const loadFailed = computed(() => Boolean(contentStore.error) && !agent.value)
-const canManage = computed(() => authStore.canManage)
+const canManage = computed(() => authStore.canWrite('agent'))
 const editor = provideAgentDraftEditor(agent, { canEdit: canManage })
 
 const profileFields: AgentDraftField[] = ['name', 'description', 'welcomeMessage', 'systemPrompt', 'workInstructions', 'examplePrompts']

@@ -396,11 +396,12 @@ export class IdentityAdministrationService {
 
   async revokeRole(input: { userId: string; roleId: string; actorId: string }) {
     await this.database.begin(async (transaction) => {
-      await requireAdminModuleActor(transaction, input.actorId, 'identity', 'write')
-      await assertCanManageUser(transaction, input.actorId, input.userId)
+      // 先取平台管理员不变量锁再复核操作人：并发互撤时，后执行的一方读到的是已提交的授权。
       if (input.roleId === 'role-platform-admin') {
         await lockPlatformAdminInvariant(transaction)
       }
+      await requireAdminModuleActor(transaction, input.actorId, 'identity', 'write')
+      await assertCanManageUser(transaction, input.actorId, input.userId)
       const [user] = await transaction<{ id: string; status: string }[]>`
         select id, status from users where tenant_id = ${tenantId} and id = ${input.userId}
           and (identity_provider = 'ai-hub' or (${this.localAccounts} and id in (select user_id from local_user_credentials where tenant_id = 'tenant-dsh-work')))
