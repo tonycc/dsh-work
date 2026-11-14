@@ -1,6 +1,6 @@
 # 管理端模块权限方案
 
-**状态：** 决策已确认（AP1～AP10，2026-11-13；AP11～AP16，2026-11-14，其中 AP11、AP12 取代 AP4、AP6）。AMP-S1（服务端）已合入（#126）；AMP-S2 实施中（员工与权限、钉钉集成改为模块，管理端前端按模块控制），P0/P2 未验收。其余能力在实施并通过第 9 节验收前均不可用，现行规则仍以[功能规则](../development/feature-rules.md)和代码为准。<br>
+**状态：** 决策已确认（AP1～AP10，2026-11-13；AP11～AP17，2026-11-14，其中 AP11、AP12 取代 AP4、AP6）。AMP-S1（服务端）已合入（#126）；AMP-S2 实施中（员工与权限、钉钉集成改为模块，管理端前端按模块控制），P0/P2 未验收。其余能力在实施并通过第 9 节验收前均不可用，现行规则仍以[功能规则](../development/feature-rules.md)和代码为准。<br>
 **更新日期：** 2026-11-14（AMP-S2 原型确认：员工与权限、钉钉集成改为可按模块授权并补防提权规则 AP11～AP13；角色编码系统生成 AP14；菜单与落地页 AP15；数据范围不改 AP16）；2026-11-13（初稿）；2026-11-13（按 PR 评审修订：补“授出不超过自身”原则，堵住组织架构与 Agent 岗位权限两条提权路径；定义三类管理员；钉钉与独立账号保持只限平台管理员；补管理助手读取范围与 Run 内校验；更正现状描述）；2026-11-13（AP1～AP10 按建议确认：模块不合并，Session 摘要归运营查看）<br>
 **依据：** 当前身份与授权实现（`server/src/modules/identity`、`server/src/modules/authorization`、`server/src/http/router.ts`）、[管理端 OpenAPI](../development/openapi-admin.json)、[数据模型第 1 节](data-model.md#1-租户身份与授权)。<br>
 **关联：** [架构总览第 9 节](../development/overview.md#9-身份安全与数据边界)、[功能规则第 8 节 Agent 岗位权限](../development/feature-rules.md#8-agent-岗位权限)、[企业组织架构方案](org-structure-plan.md)（部门授权）、[发往模型的数据防护方案](model-data-protection-plan.md)（`data-protection:terms`）。
