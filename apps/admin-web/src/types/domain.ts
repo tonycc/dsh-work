@@ -91,6 +91,9 @@ export interface AdminSession {
   identityProvider: 'prototype-sso' | 'ai-hub-oidc' | 'local-password'
   apiAudience: 'admin'
   permissions: string[]
+  /** 各模块的可用级别（管理端模块权限方案 5.6）；旧服务端没有时由前端按权限码推算。 */
+  adminModules?: Partial<Record<'agent' | 'skill' | 'connector' | 'model' | 'dlp' | 'knowledge' | 'org' | 'identity' | 'dingtalk' | 'ops', 'none' | 'read' | 'write'>>
+  platformAdmin?: boolean
 }
 
 export interface IdentityRoleSummary {

@@ -399,3 +399,22 @@ test('停用账号使代绑失效；停用后不能再代绑', async () => {
   assert.deepEqual({ ...row }, { status: 'invalid', reason: 'account_disabled' })
   assert.equal(await code(service.preview(userId, { mobile: phone }, adminId)), 'account_inactive')
 })
+
+test('AMP-01 钉钉集成模块：模块管理员可管理普通员工的绑定，应用配置仍只限平台管理员，不能操作自己与平台管理员', async () => {
+  const moduleRole = await administration.createRole({ name: `钉钉管理员-${++sequence}`, permissions: ['admin:dingtalk:write'], actorId: adminId })
+  const dingAdmin = await employee('钉钉管理员')
+  await administration.grantRole({ userId: dingAdmin, roleId: moduleRole.id, actorId: adminId })
+
+  assert.equal(await code(service.overview(dingAdmin)), 'ok')
+  assert.equal(await code(service.saveSettings({ corpId: 'ding-other', agentId: '1', appKey: 'k2', appSecret: 's2' }, dingAdmin)), 'permission_denied')
+  assert.equal(await code(service.clearSettings(dingAdmin)), 'permission_denied')
+
+  const target = await employee('被代绑的员工')
+  const person = member('被代绑的员工')
+  assert.equal(await code(bind(target, person.phone, dingAdmin)), 'ok')
+  assert.equal(await code(service.unbind(target, {}, dingAdmin)), 'ok')
+
+  const other = member('第二管理员')
+  assert.equal(await code(service.preview(secondAdminId, { mobile: other.phone }, dingAdmin)), 'permission_denied')
+  assert.equal(await code(service.preview(dingAdmin, { mobile: mobile() }, dingAdmin)), 'permission_denied')
+})

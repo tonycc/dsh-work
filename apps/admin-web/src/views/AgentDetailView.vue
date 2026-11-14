@@ -48,7 +48,7 @@ const activeSection = computed<SectionId>(() => {
 const visitedSections = ref(new Set<SectionId>([activeSection.value]))
 watch(activeSection, id => visitedSections.value.add(id), { immediate: true })
 const loadFailed = computed(() => Boolean(contentStore.error) && !agent.value)
-const canManage = computed(() => authStore.canManage)
+const canManage = computed(() => authStore.canWrite('agent'))
 
 const activeVersion = computed(() => activeVersionOf(agent.value))
 const hasActiveVersion = computed(() => Boolean(activeVersion.value))

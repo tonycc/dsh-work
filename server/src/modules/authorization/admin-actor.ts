@@ -140,12 +140,13 @@ export async function loadGrantCeiling(sql: Sql, userId: string): Promise<GrantC
 }
 
 /** 角色的权限码与授予该角色的数据范围（用于判断授出这些角色是否超出操作人）。 */
-export async function loadRoleGrants(sql: Sql, roleIds: string[]): Promise<{ permissions: string[]; dataScopes: string[] }> {
+export async function loadRoleGrants(sql: Sql, roleIds: string[], options: { includeDisabled?: boolean } = {}): Promise<{ permissions: string[]; dataScopes: string[] }> {
   if (!roleIds.length) return { permissions: [], dataScopes: [] }
+  const includeDisabled = options.includeDisabled ?? false
   const [row] = await sql<{ permissions: string[]; dataScopes: string[] }[]>`
     select coalesce((select array_agg(distinct permission.value)
                        from roles r, jsonb_array_elements_text(coalesce(r.permissions, '[]')) permission(value)
-                      where r.tenant_id = ${tenantId} and r.id = any(${roleIds}::text[]) and r.status = 'active'), '{}') as permissions,
+                      where r.tenant_id = ${tenantId} and r.id = any(${roleIds}::text[]) and (${includeDisabled}::boolean or r.status = 'active')), '{}') as permissions,
            coalesce((select array_agg(distinct dsg.scope_value)
                        from data_scope_grants dsg
                       where dsg.tenant_id = ${tenantId} and dsg.subject_type = 'role' and dsg.subject_id = any(${roleIds}::text[])), '{}') as "dataScopes"
@@ -171,4 +172,53 @@ export function assertWithinGrantCeiling(
     scopes.length ? `数据范围 ${scopes.join('、')}` : '',
   ].filter(Boolean)
   throw authorizationDenied(`${subject}超出了你自己的授权：缺少${parts.join('，')}。请联系平台管理员处理`)
+}
+
+/**
+ * 某员工持有的权限与数据范围，**不看账号是否停用**：停用的平台管理员被重新启用后会立即恢复权限，
+ * 判断能否操作这个账号时必须按它持有的授权算（管理端模块权限方案 AP13 ④）。
+ */
+async function loadHeldGrants(sql: Sql, userId: string): Promise<{ platformAdmin: boolean; permissions: string[]; dataScopes: string[] }> {
+  const [row] = await sql<{ permissions: string[]; dataScopes: string[]; platformAdmin: boolean }[]>`
+    select coalesce(array_agg(distinct permission.value) filter (where permission.value is not null), '{}') as permissions,
+           coalesce(array_agg(distinct dsg.scope_value) filter (where dsg.scope_value is not null), '{}') as "dataScopes",
+           coalesce(bool_or(ur.source_key = 'local' and r.permissions ? ${PLATFORM_ADMIN_PERMISSION}), false) as "platformAdmin"
+      from users u
+      left join user_roles ur on ur.tenant_id = u.tenant_id and ur.user_id = u.id
+        and (ur.source_key = 'local' or ur.source_key like 'department:%')
+        and (ur.valid_until is null or ur.valid_until > now())
+      left join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id and r.status = 'active'
+      left join lateral jsonb_array_elements_text(coalesce(r.permissions, '[]')) permission(value) on true
+      left join data_scope_grants dsg on dsg.tenant_id = u.tenant_id
+        and ((dsg.subject_type = 'user' and dsg.subject_id = u.id) or (dsg.subject_type = 'role' and dsg.subject_id = r.id))
+     where u.tenant_id = ${tenantId} and u.id = ${userId}
+     group by u.id
+  `
+  return { platformAdmin: row?.platformAdmin ?? false, permissions: row?.permissions ?? [], dataScopes: row?.dataScopes ?? [] }
+}
+
+/**
+ * 员工与权限、钉钉对某个账号的操作（分配或移除角色、数据范围、停用、重置密码、撤销会话、钉钉绑定）
+ * 的对象约束（方案 AP13 ③④）：非平台管理员不能操作自己的账号，不能操作平台管理员，
+ * 也不能操作持有自己没有的权限或数据范围的账号。
+ */
+export async function assertCanManageUser(sql: Sql, actorId: string, targetUserId: string) {
+  if (await isPlatformAdminActor(sql, actorId)) return
+  if (actorId === targetUserId) throw authorizationDenied('不能操作自己的账号，请联系其他管理员处理')
+  const target = await loadHeldGrants(sql, targetUserId)
+  if (target.platformAdmin) throw authorizationDenied('不能操作平台管理员的账号')
+  const actor = await loadGrantCeiling(sql, actorId)
+  if (missingPermissions(target.permissions, actor.permissions).length || missingDataScopes(target.dataScopes, actor.dataScopes).length) {
+    throw authorizationDenied('对方的权限比你高，不能操作这个账号')
+  }
+}
+
+/**
+ * 授出权限与数据范围的上限（方案 AP13 ①）：非平台管理员授出的不超过本人；`admin:*` 只有平台管理员能授出。
+ */
+export async function assertCanGrant(sql: Sql, actorId: string, granted: { permissions?: string[]; dataScopes?: string[] }, subject: string) {
+  const ceiling = await loadGrantCeiling(sql, actorId)
+  if (ceiling.platformAdmin) return
+  if ((granted.permissions ?? []).includes(PLATFORM_ADMIN_PERMISSION)) throw authorizationDenied('只有平台管理员可以授出平台管理员权限（admin:*）')
+  assertWithinGrantCeiling(ceiling, granted, subject)
 }
