@@ -140,12 +140,13 @@ export async function loadGrantCeiling(sql: Sql, userId: string): Promise<GrantC
 }
 
 /** 角色的权限码与授予该角色的数据范围（用于判断授出这些角色是否超出操作人）。 */
-export async function loadRoleGrants(sql: Sql, roleIds: string[]): Promise<{ permissions: string[]; dataScopes: string[] }> {
+export async function loadRoleGrants(sql: Sql, roleIds: string[], options: { includeDisabled?: boolean } = {}): Promise<{ permissions: string[]; dataScopes: string[] }> {
   if (!roleIds.length) return { permissions: [], dataScopes: [] }
+  const includeDisabled = options.includeDisabled ?? false
   const [row] = await sql<{ permissions: string[]; dataScopes: string[] }[]>`
     select coalesce((select array_agg(distinct permission.value)
                        from roles r, jsonb_array_elements_text(coalesce(r.permissions, '[]')) permission(value)
-                      where r.tenant_id = ${tenantId} and r.id = any(${roleIds}::text[]) and r.status = 'active'), '{}') as permissions,
+                      where r.tenant_id = ${tenantId} and r.id = any(${roleIds}::text[]) and (${includeDisabled}::boolean or r.status = 'active')), '{}') as permissions,
            coalesce((select array_agg(distinct dsg.scope_value)
                        from data_scope_grants dsg
                       where dsg.tenant_id = ${tenantId} and dsg.subject_type = 'role' and dsg.subject_id = any(${roleIds}::text[])), '{}') as "dataScopes"

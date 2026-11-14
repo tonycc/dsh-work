@@ -72,7 +72,9 @@ export const useAuthStore = defineStore('admin-auth', () => {
       ['agent', '/agents'], ['skill', '/skills'], ['connector', '/connectors'], ['model', '/model-governance'],
       ['knowledge', '/knowledge'], ['identity', '/identity'], ['org', '/organization'], ['dingtalk', '/dingtalk'], ['dlp', '/data-protection'],
     ]
-    const first = order.find(([module]) => canRead(module))
+    // 员工与权限、钉钉集成只在受管身份下可用，否则路由守卫会把它们转回概览（requiresManagedIdentity）。
+    const first = order.find(([module, path]) => canRead(module)
+      && (identityAdministrationAvailable.value || (path !== '/identity' && path !== '/dingtalk')))
     if (first) return first[1]
     if (canReadAudit.value) return '/audit'
     return '/assistant'

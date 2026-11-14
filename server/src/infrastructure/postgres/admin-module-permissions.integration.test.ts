@@ -284,6 +284,10 @@ test('AMP-01 员工与权限模块：授出不超过自身、只读超出自身�
   await assert.rejects(administration.updateRole({ roleId: 'role-platform-admin', name: '平台管理员', status: 'active', permissions: ['admin:*'], dataScopes: [], actorId: hr }), /平台管理员角色只有平台管理员可以修改/)
   await assert.rejects(administration.updateRole({ roleId: roles.knowledgeAdmin, name: '知识库管理员', status: 'active', permissions: [], dataScopes: [], actorId: hr }), /这个角色现有的权限超出了你自己的授权/)
   await administration.updateRole({ roleId: created.id, name: '人事助理（改名）', status: 'active', permissions: ['workbench:use'], dataScopes: [], actorId: hr })
+  // 停用的角色重新启用后会恢复权限：含超出权限的停用角色同样只读。
+  await database`update roles set status = 'disabled' where tenant_id = ${tenantId} and id = ${roles.sales}`
+  await assert.rejects(administration.updateRole({ roleId: roles.sales, name: '销售（改名）', status: 'disabled', permissions: [], dataScopes: [], actorId: hr }), /这个角色现有的权限超出了你自己的授权/)
+  await database`update roles set status = 'active' where tenant_id = ${tenantId} and id = ${roles.sales}`
 
   // 分配角色与数据范围。
   await administration.grantRole({ userId: plain, roleId: roles.basic, actorId: hr })

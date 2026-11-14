@@ -322,7 +322,8 @@ export class IdentityAdministrationService {
       if (input.roleId === 'role-platform-admin' && !(await isPlatformAdminActor(transaction, input.actorId))) {
         throw authorizationDenied('平台管理员角色只有平台管理员可以修改')
       }
-      await assertCanGrant(transaction, input.actorId, await loadRoleGrants(transaction, [input.roleId]), '这个角色现有的权限')
+      // 停用的角色重新启用后会恢复权限，判断“现有权限”时不看角色状态。
+      await assertCanGrant(transaction, input.actorId, await loadRoleGrants(transaction, [input.roleId], { includeDisabled: true }), '这个角色现有的权限')
       await assertCanGrant(transaction, input.actorId, { permissions, dataScopes }, '修改后的角色权限')
       await assertRoleDepartmentGrantable(transaction, input.roleId, permissions)
       const [role] = await transaction<{ id: string }[]>`

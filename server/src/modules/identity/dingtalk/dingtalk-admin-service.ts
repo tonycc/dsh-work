@@ -511,6 +511,19 @@ export class DingTalkAdministrationService {
          where id = ${runId} and tenant_id = ${tenantId} and status = 'paused' for update
       `
       if (!run) throw new IdentityAccessError(409, 'departure_check_not_paused', '该次检查不在待确认状态')
+      if (decision === 'confirmed') {
+        // 确认会让这批绑定失效（方案 AP13 ④）：批次里有自己、平台管理员或权限比自己高的员工时需要平台管理员确认。
+        const owners = await transaction<{ userId: string }[]>`
+          select distinct user_id as "userId" from external_account_bindings
+           where tenant_id = ${tenantId} and id = any(${run.pending}::text[])
+        `
+        try {
+          for (const owner of owners) await assertCanManageUser(transaction, actorId, owner.userId)
+        } catch (error) {
+          if (isAuthorizationDenial(error)) throw new IdentityAccessError(403, 'permission_denied', '这批绑定里有你、平台管理员或权限比你高的员工，请由平台管理员确认')
+          throw error
+        }
+      }
       const invalidated = decision === 'confirmed' ? await this.invalidateDeparted(transaction, run.pending) : 0
       await transaction`
         update dingtalk_departure_checks set status = ${decision}, decided_by = ${actorId}, decided_at = now() where id = ${runId}

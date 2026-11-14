@@ -34,14 +34,14 @@
 - **只调整管理端（Admin Audience）。** 员工端权限（`workbench:*`、`knowledge:view|docs|bases`）和项目空间角色不变。
 - **不做对象级授权。** 本期按模块授权，不做“只管某几个 Agent / 某几个知识库”；对象级授权另行立项。
 - **不改授权机制。** 仍是 `roles.permissions` + `user_roles`，请求时从 PostgreSQL 重新计算，授权变更递增授权版本；不新增权限表。
-- **不放宽现有的平台管理员专属范围。** 员工与权限、独立账号、钉钉集成保持只限平台管理员（AP4、AP6）。
+- **平台管理员专属范围（AMP-S2 起）。** 只剩“平台管理员”角色本身与 `admin:*` 的授出、钉钉应用配置的保存与清除；员工与权限、独立账号、钉钉集成的其余操作按模块授权并执行 AP13（原 AP4、AP6 已被 AP11、AP12 取代）。
 - **不改 Agent 执行链路。** 管理助手仍经 DSH 执行，本方案只调整平台侧的读取范围与确认、执行前校验。
 
 ## 3. 术语
 
 | 术语 | 定义 | 现有对应 |
 | --- | --- | --- |
-| 平台管理员 | 持有**本地授予**（`source_key = 'local'`）、有效期内、启用状态角色中的 `admin:*` | 路由层 identity 写限制、`local-auth-service` / `dingtalk-admin-service` 的 `assertPlatformAdmin` |
+| 平台管理员 | 持有**本地授予**（`source_key = 'local'`）、有效期内、启用状态角色中的 `admin:*` | `requirePlatformAdminOnly`：钉钉应用配置；`isPlatformAdminActor`：“授出不超过自身”与对象约束的豁免 |
 | 全模块管理员 | 持有本地授予的 `admin:write`（全模块修改）或 `admin:read`（全模块查看） | 服务层 `requirePlatformAdminActor` 现接受 `admin:write`，本方案起该函数改名并按模块判定（6 节） |
 | 模块管理员 | 持有本地授予的 `admin:<模块>:read` / `write` | 新增 |
 
@@ -54,9 +54,9 @@
 | AP1 | 权限码命名为 `admin:<模块>:read` / `admin:<模块>:write`，`write` 包含 `read`。`admin:read`、`admin:write` 保留，含义为“全部模块”的查看 / 修改；`admin:*` 不变。前缀统一为 `admin:`，与员工端的 `knowledge:view|docs|bases` 区分 |
 | AP2 | 模块按第 5.1 节划分：Agent、Skill、工具与连接、模型、数据防护、企业知识库、组织架构、运营；审计沿用 `audit:read`。“模型”与“数据防护”、“工具与连接”与 Skill 均不合并，组合需求用预置角色满足 |
 | AP3 | 跨模块引用：持有某模块写权限时，可读取该模块表单需要的其他模块**选择器精简列表**（ID、名称、状态、版本、所需角色），不需另授对方模块的查看权限 |
-| AP4 | 员工、角色与角色权限、用户数据范围、目录同步、独立账号管理仍只限平台管理员，不拆“员工管理员” |
+| AP4 | **已被 AP11 取代（2026-11-14）。** 原决定：员工、角色与角色权限、用户数据范围、目录同步、独立账号管理仍只限平台管理员，不拆“员工管理员” |
 | AP5 | **授出不超过自身**：非平台管理员的任何授权动作（部门角色授权、部门成员变更、Agent 岗位角色与数据范围、Agent 可见角色、主动任务接收人），授出的权限码与数据范围必须是操作人自身有效权限的子集；不能作用于自己的部门归属。具体规则见 5.3 |
-| AP6 | 钉钉集成保持只限平台管理员（与现状一致：服务层只认 `admin:*`，钉钉设置含应用密钥），不设 `admin:dingtalk` 模块；路由层同步收紧，不再让 `admin:read` 进入后被服务层拒绝 |
+| AP6 | **已被 AP12 取代（2026-11-14）。** 原决定：钉钉集成保持只限平台管理员（与现状一致：服务层只认 `admin:*`，钉钉设置含应用密钥），不设 `admin:dingtalk` 模块；路由层同步收紧，不再让 `admin:read` 进入后被服务层拒绝 |
 | AP7 | 运营查看 `admin:ops:read` 覆盖运营概览、Session 摘要、工作空间、Task 汇总、用量与健康状态。Session 摘要含对话标题（员工首条输入的前 40 字），仍归运营查看：只有摘要、没有消息浏览，与现状 `admin:read` 可见一致 |
 | AP8 | 持久化审批（`/approvals`）先归 Agent 模块；接入更多需审批工具后再评估按工具所属模块授权 |
 | AP9 | 管理助手：读取工具只返回操作人有查看权限的模块；专用 Run 的执行前校验与确认入口使用同一模块判定；取消自己的任务提案与操作计划只需能使用管理助手（现状需要 `admin:write`，属放宽，理由是取消只会减少操作）。规则见 5.5 |
@@ -92,8 +92,8 @@
 | 组织架构 | `admin:org:read` / `write` | `organization` | 组织架构 |
 | 运营 | `admin:ops:read` | `sessions`、`workspaces`、`tasks`、`usage`、`health`、`platform-status` | 运营概览、Session 列表、工作空间、健康 |
 | 审计（不变） | `audit:read` | `audit-events`、`operations` | 审计、运行治理 |
-| 员工与权限 | 写：平台管理员；读：任一管理权限 | `identity` | 员工与权限 |
-| 钉钉集成（不变） | 读写均为平台管理员 | `dingtalk` | 钉钉集成 |
+| 员工与权限（AP11） | `admin:identity:read` / `write`；写操作执行 AP13 | `identity`（钉钉绑定除外） | 员工与权限 |
+| 钉钉集成（AP12） | `admin:dingtalk:read` / `write`；`PUT` / `DELETE dingtalk/settings` 只限平台管理员；操作员工绑定时执行 AP13 | `dingtalk`、`identity/users/:id/dingtalk-binding` | 钉钉集成 |
 | 保密词表（不变） | `admin:dlp:read`（或全模块查看）**且** `data-protection:terms`；写同理需 `admin:dlp:write` 且 `data-protection:terms` | `data-protection/terms`、`data-protection/allowlist` | 数据防护中的词表、白名单 |
 | 管理助手 | 见 5.5 | `assistant` | 管理助手 |
 | 当前会话 | 已登录管理端即可 | `session` | — |
