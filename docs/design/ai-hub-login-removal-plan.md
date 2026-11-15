@@ -43,7 +43,7 @@
 
 已有迁移一律不修改。新迁移按顺序：
 
-1. 转换数据（AH2）：删除 `authentication_provider = 'ai-hub-oidc'` 的会话；`identity_provider = 'ai-hub'` 的用户改为 `local`、`status = 'disabled'`，递增 `local_authorization_version`，写一条迁移审计说明转换来源；全新数据库按迁移 0016 的条件不会产生 AI Hub 用户，这一步为空操作；
+1. 转换数据（AH2）：删除 `authentication_provider = 'ai-hub-oidc'` 的会话；`identity_provider = 'ai-hub'` 的用户改为 `local`、`status = 'disabled'`，递增 `local_authorization_version`；全新数据库按迁移 0016 的条件不会产生 AI Hub 用户，这一步为空操作；
 2. 删除表 `oidc_login_transactions`、`application_admin_bootstrap_claims`、`identity_directory_sync_state`；
 3. `authentication_sessions`：重建 `authentication_sessions_provider_check` 为 `('local-password', 'dingtalk')`，重建 `authentication_session_credentials` 去掉 `ai-hub-oidc` 分支，删除 `access_token_encrypted`、`refresh_token_encrypted`、`token_expires_at` 列；
 4. `users`：删除迁移 0078 的 `users_ai_hub_login_account_idx` 与 0016 的 `users_external_identity_unique` 索引，按 AH6 删列（管理端员工目录查询与搜索中对 `external_user_id`、`directory_synced_at` 的引用随 3.1 删除），重建 `identity_provider` 检查为只允许 `local`（0016 中该约束名为自动生成，沿用 0117 的做法按实际定义查找后删除重建）。
