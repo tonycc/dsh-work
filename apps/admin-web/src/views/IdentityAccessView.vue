@@ -98,9 +98,15 @@ const editingRoleLocked = computed(() => !authStore.canManageIdentity || Boolean
 function userLockReason(user: IdentityUserSummary | undefined) {
   if (!user || authStore.platformAdmin) return ''
   if (user.id === authStore.user.id) return '不能操作自己的账号'
-  const roleIds = new Set([...user.roles.map(role => role.id), ...(user.departmentRoles ?? []).map(role => role.id)])
-  if (roleIds.has('role-platform-admin')) return '平台管理员的账号只有平台管理员可以操作'
-  const held = roles.value.filter(role => roleIds.has(role.id)).flatMap(role => role.permissions)
+  // 与服务端 assertCanManageUser 同一口径：本地授予的任一角色含 admin:* 即为平台管理员；只看启用的角色。
+  // 数据范围的比较只在服务端做，前端放行后仍可能被拒绝并提示原因。
+  const localIds = new Set(user.roles.map(role => role.id))
+  const roleIds = new Set([...localIds, ...(user.departmentRoles ?? []).map(role => role.id)])
+  const heldRoles = roles.value.filter(role => roleIds.has(role.id) && role.status === 'active')
+  if (localIds.has('role-platform-admin') || heldRoles.some(role => localIds.has(role.id) && role.permissions.includes('admin:*'))) {
+    return '平台管理员的账号只有平台管理员可以操作'
+  }
+  const held = heldRoles.flatMap(role => role.permissions)
   return permissionsBeyond(held, authStore.permissions).length ? '对方的权限比你高，不能操作这个账号' : ''
 }
 const selectedUserLockReason = computed(() => userLockReason(selectedUser.value))

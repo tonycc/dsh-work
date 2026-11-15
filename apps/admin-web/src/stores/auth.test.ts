@@ -29,7 +29,6 @@ describe('admin auth store', () => {
     expect(store.identityAdministrationAvailable).toBe(false)
     expect(store.user.id).toBe('U00008')
 
-    expect(store.isAuditor).toBe(false)
   })
 
   it('keeps an auditor session read-only', async () => {
@@ -45,7 +44,6 @@ describe('admin auth store', () => {
     const { useAuthStore } = await import('./auth')
     const store = useAuthStore()
     await store.load()
-    expect(store.isAuditor).toBe(true)
     expect(store.canManage).toBe(false)
     expect(store.canManageIdentity).toBe(false)
     expect(store.canReadAdmin).toBe(false)

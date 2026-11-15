@@ -86,7 +86,6 @@ onMounted(async () => {
 <template>
   <div class="ops-page agent-page">
     <el-alert v-if="contentStore.error" :title="contentStore.error" type="error" show-icon @close="contentStore.error = ''" />
-    <el-alert v-if="authStore.isAuditor" type="info" show-icon :closable="false" title="当前为安全审计员视图，仅可查看 Agent 配置与版本；发布、回滚和启停记录见审计日志。" />
 
     <section class="content-panel filter-panel">
       <div class="filter-bar">

@@ -3,8 +3,12 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
 import {
+  ADMIN_MODULE_LABELS,
+  ADMIN_MODULES,
   adminModuleForPurpose,
+  adminModulePermission,
   adminModuleSummary,
+  allAdminModulePermissions,
   adminRouteRule,
   decideAdminRouteAccess,
   hasAdminAudienceAccess,
@@ -145,4 +149,31 @@ test('management prefixes and Run purposes', () => {
   assert.equal(adminModuleForPurpose('agent-release-trial'), 'agent')
   assert.equal(adminModuleForPurpose('admin-platform-operations'), 'connector')
   assert.equal(adminModuleForPurpose('admin-assistant'), null)
+})
+
+// 前端的模块清单与权限包含关系只用于展示，但必须与这里一致，否则按钮可用性与服务端判定不符（评审 #127）。
+test('admin-web module helpers stay in sync with the server permission tables', async () => {
+  // 用运行时路径导入，避免把前端文件纳入服务端的 tsc rootDir。
+  const web = await import(new URL('../../../apps/admin-web/src/utils/admin-modules.ts', import.meta.url).href) as {
+    ADMIN_MODULES: readonly string[]
+    ADMIN_MODULE_LABELS: Record<string, string>
+    READ_ONLY_MODULES: ReadonlySet<string>
+    permissionsBeyond: (granted: readonly string[], held: readonly string[]) => string[]
+    moduleLevelsOf: (permissions: readonly string[]) => Record<string, string>
+  }
+  assert.deepEqual([...web.ADMIN_MODULES], [...ADMIN_MODULES])
+  assert.deepEqual(web.ADMIN_MODULE_LABELS, ADMIN_MODULE_LABELS)
+  assert.deepEqual(
+    ADMIN_MODULES.filter(module => web.READ_ONLY_MODULES.has(module)),
+    ADMIN_MODULES.filter(module => !allAdminModulePermissions().includes(adminModulePermission(module, 'write'))),
+  )
+  const codes = ['admin:*', 'admin:read', 'admin:write', ...allAdminModulePermissions(), 'audit:read', 'data-protection:terms', 'knowledge:view', 'knowledge:docs', 'knowledge:bases', 'workbench:use']
+  for (const granted of codes) {
+    for (const held of codes) {
+      assert.deepEqual(web.permissionsBeyond([granted], [held]), missingPermissions([granted], [held]), `${granted} vs ${held}`)
+    }
+    for (const module of ADMIN_MODULES) {
+      assert.equal(web.moduleLevelsOf([granted])[module], adminModuleSummary([granted])[module], `${granted} on ${module}`)
+    }
+  }
 })

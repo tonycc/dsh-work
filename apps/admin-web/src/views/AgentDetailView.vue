@@ -167,7 +167,6 @@ onMounted(async () => {
           <el-button @click="router.push('/agents')">返回列表</el-button>
         </div>
       </header>
-      <el-alert v-if="authStore.isAuditor" type="info" show-icon :closable="false" title="当前为安全审计员视图，只能查看，不能修改。" />
 
       <nav class="status-tabs detail-tabs" role="tablist" aria-label="Agent 详情分区">
         <button

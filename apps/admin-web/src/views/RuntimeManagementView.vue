@@ -239,7 +239,6 @@ onMounted(() => contentStore.load())
 <template>
   <div class="ops-page runtime-page">
     <el-alert v-if="contentStore.error" :title="contentStore.error" type="error" show-icon @close="contentStore.error = ''" />
-    <el-alert v-if="authStore.isAuditor" type="info" show-icon :closable="false" title="当前为安全审计员视图，只能查看 Runtime 配置及健康状态。" />
 
     <section class="content-panel filter-panel">
       <div class="filter-bar">

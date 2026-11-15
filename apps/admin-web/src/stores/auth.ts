@@ -60,7 +60,6 @@ export const useAuthStore = defineStore('admin-auth', () => {
   const canAccessAdmin = computed(() =>
     sessionUser.value !== null && (canReadAdmin.value || canReadAudit.value || canManage.value),
   )
-  const isAuditor = computed(() => canReadAudit.value && !canManage.value)
 
   /**
    * 落地页（方案 AP15）：有运营查看时进运营概览，否则进第一个能看的模块页面，都没有时进审计或管理助手。
@@ -150,7 +149,6 @@ export const useAuthStore = defineStore('admin-auth', () => {
     canSee,
     landingRoute,
     identityAdministrationAvailable,
-    isAuditor,
     initialized,
     loading,
     error,

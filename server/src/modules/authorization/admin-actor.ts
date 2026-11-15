@@ -178,9 +178,17 @@ export function assertWithinGrantCeiling(
  * 某员工持有的权限与数据范围，**不看账号是否停用**：停用的平台管理员被重新启用后会立即恢复权限，
  * 判断能否操作这个账号时必须按它持有的授权算（管理端模块权限方案 AP13 ④）。
  */
-async function loadHeldGrants(sql: Sql, userId: string): Promise<{ platformAdmin: boolean; permissions: string[]; dataScopes: string[] }> {
-  const [row] = await sql<{ permissions: string[]; dataScopes: string[]; platformAdmin: boolean }[]>`
-    select coalesce(array_agg(distinct permission.value) filter (where permission.value is not null), '{}') as permissions,
+async function loadHeldGrants(sql: Sql, userId: string): Promise<HeldGrants> {
+  return (await loadHeldGrantsForUsers(sql, [userId])).get(userId) ?? { platformAdmin: false, permissions: [], dataScopes: [] }
+}
+
+interface HeldGrants { platformAdmin: boolean; permissions: string[]; dataScopes: string[] }
+
+async function loadHeldGrantsForUsers(sql: Sql, userIds: string[]): Promise<Map<string, HeldGrants>> {
+  if (!userIds.length) return new Map()
+  const rows = await sql<{ userId: string; permissions: string[]; dataScopes: string[]; platformAdmin: boolean }[]>`
+    select u.id as "userId",
+           coalesce(array_agg(distinct permission.value) filter (where permission.value is not null), '{}') as permissions,
            coalesce(array_agg(distinct dsg.scope_value) filter (where dsg.scope_value is not null), '{}') as "dataScopes",
            coalesce(bool_or(ur.source_key = 'local' and r.permissions ? ${PLATFORM_ADMIN_PERMISSION}), false) as "platformAdmin"
       from users u
@@ -191,10 +199,55 @@ async function loadHeldGrants(sql: Sql, userId: string): Promise<{ platformAdmin
       left join lateral jsonb_array_elements_text(coalesce(r.permissions, '[]')) permission(value) on true
       left join data_scope_grants dsg on dsg.tenant_id = u.tenant_id
         and ((dsg.subject_type = 'user' and dsg.subject_id = u.id) or (dsg.subject_type = 'role' and dsg.subject_id = r.id))
-     where u.tenant_id = ${tenantId} and u.id = ${userId}
+     where u.tenant_id = ${tenantId} and u.id = any(${userIds}::text[])
      group by u.id
   `
-  return { platformAdmin: row?.platformAdmin ?? false, permissions: row?.permissions ?? [], dataScopes: row?.dataScopes ?? [] }
+  return new Map(rows.map(({ userId, ...grants }) => [userId, grants]))
+}
+
+/**
+ * 名单页的逐行提示（与 `assertCanManageUser` 同一口径）：返回操作人能操作的账号。只决定按钮是否显示，
+ * 每次写操作仍由 `assertCanManageUser` 在事务内复核。
+ */
+export async function manageableUserIds(sql: Sql, actorId: string, userIds: string[]): Promise<Set<string>> {
+  if (!userIds.length) return new Set()
+  if (await isPlatformAdminActor(sql, actorId)) return new Set(userIds)
+  const grants = await loadHeldGrantsForUsers(sql, userIds)
+  const actor = await loadGrantCeiling(sql, actorId)
+  return new Set(userIds.filter((userId) => {
+    if (userId === actorId) return false
+    const target = grants.get(userId)
+    if (!target) return false
+    return !target.platformAdmin
+      && !missingPermissions(target.permissions, actor.permissions).length
+      && !missingDataScopes(target.dataScopes, actor.dataScopes).length
+  }))
+}
+
+/**
+ * 减少角色的权限、数据范围或停用角色（方案 AP13 ④，2026-11-15 补充）：会让持有这个角色的人降权，
+ * 等于在操作这些账号。非平台管理员只有在全部持有人都是自己能操作的账号时才能减权；
+ * 增加权限、改名称与说明不受此限（仍受“授出不超过自身”约束）。
+ */
+export async function assertCanReduceRole(sql: Sql, actorId: string, roleId: string) {
+  if (await isPlatformAdminActor(sql, actorId)) return
+  const holders = await sql<{ userId: string }[]>`
+    select distinct user_id as "userId" from user_roles
+     where tenant_id = ${tenantId} and role_id = ${roleId}
+       and (source_key = 'local' or source_key like 'department:%')
+       and (valid_until is null or valid_until > now())
+  `
+  const denied = '这个角色有你不能操作的持有人（你自己、平台管理员或权限比你高的员工），只能增加权限或修改名称说明；减少权限或停用请联系平台管理员'
+  if (holders.some(holder => holder.userId === actorId)) throw authorizationDenied(denied)
+  const grants = await loadHeldGrantsForUsers(sql, holders.map(holder => holder.userId))
+  const actor = await loadGrantCeiling(sql, actorId)
+  for (const target of grants.values()) {
+    if (target.platformAdmin
+      || missingPermissions(target.permissions, actor.permissions).length
+      || missingDataScopes(target.dataScopes, actor.dataScopes).length) {
+      throw authorizationDenied(denied)
+    }
+  }
 }
 
 /**

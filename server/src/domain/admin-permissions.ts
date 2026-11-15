@@ -183,7 +183,8 @@ export function adminModuleForAction(actionType: string): AdminModule | null {
  * 未登记的路径一律拒绝（默认拒绝）。
  */
 export type AdminRouteRule =
-  | { kind: 'module'; module: AdminModule }
+  /** `writePlatformOnly`：查看按模块，修改只限平台管理员（钉钉应用配置，方案 AP12）。 */
+  | { kind: 'module'; module: AdminModule; writePlatformOnly?: boolean }
   | { kind: 'session' }
   | { kind: 'any-admin-read' }
   | { kind: 'platform-only' }
@@ -236,6 +237,8 @@ export function adminRouteRule(path: string): AdminRouteRule | null {
   if (segment === 'data-protection' && (second === 'terms' || second === 'allowlist')) {
     return { kind: 'data-protection-terms' }
   }
+  // 钉钉应用配置（CorpId、AppKey、AppSecret）：查看为钉钉集成查看级，保存与清除只限平台管理员（方案 AP12）。
+  if (segment === 'dingtalk' && second === 'settings') return { kind: 'module', module: 'dingtalk', writePlatformOnly: true }
   // 员工的钉钉绑定（查看、代绑、解绑、解锁）属于钉钉集成模块（方案 AP12）。
   if (segment === 'identity' && /^identity\/users\/[^/]+\/dingtalk-binding(\/|$)/.test(rest)) {
     return { kind: 'module', module: 'dingtalk' }
@@ -310,9 +313,8 @@ export function decideAdminRouteAccess(permissions: Iterable<string>, path: stri
         : { allowed: false, message: write ? '当前用户没有数据防护的修改权限' : '当前用户没有数据防护的查看权限' }
     case 'module': {
       if (write && READ_ONLY_MODULES.has(rule.module)) return { allowed: false, message: `${ADMIN_MODULE_LABELS[rule.module]}只提供查看` }
-      // 钉钉应用配置（CorpId、AppKey、AppSecret）的保存与清除只限平台管理员（方案 AP12）。
-      if (write && rule.module === 'dingtalk' && /^dingtalk\/settings$/.test(path.slice(ADMIN_API_PREFIX.length))) {
-        return isPlatformAdmin(granted) ? ALLOW : { allowed: false, message: '钉钉应用配置只有平台管理员可以修改' }
+      if (write && rule.writePlatformOnly) {
+        return isPlatformAdmin(granted) ? ALLOW : { allowed: false, message: `${ADMIN_MODULE_LABELS[rule.module]}的应用配置只有平台管理员可以修改` }
       }
       const level: AdminLevel = write ? 'write' : 'read'
       if (hasAdminModuleAccess(granted, rule.module, level)) return ALLOW

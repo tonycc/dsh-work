@@ -34,6 +34,16 @@ describe('RolePermissionEditor', () => {
     expect(wrapper.text()).not.toContain('知识库管理员')
   })
 
+  it('offers admin:* only to platform administrators', async () => {
+    const platform = render({ modelValue: ['workbench:use'], actorPermissions: ['admin:*'] })
+    const section = platform.find('section[aria-label="平台管理员"]')
+    expect(section.exists()).toBe(true)
+    await section.find('input[type="checkbox"]').setValue(true)
+    expect(platform.emitted('update:modelValue')!.at(-1)![0]).toContain('admin:*')
+    const moduleAdmin = render({ modelValue: [], actorPermissions: ['admin:identity:write', 'admin:write'] })
+    expect(moduleAdmin.find('section[aria-label="平台管理员"]').exists()).toBe(false)
+  })
+
   it('locks every option for the platform administrator role', () => {
     const wrapper = render({ modelValue: ['admin:*'], actorPermissions: ['admin:*'], platformRole: true })
     expect(wrapper.text()).toContain('只能修改名称')

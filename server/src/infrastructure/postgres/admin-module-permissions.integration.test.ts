@@ -289,6 +289,30 @@ test('AMP-01 员工与权限模块：授出不超过自身、只读超出自身�
   await assert.rejects(administration.updateRole({ roleId: roles.sales, name: '销售（改名）', status: 'disabled', permissions: [], dataScopes: [], actorId: hr }), /这个角色现有的权限超出了你自己的授权/)
   await database`update roles set status = 'active' where tenant_id = ${tenantId} and id = ${roles.sales}`
 
+  // 减权会让持有人降权（AP13 ④，2026-11-15）：持有人有平台管理员或权限更高的人时只能加权、改名称说明。
+  const shared = `role-amp-shared-${randomUUID().slice(0, 8)}`
+  await createRole(shared, ['workbench:use'])
+  const sharedHolder = await createUser('共享角色持有人', [shared])
+  await administration.updateRole({ roleId: shared, name: '共享（改名）', status: 'active', permissions: ['workbench:use'], dataScopes: [], actorId: hr })
+  await administration.updateRole({ roleId: shared, name: '共享', status: 'disabled', permissions: ['workbench:use'], dataScopes: [], actorId: hr })
+  await administration.updateRole({ roleId: shared, name: '共享', status: 'active', permissions: ['workbench:use'], dataScopes: [], actorId: hr })
+  await database`insert into user_roles (tenant_id, user_id, role_id, source_key) values (${tenantId}, ${ids.platformAdmin}, ${shared}, 'local')`
+  await database`insert into user_roles (tenant_id, user_id, role_id, source_key) values (${tenantId}, ${strong}, ${shared}, 'local')`
+  await administration.updateRole({ roleId: shared, name: '共享（再改名）', status: 'active', permissions: ['workbench:use', 'admin:identity:read'], dataScopes: [], actorId: hr })
+  // 读改成写只存写码，按包含关系仍是升级，不算减权。
+  await administration.updateRole({ roleId: shared, name: '共享（再改名）', status: 'active', permissions: ['workbench:use', 'admin:identity:write'], dataScopes: [], actorId: hr })
+  await assert.rejects(administration.updateRole({ roleId: shared, name: '共享', status: 'active', permissions: ['workbench:use'], dataScopes: [], actorId: hr }), /有你不能操作的持有人/)
+  await assert.rejects(administration.updateRole({ roleId: shared, name: '共享', status: 'active', permissions: ['workbench:use', 'admin:identity:read'], dataScopes: [], actorId: hr }), /有你不能操作的持有人/)
+  await assert.rejects(administration.updateRole({ roleId: shared, name: '共享', status: 'disabled', permissions: ['workbench:use', 'admin:identity:write'], dataScopes: [], actorId: hr }), /有你不能操作的持有人/)
+  await database`delete from user_roles where tenant_id = ${tenantId} and role_id = ${shared} and user_id = ${ids.platformAdmin}`
+  await assert.rejects(administration.updateRole({ roleId: shared, name: '共享', status: 'disabled', permissions: ['workbench:use', 'admin:identity:write'], dataScopes: [], actorId: hr }), /有你不能操作的持有人/)
+  await database`delete from user_roles where tenant_id = ${tenantId} and role_id = ${shared} and user_id = ${strong}`
+  await administration.updateRole({ roleId: shared, name: '共享', status: 'disabled', permissions: ['workbench:use'], dataScopes: [], actorId: hr })
+  assert.ok(sharedHolder)
+  // 平台管理员不受此限。
+  await database`insert into user_roles (tenant_id, user_id, role_id, source_key) values (${tenantId}, ${strong}, ${shared}, 'local')`
+  await administration.updateRole({ roleId: shared, name: '共享', status: 'disabled', permissions: [], dataScopes: [], actorId: ids.platformAdmin })
+
   // 分配角色与数据范围。
   await administration.grantRole({ userId: plain, roleId: roles.basic, actorId: hr })
   await assert.rejects(administration.grantRole({ userId: plain, roleId: roles.sales, actorId: hr }), /要分配的角色超出了你自己的授权/)
@@ -302,6 +326,13 @@ test('AMP-01 员工与权限模块：授出不超过自身、只读超出自身�
   const dormant = await createUser('停用的平台管理员', ['role-platform-admin'])
   await database`update users set status = 'disabled' where tenant_id = ${tenantId} and id = ${dormant}`
   await assert.rejects(administration.revokeSessions({ userId: dormant, actorId: hr }), /不能操作平台管理员的账号/)
+
+  // 跨模块选择器只按姓名搜索（评审 #127）：不能按账号标识反查员工。
+  const marker = `marker-${randomUUID().slice(0, 8)}`
+  await database`update users set external_user_id = ${marker} where tenant_id = ${tenantId} and id = ${plain}`
+  assert.ok((await administration.listUsers({ query: marker })).items.some(item => item.id === plain))
+  assert.equal((await administration.listUsers({ query: marker, nameOnly: true })).items.length, 0)
+  assert.ok((await administration.listUsers({ query: '普通员工二', nameOnly: true })).items.some(item => item.id === plain))
 
   // 没有员工与权限修改权限的模块管理员被拒绝。
   await assert.rejects(administration.createRole({ name: '知识库越权', permissions: [], actorId: ids.knowledgeAdmin }), /没有员工与权限的修改权限/)

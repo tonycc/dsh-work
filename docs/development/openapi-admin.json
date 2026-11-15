@@ -3332,6 +3332,44 @@
         }
       }
     },
+    "/dingtalk/bound": {
+      "get": {
+        "operationId": "listDingTalkBound",
+        "summary": "已绑定名单：有效独立账号中有有效钉钉绑定的员工（姓名、账号、部门、钉钉成员名与绑定方式），按姓名或登录账号搜索；钉钉集成查看权限",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 10,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          }
+        }
+      }
+    },
     "/dingtalk/reminders": {
       "post": {
         "operationId": "remindDingTalkBinding",

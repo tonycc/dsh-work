@@ -412,7 +412,17 @@ test('AMP-01 钉钉集成模块：模块管理员可管理普通员工的绑定�
   const target = await employee('被代绑的员工')
   const person = member('被代绑的员工')
   assert.equal(await code(bind(target, person.phone, dingAdmin)), 'ok')
+  // 已绑定名单：只有钉钉权限即可在集成页找到已绑定员工并解绑（评审 #127）。
+  const bound = await service.listBound({ query: '被代绑的员工', pageSize: 100 }, dingAdmin)
+  assert.ok(bound.items.some(item => item.id === target && item.boundBy === 'admin' && item.manageable))
+  // 逐行提示：自己与平台管理员不可操作，普通员工可以。
+  const unboundRows = (await service.listUnbound({ pageSize: 100 }, dingAdmin)).items
+  assert.equal(unboundRows.find(item => item.id === dingAdmin)?.manageable, false)
+  assert.equal(unboundRows.find(item => item.id === secondAdminId)?.manageable ?? false, false)
+  assert.ok((await service.listUnbound({ pageSize: 100 }, adminId)).items.every(item => item.manageable))
+  assert.ok(!(await service.listUnbound({ pageSize: 100 }, dingAdmin)).items.some(item => item.id === target))
   assert.equal(await code(service.unbind(target, {}, dingAdmin)), 'ok')
+  assert.ok(!(await service.listBound({ query: '被代绑的员工', pageSize: 100 }, dingAdmin)).items.some(item => item.id === target))
 
   const other = member('第二管理员')
   assert.equal(await code(service.preview(secondAdminId, { mobile: other.phone }, dingAdmin)), 'permission_denied')

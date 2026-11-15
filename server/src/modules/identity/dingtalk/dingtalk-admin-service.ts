@@ -5,7 +5,7 @@ import { recordUserNotification } from '../../notification/user-notification-wri
 import { IdentityAccessError } from '../auth-service.ts'
 import { hashOpaque, randomOpaque } from '../secure-values.ts'
 import { IdentitySessionRepository } from '../session-repository.ts'
-import { assertCanManageUser, requireAdminModuleActor, requirePlatformAdminOnly } from '../../authorization/admin-actor.ts'
+import { assertCanManageUser, manageableUserIds, requireAdminModuleActor, requirePlatformAdminOnly } from '../../authorization/admin-actor.ts'
 import { isManagementPermission } from '../../../domain/admin-permissions.ts'
 import { isAuthorizationDenial } from '../../../domain/authorization-errors.ts'
 import { DINGTALK_CHANNEL, invalidateUserBindings, revokeBindingSessions } from './dingtalk-bindings.ts'
@@ -403,7 +403,34 @@ export class DingTalkAdministrationService {
        order by (latest.id is null) desc, u.display_name, u.id
        limit ${pageSize} offset ${(page - 1) * pageSize}
     `
-    return { items: rows.map(({ total: _total, ...row }) => row), total: rows[0]?.total ?? 0, page, pageSize }
+    // manageable：操作人能否操作这名员工（AP13 ③④），只用于页面显示按钮。
+    const manageable = await manageableUserIds(this.database, actorId, rows.map(row => row.id))
+    return { items: rows.map(({ total: _total, ...row }) => ({ ...row, manageable: manageable.has(row.id) })), total: rows[0]?.total ?? 0, page, pageSize }
+  }
+
+  /**
+   * 已绑定名单（2026-11-15，评审 #127）：只有钉钉集成权限的管理员在钉钉集成页内解绑、解锁，
+   * 不需要员工与权限的查看权限。只返回姓名、账号、部门与绑定方式；按姓名或登录账号搜索。
+   */
+  async listBound(input: { page?: number; pageSize?: number; query?: string }, actorId: string) {
+    await this.database.begin(transaction => assertDingTalkAdmin(transaction, actorId, 'read'))
+    const pageSize = Math.min(100, Math.max(10, Number.isInteger(input.pageSize) ? input.pageSize! : 50))
+    const page = Math.max(1, Number.isInteger(input.page) ? input.page! : 1)
+    const query = typeof input.query === 'string' ? input.query.trim().slice(0, 100) : ''
+    const rows = await this.database<{ id: string; name: string; loginAccount: string; department: string; dingtalkName: string | null; boundBy: 'self' | 'admin'; boundAt: Date; total: number }[]>`
+      select u.id, u.display_name as name, c.username as "loginAccount", coalesce(u.department_id, '未分配部门') as department,
+             b.external_display_name as "dingtalkName", b.bound_by as "boundBy", b.bound_at as "boundAt",
+             count(*) over ()::integer as total
+        from users u
+        join local_user_credentials c on c.tenant_id = u.tenant_id and c.user_id = u.id
+        join external_account_bindings b on b.tenant_id = u.tenant_id and b.user_id = u.id and b.channel = ${DINGTALK_CHANNEL} and b.status = 'valid'
+       where u.tenant_id = ${tenantId} and u.identity_provider = 'local' and u.business_user and u.status = 'active'
+         and (${query} = '' or u.display_name ilike ${`%${query}%`} or c.username ilike ${`%${query}%`})
+       order by u.display_name, u.id
+       limit ${pageSize} offset ${(page - 1) * pageSize}
+    `
+    const manageable = await manageableUserIds(this.database, actorId, rows.map(row => row.id))
+    return { items: rows.map(({ total: _total, ...row }) => ({ ...row, manageable: manageable.has(row.id) })), total: rows[0]?.total ?? 0, page, pageSize }
   }
 
   /** “提醒员工”：给未绑定且未被锁定的员工各登记一条站内通知；同一员工每天最多一条。 */

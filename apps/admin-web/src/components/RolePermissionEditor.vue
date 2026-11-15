@@ -102,6 +102,8 @@ function applyTemplate(permissions: string[]) {
 }
 
 const legacyAll = computed(() => props.modelValue.some(code => LEGACY_ALL.has(code)))
+/** 平台级权限 `admin:*`（方案 AP13 ①）：只有平台管理员能授出，因此只对平台管理员显示；已含该权限的角色也显示。 */
+const showPlatformOption = computed(() => !props.platformRole && (props.actorPermissions.includes('admin:*') || granted.value.has('admin:*')))
 
 const sections = computed(() => ADMIN_MODULES.map((module) => {
   const level = levels.value[module]
@@ -135,6 +137,13 @@ const sections = computed(() => ADMIN_MODULES.map((module) => {
     </div>
     <el-alert v-if="platformRole" type="info" :closable="false" title="平台管理员角色拥有全部权限（admin:*），只能修改名称、说明。" />
     <el-alert v-else-if="legacyAll && editable" type="info" :closable="false" title="该角色使用旧的“全部模块”权限；修改任一模块后将改存为逐个模块的权限，以后新增的模块不会自动包含。" />
+    <section v-if="showPlatformOption" class="role-permissions__section role-permissions__platform" aria-label="平台管理员">
+      <strong>平台管理员</strong>
+      <p>全部模块与审计的全部权限，包括授出平台管理员权限、修改钉钉应用配置。只有平台管理员可以授出。</p>
+      <el-checkbox :model-value="granted.has('admin:*')" :disabled="!editable || beyond('admin:*')" @change="toggleCode('admin:*')">
+        平台管理员权限（admin:*）
+      </el-checkbox>
+    </section>
     <div class="role-permissions__grid">
       <section v-for="section in sections" :key="section.module" class="role-permissions__section" :aria-label="section.label">
         <strong>{{ section.label }}</strong>
