@@ -595,17 +595,17 @@ bash current/scripts/deploy/restore.sh \
 
 #### 2. Mac mini 升级前只读检查
 
-在 Mac mini 的持续 Bash 会话中按第 2 节设置 `DWP_*`（`DWP_TAG='v2026.11.16-01'`，`DWP_ROOT` 填实际部署目录），然后：
+在 Mac mini 的持续 Bash 会话中按第 2 节设置 `DWP_*`（`DWP_TAG='v2026.11.16-01'`，`DWP_ROOT` 填实际部署目录）。第 2 节开启了 `set -e`：本节的检查命令都写成“没有匹配也不退出”，不要去掉其中的 `|| true` 或 `if`，否则当前会话会退出并丢失 `DWP_*`。
 
 ```bash
 cat "${DWP_ROOT}/active-release"   # 应为当前生产版本，例如 v2026.11.09-01
-grep -E '^DSH_WORK_AUTO_DEPLOY_ENABLED=' "${DWP_ROOT}/runtime.env"
+grep -E '^DSH_WORK_AUTO_DEPLOY_ENABLED=' "${DWP_ROOT}/runtime.env" || echo 'DSH_WORK_AUTO_DEPLOY_ENABLED 未设置（等同关闭）'
 ```
 
 **检查可信入口是否已配置。** 新版本不再从 `AI_HUB_*_PORTAL_URL` 回退，缺少下面两项时预检会在迁移前失败：
 
 ```bash
-grep -E '^(DSH_WORK_(WORKBENCH|ADMIN)_(ORIGINS|DEFAULT_ORIGIN)|AI_HUB_[A-Z_]+)=' "${DWP_ROOT}/runtime.env" \
+{ grep -E '^(DSH_WORK_(WORKBENCH|ADMIN)_(ORIGINS|DEFAULT_ORIGIN)|AI_HUB_[A-Z_]+)=' "${DWP_ROOT}/runtime.env" || true; } \
   | sed -E 's/^(AI_HUB_[A-Z_]*SECRET)=.*/\1=***/'
 ```
 
@@ -623,11 +623,17 @@ docker compose --env-file "${DWP_ROOT}/runtime.env" \
     select count(*) from authentication_sessions where authentication_provider = '\''ai-hub-oidc'\'';"'
 ```
 
-**确认异机备份目录可写、磁盘有余量**（`release.sh` 会在迁移前备份并校验，目录不可用时整次升级停止）：
+**确认异机备份目录可写、磁盘有余量。** 下面在子 shell 中按 `runtime.env` 的实际解析读取备份目录，不改动当前会话的变量；这只是提前发现问题，最终以 `release.sh` 预检为准（它还检查目录不是符号链接、与部署目录不在同一文件系统）：
 
 ```bash
-DWP_OFFHOST="$(grep -E '^DSH_WORK_OFF_HOST_BACKUP_DIRECTORY=' "${DWP_ROOT}/runtime.env" | cut -d= -f2- | tr -d '"')"
-[[ -d "${DWP_OFFHOST}" && -w "${DWP_OFFHOST}" ]] && df -h "${DWP_OFFHOST}" "${DWP_ROOT}"
+(
+  set -a; . "${DWP_ROOT}/runtime.env"; set +a
+  if [[ -d "${DSH_WORK_OFF_HOST_BACKUP_DIRECTORY}" && -w "${DSH_WORK_OFF_HOST_BACKUP_DIRECTORY}" ]]; then
+    df -h "${DSH_WORK_OFF_HOST_BACKUP_DIRECTORY}" "${DWP_ROOT}"
+  else
+    echo "异机备份目录不可用：${DSH_WORK_OFF_HOST_BACKUP_DIRECTORY}" >&2
+  fi
+)
 ```
 
 #### 3. 进入维护窗口
@@ -647,20 +653,22 @@ chmod 600 "${DWP_ROOT}/runtime.env.before-ah-s1"
 然后用本地编辑器修改 `${DWP_ROOT}/runtime.env`：
 
 1. 第 2 步检查缺少 `DSH_WORK_WORKBENCH_ORIGINS` / `DSH_WORK_ADMIN_ORIGINS` 时补上；有 `AI_HUB_WORKBENCH_PORTAL_URL` / `AI_HUB_ADMIN_PORTAL_URL` 的，把它们的值分别填进这两项。
-2. 删除所有 `AI_HUB_*` 行，以及 `DSH_WORK_DIRECTORY_SYNC_INTERVAL_SECONDS`、`DSH_WORK_ADMIN_BOOTSTRAP_ENABLED`、`DSH_WORK_OIDC_*`；删除 `DSH_WORK_AUTH_MODE`（若有）。这些变量新版本不再读取；不删也能启动，但启动日志会持续警告。
+2. 删除所有 `AI_HUB_*` 行，以及 `DSH_WORK_DIRECTORY_SYNC_INTERVAL_SECONDS`、`DSH_WORK_ADMIN_BOOTSTRAP_ENABLED`、`DSH_WORK_OIDC_*`；删除 `DSH_WORK_AUTH_MODE`（若有）。这些变量新版本不再读取；不删也能启动，但启动日志会持续警告。例外：`DSH_WORK_AUTH_MODE` 只有值为 `local` 或 `oidc` 时才被忽略，其他值（包括 `prototype`）会让服务拒绝启动，必须删除。
 3. 其他配置（数据库、证书、`DSH_CREDENTIAL_MASTER_KEY`、执行镜像、钉钉等）保持不变。
 
 ```bash
 /bin/bash -n "${DWP_ROOT}/runtime.env"
-grep -cE '^(AI_HUB_|DSH_WORK_OIDC_|DSH_WORK_DIRECTORY_SYNC_INTERVAL_SECONDS=|DSH_WORK_ADMIN_BOOTSTRAP_ENABLED=|DSH_WORK_AUTH_MODE=)' "${DWP_ROOT}/runtime.env"   # 应输出 0
-grep -E '^DSH_WORK_(WORKBENCH|ADMIN)_ORIGINS=.+' "${DWP_ROOT}/runtime.env"   # 应输出两行
+grep -cE '^(AI_HUB_|DSH_WORK_OIDC_|DSH_WORK_DIRECTORY_SYNC_INTERVAL_SECONDS=|DSH_WORK_ADMIN_BOOTSTRAP_ENABLED=|DSH_WORK_AUTH_MODE=)' "${DWP_ROOT}/runtime.env" || true   # 应输出 0
+grep -E '^DSH_WORK_(WORKBENCH|ADMIN)_ORIGINS=.+' "${DWP_ROOT}/runtime.env" || echo '缺少可信入口，回到上一步补齐'   # 应输出两行
 ```
 
 #### 5. 下载、验证并执行升级
 
-按第 6 节下载并验证 `v2026.11.16-01`（得到 `DWP_BUNDLE`），再用新包里的脚本升级：
+按第 6 节下载并验证 `v2026.11.16-01`（得到 `DWP_BUNDLE`），先记下后端错误日志当前的行数（launchd 日志是追加写入的，验收时只看这之后的内容），再用新包里的脚本升级：
 
 ```bash
+DWP_LOG="${DWP_ROOT}/logs/server.stderr.log"
+DWP_LOG_LINES="$(wc -l < "${DWP_LOG}" 2>/dev/null || echo 0)"
 bash "${DWP_BUNDLE}/scripts/deploy/release.sh" "${DWP_VERSION}" "${DWP_ROOT}"
 ```
 
@@ -668,28 +676,36 @@ bash "${DWP_BUNDLE}/scripts/deploy/release.sh" "${DWP_VERSION}" "${DWP_ROOT}"
 
 | 失败位置 | 现象 | 处理 |
 | --- | --- | --- |
-| 预检 | `Set DSH_WORK_WORKBENCH_ORIGINS` 等提示，或身份配置无效 | 数据库与应用都未改动；按第 4 步补齐 `runtime.env` 后重跑 |
+| 预检 | 输出 `DSH_WORK_WORKBENCH_ORIGINS 未配置`（或 `ADMIN`）后接 `Production identity configuration is invalid` | 数据库与应用都未改动；按第 4 步补齐 `runtime.env` 后重跑 |
 | 备份 / 异机校验 | 备份目录不可用或校验失败 | 迁移未开始；恢复异机目录后重跑 |
-| 迁移 0129 | 日志含 `仍有 N 个 AI Hub 用户` | 0129 整体回滚，脚本恢复旧版本；先处理这些账号（只可能是遗留数据），再重跑 |
-| 迁移后健康检查 | 输出 `database migrations were applied ... service stays stopped` | 服务保持停止，不能手工启动旧版本；查看 `logs/server.stderr.log` 排障，优先发布修复版本，必要时按第 12 节用本次备份 `restore.sh` 后 `rollback.sh` |
+| 迁移 0129 | `release.sh` 终端输出含 `仍有 N 个 AI Hub 用户` 与 `database migration failed`（不写入日志文件） | 每个迁移各自一个事务：0126～0128 已生效（只新增列，旧版本可用），0129 已回滚，脚本已恢复旧版本；先处理这些账号（只可能是遗留数据），再重跑 |
+| 迁移后健康检查 | 输出 `database migrations were applied ... service stays stopped` | 服务保持停止，不能手工启动旧版本；查看 `logs/server.stderr.log` 排障，优先发布修复版本。必要时按第 12 节用本次备份 `restore.sh` 后立即 `rollback.sh`：此时 `current` 指向新版本，`restore.sh` 会先用新版本在恢复后的旧 Schema 上启动服务，回滚完成前保持 Runtime 排空、不对员工开放。新版本从未激活时 `active-release` 仍是旧版本，回滚会把旧版本自己记入 `automation/state/blocked-release`；以后开启自动部署前先确认并清理该文件 |
 
 #### 6. 升级后验收
 
 ```bash
 cat "${DWP_ROOT}/active-release"   # 应为 v2026.11.16-01
-grep -n 'AI Hub 登录已删除' "${DWP_ROOT}/logs/server.stderr.log" "${DWP_ROOT}/logs/server.stdout.log" | tail -3   # 应无输出
 curl --fail --silent --show-error --max-time 30 http://127.0.0.1:4190/health
 for DWP_AUDIENCE_PORT in workbench:4174 admin:4180; do
   DWP_AUDIENCE="${DWP_AUDIENCE_PORT%%:*}"; DWP_PORT="${DWP_AUDIENCE_PORT##*:}"
   curl --fail --silent --show-error --max-time 30 --cacert "${DWP_ROOT}/certs/root-ca.crt" \
     "https://${DWP_IP}:${DWP_PORT}/auth/${DWP_AUDIENCE}/configuration"; echo
-  curl --silent --output /dev/null --write-out '%{http_code}\n' --max-time 30 --cacert "${DWP_ROOT}/certs/root-ca.crt" \
-    "https://${DWP_IP}:${DWP_PORT}/auth/${DWP_AUDIENCE}/oidc/login"   # 应为 404
 done
 ```
 
-- 两个 `configuration` 响应只含 `mode: "local"`、`localEnabled: true`（员工端另有钉钉 `corpId`），不含 `aiHubEnabled`。
-- 日志有“AI Hub 登录已删除，以下旧配置不再读取”时，按列出的变量回到第 4 步删除并重启后端（`launchctl kickstart -k "gui/$(id -u)/com.company.dsh-work.server"`）。
+只看本次升级之后新写入的错误日志，确认没有旧配置警告：
+
+```bash
+DWP_NEW_LOG="$(tail -n "+$(( DWP_LOG_LINES + 1 ))" "${DWP_LOG}")"
+if [[ "${DWP_NEW_LOG}" == *'AI Hub 登录已删除'* ]]; then
+  printf '%s\n' "${DWP_NEW_LOG}" | grep 'AI Hub 登录已删除' | tail -1
+else
+  echo '本次启动没有旧配置警告'
+fi
+```
+
+- 两个 `configuration` 响应只含 `mode: "local"`、`localEnabled: true`（员工端另有钉钉 `corpId`），不含 `aiHubEnabled`；这是区分新旧版本的依据（旧版本未配置 AI Hub 时也不注册 `/oidc/login`，所以不用该地址判断）。
+- 有旧配置警告时，按列出的变量回到第 4 步删除，先执行 `DWP_LOG_LINES="$(wc -l < "${DWP_LOG}")"` 记下行数，再重启后端（`launchctl kickstart -k "gui/$(id -u)/com.company.dsh-work.server"`），然后重跑上面的日志检查。
 
 在浏览器中：
 
