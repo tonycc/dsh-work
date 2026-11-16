@@ -1,6 +1,6 @@
 # 删除 AI Hub 登录方案
 
-**状态：** AH1、AH2、AH5、AH7 已确认，其余待评审；未实施。
+**状态：** AH1～AH7 均已确认；未实施。
 **更新日期：** 2026-11-16<br>
 **依据：** [组织架构方案](org-structure-plan.md) OD1（“AI Hub 账号登录计划删除”）；现有身份实现（`server/src/modules/identity/`，迁移 0014、0016～0018、0020、0042、0077、0078、0117）；[独立账号登录](../release/local-authentication.md)。
 
@@ -24,11 +24,11 @@
 | --- | --- | --- |
 | AH1 | 彻底删除 AI Hub 登录、员工目录同步和 AI Hub 初始管理员认领，不保留开关或隐藏入口。首位管理员只通过独立账号初始化（`auth:bootstrap` / `local-bootstrap.js`）。 | 已确认（2026-11-15） |
 | AH2 | 不兼容老 AI Hub 用户：生产库没有 AI Hub 用户和会话，不做账号转换。新迁移删除残留的 `ai-hub-oidc` 会话；遇到任何 `identity_provider = 'ai-hub'` 的用户时直接失败并提示先处理这些账号（只可能出现在开发或测试库中），不静默删除或改写。 | 已确认（2026-11-15） |
-| AH3 | 部署中残留的 `AI_HUB_*` 变量和 `DSH_WORK_AUTH_MODE=oidc`/`local` 不再读取：服务启动时只记一条警告并忽略，不阻止启动，避免旧 `runtime.env` 升级后起不来（`DSH_WORK_AUTH_MODE=prototype` 仍按现状报错）。`DSH_WORK_*_ORIGINS` 改为必填，不再回退到 `AI_HUB_*_PORTAL_URL`。 | 待确认 |
-| AH4 | `/auth/{audience}/configuration` 保留 `mode: 'local'` 与 `localEnabled: true`，删除 `aiHubEnabled`；`mode` 不再出现 `oidc`。钉钉相关字段不变。 | 待确认 |
+| AH3 | 部署中残留的 `AI_HUB_*` 变量和 `DSH_WORK_AUTH_MODE=oidc`/`local` 不再读取：服务启动时只记一条警告并忽略，不阻止启动，避免旧 `runtime.env` 升级后起不来（`DSH_WORK_AUTH_MODE=prototype` 仍按现状报错）。`DSH_WORK_*_ORIGINS` 改为必填，不再回退到 `AI_HUB_*_PORTAL_URL`。 | 已确认（2026-11-16） |
+| AH4 | `/auth/{audience}/configuration` 保留 `mode: 'local'` 与 `localEnabled: true`，删除 `aiHubEnabled`；`mode` 不再出现 `oidc`。钉钉相关字段不变。 | 已确认（2026-11-16） |
 | AH5 | 部署文档不再假设与 AI Hub 同机：Mac mini 手册删除 AI Hub 端口与健康检查、AI Hub 应用登记、从 AI Hub 目录读取证书等内容，证书改为“企业内网根 CA 签发的服务器证书”，来源目录由部署人员指定。dsh-work 部署目录中已有的证书副本不受影响，现有部署无需重新签发。同机若还运行其他服务，只保留通用的“端口不得冲突”要求。 | 已确认（2026-11-15） |
 | AH7 | 不再考虑把治理能力迁入 AI Hub：删除架构总览第 11 节“跨应用治理复用达到门槛后迁入 AI Hub”一条，第 6 条改为 Agent、Skill、Tool、Model、发布治理与 Workspace、Session、Run/Attempt 等运行状态都由 dsh-work 持有。完成后仓库中不再有 AI Hub 的产品或架构依赖。 | 已确认（2026-11-16） |
-| AH6 | `users` 表的 `identity_provider`、`business_user`、`external_subject` 列保留（独立账号仍在使用），`identity_provider` 只允许 `local`；只为 AI Hub 服务的 `external_user_id`、`identity_updated_at`、`directory_synced_at` 列一并删除。 | 待确认 |
+| AH6 | `users` 表的 `identity_provider`、`business_user`、`external_subject` 列保留（独立账号仍在使用），`identity_provider` 只允许 `local`；只为 AI Hub 服务的 `external_user_id`、`identity_updated_at`、`directory_synced_at` 列一并删除。 | 已确认（2026-11-16） |
 
 ## 3. 删除范围
 
