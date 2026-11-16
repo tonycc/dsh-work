@@ -1,7 +1,7 @@
 # 删除 AI Hub 登录方案
 
-**状态：** AH1、AH2、AH5 已确认，其余待评审；未实施。
-**更新日期：** 2026-11-15<br>
+**状态：** AH1、AH2、AH5、AH7 已确认，其余待评审；未实施。
+**更新日期：** 2026-11-16<br>
 **依据：** [组织架构方案](org-structure-plan.md) OD1（“AI Hub 账号登录计划删除”）；现有身份实现（`server/src/modules/identity/`，迁移 0014、0016～0018、0020、0042、0077、0078、0117）；[独立账号登录](../release/local-authentication.md)。
 
 ## 1. 现状与目标
@@ -27,7 +27,7 @@
 | AH3 | 部署中残留的 `AI_HUB_*` 变量和 `DSH_WORK_AUTH_MODE=oidc`/`local` 不再读取：服务启动时只记一条警告并忽略，不阻止启动，避免旧 `runtime.env` 升级后起不来（`DSH_WORK_AUTH_MODE=prototype` 仍按现状报错）。`DSH_WORK_*_ORIGINS` 改为必填，不再回退到 `AI_HUB_*_PORTAL_URL`。 | 待确认 |
 | AH4 | `/auth/{audience}/configuration` 保留 `mode: 'local'` 与 `localEnabled: true`，删除 `aiHubEnabled`；`mode` 不再出现 `oidc`。钉钉相关字段不变。 | 待确认 |
 | AH5 | 部署文档不再假设与 AI Hub 同机：Mac mini 手册删除 AI Hub 端口与健康检查、AI Hub 应用登记、从 AI Hub 目录读取证书等内容，证书改为“企业内网根 CA 签发的服务器证书”，来源目录由部署人员指定。dsh-work 部署目录中已有的证书副本不受影响，现有部署无需重新签发。同机若还运行其他服务，只保留通用的“端口不得冲突”要求。 | 已确认（2026-11-15） |
-| AH7 | 架构总览中“跨应用治理达到门槛后迁入 AI Hub”的路线规划与登录无关，暂时保留；如不再考虑该方向，另行删除。 | 待确认 |
+| AH7 | 不再考虑把治理能力迁入 AI Hub：删除架构总览第 11 节“跨应用治理复用达到门槛后迁入 AI Hub”一条，第 6 条改为 Agent、Skill、Tool、Model、发布治理与 Workspace、Session、Run/Attempt 等运行状态都由 dsh-work 持有。完成后仓库中不再有 AI Hub 的产品或架构依赖。 | 已确认（2026-11-16） |
 | AH6 | `users` 表的 `identity_provider`、`business_user`、`external_subject` 列保留（独立账号仍在使用），`identity_provider` 只允许 `local`；只为 AI Hub 服务的 `external_user_id`、`identity_updated_at`、`directory_synced_at` 列一并删除。 | 待确认 |
 
 ## 3. 删除范围
@@ -66,7 +66,7 @@
 ### 3.5 文档与验收材料
 
 - **删除：** `docs/release/ai-hub-sso-integration.md`（同时从 `docs/index/README.md` 与项目检查清单移除）。
-- **修改：** 架构总览（身份来源、外部依赖表、上游不可用规则、登录流程、限制与风险、上线顺序中的“AI Hub 联调”）、内部端口与契约（认证注册、定时任务后台身份、`configuration` 契约、`loginAccount`）、功能规则（项目空间选成员、定时任务后台身份、组织架构范围、钉钉绑定中的 AI Hub 说明）、数据模型、移动端接入规范、开发与测试、独立账号登录、Mac mini 部署手册（按 AH5：开头说明与第 1 节端口表去掉 AI Hub 与 authentik、第 2 节去掉 AI Hub 根目录参数、第 4.2 节去掉 AI Hub 健康检查并改写证书来源、删除第 5 节“在现有 AI Hub 登记应用”、第 7 节去掉 `AI_HUB_*` 配置、第 8 节去掉 OIDC Discovery 预检、第 9 节首位管理员改为 `local-bootstrap.js` 初始化并按独立账号验收，第 10～13 节去掉与 AI Hub 备份回执、登录排错、多入口回调登记的对照，其余章节编号顺延）、三份 OpenAPI（auth、admin、workbench；mobile-h5 中的描述）、Agent 设计规范与生命周期模板中的 OIDC 措辞、相关设计方案中的 AI Hub 说明。
+- **修改：** 架构总览（身份来源、外部依赖表、上游不可用规则、登录流程、限制与风险、第 11 节生产演进中的“AI Hub 联调”与“治理迁入 AI Hub”（AH7）、第 12 节相关文档中的 AI Hub 接入链接）、内部端口与契约（认证注册、定时任务后台身份、`configuration` 契约、`loginAccount`）、功能规则（项目空间选成员、定时任务后台身份、组织架构范围、钉钉绑定中的 AI Hub 说明）、数据模型、移动端接入规范、开发与测试、独立账号登录、Mac mini 部署手册（按 AH5：开头说明与第 1 节端口表去掉 AI Hub 与 authentik、第 2 节去掉 AI Hub 根目录参数、第 4.2 节去掉 AI Hub 健康检查并改写证书来源、删除第 5 节“在现有 AI Hub 登记应用”、第 7 节去掉 `AI_HUB_*` 配置、第 8 节去掉 OIDC Discovery 预检、第 9 节首位管理员改为 `local-bootstrap.js` 初始化并按独立账号验收，第 10～13 节去掉与 AI Hub 备份回执、登录排错、多入口回调登记的对照，其余章节编号顺延）、三份 OpenAPI（auth、admin、workbench；mobile-h5 中的描述）、Agent 设计规范与生命周期模板中的 OIDC 措辞、相关设计方案中的 AI Hub 说明。
 - **项目规范：** `AGENTS.md` P0/P2 说明中的“OIDC”改为“钉钉免登”或删除（需评审时一并确认）。
 - **验收矩阵：** `agent-platform-capabilities.v2.json` 中 `real-oidc-task` 已为 `removed`，补充删除原因；`pf07-platform-acceptance.md` 去掉“真实 OIDC”要求。
 - **E2E：** 删除 `e2e/login-options.integration.spec.ts` 与 `playwright.login-options.config.ts`，`playwright.config.ts` 去掉对应项目；`local-auth.integration.spec.ts` 与 `project-space.integration.spec.ts` 去掉 AI Hub 场景；验收目录 `admin-platform.md`、`agents.md`、`organization.md`、`dingtalk.md`、`workbench.md` 与 `TEST-CATALOG.md` 中的 AI Hub 旅程删除或改写。
