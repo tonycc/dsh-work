@@ -35,10 +35,11 @@
 ### 3.1 后端
 
 - **整个删除：** `oidc-client.ts`、`ai-hub-client.ts`、`directory-sync-service.ts`、`OidcAuthService`（`auth-service.ts` 中）、`http/auth-routes.ts`（OIDC 登录、回调、切换账号、`/auth/admin/bootstrap`）、`session-repository.ts` 中 OIDC 事务、AI Hub 用户写入、初始管理员认领与 Token 刷新部分，`config.ts` 中 `OidcIdentityConfiguration` 的解析与 `types.ts` 中对应类型。
-- **迁出后保留：** `auth-service.ts` 中被独立账号与钉钉登录共用的 `IdentityAccessError`、`assertAudienceAccess`、`normalizeReturnTo`、`validateRequestOrigin`、`resolveRequestOrigin`、`rejectCrossSiteNavigation`、Cookie 读写函数，移到身份模块的公共文件，调用方只改 import。
-- **简化：** `config.ts` 只剩独立账号配置（`loadStartupIdentityConfiguration` 不再判断 `AI_HUB_*`，按 AH3 警告）；`portal-authenticator.ts`、`local-auth-routes.ts`、`dingtalk-auth-routes.ts` 去掉 `oidc` 参数及“登录时顺带撤销 OIDC 会话”的分支；`main.ts` 去掉 OIDC 服务、目录同步定时器、`automationDirectory` 与 `ai-hub-oidc` 运营来源。
+- **迁出后保留：** `auth-service.ts` 中被独立账号与钉钉登录共用的 `IdentityAccessError`、`assertAudienceAccess`、`normalizeReturnTo`、`validateRequestOrigin`、`resolveRequestOrigin`、`rejectCrossSiteNavigation`、Cookie 读写函数，连同它们依赖的私有函数（`requestOrigin`、`singleForwardedHeader`、`normalizeHeaderOrigin`、`isUnsafeMethod`）移到身份模块的公共文件；`validateRequestOrigin`、`resolveRequestOrigin` 的参数类型从 `Pick<OidcAudienceConfiguration, …>` 改为独立账号配置可满足的类型，调用方只改 import。
+- **独立账号服务（`local-auth-service.ts`）：** 删除 `upstream_managed_status`（“AI Hub 账号状态请在企业身份平台中管理”）分支、`loginAccountExists` 中与 AI Hub 登录账号比对的 `union` 查询，以及“撤销此前的密码与 AI Hub 会话”注释中的 AI Hub。
+- **简化：** `config.ts` 只剩独立账号配置（`loadStartupIdentityConfiguration` 不再判断 `AI_HUB_*`，按 AH3 警告）；`portal-authenticator.ts`、`local-auth-routes.ts`、`dingtalk-auth-routes.ts` 去掉 `oidc` 参数及“登录时顺带撤销 OIDC 会话”的分支；`main.ts` 去掉 OIDC 服务、目录同步定时器、`automationDirectory` 与 `ai-hub-oidc` 运营来源；`session-routes.ts` 的 `AuthConfiguration` 去掉 `aiHubEnabled`，`router.ts` 中提到 AI Hub 的错误提示改写。
 - **删除 `ai-hub` 分支：** 管理端员工目录与搜索（`administration-service.ts`）、组织架构成员查询（`postgres-organization-service.ts`）、知识库权限（`knowledge-access.ts`、`postgres-knowledge-base-service.ts`、`weknora-knowledge-provider.ts`）、定时任务后台身份复核（`postgres-authorization-service.ts` 的 `resolveAutomationSubject` 只做 active + 租户 + 当前角色检查）、运营概览的 `sso` 字段、钉钉配置与自助绑定中的 AI Hub 判断。
-- **测试：** 删除只测 AI Hub 的用例（`portal-auth.integration.test.ts`、`bootstrap-scope.test.ts`、`identity.integration.test.ts` / `identity.test.ts` / `authentication-startup.integration.test.ts` 中 OIDC 部分）；其他集成测试中构造 AI Hub 用户的夹具改为独立账号。`scripts/checks/security.mjs`、`project.mjs` 及其测试中引用 `ai-hub-client.ts` 与 AI Hub 文档的检查项一并删除。
+- **测试：** 删除只测 AI Hub 的用例（`portal-auth.integration.test.ts`、`bootstrap-scope.test.ts`、`identity.integration.test.ts` / `identity.test.ts` / `authentication-startup.integration.test.ts` 中 OIDC 部分）；`local-auth.test.ts`、`review-p2-origin.test.ts`、`router-error-experience.test.ts` 中的 OIDC 用例与断言同步删改；其他集成测试中构造 AI Hub 用户的夹具改为独立账号。`scripts/acceptance/pf07-mcp-platform-probe.ts`、`scripts/bench/team-workspace-statistics.ts` 插入 `identity_provider = 'ai-hub'` 的测试用户，迁移后会失败，改为独立账号。`test-identity.ts`、`dingtalk-config.ts`、`postgres-workspace-member-service.ts` 中提到 AI Hub 的注释同步删除。`scripts/checks/security.mjs`、`project.mjs` 及其测试中引用 `ai-hub-client.ts` 与 AI Hub 文档的检查项一并删除。
 
 ### 3.2 数据库（新迁移 0129）
 
@@ -46,8 +47,8 @@
 
 1. 清理与检查（AH2）：删除 `authentication_provider = 'ai-hub-oidc'` 的会话；存在 `identity_provider = 'ai-hub'` 的用户时抛出异常并说明原因。全新数据库按迁移 0016 的条件不会产生 AI Hub 用户，生产库已确认没有；
 2. 删除表 `oidc_login_transactions`、`application_admin_bootstrap_claims`、`identity_directory_sync_state`；
-3. `authentication_sessions`：重建 `authentication_sessions_provider_check` 为 `('local-password', 'dingtalk')`，重建 `authentication_session_credentials` 去掉 `ai-hub-oidc` 分支，删除 `access_token_encrypted`、`refresh_token_encrypted`、`token_expires_at` 列；
-4. `users`：删除迁移 0078 的 `users_ai_hub_login_account_idx` 与 0016 的 `users_external_identity_unique` 索引，按 AH6 删列（管理端员工目录查询与搜索中对 `external_user_id`、`directory_synced_at` 的引用随 3.1 删除），重建 `identity_provider` 检查为只允许 `local`（0016 中该约束名为自动生成，沿用 0117 的做法按实际定义查找后删除重建）。
+3. `authentication_sessions`：先删除 `access_token_encrypted`、`refresh_token_encrypted`、`token_expires_at` 列（PostgreSQL 删列时会连带删除引用这些列的 `authentication_session_credentials`），再以同名重建该约束，只保留 `local-password` 不带 `binding_id`、`dingtalk` 必带 `binding_id` 两种组合；重建 `authentication_sessions_provider_check` 为 `('local-password', 'dingtalk')`；去掉 `authentication_provider` 的默认值 `'ai-hub-oidc'`（迁移 0077），由代码显式写入；
+4. `users`：删除迁移 0078 的 `users_ai_hub_login_account_idx` 与 0016 的 `users_external_identity_unique` 索引；迁移 0017 的 `users_business_directory` 部分索引条件含 `identity_provider = 'ai-hub'`，删除后以 `where business_user` 重建，供管理端员工目录使用；按 AH6 删列（管理端员工目录查询与搜索中对 `external_user_id`、`directory_synced_at` 的引用随 3.1 删除），重建 `identity_provider` 检查为只允许 `local`（0016 中该约束名为自动生成，沿用 0117 的做法按实际定义查找后删除重建）。
 
 ### 3.3 前端
 
@@ -55,12 +56,13 @@
 - **两端 `AuthErrorView.vue`：** 删除 `business_user_required`、`access_denied`、`initial_admin_not_authorized` 等只由 OIDC 流程产生的错误文案。
 - **管理端员工与权限（`IdentityAccessView.vue`）：** 删除“来源”列、账号来源、AI Hub 用户标识、目录同步时间、“由 AI Hub 管理”说明及 `directoryEnabled` 判断。
 - **管理端接入说明（`IntegrationGuideView.vue`）：** 删除“不配置 AI Hub 回调”“不调用 OIDC 登录”“不要求 AI Hub / OIDC”等说明句。
+- **登出：** `GET /auth/{audience}/logout` 只由 OIDC 路由注册（未配置 AI Hub 时本来就不存在），两端 `stores/auth.ts` 在 POST 登出失败时回退到 GET 的逻辑删除，`IntegrationGuideView.vue` 中“或 GET”的说法同步删除。
 - **类型与注释：** 两端 `domain.ts`、管理端 `stores/auth.ts` 去掉 `ai-hub`、`ai-hub-oidc` 取值；`DingTalkSettingsSection.vue`、`stores/knowledge.ts` 中提到 AI Hub 账号的注释同步删除。
 
 ### 3.4 配置与部署
 
 - `.env.example`、`deploy/runtime.env.example` 删除 `AI_HUB_*` 段落与说明。
-- `preflight.sh`、`release.sh`、`render-endpoint-compose.mjs` 去掉对 `AI_HUB_*_PORTAL_URL` 的回退，缺少 `DSH_WORK_*` 时给出明确提示；`preflight.sh` 去掉 `aiHubConfigurationIssue` 警告；`configure-macmini-endpoints.mjs` 与 `set-macmini-endpoints.sh` 不再写入 `AI_HUB_*_PORTAL_URL` / `_REDIRECT_URI`；`deployment-safety.test.mjs` 相应调整。
+- `preflight.sh`、`release.sh`、`render-endpoint-compose.mjs` 去掉对 `AI_HUB_*_PORTAL_URL` 的回退，缺少 `DSH_WORK_*_ORIGINS` 时给出明确提示；`release.sh` 未配置 `DSH_WORK_*_DEFAULT_ORIGIN` 时取对应 `ORIGINS` 的第一个，与服务端一致；`preflight.sh` 去掉 `aiHubConfigurationIssue` 警告；`configure-macmini-endpoints.mjs` 与 `set-macmini-endpoints.sh` 不再写入 `AI_HUB_*_PORTAL_URL` / `_REDIRECT_URI`，执行时顺带删除 `runtime.env` 中已有的这四项；`deployment-safety.test.mjs` 相应调整。
 - P0 冒烟服务（`smoke-router.ts`）的配置接口去掉 `aiHubEnabled`；`scripts/testing/*-browser.ts` 中的 AI Hub 引用一并清理。
 
 ### 3.5 文档与验收材料
@@ -69,8 +71,9 @@
 - **修改：** 架构总览（身份来源、外部依赖表、上游不可用规则、登录流程、限制与风险、第 11 节生产演进中的“AI Hub 联调”与“治理迁入 AI Hub”（AH7）、第 12 节相关文档中的 AI Hub 接入链接）、内部端口与契约（认证注册、定时任务后台身份、`configuration` 契约、`loginAccount`）、功能规则（项目空间选成员、定时任务后台身份、组织架构范围、钉钉绑定中的 AI Hub 说明）、数据模型、移动端接入规范、开发与测试、独立账号登录、Mac mini 部署手册（按 AH5：开头说明与第 1 节端口表去掉 AI Hub 与 authentik、第 2 节去掉 AI Hub 根目录参数、第 4.2 节去掉 AI Hub 健康检查并改写证书来源、删除第 5 节“在现有 AI Hub 登记应用”、第 7 节去掉 `AI_HUB_*` 配置、第 8 节去掉 OIDC Discovery 预检、第 9 节首位管理员改为 `local-bootstrap.js` 初始化并按独立账号验收，第 10～13 节去掉与 AI Hub 备份回执、登录排错、多入口回调登记的对照，其余章节编号顺延）、三份 OpenAPI（auth、admin、workbench；mobile-h5 中的描述）、Agent 设计规范与生命周期模板中的 OIDC 措辞、相关设计方案中的 AI Hub 说明。
 - **项目规范：** `AGENTS.md` P0/P2 说明中的“OIDC”改为“钉钉免登”或删除（需评审时一并确认）。
 - **验收矩阵：** `agent-platform-capabilities.v2.json` 中 `real-oidc-task` 已为 `removed`，补充删除原因；`pf07-platform-acceptance.md` 去掉“真实 OIDC”要求。
-- **E2E：** 删除 `e2e/login-options.integration.spec.ts` 与 `playwright.login-options.config.ts`，`playwright.config.ts` 去掉对应项目；`local-auth.integration.spec.ts` 与 `project-space.integration.spec.ts` 去掉 AI Hub 场景；验收目录 `admin-platform.md`、`agents.md`、`organization.md`、`dingtalk.md`、`workbench.md` 与 `TEST-CATALOG.md` 中的 AI Hub 旅程删除或改写。
+- **E2E：** 删除 `e2e/login-options.integration.spec.ts` 与 `playwright.login-options.config.ts`，`playwright.config.ts` 去掉对应项目，同时删除 `package.json` 的 `test:e2e:login-options` 脚本和 `.github/workflows/ci.yml` 中运行它的步骤（否则 CI 失败）；`scripts/testing/playwright-p0-config.test.mjs` 与管理端相关单测同步调整；`local-auth.integration.spec.ts` 与 `project-space.integration.spec.ts` 去掉 AI Hub 场景；验收目录 `admin-platform.md`、`agents.md`、`organization.md`、`dingtalk.md`、`workbench.md` 与 `TEST-CATALOG.md` 中的 AI Hub 旅程删除或改写。
 - **架构图：** `diagrams/` 中的 AI Hub OIDC 节点删除；README 的登录说明同步。
+- **其他：** `docs/release/c-tier-p2-acceptance.md` 与 `scripts/acceptance/c-tier-p2.mjs` 中“通过 AI Hub 登录”的说法，`docs/index/README.md` 项目空间一行中的“P2/OIDC”。
 
 ## 4. 实施切片
 
@@ -79,7 +82,7 @@
 ## 5. 前置检查（实施前在 Mac mini 执行）
 
 1. **生产库中的 AI Hub 数据（已完成）：** 2026-11-15 确认生产库没有 AI Hub 用户和会话（AH2）。
-2. **部署配置不依赖回退：** `runtime.env` 中 `DSH_WORK_WORKBENCH_ORIGINS`、`DSH_WORK_ADMIN_ORIGINS`、`DSH_WORK_WORKBENCH_DEFAULT_ORIGIN`、`DSH_WORK_ADMIN_DEFAULT_ORIGIN` 均有值（2026-11-09 用 `set-macmini-endpoints.sh` 调整 IP 时已写入，需再确认）。不满足时先补齐，再升级到 AH-S1 版本。
+2. **部署配置不依赖回退：** `runtime.env` 中 `DSH_WORK_WORKBENCH_ORIGINS`、`DSH_WORK_ADMIN_ORIGINS`、`DSH_WORK_WORKBENCH_DEFAULT_ORIGIN`、`DSH_WORK_ADMIN_DEFAULT_ORIGIN` 均有值（2026-11-09 用 `set-macmini-endpoints.sh` 调整 IP 时已写入，需再确认）。不满足时先补齐，再升级到 AH-S1 版本。`configure-macmini-endpoints.mjs` 过去一直把 `AI_HUB_*_PORTAL_URL` / `_REDIRECT_URI` 写进 `runtime.env`，生产必然有残留：升级后按 AH3 只会产生警告，升级时把这四项与其他 `AI_HUB_*` 一起从 `runtime.env` 删除。
 3. **会话影响：** 独立账号会话 Cookie 名在配置 AI Hub 与否时相同（`dsh_work_local_session` / `dsh_work_local_admin_session`），升级不会让独立账号员工全部掉线。
 
 ## 6. 验收
