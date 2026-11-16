@@ -64,10 +64,9 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
           select 1 from external_knowledge_connections c
            where c.tenant_id = ${tenantId} and c.id = ${this.connectionId} and c.status = 'active'
         ) as connection,
-        -- 按部门授权只在本地身份模式下提供；AI Hub（OIDC）账号没有部门，也没有添加入口（第 3 节）。
         exists (
           select 1 from users u
-           where u.tenant_id = ${tenantId} and u.id = ${input.userId} and u.identity_provider <> 'ai-hub'
+           where u.tenant_id = ${tenantId} and u.id = ${input.userId}
         ) as "localIdentity",
         exists (
           select 1 from users u
