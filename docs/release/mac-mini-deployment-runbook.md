@@ -1,6 +1,6 @@
 # Mac mini 部署手册
 
-更新时间：2026-11-16（删除 AI Hub 登录：第 5 节改为账号说明，首位管理员改由 `local-bootstrap.js` 初始化）
+更新时间：2026-11-16（删除 AI Hub 登录：第 5 节改为账号说明，首位管理员改由 `local-bootstrap.js` 初始化；新增 12.3 节升级步骤）
 
 本流程用于在**已经安装 DSH 的 Apple Silicon Mac mini** 上首次部署 dsh-work。
 所有 dsh-work 命令以本仓库现有部署脚本为准；本文统一维护首次安装、升级、恢复和地址变更。
@@ -487,7 +487,7 @@ docker compose --env-file "${DWP_ROOT}/runtime.env" \
 | Release 验证失败 | 检查 Tag、不可变设置、CI 来源和服务账号 gh 认证，不跳过验证 |
 | DSH Lock/ACP 失败 | 核对已安装 checkout、构建、权限与发布包 Lock，单独安排 Runtime 变更 |
 | NAS 不可用或备份失败 | 恢复真实异机挂载及权限；不删除备份门禁，不用本机目录替代 |
-| 初始管理员登录后无权限 | 检查是否为环境指定的 ACTIVE 业务员工、Bootstrap Scope 和认领状态，不新建第二个应用绕过 |
+| 初始管理员登录后无权限 | 确认登录的是 `local-bootstrap.js` 初始化的账号且未被停用；初始化账本只能消费一次，丢失管理员时由另一位平台管理员恢复，不重复初始化 |
 | `automation/state/blocked-release` 存在 | 说明某版本部署进入变更阶段后失败或被回滚；先排障并优先发布修复版本，不反复清空状态 |
 
 应用回滚前先暂停自动升级，确认没有正在运行的部署/备份，并人工确认旧应用兼容当前数据库
@@ -581,6 +581,124 @@ bash current/scripts/deploy/restore.sh \
 5. 确认无误后可以从 `DSH_HOME` 移除 DeepSeek 密钥（工具目录探测与 MCP 连接检查不发出模型请求，不受影响）。
 
 联网搜索只在默认路由的 Provider 为 DeepSeek 官方时可用；更换为其他厂商后，开启联网搜索的 AI 同事本轮不装配该工具，并在回答中说明暂时不可用。
+
+### 12.3 删除 AI Hub 登录（AH-S1，迁移 0129）的升级步骤
+
+适用于从 `v2026.11.09-01` 或更早版本首次升级到包含迁移 `0129_remove_ai_hub_login` 的版本（`v2026.11.16-01` 起）。该版本删除 AI Hub 登录（[删除方案](../design/ai-hub-login-removal-plan.md)），同时带上 `v2026.11.09-01` 之后合入的 MCP 调用对账、知识检索工具、管理端模块权限等改动（迁移 0126～0128 只新增列，可向后兼容）。
+
+**影响：** 迁移 0129 删除表和列，**不能回退到旧版本**；失败后只能发布修复版本，或用本次升级前的备份恢复数据库再回滚应用（第 12 节）。升级过程中后端会停止几分钟，执行中的对话会中断；员工的独立账号会话 Cookie 名不变，升级后无需重新登录。
+
+#### 1. 发布端准备 Release
+
+1. 确认 `main` 上包含 PR #129，`server/package.json` 的 `releaseVersion` 为目标版本（例如 `2026.11.16-01`），该 Commit 的 CI 四个 Job 全部成功。
+2. 按第 3 节在 Actions 运行 **Manual release**，输入同一版本号，等待生成 `v2026.11.16-01` 及其资产与来源证明。
+
+#### 2. Mac mini 升级前只读检查
+
+在 Mac mini 的持续 Bash 会话中按第 2 节设置 `DWP_*`（`DWP_TAG='v2026.11.16-01'`，`DWP_ROOT` 填实际部署目录），然后：
+
+```bash
+cat "${DWP_ROOT}/active-release"   # 应为当前生产版本，例如 v2026.11.09-01
+grep -E '^DSH_WORK_AUTO_DEPLOY_ENABLED=' "${DWP_ROOT}/runtime.env"
+```
+
+**检查可信入口是否已配置。** 新版本不再从 `AI_HUB_*_PORTAL_URL` 回退，缺少下面两项时预检会在迁移前失败：
+
+```bash
+grep -E '^(DSH_WORK_(WORKBENCH|ADMIN)_(ORIGINS|DEFAULT_ORIGIN)|AI_HUB_[A-Z_]+)=' "${DWP_ROOT}/runtime.env" \
+  | sed -E 's/^(AI_HUB_[A-Z_]*SECRET)=.*/\1=***/'
+```
+
+- `DSH_WORK_WORKBENCH_ORIGINS`、`DSH_WORK_ADMIN_ORIGINS` 必须有值（例如 `https://<Mac mini IP>:4174`、`https://<Mac mini IP>:4180`）；默认入口两项可不设，不设时取各自列表的第一项。
+- 输出里的 `AI_HUB_*` 行是旧配置，第 4 步删除。
+
+**复查生产库没有 AI Hub 数据。** 两条都应为 0（2026-11-15 已确认；库中仍有 AI Hub 用户时迁移 0129 会失败并回滚）：
+
+```bash
+docker compose --env-file "${DWP_ROOT}/runtime.env" \
+  -f "${DWP_ROOT}/current/deploy/compose.yaml" \
+  -f "${DWP_ROOT}/generated/compose.endpoints.yaml" \
+  exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "
+    select count(*) from users where identity_provider <> '\''local'\'';
+    select count(*) from authentication_sessions where authentication_provider = '\''ai-hub-oidc'\'';"'
+```
+
+**确认异机备份目录可写、磁盘有余量**（`release.sh` 会在迁移前备份并校验，目录不可用时整次升级停止）：
+
+```bash
+DWP_OFFHOST="$(grep -E '^DSH_WORK_OFF_HOST_BACKUP_DIRECTORY=' "${DWP_ROOT}/runtime.env" | cut -d= -f2- | tr -d '"')"
+[[ -d "${DWP_OFFHOST}" && -w "${DWP_OFFHOST}" ]] && df -h "${DWP_OFFHOST}" "${DWP_ROOT}"
+```
+
+#### 3. 进入维护窗口
+
+1. 通知员工维护时间。
+2. 在管理端 Runtime 页面把调度切换为“排空”，等待执行中的 Attempt 结束（排空期间员工新发起的任务会排队）。
+
+#### 4. 整理运行配置
+
+在 Mac mini 本地编辑，不要把内容回显到聊天或日志。先留一份原配置：
+
+```bash
+cp -p "${DWP_ROOT}/runtime.env" "${DWP_ROOT}/runtime.env.before-ah-s1"
+chmod 600 "${DWP_ROOT}/runtime.env.before-ah-s1"
+```
+
+然后用本地编辑器修改 `${DWP_ROOT}/runtime.env`：
+
+1. 第 2 步检查缺少 `DSH_WORK_WORKBENCH_ORIGINS` / `DSH_WORK_ADMIN_ORIGINS` 时补上；有 `AI_HUB_WORKBENCH_PORTAL_URL` / `AI_HUB_ADMIN_PORTAL_URL` 的，把它们的值分别填进这两项。
+2. 删除所有 `AI_HUB_*` 行，以及 `DSH_WORK_DIRECTORY_SYNC_INTERVAL_SECONDS`、`DSH_WORK_ADMIN_BOOTSTRAP_ENABLED`、`DSH_WORK_OIDC_*`；删除 `DSH_WORK_AUTH_MODE`（若有）。这些变量新版本不再读取；不删也能启动，但启动日志会持续警告。
+3. 其他配置（数据库、证书、`DSH_CREDENTIAL_MASTER_KEY`、执行镜像、钉钉等）保持不变。
+
+```bash
+/bin/bash -n "${DWP_ROOT}/runtime.env"
+grep -cE '^(AI_HUB_|DSH_WORK_OIDC_|DSH_WORK_DIRECTORY_SYNC_INTERVAL_SECONDS=|DSH_WORK_ADMIN_BOOTSTRAP_ENABLED=|DSH_WORK_AUTH_MODE=)' "${DWP_ROOT}/runtime.env"   # 应输出 0
+grep -E '^DSH_WORK_(WORKBENCH|ADMIN)_ORIGINS=.+' "${DWP_ROOT}/runtime.env"   # 应输出两行
+```
+
+#### 5. 下载、验证并执行升级
+
+按第 6 节下载并验证 `v2026.11.16-01`（得到 `DWP_BUNDLE`），再用新包里的脚本升级：
+
+```bash
+bash "${DWP_BUNDLE}/scripts/deploy/release.sh" "${DWP_VERSION}" "${DWP_ROOT}"
+```
+
+脚本依次执行：Release 与来源验证 → 预检（含身份配置与入口）→ 停止旧后端并备份、异机校验 → 迁移 0126～0129 → 切换 `current` → 健康检查。
+
+| 失败位置 | 现象 | 处理 |
+| --- | --- | --- |
+| 预检 | `Set DSH_WORK_WORKBENCH_ORIGINS` 等提示，或身份配置无效 | 数据库与应用都未改动；按第 4 步补齐 `runtime.env` 后重跑 |
+| 备份 / 异机校验 | 备份目录不可用或校验失败 | 迁移未开始；恢复异机目录后重跑 |
+| 迁移 0129 | 日志含 `仍有 N 个 AI Hub 用户` | 0129 整体回滚，脚本恢复旧版本；先处理这些账号（只可能是遗留数据），再重跑 |
+| 迁移后健康检查 | 输出 `database migrations were applied ... service stays stopped` | 服务保持停止，不能手工启动旧版本；查看 `logs/server.stderr.log` 排障，优先发布修复版本，必要时按第 12 节用本次备份 `restore.sh` 后 `rollback.sh` |
+
+#### 6. 升级后验收
+
+```bash
+cat "${DWP_ROOT}/active-release"   # 应为 v2026.11.16-01
+grep -n 'AI Hub 登录已删除' "${DWP_ROOT}/logs/server.stderr.log" "${DWP_ROOT}/logs/server.stdout.log" | tail -3   # 应无输出
+curl --fail --silent --show-error --max-time 30 http://127.0.0.1:4190/health
+for DWP_AUDIENCE_PORT in workbench:4174 admin:4180; do
+  DWP_AUDIENCE="${DWP_AUDIENCE_PORT%%:*}"; DWP_PORT="${DWP_AUDIENCE_PORT##*:}"
+  curl --fail --silent --show-error --max-time 30 --cacert "${DWP_ROOT}/certs/root-ca.crt" \
+    "https://${DWP_IP}:${DWP_PORT}/auth/${DWP_AUDIENCE}/configuration"; echo
+  curl --silent --output /dev/null --write-out '%{http_code}\n' --max-time 30 --cacert "${DWP_ROOT}/certs/root-ca.crt" \
+    "https://${DWP_IP}:${DWP_PORT}/auth/${DWP_AUDIENCE}/oidc/login"   # 应为 404
+done
+```
+
+- 两个 `configuration` 响应只含 `mode: "local"`、`localEnabled: true`（员工端另有钉钉 `corpId`），不含 `aiHubEnabled`。
+- 日志有“AI Hub 登录已删除，以下旧配置不再读取”时，按列出的变量回到第 4 步删除并重启后端（`launchctl kickstart -k "gui/$(id -u)/com.company.dsh-work.server"`）。
+
+在浏览器中：
+
+1. 管理端与员工端登录页只有账号密码，没有 AI Hub 入口；平台管理员能登录管理端，“员工与权限”列表正常、没有“来源”列。
+2. 用一名普通员工登录员工端；配置了钉钉的环境，在钉钉内打开一次确认免登正常。
+3. 把 Runtime 调度**先切回“接受”**，再发一条无敏感内容的员工对话，确认回答、事件流与成果正常。
+4. 按 9.4 节记录本次部署验收（版本、Commit、检查结果、Run/Attempt 引用），不记录密码。
+
+确认一切正常后，删除第 4 步留的 `runtime.env.before-ah-s1`（含密钥，不要长期保留）。
 
 ## 13. 多 IP、固定域名与证书
 
