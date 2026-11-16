@@ -128,7 +128,10 @@ export class IdentityAdministrationService {
            )
       `
       const items = await transaction<UserListRow[]>`
-        select u.id, u.display_name as name,               (select c.username from local_user_credentials c where c.tenant_id = u.tenant_id and c.user_id = u.id) as username,               (select c.username from local_user_credentials c where c.tenant_id = u.tenant_id and c.user_id = u.id) as "loginAccount",               u.email, coalesce(u.department_id, '未分配部门') as department,               u.status,
+        select u.id, u.display_name as name,
+               cred.username as username, cred.username as "loginAccount",
+               u.email, coalesce(u.department_id, '未分配部门') as department,
+               u.status,
                u.local_authorization_version::integer as "authorizationVersion",
                coalesce((
                  select jsonb_agg(jsonb_build_object(
@@ -176,7 +179,8 @@ export class IdentityAdministrationService {
                  ) latest on true
                ) as dingtalk
          from users u
-         where u.tenant_id = ${tenantId} and exists (select 1 from local_user_credentials c where c.tenant_id = u.tenant_id and c.user_id = u.id)
+         join local_user_credentials cred on cred.tenant_id = u.tenant_id and cred.user_id = u.id
+         where u.tenant_id = ${tenantId}
            and u.business_user
            and (${status} = '' or u.status = ${status})
            and (${dingtalk} = '' or ${dingtalkStatus} = ${dingtalk})
@@ -490,7 +494,10 @@ export class IdentityAdministrationService {
 
   private async requireUser(userId: string) {
     const [user] = await this.database<UserListRow[]>`
-      select u.id, u.display_name as name,             (select c.username from local_user_credentials c where c.tenant_id = u.tenant_id and c.user_id = u.id) as username,             (select c.username from local_user_credentials c where c.tenant_id = u.tenant_id and c.user_id = u.id) as "loginAccount",             u.email, coalesce(u.department_id, '未分配部门') as department,             u.status,
+      select u.id, u.display_name as name,
+             cred.username as username, cred.username as "loginAccount",
+             u.email, coalesce(u.department_id, '未分配部门') as department,
+             u.status,
              u.local_authorization_version::integer as "authorizationVersion",
              coalesce((select jsonb_agg(jsonb_build_object('id', r.id, 'code', r.code, 'name', r.name, 'status', r.status) order by r.name)
                from user_roles ur join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id
@@ -514,8 +521,9 @@ export class IdentityAdministrationService {
                 and s.user_id = u.id and s.revoked_at is null and s.expires_at > now()) as "activeSessionCount",
              (select max(s.last_seen_at) from authentication_sessions s where s.tenant_id = u.tenant_id
                 and s.user_id = u.id) as "lastSeenAt"
-        from users u where u.tenant_id = ${tenantId} and u.id = ${userId}
-          and exists (select 1 from local_user_credentials c where c.tenant_id = u.tenant_id and c.user_id = u.id)
+        from users u
+        join local_user_credentials cred on cred.tenant_id = u.tenant_id and cred.user_id = u.id
+       where u.tenant_id = ${tenantId} and u.id = ${userId}
     `
     if (!user) throw notFound(`用户不存在：${userId}`)
     return user

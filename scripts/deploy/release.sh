@@ -272,6 +272,9 @@ workbench_origins=${DSH_WORK_WORKBENCH_ORIGINS:?Set DSH_WORK_WORKBENCH_ORIGINS}
 admin_origins=${DSH_WORK_ADMIN_ORIGINS:?Set DSH_WORK_ADMIN_ORIGINS}
 workbench_origin=${DSH_WORK_WORKBENCH_DEFAULT_ORIGIN:-${workbench_origins%%,*}}
 admin_origin=${DSH_WORK_ADMIN_DEFAULT_ORIGIN:-${admin_origins%%,*}}
+# 去掉首尾空白，与服务端解析一致。
+workbench_origin=$(printf '%s' "${workbench_origin}" | tr -d '[:space:]')
+admin_origin=$(printf '%s' "${admin_origin}" | tr -d '[:space:]')
 health_url="${workbench_origin%/}/health"
 healthy=false
 for _attempt in {1..30}; do

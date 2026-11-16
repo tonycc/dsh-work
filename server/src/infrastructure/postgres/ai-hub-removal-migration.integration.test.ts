@@ -37,6 +37,20 @@ test('0129 removes AI Hub sessions, tables and columns and allows only local acc
     values ('legacy-oidc-session', ${tenantId}, 'workbench', 'U00001', 'sealed', now() + interval '1 hour',
       1, '[]'::jsonb, '[]'::jsonb, now() + interval '1 hour', now() + interval '1 hour')
   `
+  // 生产形态的数据：密码会话与带绑定的钉钉会话，迁移后必须原样保留。
+  await sql`
+    insert into external_account_bindings (id, tenant_id, channel, user_id, external_user_id, bound_by, status)
+    values ('binding-before-0129', ${tenantId}, 'dingtalk', 'U00001', 'ding-before-0129', 'self', 'valid')
+  `
+  await sql`
+    insert into authentication_sessions (session_hash, tenant_id, audience, user_id, authentication_provider, binding_id,
+      authorization_version, permissions, data_scopes, permissions_expires_at, expires_at)
+    values
+      ('password-before-0129', ${tenantId}, 'workbench', 'U00001', 'local-password', null,
+        1, '[]'::jsonb, '[]'::jsonb, now() + interval '1 hour', now() + interval '1 hour'),
+      ('dingtalk-before-0129', ${tenantId}, 'workbench', 'U00001', 'dingtalk', 'binding-before-0129',
+        1, '[]'::jsonb, '[]'::jsonb, now() + interval '1 hour', now() + interval '1 hour')
+  `
   const userChecks = async () => (await sql<{ name: string; definition: string }[]>`
     select conname as name, pg_get_constraintdef(oid) as definition from pg_constraint
      where conrelid = 'users'::regclass and contype = 'c' order by conname
@@ -53,6 +67,14 @@ test('0129 removes AI Hub sessions, tables and columns and allows only local acc
 
   const [{ count }] = await sql<{ count: number }[]>`select count(*)::integer as count from authentication_sessions where session_hash = 'legacy-oidc-session'`
   assert.equal(count, 0, '残留的 AI Hub 会话被删除')
+  const kept = await sql<{ hash: string; provider: string; binding: string | null }[]>`
+    select session_hash as hash, authentication_provider as provider, binding_id as binding from authentication_sessions
+     where session_hash in ('password-before-0129', 'dingtalk-before-0129') order by session_hash
+  `
+  assert.deepEqual(kept.map(row => [row.hash, row.provider, row.binding]), [
+    ['dingtalk-before-0129', 'dingtalk', 'binding-before-0129'],
+    ['password-before-0129', 'local-password', null],
+  ], '密码会话与钉钉会话迁移后原样保留')
   const tables = await sql<{ name: string }[]>`
     select table_name as name from information_schema.tables
      where table_schema = 'public' and table_name in ('oidc_login_transactions', 'application_admin_bootstrap_claims', 'identity_directory_sync_state')
@@ -89,6 +111,18 @@ test('0129 removes AI Hub sessions, tables and columns and allows only local acc
     values ('password-after-0129', ${tenantId}, 'workbench', 'U00001', 'local-password',
       1, '[]'::jsonb, '[]'::jsonb, now() + interval '1 hour', now() + interval '1 hour')
   `
+  await sql`
+    insert into authentication_sessions (session_hash, tenant_id, audience, user_id, authentication_provider, binding_id,
+      authorization_version, permissions, data_scopes, permissions_expires_at, expires_at)
+    values ('dingtalk-after-0129', ${tenantId}, 'workbench', 'U00001', 'dingtalk', 'binding-before-0129',
+      1, '[]'::jsonb, '[]'::jsonb, now() + interval '1 hour', now() + interval '1 hour')
+  `
+  await assert.rejects(sql`
+    insert into authentication_sessions (session_hash, tenant_id, audience, user_id, authentication_provider, binding_id,
+      authorization_version, permissions, data_scopes, permissions_expires_at, expires_at)
+    values ('dingtalk-without-binding', ${tenantId}, 'workbench', 'U00001', 'dingtalk', null,
+      1, '[]'::jsonb, '[]'::jsonb, now() + interval '1 hour', now() + interval '1 hour')
+  `, /authentication_session_credentials/, '钉钉会话仍必须带绑定')
   const [index] = await sql<{ definition: string }[]>`select indexdef as definition from pg_indexes where indexname = 'users_business_directory'`
   assert.match(index!.definition, /WHERE business_user/)
   assert.doesNotMatch(index!.definition, /ai-hub/)

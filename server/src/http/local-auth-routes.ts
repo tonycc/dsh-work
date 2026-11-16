@@ -10,10 +10,9 @@ export function registerLocalAuthRoutes(router: Router, authentication: LocalAut
       response.writeHead(302, { 'Cache-Control': 'no-store', Location: authentication.loginPage(request, audience, context.url.searchParams.get('return_to')) })
       response.end()
     })
+    // 切换账号与登录相同：转到登录页，新登录成功后替换当前会话。
     router.get(`/auth/${audience}/switch-account`, (request, context, response) => {
-      const location = new URL(authentication.loginPage(request, audience, context.url.searchParams.get('return_to')))
-      location.searchParams.set('switch_account', 'true')
-      response.writeHead(302, { 'Cache-Control': 'no-store', Location: location.toString() })
+      response.writeHead(302, { 'Cache-Control': 'no-store', Location: authentication.loginPage(request, audience, context.url.searchParams.get('return_to')) })
       response.end()
     })
     router.post(`/auth/${audience}/login`, async (request, _context, response) => {

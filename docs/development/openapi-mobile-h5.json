@@ -1727,7 +1727,8 @@
           "identityProvider": {
             "type": "string",
             "enum": [
-              "prototype-sso"
+              "local-password",
+              "dingtalk"
             ]
           },
           "apiAudience": {
