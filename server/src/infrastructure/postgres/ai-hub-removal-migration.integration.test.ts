@@ -37,7 +37,19 @@ test('0129 removes AI Hub sessions, tables and columns and allows only local acc
     values ('legacy-oidc-session', ${tenantId}, 'workbench', 'U00001', 'sealed', now() + interval '1 hour',
       1, '[]'::jsonb, '[]'::jsonb, now() + interval '1 hour', now() + interval '1 hour')
   `
+  const userChecks = async () => (await sql<{ name: string; definition: string }[]>`
+    select conname as name, pg_get_constraintdef(oid) as definition from pg_constraint
+     where conrelid = 'users'::regclass and contype = 'c' order by conname
+  `).map(row => `${row.name}: ${row.definition}`)
+  const checksBefore = await userChecks()
   await runMigrations(sql, migrations)
+
+  // 只替换 identity_provider 的检查，users 上其他 CHECK 约束原样保留。
+  assert.deepEqual(
+    (await userChecks()).filter(check => !check.startsWith('users_identity_provider_check:')),
+    checksBefore.filter(check => !check.includes('identity_provider')),
+  )
+  assert.equal(checksBefore.filter(check => check.includes('identity_provider')).length, 1)
 
   const [{ count }] = await sql<{ count: number }[]>`select count(*)::integer as count from authentication_sessions where session_hash = 'legacy-oidc-session'`
   assert.equal(count, 0, '残留的 AI Hub 会话被删除')

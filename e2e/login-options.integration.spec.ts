@@ -85,7 +85,7 @@ test('LOGIN-OPTIONS-P1 account details and fixed row actions remain readable at 
   await expect(staff.getByText('staff.employee@example.invalid', { exact: true })).toBeInViewport()
   await staff.getByRole('button', { name: '配置', exact: true }).click()
   const drawer = page.getByRole('dialog', { name: '员工授权配置', exact: true })
-  await expect(drawer.getByText('staff.employee@example.invalid', { exact: true })).toBeInViewport()
+  await expect(drawer.getByRole('row', { name: '登录账号 staff.employee@example.invalid', exact: true })).toBeInViewport()
   await page.screenshot({ path: testInfo.outputPath('account-details-narrow.png'), fullPage: true, animations: 'disabled' })
 })
 
