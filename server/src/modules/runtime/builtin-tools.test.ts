@@ -28,7 +28,7 @@ test('Skills cannot declare bash: allowed-tools Bash stays an unsupported requir
   assert.deepEqual(unavailableSkillTools(['bash@1.0.0'], { webSearchEnabled: true }), ['bash@1.0.0（平台不提供该工具）'])
 })
 
-// 推荐方案 4.1：推荐工具只在开启开关的个人对话中装配，Skill 不能声明。
+// 功能规则 2.4：推荐工具只在开启开关的个人对话中装配，Skill 不能声明。
 test('agent recommendation tools assemble only for enabled personal conversations', () => {
   assert.deepEqual(agentRecommendationToolNames({ enabled: true, personalConversation: true }), ['list_colleague_agents', 'recommend_agents'])
   assert.deepEqual(agentRecommendationToolNames({ enabled: true, personalConversation: false }), [])

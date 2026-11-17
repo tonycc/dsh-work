@@ -124,7 +124,7 @@ export interface WorkbenchAgentDefinition {
   welcomeMessage: string
   version: string
   examplePrompts: string[]
-  /** 当前启用版本开启了“可创建 Skill”：Skill 广场的“创建 Skill”入口据此找到 Skill 创建专家（方案 4.8）。 */
+  /** 当前启用版本开启了“可创建 Skill”：Skill 广场的“创建 Skill”入口据此找到 Skill 创建专家（功能规则 5.6）。 */
   canCreateSkills: boolean
 }
 

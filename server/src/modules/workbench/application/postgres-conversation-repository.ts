@@ -204,7 +204,7 @@ export class PostgresConversationRepository {
     this.workspaces = workspaces
   }
 
-  /** 推荐方案 4.2：会话详情装载推荐卡片。生产组装时接入；测试替身未接时详情不含推荐。 */
+  /** 功能规则 2.4：会话详情装载推荐卡片。生产组装时接入；测试替身未接时详情不含推荐。 */
   setSkillDraftReader(reader: SkillDraftReader) {
     this.skillDrafts = reader
   }

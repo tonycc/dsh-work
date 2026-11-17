@@ -60,7 +60,7 @@ export const useAuthStore = defineStore('admin-auth', () => {
   )
 
   /**
-   * 落地页（方案 AP15）：有运营查看时进运营概览，否则进第一个能看的模块页面，都没有时进审计或管理助手。
+   * 落地页（功能规则第 13 节）：有运营查看时进运营概览，否则进第一个能看的模块页面，都没有时进审计或管理助手。
    * 顺序与侧栏一致。
    */
   function landingRoute(): string {

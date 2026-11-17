@@ -27,7 +27,7 @@ export type BuiltinToolAssembly =
    */
   | 'execution-container'
   /**
-   * 个人对话（推荐方案 R1/R3）：Agent 版本开启“可推荐其他 AI 同事”，且是个人空间中由员工发起的交互运行时装配；
+   * 个人对话（功能规则 2.4）：Agent 版本开启“可推荐其他 AI 同事”，且是个人空间中由员工发起的交互运行时装配；
    * 团队空间、定时与主动任务、发布试运行与管理运行不装配，Skill 不能声明。
    */
   | 'personal-conversation'
@@ -120,7 +120,7 @@ export function projectTaskToolNames(input: { enabled: boolean; mode: 'none' | '
   return input.mode === 'read' ? [...projectTaskReadTools] : [...projectTaskReadTools, ...projectTaskWriteTools]
 }
 
-/** 推荐工具（推荐方案 4.1）：Agent 版本开启且是个人对话中员工发起的交互运行时装配。 */
+/** 推荐工具（功能规则 2.4）：Agent 版本开启且是个人对话中员工发起的交互运行时装配。 */
 export const agentRecommendationToolNamesList = ['list_colleague_agents', 'recommend_agents'] as const
 
 export function agentRecommendationToolNames(input: { enabled: boolean; personalConversation: boolean }): string[] {

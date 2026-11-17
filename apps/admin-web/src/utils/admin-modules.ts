@@ -81,7 +81,7 @@ function expand(permissions: readonly string[]) {
   return result
 }
 
-/** 授出不超过自身（方案 AP13 ①）：`granted` 中操作人没有的权限码；操作人是平台管理员时为空。 */
+/** 授出不超过自身（功能规则第 13 节）：`granted` 中操作人没有的权限码；操作人是平台管理员时为空。 */
 export function permissionsBeyond(granted: readonly string[], held: readonly string[]) {
   if (held.includes('admin:*')) return []
   const heldExpanded = expand(held)

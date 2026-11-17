@@ -765,7 +765,7 @@ export class PostgresAuthorizationService {
   }
 
   /**
-   * 管理端 Run 的用途对应的权限（方案 5.5）：`admin-assistant` 只需能使用管理助手；
+   * 管理端 Run 的用途对应的权限（功能规则第 13 节）：`admin-assistant` 只需能使用管理助手；
    * 专用 Run 需要所属模块的修改权限。未知用途拒绝。
    */
   async requireAdminRunPurpose(userId: string, purpose: string) {

@@ -29,7 +29,7 @@ export function registerIdentityAdministrationRoutes(
 
   router.get(`${basePath}/roles`, async (_request, context) => {
     const roles = await administration.listRoles()
-    // 只凭 Skill 修改权限读取时（选择可见角色，方案 5.2）不返回角色的权限与数据范围。
+    // 只凭 Skill 修改权限读取时（选择可见角色，功能规则第 13 节）不返回角色的权限与数据范围。
     return envelope('admin', context.adminView === 'selector'
       ? roles.map(({ id, code, name, status }) => ({ id, code, name, status, permissions: [], dataScopes: [], userCount: 0 }))
       : roles, 'postgres')

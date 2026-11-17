@@ -73,7 +73,7 @@ export class AttemptDispatcher {
      */
     projectTaskToolMode?: 'none' | 'read' | 'read-write'
     /**
-     * 推荐方案 R3：个人空间中由员工发起的交互运行。仍须 Agent 版本开启“可推荐其他 AI 同事”；
+     * 功能规则 2.4：个人空间中由员工发起的交互运行。仍须 Agent 版本开启“可推荐其他 AI 同事”；
      * 有 purpose 的运行（发布试运行、定时与主动任务、系统与管理运行）不装配。
      */
     personalConversation?: boolean
@@ -122,12 +122,12 @@ export class AttemptDispatcher {
           sessionId: run.sessionId,
           userId: input.userId,
           agentVersionId: input.agentVersionId,
-          // 优化方案 O3：先只用本次提问检索，没有结果时再带上一条提问。
+          // 功能规则第 11 节：先只用本次提问检索，没有结果时再带上一条提问。
           query: input.prompt.trim(),
           fallbackQuery: knowledgeQuery(input.prompt, input.history),
         })
       : null
-    // 连接被停用或 API Key 读不出（not_configured）是管理员的配置状态，不是检索故障：只提示，不写失败审计（优化方案 O2）。
+    // 连接被停用或 API Key 读不出（not_configured）是管理员的配置状态，不是检索故障：只提示，不写失败审计（功能规则第 11 节）。
     if (knowledge?.status === 'unavailable' && knowledge.failureReason !== 'not_configured') {
       await this.deps.operations?.appendAudit(
         input.userId, 'knowledge.retrieve.unavailable', run.id, 'failed', `trace-${run.id}`,
@@ -362,7 +362,7 @@ export class AttemptDispatcher {
 const previousQuestionChars = 500
 
 /**
- * 补充检索的查询词（WK4、4.3，优化方案 O3）：同一会话中员工的上一条提问加本次提问，让“那第二条呢”这类追问
+ * 补充检索的查询词（功能规则第 11 节）：同一会话中员工的上一条提问加本次提问，让“那第二条呢”这类追问
  * 也能检索到。只在本次提问没有结果时使用；由平台拼接，不调用模型改写。
  */
 export function knowledgeQuery(

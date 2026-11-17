@@ -480,7 +480,7 @@ export const adminApi = {
   getIdentityRoles: () => request<IdentityRoleSummary[]>('/identity/roles'),
   getLocalPermissions: () => request<LocalPermissionDefinition[]>('/identity/permissions'),
   createIdentityRole: (input: {
-    /** 已废弃：角色编码由系统生成（方案 AP14）。 */
+    /** 已废弃：角色编码由系统生成（功能规则第 13 节）。 */
     code?: string
     name: string
     description: string

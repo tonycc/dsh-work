@@ -297,7 +297,7 @@ export class AdminAssistantService {
   }
 
   async cancelProposal(userId: string, proposalId: string) {
-    // 取消只会减少操作：发起人本人持有任一管理权限即可（方案 AP9）。
+    // 取消只会减少操作：发起人本人持有任一管理权限即可（功能规则第 13 节）。
     await this.authorization.requireAdminAccess(userId)
     const proposal = await this.requireProposal(userId, proposalId)
     if (proposal.status === 'confirmed') throw stateConflict('专用助手已经启动，不能再取消任务提案')
@@ -604,7 +604,7 @@ export class AdminAssistantService {
     throw authorizationDenied('当前 Run 不能查询管理状态')
   }
 
-  /** 操作计划按目标模块复核修改权限（方案 5.5），生成与确认共用。 */
+  /** 操作计划按目标模块复核修改权限（功能规则第 13 节），生成与确认共用。 */
   private async requireActionModule(userId: string, actionType: string) {
     const module = adminModuleForAction(actionType)
     if (!module) throw authorizationDenied(`未登记权限归属的管理操作：${actionType}`)

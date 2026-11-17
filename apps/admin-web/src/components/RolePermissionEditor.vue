@@ -102,7 +102,7 @@ function applyTemplate(permissions: string[]) {
 }
 
 const legacyAll = computed(() => props.modelValue.some(code => LEGACY_ALL.has(code)))
-/** 平台级权限 `admin:*`（方案 AP13 ①）：只有平台管理员能授出，因此只对平台管理员显示；已含该权限的角色也显示。 */
+/** 平台级权限 `admin:*`（功能规则第 13 节）：只有平台管理员能授出，因此只对平台管理员显示；已含该权限的角色也显示。 */
 const showPlatformOption = computed(() => !props.platformRole && (props.actorPermissions.includes('admin:*') || granted.value.has('admin:*')))
 
 const sections = computed(() => ADMIN_MODULES.map((module) => {

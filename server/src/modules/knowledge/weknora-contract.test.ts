@@ -28,10 +28,10 @@ test('WeKnora 新建知识库、检索、文档元数据与删除接口符合平
     // 新知识库没有文档：检索与元数据接口仍须返回 data 列表（客户端会校验结构）。
     const emptySearch = await client.search({ query: '契约测试', knowledgeBaseIds: [created.id], matchCount: 10 })
     assert.deepEqual(emptySearch.results, [])
-    // 优化方案 O5：检索响应带重排序结果（meta.rerank.outcome），平台记录到管理端健康状态。
+    // 功能规则第 11 节：检索响应带重排序结果（meta.rerank.outcome），平台记录到管理端健康状态。
     // 未配置重排序时 WeKnora 也返回 no_model 或 disabled，因此字段必须存在。
     assert.equal(typeof emptySearch.rerankOutcome, 'string', '检索响应应带 meta.rerank.outcome')
-    // 优化方案 O7：平台新建的知识库没有摘要模型，入库不会调用对话模型。
+    // 功能规则第 11 节：平台新建的知识库没有摘要模型，入库不会调用对话模型。
     const stats = (await client.listKnowledgeBases()).find(item => item.id === created.id)
     assert.ok(stats, '知识库列表包含新建的知识库')
     assert.equal(stats.summaryModelId, null, '平台新建的知识库不应带摘要模型')

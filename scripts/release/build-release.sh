@@ -103,7 +103,7 @@ deployment_scripts=(
 for deployment_script in "${deployment_scripts[@]}"; do
   cp "${project_root}/scripts/deploy/${deployment_script}" "${bundle}/scripts/deploy/"
 done
-# C 档 P2 验收脚本（2026-10-28 已通过，用法见脚本开头），无依赖，在 Mac mini 上直接运行。
+# C 档 P2 验收脚本（2026-10-28 已通过；用法与安全步骤见脚本开头），无依赖，在 Mac mini 上直接运行。
 cp "${project_root}/scripts/acceptance/c-tier-p2.mjs" "${bundle}/scripts/acceptance/"
 
 cp "${project_root}/deploy/compose.yaml" "${bundle}/deploy/compose.yaml"

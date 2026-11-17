@@ -100,7 +100,7 @@ export const useContentStore = defineStore('admin-content', () => {
       statusData,
     ] = await Promise.all([
       // 功能规则第 13 节：只请求有权限的模块，避免模块管理员首屏因无权数据报错。
-      // Agent 修改权限可读取 Skill、连接器与内置工具的精简候选列表（方案 5.2）。
+      // Agent 修改权限可读取 Skill、连接器与内置工具的精简候选列表（功能规则第 13 节）。
       when(authStore.canRead('ops'), adminApi.getTasks, []),
       when(authStore.canRead('connector'), adminApi.getRuntimes, []),
       when(authStore.canRead('ops'), adminApi.getWorkspaces, []),

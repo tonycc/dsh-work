@@ -260,7 +260,7 @@ flowchart LR
 ## 9. 身份、安全与数据边界
 
 - 正式认证只有独立账号密码，员工端在钉钉客户端内可凭已绑定的钉钉账号免登，不提供管理端登录模式设置。独立密码以加盐 scrypt 保存；密码会话与钉钉会话共用本地授权机制，按来源分别撤销，生产要求 HTTPS 和 Secure Cookie；
-- Workbench 与 Admin 分别校验 Audience；每次 API 请求从 PostgreSQL 解析当前本地角色、权限、数据范围和授权版本；管理端按模块校验查看与修改权限，路由入口对照表默认拒绝、服务层只认本地授予，非平台管理员授出的权限不能超过本人（[功能规则第 13 节](feature-rules.md#13-管理端模块权限amp-s1)）；
+- Workbench 与 Admin 分别校验 Audience；每次 API 请求从 PostgreSQL 解析当前本地角色、权限、数据范围和授权版本；管理端按模块校验查看与修改权限，路由入口对照表默认拒绝、服务层只认本地授予，非平台管理员授出的权限不能超过本人（[功能规则第 13 节](feature-rules.md#13-管理端模块权限amp-s1amp-s2)）；
 - 首位平台管理员只能通过受控命令 `auth:bootstrap`（发布包为 `local-bootstrap.js`）一次性初始化，之后所有授权在 dsh-work 管理端维护；
 - API 不信任浏览器提交的 `actor`、用户 ID、角色或数据范围；
 - Workspace、Agent、Skill、Tool、Connector、文件和 Artifact 都在服务端执行对象级授权；

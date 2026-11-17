@@ -97,7 +97,7 @@ const composerKey = ref(0)
 const referencedWorkspaceFileIds = ref<string[]>([])
 const selectedAgentId = ref('')
 const selectedSkillId = ref('')
-/** 推荐卡片跳转（推荐方案 4.3）：预填问题时的提示；目标同事已不可用时提示且不选中。 */
+/** 推荐卡片跳转（功能规则 2.4）：预填问题时的提示；目标同事已不可用时提示且不选中。 */
 const recommendationNotice = ref<'' | 'prefilled' | 'unavailable'>('')
 
 // Global tasks are implicit personal tasks. Only an explicit locked origin

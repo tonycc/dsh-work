@@ -539,7 +539,7 @@ export class DingTalkAdministrationService {
       `
       if (!run) throw new IdentityAccessError(409, 'departure_check_not_paused', '该次检查不在待确认状态')
       if (decision === 'confirmed') {
-        // 确认会让这批绑定失效（方案 AP13 ④）：批次里有自己、平台管理员或权限比自己高的员工时需要平台管理员确认。
+        // 确认会让这批绑定失效（功能规则第 13 节）：批次里有自己、平台管理员或权限比自己高的员工时需要平台管理员确认。
         const owners = await transaction<{ userId: string }[]>`
           select distinct user_id as "userId" from external_account_bindings
            where tenant_id = ${tenantId} and id = any(${run.pending}::text[])
@@ -756,7 +756,7 @@ async function assertPlatformAdmin(transaction: DatabaseTransaction, userId: str
 }
 
 /**
- * 钉钉集成模块（方案 AP12）：查看为查看级，其余为修改级；操作某员工的绑定时还要满足
+ * 钉钉集成模块（功能规则第 13 节）：查看为查看级，其余为修改级；操作某员工的绑定时还要满足
  * 员工与权限的对象约束（AP13 ③④：不能操作自己、平台管理员或权限比自己高的账号）。
  */
 async function assertDingTalkAdmin(transaction: DatabaseTransaction, actorId: string, level: 'read' | 'write', targetUserId?: string) {

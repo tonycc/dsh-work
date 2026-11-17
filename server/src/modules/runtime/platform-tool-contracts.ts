@@ -161,7 +161,7 @@ export const platformToolContracts = {
     outputSchema: objectOutput,
     effect: 'write', retryPolicy: 'never', concurrencyPolicy: 'serialized', timeoutMs: 30_000,
   }),
-  // 推荐 AI 同事（推荐方案 4.1）：目录只读可重试；推荐写入不重试，同一 Attempt 再次调用替换上一组。
+  // 推荐 AI 同事（功能规则 2.4）：目录只读可重试；推荐写入不重试，同一 Attempt 再次调用替换上一组。
   list_colleague_agents: contract({
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     outputSchema: objectOutput,

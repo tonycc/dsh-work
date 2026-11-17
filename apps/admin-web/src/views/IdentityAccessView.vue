@@ -76,7 +76,7 @@ const roleForm = reactive({
 const assignableRoles = computed(() => roles.value.filter(role => (
   role.status === 'active'
   && !selectedUser.value?.roles.some(assigned => assigned.id === role.id)
-  // 只列出不超过操作人自身的角色（方案 AP13 ①），服务端同样复核。
+  // 只列出不超过操作人自身的角色（功能规则第 13 节），服务端同样复核。
   && (authStore.platformAdmin || permissionsBeyond(role.permissions, authStore.permissions).length === 0)
 )))
 const permissionNames = computed(() => Object.fromEntries(permissionDefinitions.value.map(permission => [permission.code, permission.name])))

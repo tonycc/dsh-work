@@ -159,7 +159,7 @@ export interface TaskRun {
    * 不随新一轮消失。只有一轮或团队 Run 详情时省略。
    */
   threadRuns?: Array<{ runId: string; status: TaskRun['status']; stoppedBy: string | null }>
-  /** 推荐方案 4.2：个人会话中各 Run 当前 Attempt 的推荐卡片，前端按 runId 挂到该 Run 的回复下。 */
+  /** 功能规则 2.4：个人会话中各 Run 当前 Attempt 的推荐卡片，前端按 runId 挂到该 Run 的回复下。 */
   recommendations?: AgentRecommendationView[]
   /** 功能规则 5.6：各 Run 当前 Attempt 保存的 Skill 草稿，只给提交人本人看。 */
   skillDrafts?: SkillDraftView[]
@@ -324,7 +324,7 @@ export interface AgentDefinition {
   webSearchEnabled: boolean
   /** 是否允许项目任务管理（project_task_*）；仅团队空间运行装配，见项目空间方案 S6。 */
   projectTasksEnabled: boolean
-  /** 是否可推荐其他 AI 同事；仅个人对话的员工交互运行装配（推荐方案 R1/R3）。 */
+  /** 是否可推荐其他 AI 同事；仅个人对话的员工交互运行装配（功能规则 2.4）。 */
   agentRecommendationEnabled: boolean
   /** 是否可创建 Skill（功能规则 5.6）；仅个人对话的员工交互运行装配。 */
   skillCreationEnabled: boolean

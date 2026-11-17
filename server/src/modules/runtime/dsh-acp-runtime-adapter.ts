@@ -184,7 +184,7 @@ export interface DshAcpRuntimeAdapterConfiguration {
     manifest: RuntimeManifest,
     signal: AbortSignal,
   ) => Promise<unknown>
-  /** 推荐方案 4.1：dsh-work 助手列出并推荐 AI 同事，只在员工个人对话中装配。 */
+  /** 功能规则 2.4：dsh-work 助手列出并推荐 AI 同事，只在员工个人对话中装配。 */
   agentRecommendationTool?: (
     name: 'list_colleague_agents' | 'recommend_agents',
     input: Record<string, unknown>,
@@ -1570,7 +1570,7 @@ export function renderSystemPrompt(manifest: RuntimeManifest, options: { executi
       '向用户介绍能力或限制时，用日常工作中的说法讲能帮他做成什么事，例如“整理、总结文档”“处理 Excel 表格”“生成 Word、PDF 或 PPT 文件”“把文件转换成另一种格式”；不要列出工具名、Skill 标识与版本号，也不要使用 MCP、沙箱、工作区、output、命令、Python 包名等技术说法。限制同样用用户能理解的话说，例如“不能上网查资料”“不会改动你上传的原文件，修改后的内容作为新文件交给你”。用户明确问技术细节时再说明。',
     ] : []),
   ].join('\n'))
-  // 推荐方案 R4：有职责相符的同事时优先推荐。紧跟能力边界放置，并写明先于找文件、要数据等任何处理。
+  // 功能规则 2.4：有职责相符的同事时优先推荐。紧跟能力边界放置，并写明先于找文件、要数据等任何处理。
   if (manifest.tools.some(tool => tool.id === 'recommend_agents')) {
     sections.push([
       '# 推荐 AI 同事（先于其他处理）',

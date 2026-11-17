@@ -4,7 +4,7 @@
  * 错误信息不带 Key、请求正文或响应正文。
  */
 
-/** not_configured：连接已停用、未配置或 API Key 读不出（优化方案 O2），不是 WeKnora 自身故障。 */
+/** not_configured：连接已停用、未配置或 API Key 读不出（功能规则第 11 节），不是 WeKnora 自身故障。 */
 export type WeKnoraFailureReason = 'timeout' | 'network' | 'auth' | 'rate_limited' | 'server' | 'protocol' | 'not_configured'
 
 export class WeKnoraUnavailableError extends Error {
@@ -67,7 +67,7 @@ export interface WeKnoraKnowledgeBaseStats {
   knowledgeCount: number
   processingCount: number
   updatedAt: string | null
-  /** WeKnora 中为该知识库配置的摘要模型；平台建库不设置，非空表示有人在 WeKnora 中修改过（优化方案 O7）。 */
+  /** WeKnora 中为该知识库配置的摘要模型；平台建库不设置，非空表示有人在 WeKnora 中修改过（功能规则第 11 节）。 */
   summaryModelId: string | null
 }
 

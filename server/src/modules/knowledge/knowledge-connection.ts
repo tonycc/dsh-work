@@ -72,7 +72,7 @@ export class PostgresKnowledgeConnection {
               or (external_knowledge_connections.updated_by = 'deployment-config'
                   and external_knowledge_connections.embedding_model_id is distinct from excluded.embedding_model_id))
     `
-    // 优化方案 O9：部署配置的地址变化与管理端更换地址一样，原有知识库属于原实例，标为“原连接已更换”。
+    // 功能规则第 11 节：部署配置的地址变化与管理端更换地址一样，原有知识库属于原实例，标为“原连接已更换”。
     if (existing && !existing.credentialRef && !sameBaseUrl(existing.baseUrl, baseUrl)) {
       const moved = await this.database`
         update external_knowledge_bases set status = 'unavailable', updated_by = 'deployment-config', updated_at = now()
