@@ -89,7 +89,7 @@ export interface RuntimeManifest {
       files?: Array<{ path: string; content?: string; sha256: string; size: number }>
     }>
   }
-  /** 平台内置 Skill 中本次未装配的：被本次 Skill 覆盖或被 Runtime 紧急停用（builtin-skills-plan 5.3）。 */
+  /** 平台内置 Skill 中本次未装配的：被本次 Skill 覆盖或被 Runtime 紧急停用（功能规则 5.5）。 */
   builtin_skill_exclusions?: Array<{
     skill: string
     reason: 'covered' | 'disabled'
@@ -134,7 +134,7 @@ export interface RuntimeManifest {
   data_scopes: string[]
   knowledge_context: RuntimeKnowledgeDocument[]
   /**
-   * 企业知识检索结果（weknora-knowledge-plan 4.5）。缺省即 not_applicable：本次执行不支持检索。
+   * 企业知识检索结果（功能规则第 11 节）。缺省即 not_applicable：本次执行不支持检索。
    */
   knowledge_status?: Exclude<RuntimeKnowledgeStatus, 'not_applicable'>
   /** 所选但已删除或对员工不可见、本次跳过的知识库名称；只用于回答页脚，不进入提示词。 */

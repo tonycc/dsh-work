@@ -41,7 +41,7 @@ test('agent recommendation tools assemble only for enabled personal conversation
   assert.equal(agentBuiltinToolNames({ webSearchEnabled: true }).includes('list_colleague_agents'), false)
 })
 
-// Skill 创建专家方案 4.2：开启开关的个人对话装配；草稿只能经 bash 写出，bash 被停用时不装配保存工具。
+// 功能规则 5.6：开启开关的个人对话装配；草稿只能经 bash 写出，bash 被停用时不装配保存工具。
 test('Skill creation tools assemble only for enabled personal conversations, saving only with bash', () => {
   assert.deepEqual(skillCreationToolNames({ enabled: true, personalConversation: true, bashAvailable: true }), ['list_available_skills', 'skill_draft_save'])
   assert.deepEqual(skillCreationToolNames({ enabled: true, personalConversation: true, bashAvailable: false }), ['list_available_skills'])
@@ -54,7 +54,7 @@ test('Skill creation tools assemble only for enabled personal conversations, sav
   }
 })
 
-// Agent 知识检索工具方案 4.2（KO9）：个人对话且执行前检索为 ok 时装配，不需要 Agent 开关。
+// 功能规则第 11 节（KO9）：个人对话且执行前检索为 ok 时装配，不需要 Agent 开关。
 test('knowledge search tool assembles only for personal conversations whose pre-retrieval succeeded', () => {
   assert.deepEqual(knowledgeSearchToolNames({ personalConversation: true, knowledgeStatus: 'ok' }), ['knowledge_search'])
   for (const status of ['not_selected', 'skipped', 'unavailable', 'not_applicable', undefined]) {

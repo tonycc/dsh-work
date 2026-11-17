@@ -1,6 +1,6 @@
 # 企业知识库
 
-设计见[企业知识库接入 WeKnora 方案](../../docs/design/weknora-knowledge-plan.md)与[企业知识库优化方案](../../docs/design/weknora-knowledge-optimization-plan.md)。本分册覆盖一期 WK-S2（员工端“知识库”与对话中添加知识库）、WK-S3（管理端）与优化方案的提示与配置项；WK-S1 的检索链路用例在 `server/src/infrastructure/postgres/weknora-knowledge.integration.test.ts`。所有 P0、P1 用例使用按 WeKnora v0.9.0 接口实现的测试替身，不能证明真实 WeKnora 的解析与检索效果。证据层级与写法见[验收目录索引](../TEST-CATALOG.md)。
+规则见[功能规则第 11 节](../../docs/development/feature-rules.md#11-企业知识库weknorawk-s1-起)。本分册覆盖一期 WK-S2（员工端“知识库”与对话中添加知识库）、WK-S3（管理端）与知识库优化（O1～O12）的提示与配置项；WK-S1 的检索链路用例在 `server/src/infrastructure/postgres/weknora-knowledge.integration.test.ts`。所有 P0、P1 用例使用按 WeKnora v0.9.0 接口实现的测试替身，不能证明真实 WeKnora 的解析与检索效果。证据层级与写法见[验收目录索引](../TEST-CATALOG.md)。
 
 ### KB-P0-01 员工浏览知识库并按权限看到不同操作
 
@@ -214,6 +214,6 @@
 2. WeKnora 停机时对话照常回答并注明不可用；员工端页面提示不可用。
 3. 用只有 `retrieve`、`ingest`、`manage_kbs` 能力的 API Key 运行 `server/src/modules/knowledge/weknora-contract.test.ts` 契约测试；启用重排序后复核最低相关度。
 4. 同一次对话检索两个使用不同嵌入模型的知识库，两边的文档都能检索到（优化方案 O10）。
-5. 个人对话中添加知识库后连续追问（如“差旅报销有什么规定”→“那住宿呢”→“一线城市呢”）：AI 同事结合对话改写检索词、调用“检索企业知识库”工具并引用正确文档；用答案分散在长文档多处的真实文档，对比装配与不装配工具时的回答（[Agent 知识检索工具方案](../../docs/design/knowledge-search-tool-plan.md) KS-S2）。
+5. 个人对话中添加知识库后连续追问（如“差旅报销有什么规定”→“那住宿呢”→“一线城市呢”）：AI 同事结合对话改写检索词、调用“检索企业知识库”工具并引用正确文档；用答案分散在长文档多处的真实文档，对比装配与不装配工具时的回答（KS-S2）。
 
 **验收：** 证据按发布流程留存，不写入本条目。

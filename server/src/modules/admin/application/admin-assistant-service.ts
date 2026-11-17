@@ -197,7 +197,7 @@ export class AdminAssistantService {
     await this.requireActiveAttempt(manifest)
     const domain = readEnum(input, 'domain', ['overview', 'skills', 'agents', 'operations'] as const)
     const query = readOptionalString(input, 'query', 200)
-    // 管理端模块权限方案 5.5：只返回操作人有查看权限的模块，无权分区注明“无权查看”。
+    // 功能规则第 13 节：只返回操作人有查看权限的模块，无权分区注明“无权查看”。
     const permissions = await this.authorization.localAdminPermissions(manifest.user_context.user_id)
     const canRead = (module: AdminModule) => hasAdminModuleAccess(permissions, module, 'read')
     const denied = (module: AdminModule) => ({ unavailable: `无权查看${ADMIN_MODULE_LABELS[module]}` })
@@ -265,7 +265,7 @@ export class AdminAssistantService {
   async confirmProposal(userId: string, proposalId: string, proposalSha256: string) {
     await this.authorization.requireAdminAccess(userId)
     const proposal = await this.requireProposal(userId, proposalId)
-    // 管理端模块权限方案 5.5：按提案的目标专用 Run 检查所属模块的修改权限。
+    // 功能规则第 13 节：按提案的目标专用 Run 检查所属模块的修改权限。
     await this.authorization.requireAdminRunPurpose(userId, proposal.purpose)
     if (proposal.proposalSha256 !== proposalSha256) throw notFound('任务提案不存在或已变化，请重新查看')
     if (proposal.status === 'cancelled') throw stateConflict('任务提案已取消，请重新发起')

@@ -12,7 +12,7 @@ import { WeKnoraDouble } from '../testing/weknora-double.ts'
 import { registerKnowledgeRoutes } from './workbench/knowledge-routes.ts'
 import { Router } from './router.ts'
 
-// KB-01～KB-06（e2e/catalog/knowledge.md，weknora-knowledge-plan WK-S2）：员工端知识库与文档管理、
+// KB-01～KB-06（e2e/catalog/knowledge.md，功能规则第 11 节，WK-S2）：员工端知识库与文档管理、
 // 可见部门调整、会话所选知识库与服务不可用。WeKnora 用按 v0.9.0 接口实现的测试 HTTP 服务。
 
 const tenantId = 'tenant-dsh-work'

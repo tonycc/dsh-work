@@ -1,5 +1,5 @@
 /**
- * WeKnora v0.9.0 HTTP 客户端（weknora-knowledge-plan 第 4 节）。只调用检索、文档元数据与知识库
+ * WeKnora v0.9.0 HTTP 客户端（功能规则第 11 节）。只调用检索、文档元数据与知识库
  * 管理接口；WeKnora 的问答、Agent 与 MCP 一律不用（WK5）。API Key 只在这里进入请求头，
  * 错误信息不带 Key、请求正文或响应正文。
  */

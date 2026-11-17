@@ -479,7 +479,7 @@ async function loginAccountExists(transaction: DatabaseTransaction, username: st
   return Boolean(existing)
 }
 
-/** 修改员工与权限（管理端模块权限方案 AP11）：只认本地授予的模块权限。 */
+/** 修改员工与权限（功能规则第 13 节）：只认本地授予的模块权限。 */
 async function assertIdentityWriter(transaction: DatabaseTransaction, userId: string) {
   try {
     await requireAdminModuleActor(transaction, userId, 'identity', 'write')

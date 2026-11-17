@@ -23,7 +23,7 @@ export interface AdminActor {
 type Sql = DatabaseClient | DatabaseTransaction
 
 /**
- * 服务层管理判定的唯一实现（管理端模块权限方案 5.1、第 6 节）：用户与租户均有效，并持有
+ * 服务层管理判定的唯一实现（功能规则第 13 节）：用户与租户均有效，并持有
  * **本地授予**（`source_key = 'local'`）、有效期内的启用角色，且角色含 `codes` 之一。
  * 部门授予与外部目录同步的角色不能构成管理权限。
  */
@@ -176,7 +176,7 @@ export function assertWithinGrantCeiling(
 
 /**
  * 某员工持有的权限与数据范围，**不看账号是否停用**：停用的平台管理员被重新启用后会立即恢复权限，
- * 判断能否操作这个账号时必须按它持有的授权算（管理端模块权限方案 AP13 ④）。
+ * 判断能否操作这个账号时必须按它持有的授权算（功能规则第 13 节）。
  */
 async function loadHeldGrants(sql: Sql, userId: string): Promise<HeldGrants> {
   return (await loadHeldGrantsForUsers(sql, [userId])).get(userId) ?? { platformAdmin: false, permissions: [], dataScopes: [] }

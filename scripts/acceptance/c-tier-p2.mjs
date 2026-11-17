@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// C 档 P2 验收（执行隔离方案第 9 节）：只经员工端公开接口驱动真实 DSH，逐场景留证。
+// C 档 P2 验收（执行隔离方案第 9 节；2026-10-28 已在 Mac mini 通过）：只经员工端公开接口驱动真实 DSH，逐场景留证。
 // 不读写数据库，不代办登录；结论由验收人复核 evidence.json 后填写。
 import { execFileSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'

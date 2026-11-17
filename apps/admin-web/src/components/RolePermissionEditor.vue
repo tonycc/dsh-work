@@ -15,7 +15,7 @@ import {
 } from '@/utils/admin-modules'
 
 /**
- * 角色的功能权限按模块编辑（管理端模块权限方案 AP11～AP15）。旧的 `admin:read` / `admin:write`
+ * 角色的功能权限按模块编辑（功能规则第 13 节）。旧的 `admin:read` / `admin:write`
  * 显示为各模块全部查看 / 修改，修改任一模块后改存为逐个模块的权限码。超出操作人自身的选项不可勾选。
  */
 const props = defineProps<{

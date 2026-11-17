@@ -8,7 +8,7 @@ import { useAuthStore } from '@/stores/auth'
 import type { KnowledgeAdminBase, KnowledgeAdminBaseList, KnowledgeAdminDepartment, KnowledgeAdminOverview } from '@/types/knowledge'
 
 /**
- * 管理端“企业知识库”（weknora-knowledge-plan 第 9 节，WK-S3）：连接配置与健康状态、全部知识库与跨部门授权、
+ * 管理端“企业知识库”（功能规则第 11 节，WK-S3）：连接配置与健康状态、全部知识库与跨部门授权、
  * 归属部门、新建与删除。平台管理员可以授给任意部门（含全公司）并撤销任何授权；文档由归属部门的员工在员工端维护。
  */
 const authStore = useAuthStore()

@@ -1,6 +1,6 @@
 # 站内通知
 
-设计见 [站内通知方案](../../docs/design/notification-center-plan.md)，原型见方案页首链接。标注“待建”的 spec 文件随对应实施切片创建。
+规则见[功能规则 3.7](../../docs/development/feature-rules.md#37-动态通知与用量)。标注“待建”的 spec 文件随对应实施切片创建。
 
 ## 通知记录与接口（NC-S1）
 

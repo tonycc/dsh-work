@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 
 /**
- * 按 WeKnora v0.9.0 接口约定实现的测试替身（weknora-knowledge-plan 第 12 节）。只实现平台调用的
+ * 按 WeKnora v0.9.0 接口约定实现的测试替身（功能规则第 11 节）。只实现平台调用的
  * 检索、文档元数据与知识库管理接口，返回固定数据；仅用于测试，不是生产备用。
  */
 export interface WeKnoraDoubleDocument {

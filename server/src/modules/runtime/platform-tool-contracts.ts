@@ -207,7 +207,7 @@ export const platformToolContracts = {
     effect: 'write', retryPolicy: 'never', concurrencyPolicy: 'serialized', timeoutMs: 60_000,
   }),
   /**
-   * Agent 知识检索工具方案（KO9）：在会话所选、员工当前可见的知识库中检索。读工具：写入的引用快照与审计是
+   * 功能规则第 11 节（KO9）：在会话所选、员工当前可见的知识库中检索。读工具：写入的引用快照与审计是
    * 执行证据，不是业务效果，不进入 task_operations 登记；同一 Attempt 内串行，保证引用序号连续。
    */
   knowledge_search: contract({

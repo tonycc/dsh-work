@@ -28,7 +28,7 @@ import { createThrowawayDatabase, type ThrowawayDatabase } from './test-database
 
 if (!process.env.DSH_WORK_TEST_DATABASE_URL) throw new Error('DSH_WORK_TEST_DATABASE_URL 未配置')
 
-// weknora-knowledge-plan 第 12 节 P1：一次性 PostgreSQL + 按 WeKnora v0.9.0 接口实现的测试 HTTP 服务。
+// 功能规则第 11 节 P1：一次性 PostgreSQL + 按 WeKnora v0.9.0 接口实现的测试 HTTP 服务。
 const tenantId = 'tenant-dsh-work'
 const ADMIN = 'U00008'
 const EMPLOYEE = 'U00001'
@@ -432,7 +432,7 @@ test('员工已不具备查看级别时，所选知识库按“你已无权查�
   assert.equal(searches().length, 0)
 })
 
-// Agent 知识检索工具方案（KO9）：装配条件、实时复核、引用续编与审计。
+// 功能规则第 11 节（KO9）：装配条件、实时复核、引用续编与审计。
 const toolInput = (result: { runId: string; attemptId: string; manifest: RuntimeManifest }, query: string, callNumber = 1, knowledgeBaseNames?: string[]) => ({
   runId: result.runId, attemptId: result.attemptId, sessionId: result.manifest.session_id!, userId: EMPLOYEE,
   agentVersionId: result.manifest.agent_version_id!, traceId: `trace-${result.runId}`, query, callNumber,

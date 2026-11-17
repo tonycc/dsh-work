@@ -16,7 +16,7 @@ export function registerIdentityAdministrationRoutes(
       pageSize: Number(context.url.searchParams.get('page_size') ?? undefined),
       nameOnly: context.adminView === 'selector',
     })
-    // 只凭 Agent 修改权限读取时（选择主动任务接收人，管理端模块权限方案 5.2）只返回姓名与部门，
+    // 只凭 Agent 修改权限读取时（选择主动任务接收人，功能规则第 13 节）只返回姓名与部门，
     // 不返回员工概况统计，也只按姓名搜索。
     if (context.adminView !== 'selector') return envelope('admin', page, 'postgres')
     return envelope('admin', {

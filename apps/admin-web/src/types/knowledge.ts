@@ -1,4 +1,4 @@
-/** 管理端“企业知识库”（weknora-knowledge-plan 第 9 节，WK-S3），与管理端 OpenAPI 的 KnowledgeAdmin* 结构一致。 */
+/** 管理端“企业知识库”（功能规则第 11 节，WK-S3），与管理端 OpenAPI 的 KnowledgeAdmin* 结构一致。 */
 export interface KnowledgeAdminConnection {
   configured: boolean
   baseUrl: string | null

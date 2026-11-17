@@ -16,7 +16,7 @@ import type { DingTalkSettingsInput, DingTalkSettingsManager, DingTalkSettingsPr
 const tenantId = 'tenant-dsh-work'
 /** 代绑确认凭证有效期（4.2 方式二：单次有效、短时过期）。 */
 const confirmationTtlSeconds = 5 * 60
-/** 离职检查：判为离职的比例超过该值时整批暂停（与组织架构方案附录 A 一致）。 */
+/** 离职检查：判为离职的比例超过该值时整批暂停。 */
 const departurePauseRatio = 0.1
 /** 离职检查异常：连续 3 次检查失败比例超过 5%。 */
 const departureWarningRatio = 0.05
@@ -745,7 +745,7 @@ async function requireLocalUser(transaction: DatabaseTransaction, userId: string
   return user
 }
 
-/** 钉钉应用配置的保存与清除仍只限平台管理员（管理端模块权限方案 AP12）：换成他人控制的应用可以冒充已绑定员工登录。 */
+/** 钉钉应用配置的保存与清除仍只限平台管理员（功能规则第 13 节）：换成他人控制的应用可以冒充已绑定员工登录。 */
 async function assertPlatformAdmin(transaction: DatabaseTransaction, userId: string) {
   try {
     await requirePlatformAdminOnly(transaction, userId)

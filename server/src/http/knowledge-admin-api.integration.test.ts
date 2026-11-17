@@ -16,7 +16,7 @@ import { registerKnowledgeAdminRoutes } from './admin/knowledge-admin-routes.ts'
 import { registerKnowledgeRoutes } from './workbench/knowledge-routes.ts'
 import { Router } from './router.ts'
 
-// KB-ADM-01、KB-ADM-02（e2e/catalog/knowledge.md，weknora-knowledge-plan WK-S3）：管理端连接配置与加密凭据、
+// KB-ADM-01、KB-ADM-02（e2e/catalog/knowledge.md，功能规则第 11 节，WK-S3）：管理端连接配置与加密凭据、
 // 全部知识库与跨部门授权。WeKnora 用按 v0.9.0 接口实现的测试 HTTP 服务。
 
 const tenantId = 'tenant-dsh-work'

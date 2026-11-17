@@ -25,7 +25,7 @@ interface ConnectionRow {
 }
 
 /**
- * 企业知识库连接（weknora-knowledge-plan 第 9 节，WK-S3）：管理端保存的地址、加密 API Key 与统一嵌入模型
+ * 企业知识库连接（功能规则第 11 节，WK-S3）：管理端保存的地址、加密 API Key 与统一嵌入模型
  * 是唯一来源，检索链路与员工端每次调用前读取，保存后立即生效。连接停用、未配置或凭据不可读时没有客户端。
  */
 export class PostgresKnowledgeConnection {

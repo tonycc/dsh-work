@@ -115,7 +115,7 @@ export class AttemptDispatcher {
           additionalSkillReferences: input.additionalSkillReferences,
         }))
     const effectiveDataScopes = authorization?.dataScopes ?? (trial ? [] : ['enterprise:authorized'])
-    // 企业知识（weknora-knowledge-plan 5.7）：一期只在个人空间的员工对话中检索，且只检索会话所选、
+    // 企业知识（功能规则第 11 节）：一期只在个人空间的员工对话中检索，且只检索会话所选、
     // 员工当前可见的知识库。团队空间、定时任务、主动任务、验证运行与系统运行都不调用（2.1）。
     const knowledge = this.deps.knowledge && !input.purpose && input.personalConversation === true && run.sessionId
       ? await this.deps.knowledge.resolveContext({
@@ -164,7 +164,7 @@ export class AttemptDispatcher {
       max_tool_calls: Math.min(agent.maxToolCalls, input.limits?.maxToolCalls ?? Number.POSITIVE_INFINITY),
     }
     // 平台内置 Skill 排在 Agent 固定与会话选择的 Skill 之后；被覆盖或紧急停用的记录在 Manifest 中。
-    // 内置 Skill 不经 Skill 授权或空间授权，执行前复核也不把它们当作附加 Skill（builtin-skills-plan 5.3）。
+    // 内置 Skill 不经 Skill 授权或空间授权，执行前复核也不把它们当作附加 Skill（功能规则 5.5）。
     const builtin = this.deps.builtinSkills?.resolve({
       disabled: runtimePolicy?.disabledBuiltinSkills ?? [],
       covering: agent.coveringSkills,
@@ -198,7 +198,7 @@ export class AttemptDispatcher {
             bashAvailable: !disabledTools.has('bash'),
           })
         : []),
-      // Agent 知识检索工具方案 4.2（KO9）：个人对话中执行前检索为 ok 时装配，范围与执行前检索相同。
+      // 功能规则第 11 节（KO9）：个人对话中执行前检索为 ok 时装配，范围与执行前检索相同。
       ...(!input.purpose
         ? knowledgeSearchToolNames({
             personalConversation: input.personalConversation === true,

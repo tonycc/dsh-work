@@ -107,7 +107,7 @@ const composerWorkspaceName = computed(() => props.workspaceLocked ? props.works
 const composerReady = computed(() => true)
 
 /**
- * 企业知识库（weknora-knowledge-plan 5.7）：一期只在个人空间的新对话中添加；所选知识库随首条提问
+ * 企业知识库（功能规则第 11 节）：一期只在个人空间的新对话中添加；所选知识库随首条提问
  * 写入会话。从知识库页“用这个知识库提问”进入时经 `?knowledgeBase=` 预先带上。
  */
 const knowledge = useKnowledgeStore()

@@ -29,7 +29,7 @@ export interface KnowledgeResolution {
   failureReason?: string
 }
 
-/** Agent 知识检索工具的返回（Agent 知识检索工具方案 4.1）。 */
+/** Agent 知识检索工具的返回（功能规则第 11 节）。 */
 export interface KnowledgeToolResult {
   documents: Array<{ ordinal: number; title: string; knowledgeBaseName: string; updatedDate: string; excerpt: string }>
   /** 已删除或已无权查看而跳过的知识库名称。 */
@@ -40,7 +40,7 @@ export interface KnowledgeToolResult {
 }
 
 /**
- * 企业知识端口（weknora-knowledge-plan 第 6 节）：执行前按会话所选、员工可见的知识库检索，
+ * 企业知识端口（功能规则第 11 节）：执行前按会话所选、员工可见的知识库检索，
  * 回答完成后按引用快照追加页脚。只在个人空间的员工对话中调用（一期，2.1）。
  */
 export interface KnowledgeProvider {

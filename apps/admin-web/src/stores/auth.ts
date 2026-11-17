@@ -36,7 +36,7 @@ export const useAuthStore = defineStore('admin-auth', () => {
   ))
   const platformAdmin = computed(() => permissions.value.includes('admin:*'))
   const user = computed(() => sessionUser.value ?? loadingUser)
-  /** 持有任一模块管理权限（能使用管理助手与接入文档，管理端模块权限方案 AP15）。 */
+  /** 持有任一模块管理权限（能使用管理助手与接入文档，功能规则第 13 节）。 */
   const canReadAdmin = computed(() => ADMIN_MODULES.some(module => moduleLevels.value[module] !== 'none'))
   const canRead = (module: AdminModule) => moduleLevels.value[module] !== 'none'
   const canWrite = (module: AdminModule) => moduleLevels.value[module] === 'write'

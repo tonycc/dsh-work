@@ -6,7 +6,7 @@ import { WeKnoraClient } from './weknora-client.ts'
 import { minimumRelevanceScore } from './weknora-knowledge-provider.ts'
 
 /**
- * 真实 WeKnora 接口契约（weknora-knowledge-plan 4.1、第 12 节 P2）：确认 4.3～4.6 依赖的接口和字段在
+ * 真实 WeKnora 接口契约（功能规则第 11 节，P2）：确认平台依赖的接口和字段在
  * 部署的版本中存在。只在配置了以下变量时运行，CI 中跳过；升级 WeKnora 前必须跑一遍。
  *
  *   WEKNORA_CONTRACT_URL、WEKNORA_CONTRACT_API_KEY、WEKNORA_CONTRACT_EMBEDDING_MODEL_ID
@@ -81,7 +81,7 @@ test('最低相关度：命中文档高于门槛，无关提问低于门槛', { 
       await new Promise(resolve => setTimeout(resolve, 1000))
     }
     const search = async (query: string) => (await client.search({ query, knowledgeBaseIds: [created.id], matchCount: 10 })).results
-    // 相关提问：最高分须来自目标文档且不低于门槛，同一提问中的非目标文档须低于门槛（优化方案第 10 节的 12 个提问）。
+    // 相关提问：最高分须来自目标文档且不低于门槛，同一提问中的非目标文档须低于门槛（KO10 校准用的 12 个提问）。
     const relevant: Array<[string, string]> = [
       ['安全库存怎么定', '库存管理规范.txt'], ['出差住宿可以报多少钱', '差旅报销制度.txt'], ['请假超过三天谁审批', '请假与考勤.txt'],
       ['呆滞物料多久清理', '库存管理规范.txt'], ['报销要附什么材料', '差旅报销制度.txt'], ['年假几天', '请假与考勤.txt'],

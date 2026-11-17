@@ -128,7 +128,7 @@ export function agentRecommendationToolNames(input: { enabled: boolean; personal
 }
 
 /**
- * Skill 创建工具（Skill 创建专家方案 4.2）：Agent 版本开启且是个人对话中员工发起的交互运行时装配。
+ * Skill 创建工具（功能规则 5.6）：Agent 版本开启且是个人对话中员工发起的交互运行时装配。
  * 草稿目录只能经执行容器中的 bash 写出（write 只写 output/ 中的文本成果），bash 不可用时不装配保存工具。
  */
 export const skillCreationToolNamesList = ['list_available_skills', 'skill_draft_save'] as const
@@ -139,7 +139,7 @@ export function skillCreationToolNames(input: { enabled: boolean; personalConver
 }
 
 /**
- * 知识检索工具（Agent 知识检索工具方案 4.2，KO9）：个人对话中、执行前检索结果为 ok（会话添加了可见知识库，
+ * 知识检索工具（功能规则第 11 节，KO9）：个人对话中、执行前检索结果为 ok（会话添加了可见知识库，
  * 员工与 Agent 都具备查看级别，连接可用）时装配。不需要 Agent 版本开关（KS2）。
  */
 export const knowledgeSearchToolName = 'knowledge_search'

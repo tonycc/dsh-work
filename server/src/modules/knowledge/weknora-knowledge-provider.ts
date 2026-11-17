@@ -36,7 +36,7 @@ interface SelectedBaseRow {
 }
 
 /**
- * 企业知识库接入 WeKnora（weknora-knowledge-plan）。可见范围按部门授权实时计算（5.3、5.5），
+ * 企业知识库接入 WeKnora（功能规则第 11 节）。可见范围按部门授权实时计算，
  * 检索范围 = 会话所选知识库 ∩ 当前可见知识库（5.7）；返回结果再按本次传入的知识库校验一次
  * （4.4 第 4 步）。员工与 Agent 都须具备查看级别（5.1、WK14）。
  */
@@ -160,7 +160,7 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
   }
 
   /**
-   * Agent 知识检索工具（Agent 知识检索工具方案 4.3，KO9）：每次调用实时复核范围，筛选规则与执行前检索相同，
+   * Agent 知识检索工具（功能规则第 11 节，KO9）：每次调用实时复核范围，筛选规则与执行前检索相同，
    * 结果写入引用快照并续编序号（KS5）。审计不记录检索词与摘录（KS6）；失败单独审计，不计入健康状态的
    * 检索与不可用次数（KS7）。
    */
