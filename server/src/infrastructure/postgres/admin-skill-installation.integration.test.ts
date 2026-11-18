@@ -418,6 +418,11 @@ test('ZIP upload reuses package parsing, compatibility planning, folder storage 
   assert.equal(version?.status, 'published')
   assert.equal((await artifactStore.read(version!.manifest.artifact)).files.find(file => file.path === 'references/value.txt')?.content, 'SKILL_RESOURCE_MARKER_7F31')
 })
+test('installation refuses Skill names reserved for platform built-in Skills', { skip: real }, async () => {
+  const reserved = zipSync({ 'SKILL.md': strToU8(body.replace('name: installation-test', 'name: HTML 页面（平台内置）')), 'references/value.txt': strToU8('v') })
+  await assert.rejects(service.prepareZip(actor, { fileName: 'reserved.zip', bytes: reserved }), /保留给平台内置 Skill/)
+})
+
 test('an installed draft can be discarded and replaced by a corrected package', { skip: real }, async () => {
   const skills = new PostgresSkillService(database.client, operations, artifactStore)
   const draftBody = body.replace('installation-test', 'discard-test')
