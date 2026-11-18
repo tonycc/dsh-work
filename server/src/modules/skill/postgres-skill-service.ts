@@ -1146,7 +1146,7 @@ export class PostgresSkillService {
 function assertInstalledDraft(skill: Pick<SkillRow, 'strictTest'>) {
   if (skill.strictTest) return
   throw skillConflict(
-    '这个草稿由已删除的文本创建/更新接口写入，不能试运行或发布',
+    '这个草稿由已删除的文本创建/更新接口写入，不能试运行或发布；请在“版本历史”中放弃该草稿后重新安装',
     'skill_legacy_draft_unsupported',
     '请在 Skill 详情的“版本历史”中放弃该草稿（已发布版本不受影响），再经 ZIP、链接或管理助手安装新包。',
   )

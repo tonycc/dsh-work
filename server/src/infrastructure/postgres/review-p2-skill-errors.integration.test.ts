@@ -103,7 +103,8 @@ test('旧文本接口留下的草稿在试运行、进度与发布入口都被�
     const result = await request(path, body, method)
     assert.equal(result.status, 409, path)
     assert.equal(result.body.error?.code, 'skill_legacy_draft_unsupported', path)
-    assert.match(result.body.error?.message ?? '', /已删除的文本创建\/更新接口/)
+    // 管理端只显示 message，放弃草稿的指引须写在 message 中。
+    assert.match(result.body.error?.message ?? '', /已删除的文本创建\/更新接口.*“版本历史”中放弃该草稿后重新安装/)
     assert.equal(result.body.error?.suggestion, suggestion)
   }
   const [tests] = await db.client<{ count: number }[]>`select count(*)::int as count from skill_test_runs where skill_id = ${legacyId}`
