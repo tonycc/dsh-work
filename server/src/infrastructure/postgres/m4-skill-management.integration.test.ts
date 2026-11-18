@@ -96,6 +96,11 @@ test('Skill 发布需通过测试，新草稿不影响已固定的引用，回�
   const withDraft = (await skills.getSkills()).find(skill => skill.id === skillId)
   assert.equal(withDraft?.version, '0.2.0')
   assert.equal(withDraft?.activeVersion, '0.1.0')
+  await assert.rejects(
+    insertSkillDraft(database, artifactStore, { skillId, version: '0.3.0', name: '订单风险归纳', description: '不应写入的第三版。',
+      instructions: '已有草稿时夹具拒绝追加，避免留下孤立草稿。', toolIds: ['read@1.0.0'], testPrompt: '验证夹具拒绝追加。', actor: 'U00008' }),
+    /已有草稿/,
+  )
   await skills.assertPublishedReferences([`${skillId}@0.1.0`])
   await assert.rejects(
     skills.setStatus({ skillId, status: 'published', actor: 'U00008' }),
