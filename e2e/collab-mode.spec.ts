@@ -174,6 +174,27 @@ test('SKC-04: in collaboration mode the Skill plaza opens a direct chat with the
   await expect(page.getByLabel('对话输入')).toHaveValue('')
 })
 
+test('MODE-E2E-18: in collaboration mode the Skill plaza starts a new conversation with the chosen Skill', async ({ page }) => {
+  await switchToCollab(page)
+  await page.getByRole('button', { name: '打开用户菜单' }).click()
+  await page.getByRole('menuitem', { name: 'Skill 广场' }).click()
+  await page.getByRole('button', { name: '使用 Skill：订单分析' }).click()
+  // 通用助手是员工可见 AI 同事的第一位；地址保留 Skill，输入框上方显示可移除的 Skill 标签。
+  await expect(page).toHaveURL(/\/c\/chats\/agent\/[^/?]+\?skill=order-analysis$/)
+  await expect(page.getByLabel('已选择 Skill', { exact: true })).toHaveText(/@订单分析/)
+  await expect(page.getByRole('status').filter({ hasText: '已选用 Skill“订单分析”，发送后将开始新的对话。' })).toBeVisible()
+  await expect(page.getByLabel('对话输入')).toHaveValue('分析本月订单交付风险。')
+
+  // 发送：经与工作模式相同的创建会话入口开启新会话并选用该 Skill（冒烟服务不执行对话，只核对请求）。
+  const created = page.waitForRequest(request => request.method() === 'POST' && /\/api\/workbench\/v1\/sessions$/.test(request.url()))
+  await page.getByRole('button', { name: '发送消息' }).click()
+  expect((await created).postDataJSON()).toMatchObject({ skillId: 'order-analysis', title: '分析本月订单交付风险。' })
+
+  await page.getByRole('button', { name: '移除已选择 Skill' }).click()
+  await expect(page).toHaveURL(/\/c\/chats\/agent\/[^/?]+$/)
+  await expect(page.getByLabel('已选择 Skill', { exact: true })).toHaveCount(0)
+})
+
 test('MODE-E2E-03: collaboration shell uses a bottom tab bar on narrow screens', async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 760 })
   await switchToCollab(page, { narrow: true })

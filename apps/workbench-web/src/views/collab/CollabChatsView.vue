@@ -26,6 +26,17 @@ const focusSessionId = computed(() => {
   const value = route.query.session
   return typeof value === 'string' && value ? value : undefined
 })
+/** Skill 广场“去对话”带来的 Skill（`/workbench?skill=` 在协作模式映射为 `/c/chats?skill=`，MODE-E2E-18）。 */
+const skillId = computed(() => {
+  const value = route.query.skill
+  return typeof value === 'string' && value ? value : undefined
+})
+
+function clearSkill() {
+  const query = { ...route.query }
+  delete query.skill
+  void router.replace({ query })
+}
 
 /** 打开了尚无对话的 AI 同事：列表顶部临时显示它，发送第一条消息后成为正式的一行（D25）。 */
 const pendingAgent = computed(() => {
@@ -68,6 +79,30 @@ watch(() => route.name === 'collab-chats' ? route.query.conversation : undefined
   } finally {
     resolving.value = false
   }
+}, { immediate: true })
+
+/**
+ * `/c/chats?skill=:id`（未指定 AI 同事）：进入通用助手的单聊并带上 Skill。服务端把平台通用助手排在
+ * 员工可见 AI 同事的第一位；员工看不到它时进入第一个可见的 AI 同事，一个都没有时说明原因。
+ */
+watch(() => route.name === 'collab-chats' ? skillId.value : undefined, async (value) => {
+  if (!value) return
+  resolveError.value = ''
+  resolving.value = true
+  try {
+    if (!contentStore.agents.length) await contentStore.refreshAgents()
+    const first = contentStore.agents[0]
+    if (first) {
+      await router.replace({ name: 'collab-agent-chat', params: { agentId: first.id }, query: { skill: value } })
+      return
+    }
+    resolveError.value = '当前没有可用的 AI 同事，无法用这个 Skill 发起对话'
+  } catch (cause) {
+    resolveError.value = cause instanceof Error ? cause.message : '无法加载 AI 同事'
+  } finally {
+    resolving.value = false
+  }
+  await router.replace({ name: 'collab-chats' })
 }, { immediate: true })
 
 /** 打开中的对话对象有未读、且页面可见时标记已读（窄屏只显示列表时没有打开的对象）。 */
@@ -119,6 +154,8 @@ if (!contentStore.agents.length) void contentStore.refreshAgents().catch(() => u
         :key="agentId"
         :agent-id="agentId"
         :focus-session-id="focusSessionId"
+        :skill-id="skillId"
+        @skill-cleared="clearSkill"
         @back="router.push({ name: 'collab-chats' })"
       />
       <CollabGroupPage

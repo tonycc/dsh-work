@@ -4,6 +4,7 @@ import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useAuthStore } from '@/stores/auth'
+import { useContentStore } from '@/stores/content'
 import { useTaskStore } from '@/stores/tasks'
 import type { AgentConversation, AgentConversationSegment, TaskResult, TaskRun } from '@/types/domain'
 import { TaskComposer } from '@dsh-work/workbench-components'
@@ -14,6 +15,7 @@ const api = vi.hoisted(() => ({
   listConversationTargets: vi.fn(),
   getRun: vi.fn(),
   getSession: vi.fn(),
+  getSkills: vi.fn(),
 }))
 vi.mock('@/api/client', () => ({ workbenchApi: api }))
 vi.mock('@/utils/feedback', () => ({ notifyActionFailure: vi.fn(), downloadArtifactFile: vi.fn() }))
@@ -58,7 +60,7 @@ function conversation(overrides: Partial<AgentConversation> = {}): AgentConversa
   }
 }
 
-async function mountChat(props: { agentId?: string; focusSessionId?: string } = {}) {
+async function mountChat(props: { agentId?: string; focusSessionId?: string; skillId?: string } = {}) {
   const wrapper = mount(CollabAgentChat, { props: { agentId: 'agent-x', ...props }, global: { plugins: [ElementPlus] }, attachTo: document.body })
   await flushPromises()
   return wrapper
@@ -155,5 +157,59 @@ describe('CollabAgentChat (S5c 单聊)', () => {
     await mountChat({ focusSessionId: 's-old' })
     expect(api.getAgentConversation).toHaveBeenCalledTimes(2)
     expect(Element.prototype.scrollIntoView).toHaveBeenCalled()
+  })
+})
+
+describe('CollabAgentChat: 选用 Skill 开始新会话（MODE-E2E-18）', () => {
+  const skill = { id: 'skill-report', name: '区域汇总', version: '1.0.0', category: '文件', description: '', owner: '', testPrompt: '', updatedAt: '' }
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    Object.values(api).forEach(fn => fn.mockReset())
+    api.listConversationTargets.mockResolvedValue({ items: [], nextCursor: null })
+    api.getRun.mockImplementation(async (id: string) => run(id, id === 'r-new' ? 's-new' : 's-old', id === 'r-new' ? '本周' : '上周'))
+    api.getAgentConversation.mockResolvedValue(conversation())
+    api.getSkills.mockResolvedValue([skill])
+    const auth = useAuthStore()
+    vi.spyOn(auth, 'user', 'get').mockReturnValue({ id: 'U1', name: '林岚', title: '', department: '', avatarText: '林', role: 'employee', dataScopes: [] })
+    Element.prototype.scrollIntoView = vi.fn()
+    Element.prototype.scrollTo = vi.fn()
+  })
+
+  it('shows the Skill chip and starts a new session with it instead of continuing', async () => {
+    const wrapper = await mountChat({ skillId: 'skill-report' })
+    expect(wrapper.get('[aria-label="已选择 Skill"]').text()).toContain('@区域汇总')
+    expect(wrapper.get('[data-testid="skill-session-notice"]').text()).toContain('发送后将开始新的对话')
+    expect(wrapper.find('[data-testid="new-session-notice"]').exists()).toBe(false)
+    const store = useTaskStore()
+    const create = vi.spyOn(store, 'createTask').mockResolvedValue(run('r-skill', 's-skill', '汇总'))
+    const start = vi.spyOn(store, 'startRunWithSessionFiles')
+    await submit(wrapper, '按区域汇总')
+    expect(create).toHaveBeenCalledWith('按区域汇总', [], undefined, undefined, 'agent-x', [], 'skill-report')
+    expect(start).not.toHaveBeenCalled()
+    expect(wrapper.emitted('skill-cleared')).toHaveLength(1)
+  })
+
+  it('prefills the Skill’s suggested question only when it has one', async () => {
+    api.getSkills.mockResolvedValue([{ ...skill, testPrompt: '按区域汇总本月金额' }])
+    const wrapper = await mountChat({ skillId: 'skill-report' })
+    expect((wrapper.get('textarea').element as HTMLTextAreaElement).value).toBe('按区域汇总本月金额')
+    expect(wrapper.find('[data-testid="recommendation-prefill-notice"]').exists()).toBe(false)
+  })
+
+  it('asks the page to drop the Skill when its chip is removed', async () => {
+    const wrapper = await mountChat({ skillId: 'skill-report' })
+    await wrapper.get('[aria-label="移除已选择 Skill"]').trigger('click')
+    expect(wrapper.emitted('skill-cleared')).toHaveLength(1)
+  })
+
+  it('ignores a Skill the employee cannot see and continues as usual', async () => {
+    const wrapper = await mountChat({ skillId: 'skill-hidden' })
+    expect(wrapper.find('[aria-label="已选择 Skill"]').exists()).toBe(false)
+    const store = useTaskStore()
+    const start = vi.spyOn(store, 'startRunWithSessionFiles').mockResolvedValue(run('r-next', 's-new', '继续'))
+    vi.spyOn(store, 'subscribe').mockImplementation(() => undefined)
+    await submit(wrapper, '继续')
+    expect(start).toHaveBeenCalled()
+    expect(useContentStore().skills.map(item => item.id)).toEqual(['skill-report'])
   })
 })
