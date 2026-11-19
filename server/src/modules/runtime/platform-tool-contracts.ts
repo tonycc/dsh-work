@@ -75,6 +75,9 @@ export const platformToolContracts = {
       required: ['id', 'name', 'version', 'instructions', 'resourceDirectory', 'dependencies', 'pythonEntries', 'contentSha256'],
     },
     effect: 'write', retryPolicy: 'safe', concurrencyPolicy: 'serialized', timeoutMs: 30_000,
+    // 只写本 Attempt 的激活状态（skill_runtime_activations 按 Attempt 去重），不在 task_operations 登记：
+    // 重试产生的新 Attempt 必须真正激活，否则其后的 python_execute 会因“未激活”被拒。
+    writeScope: 'attempt-workspace',
   }),
   python_execute: contract({
     inputSchema: {

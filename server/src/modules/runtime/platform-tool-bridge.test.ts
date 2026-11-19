@@ -585,3 +585,26 @@ test('python_execute writes only the Attempt workspace: no Task operation record
   assert.equal(runs, 3)
   assert.equal(begun, 0)
 })
+
+test('activate_skill only writes Attempt state: a retried Attempt activates again instead of replaying a receipt', async () => {
+  assert.equal(platformToolContracts.activate_skill.writeScope, 'attempt-workspace')
+  let activations = 0, begun = 0
+  const operations = {
+    async begin() { begun += 1; return { id: 'operation-activate', status: 'completed' as const, receipt: { result: {} }, errorCode: null, execute: false } },
+    async resolve() { throw new Error('activate_skill must not resolve a Task operation') },
+  }
+  const activated = { id: 'skill-report', name: 'report', version: '1.0.0', instructions: '按说明运行脚本汇总表格。', resourceDirectory: null, dependencies: [], pythonEntries: [], contentSha256: 'a'.repeat(64) }
+  for (const callId of ['call-1', 'call-retry']) {
+    const bridge = await createPlatformToolBridge({ activate_skill: {
+      contract: platformToolContracts.activate_skill,
+      async handler() { activations += 1; return activated },
+    } }, 5, undefined, operations)
+    try {
+      assert.equal((await call(bridge.socket, 'activate_skill', { name: 'report' }, callId)).status, 200)
+    } finally {
+      await bridge.close()
+    }
+  }
+  assert.equal(activations, 2)
+  assert.equal(begun, 0)
+})
