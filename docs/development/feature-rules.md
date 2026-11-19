@@ -330,7 +330,7 @@
 
 已随执行隔离实现：输出收集、格式与安全检查及成果登记（2b-2，`python_execute` 的输出自 1b② 起同样登记）；本轮装配了 `bash` 时原始文件只读挂载于 `input/original/`（2b-4），`python_execute` 与 `bash` 在同一执行容器中运行，脚本可经参数读取；员工侧运行总装配 `bash`，只有 Runtime 紧急停用 `bash` 时没有原始文件。服务重启不恢复执行：活动 Attempt 以 `SERVICE_RESTARTED` 失败、遗留执行容器在启动时删除，由员工重新执行（[Runtime 优化方案](../design/runtime-execution-optimization-plan.md)约束 2，已决定不做中断后继续执行）。
 
-调用记录：`python_execute` 是写操作，每次调用按“工具 + 参数摘要 + Attempt”在 `task_operations` 登记幂等操作并回写结果；每次执行另在 `skill_python_executions` 记下 Run、Attempt、Skill、入口与是否成功，供试运行证据与发布覆盖检查使用。不记录退出码、耗时与输出正文。
+调用记录：`python_execute` 是写操作，每次调用按“工具 + 参数摘要”在 `task_operations` 登记幂等操作（同一 Task 内去重：参数相同的再次调用直接返回已登记结果，不重新执行），回执保存完整结果（退出码、stdout/stderr、成果清单，受输出上限约束）；脚本正常返回时另在 `skill_python_executions` 记下 Run、Attempt、Skill、入口与是否成功（退出码为 0），供试运行证据与发布覆盖检查使用。不单独记录耗时。
 
 未完成（在此之前不得宣称完整的生产脚本平台）：Mac mini 上 `python-skill` 场景的真实验收（仓库中没有 Mac mini 执行该场景的记录）。`python_execute` 读取原始 xlsx 已有真实 Docker 用例；2026-11-04 在本机开发环境（真实 DSH 与执行容器）按验收目录 `SKILL-PY-P2` 走通样例脚本型 Skill 的安装、严格试运行、发布与员工上传 xlsx 汇总。
 
