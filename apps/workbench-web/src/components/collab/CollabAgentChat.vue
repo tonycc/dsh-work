@@ -35,7 +35,7 @@ const props = defineProps<{
   /** 从 Skill 广场“去对话”带来的 Skill（MODE-E2E-18）：发送时随新会话一起选用。 */
   skillId?: string
 }>()
-const emit = defineEmits<{ back: []; 'skill-cleared': [] }>()
+const emit = defineEmits<{ back: []; 'skill-cleared': []; 'open-agent': [agentId: string, sessionId: string] }>()
 
 const taskStore = useTaskStore()
 const authStore = useAuthStore()
@@ -70,6 +70,8 @@ const continueSessionId = computed(() => conversation.value?.continueSessionId ?
  * 员工可见的 Skill 中找不到时视为未选用。
  */
 const selectedSkill = computed(() => props.skillId ? contentStore.skills.find(item => item.id === props.skillId) : undefined)
+/** 知识库选择所属的会话：选用 Skill 时发送会开启新会话，选择只用于新会话，不读写最近一段会话。 */
+const knowledgeSessionId = computed(() => selectedSkill.value ? null : continueSessionId.value)
 const canSend = computed(() => agent.value?.available === true)
 
 /**
@@ -82,7 +84,7 @@ const showKnowledge = computed(() => knowledge.enabled)
 const selectedKnowledge = ref<SessionKnowledgeBase[]>([])
 let knowledgeToken = 0
 // 同时监听启用状态：刷新页面时状态可能晚于会话加载，否则会漏读已选知识库，之后保存时把它们覆盖掉。
-watch([continueSessionId, () => knowledge.enabled], async ([sessionId, enabled]) => {
+watch([knowledgeSessionId, () => knowledge.enabled], async ([sessionId, enabled]) => {
   const token = ++knowledgeToken
   selectedKnowledge.value = []
   if (!sessionId || !enabled) return
@@ -94,7 +96,7 @@ watch([continueSessionId, () => knowledge.enabled], async ([sessionId, enabled])
   }
 }, { immediate: true })
 async function changeKnowledge(items: SessionKnowledgeBase[]) {
-  const sessionId = continueSessionId.value
+  const sessionId = knowledgeSessionId.value
   if (!sessionId) {
     selectedKnowledge.value = items
     return
@@ -287,14 +289,24 @@ async function submit(payload: { prompt: string; files: File[]; workspaceId: str
     } else {
       // 首次对话或 Agent 版本已变化：经既有 createSession 开启新会话，固定 AI 同事当前版本。
       const knowledgeBaseIds = showKnowledge.value ? selectedKnowledge.value.filter(item => item.available).map(item => item.id) : []
-      if (knowledgeBaseIds.length) {
-        await taskStore.createTask(payload.prompt, payload.files, undefined, undefined, props.agentId, references, skill?.id, undefined, [], knowledgeBaseIds)
-      } else if (skill) {
-        await taskStore.createTask(payload.prompt, payload.files, undefined, undefined, props.agentId, references, skill.id)
+      if (skill) {
+        // 选用 Skill：与工作模式“新对话”相同，不指定 AI 同事，由服务端在本人可见的 AI 同事中依次选出
+        // 能提供该 Skill 所需工具的一位（通常是通用助手）；落到其他 AI 同事时转到它的单聊。
+        const task = await taskStore.createTask(payload.prompt, payload.files, undefined, undefined, undefined, references, skill.id, undefined, [], knowledgeBaseIds)
+        payload.confirm()
+        referencedArtifacts.value = []
+        const location = await workbenchApi.resolveConversation(task.id).catch(() => null)
+        if (location?.type === 'agent' && location.agentId !== props.agentId) {
+          emit('open-agent', location.agentId, location.sessionId)
+          void conversations.refresh()
+          return
+        }
+        emit('skill-cleared')
+      } else if (knowledgeBaseIds.length) {
+        await taskStore.createTask(payload.prompt, payload.files, undefined, undefined, props.agentId, references, undefined, undefined, [], knowledgeBaseIds)
       } else {
         await taskStore.createTask(payload.prompt, payload.files, undefined, undefined, props.agentId, references)
       }
-      if (skill) emit('skill-cleared')
     }
     payload.confirm()
     referencedArtifacts.value = []

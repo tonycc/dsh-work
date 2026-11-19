@@ -32,6 +32,11 @@ const skillId = computed(() => {
   return typeof value === 'string' && value ? value : undefined
 })
 
+/** 选用 Skill 发送后，服务端选出的 AI 同事不是当前单聊时，转到它的单聊并定位到新会话。 */
+function openAgentSession(id: string, sessionId: string) {
+  void router.replace({ name: 'collab-agent-chat', params: { agentId: id }, query: { session: sessionId } })
+}
+
 function clearSkill() {
   const query = { ...route.query }
   delete query.skill
@@ -81,15 +86,23 @@ watch(() => route.name === 'collab-chats' ? route.query.conversation : undefined
   }
 }, { immediate: true })
 
+/** 员工可见的 AI 同事：页面只请求一次，Skill 定位与“待开始的单聊”共用。 */
+const agentsReady: Promise<unknown> = contentStore.agents.length ? Promise.resolve() : contentStore.refreshAgents()
+// 列表加载失败只影响 Skill 定位（在下方提示），不作为未处理的拒绝。
+agentsReady.catch(() => undefined)
+
 /**
- * `/c/chats?skill=:id`（未指定 AI 同事）：进入通用助手的单聊并带上 Skill。服务端把平台通用助手排在
- * 员工可见 AI 同事的第一位；员工看不到它时进入第一个可见的 AI 同事，一个都没有时说明原因。
+ * `/c/chats?skill=:id`（未指定 AI 同事）：先进入通用助手的单聊并带上 Skill，便于看到标签与提示。服务端把平台
+ * 通用助手排在员工可见 AI 同事的第一位；员工看不到它时进入第一个可见的 AI 同事，一个都没有时说明原因。
+ * 发送时不指定 AI 同事，由服务端选出能提供该 Skill 所需工具的一位（与工作模式相同），落到其他同事时转到它的单聊。
  */
 watch(() => route.name === 'collab-chats' ? skillId.value : undefined, async (value) => {
   if (!value) return
   resolveError.value = ''
   resolving.value = true
   try {
+    await agentsReady
+    // 加载期间内容缓存被重置时上面的结果会被丢弃：列表仍为空就再读一次，避免误报“没有可用的 AI 同事”。
     if (!contentStore.agents.length) await contentStore.refreshAgents()
     const first = contentStore.agents[0]
     if (first) {
@@ -136,7 +149,6 @@ onBeforeUnmount(() => {
   clearInterval(listTimer)
 })
 
-if (!contentStore.agents.length) void contentStore.refreshAgents().catch(() => undefined)
 </script>
 
 <template>
@@ -156,6 +168,7 @@ if (!contentStore.agents.length) void contentStore.refreshAgents().catch(() => u
         :focus-session-id="focusSessionId"
         :skill-id="skillId"
         @skill-cleared="clearSkill"
+        @open-agent="openAgentSession"
         @back="router.push({ name: 'collab-chats' })"
       />
       <CollabGroupPage

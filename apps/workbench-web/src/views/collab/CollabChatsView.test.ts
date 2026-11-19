@@ -136,6 +136,21 @@ describe('CollabChatsView: 从 Skill 广场选用 Skill（MODE-E2E-18）', () =>
     wrapper.unmount()
   })
 
+  it('follows the session to the AI colleague the server picked', async () => {
+    const { wrapper, router } = await mountAt('/c/chats/agent/assistant?skill=skill-report')
+    wrapper.findComponent({ name: 'CollabAgentChat' }).vm.$emit('open-agent', 'other', 's-skill')
+    await flushPromises()
+    expect(router.currentRoute.value.params.agentId).toBe('other')
+    expect(router.currentRoute.value.query).toEqual({ session: 's-skill' })
+    wrapper.unmount()
+  })
+
+  it('loads the AI colleague list once when arriving with a Skill', async () => {
+    const { wrapper } = await mountAt('/c/chats?skill=skill-report')
+    expect(workbenchApi.getAgents).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
   it('explains instead of showing a blank page when no AI colleague is available', async () => {
     vi.mocked(workbenchApi.getAgents).mockResolvedValue([])
     const { wrapper, router } = await mountAt('/c/chats?skill=skill-report')

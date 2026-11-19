@@ -16,6 +16,9 @@ const api = vi.hoisted(() => ({
   getRun: vi.fn(),
   getSession: vi.fn(),
   getSkills: vi.fn(),
+  resolveConversation: vi.fn(),
+  getKnowledgeStatus: vi.fn(),
+  getSessionKnowledgeBases: vi.fn(),
 }))
 vi.mock('@/api/client', () => ({ workbenchApi: api }))
 vi.mock('@/utils/feedback', () => ({ notifyActionFailure: vi.fn(), downloadArtifactFile: vi.fn() }))
@@ -175,7 +178,7 @@ describe('CollabAgentChat: 选用 Skill 开始新会话（MODE-E2E-18）', () =>
     Element.prototype.scrollTo = vi.fn()
   })
 
-  it('shows the Skill chip and starts a new session with it instead of continuing', async () => {
+  it('shows the Skill chip and starts a new session with it, letting the server pick the AI colleague', async () => {
     const wrapper = await mountChat({ skillId: 'skill-report' })
     expect(wrapper.get('[aria-label="已选择 Skill"]').text()).toContain('@区域汇总')
     expect(wrapper.get('[data-testid="skill-session-notice"]').text()).toContain('发送后将开始新的对话')
@@ -183,10 +186,49 @@ describe('CollabAgentChat: 选用 Skill 开始新会话（MODE-E2E-18）', () =>
     const store = useTaskStore()
     const create = vi.spyOn(store, 'createTask').mockResolvedValue(run('r-skill', 's-skill', '汇总'))
     const start = vi.spyOn(store, 'startRunWithSessionFiles')
-    await submit(wrapper, '按区域汇总')
-    expect(create).toHaveBeenCalledWith('按区域汇总', [], undefined, undefined, 'agent-x', [], 'skill-report')
+    api.resolveConversation.mockResolvedValue({ type: 'agent', agentId: 'agent-x', sessionId: 's-skill' })
+    const confirm = await submit(wrapper, '按区域汇总')
+    // 与工作模式“新对话”相同：不指定 AI 同事（第 5 个参数），由服务端选出能提供该 Skill 工具的一位。
+    expect(create).toHaveBeenCalledWith('按区域汇总', [], undefined, undefined, undefined, [], 'skill-report', undefined, [], [])
     expect(start).not.toHaveBeenCalled()
+    expect(confirm).toHaveBeenCalled()
+    expect(api.resolveConversation).toHaveBeenCalledWith('r-skill')
     expect(wrapper.emitted('skill-cleared')).toHaveLength(1)
+    expect(wrapper.emitted('open-agent')).toBeUndefined()
+  })
+
+  it('moves to the AI colleague the server picked when it is not this chat', async () => {
+    const wrapper = await mountChat({ skillId: 'skill-report' })
+    const store = useTaskStore()
+    vi.spyOn(store, 'createTask').mockResolvedValue(run('r-skill', 's-skill', '汇总'))
+    api.resolveConversation.mockResolvedValue({ type: 'agent', agentId: 'agent-search', sessionId: 's-skill' })
+    await submit(wrapper, '按区域汇总')
+    expect(wrapper.emitted('open-agent')).toEqual([['agent-search', 's-skill']])
+    expect(wrapper.emitted('skill-cleared')).toBeUndefined()
+  })
+
+  it('keeps the knowledge-base choice for the new session instead of the one it would have continued', async () => {
+    api.getKnowledgeStatus.mockResolvedValue({ enabled: true, level: 'bases' })
+    api.getSessionKnowledgeBases.mockResolvedValue([{ id: 'kb-old', name: '旧选择', available: true }])
+    const wrapper = await mountChat({ skillId: 'skill-report' })
+    expect(api.getSessionKnowledgeBases).not.toHaveBeenCalled()
+    await wrapper.setProps({ skillId: undefined })
+    await flushPromises()
+    expect(api.getSessionKnowledgeBases).toHaveBeenCalledWith('s-new')
+  })
+
+  it('continues the latest session again once the Skill is removed', async () => {
+    const wrapper = await mountChat({ skillId: 'skill-report' })
+    await wrapper.setProps({ skillId: undefined })
+    await flushPromises()
+    expect(wrapper.find('[aria-label="已选择 Skill"]').exists()).toBe(false)
+    const store = useTaskStore()
+    const start = vi.spyOn(store, 'startRunWithSessionFiles').mockResolvedValue(run('r-next', 's-new', '继续'))
+    const create = vi.spyOn(store, 'createTask')
+    vi.spyOn(store, 'subscribe').mockImplementation(() => undefined)
+    await submit(wrapper, '继续')
+    expect(start).toHaveBeenCalledWith('s-new', { prompt: '继续', attachments: [], referencedFileIds: [] })
+    expect(create).not.toHaveBeenCalled()
   })
 
   it('prefills the Skill’s suggested question only when it has one', async () => {
