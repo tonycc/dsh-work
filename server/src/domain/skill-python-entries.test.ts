@@ -13,7 +13,7 @@ test('python-entries accepts a path or a list of relative .py paths', () => {
   assert.equal(readPythonEntriesField(undefined), undefined)
   assert.deepEqual(readPythonEntriesField('scripts/main.py'), ['scripts/main.py'])
   assert.deepEqual(readPythonEntriesField([' scripts/main.py ', 'run.py']), ['scripts/main.py', 'run.py'])
-  for (const invalid of [[], 'scripts/main.sh', '/abs/main.py', '../main.py', 'scripts/./main.py', ['a.py', 'a.py'], [1], { a: 'b' }, Array.from({ length: 33 }, (_, index) => `s${index}.py`)]) {
+  for (const invalid of [[], 'scripts/main.sh', '/abs/main.py', '../main.py', 'scripts/./main.py', 'a..b.py', ['a.py', 'a.py'], [1], { a: 'b' }, Array.from({ length: 33 }, (_, index) => `s${index}.py`)]) {
     assert.throws(() => readPythonEntriesField(invalid), /python-entries/)
   }
 })

@@ -7,7 +7,8 @@ import { parseDocument } from 'yaml'
  */
 export const PYTHON_ENTRIES_FIELD = 'python-entries'
 export const MAX_PYTHON_ENTRIES = 32
-const ENTRY_PATH = /^(?!\/)(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9_./-]+\.py$/
+// 与执行器 resolvePythonCall 一致：任何位置出现 `..` 都不接受，也不接受 `.` 路径段。
+const ENTRY_PATH = /^(?!\/)(?!.*\.\.)(?!.*(?:^|\/)\.(?:\/|$))[A-Za-z0-9_./-]+\.py$/
 
 /**
  * 校验 frontmatter 中 `python-entries` 的取值。字段缺失返回 undefined；格式无效时抛出说明原因的 Error。
