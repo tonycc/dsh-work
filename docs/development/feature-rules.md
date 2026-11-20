@@ -333,7 +333,7 @@
 
 调用记录（2026-11-19）：`python_execute` 只写本 Attempt 工作区、`activate_skill` 只写本 Attempt 的激活状态，都没有外部副作用，不在 `task_operations` 登记幂等操作（工具约定 `writeScope: 'attempt-workspace'`）：同一轮中参数相同的再次调用、重试产生的新 Attempt 都实际重新运行脚本，中断的调用也不会留下“效果未知”的操作而阻止员工重试。脚本正常返回时在 `skill_python_executions` 记下 Run、Attempt、Skill、入口与是否成功（退出码为 0），供试运行证据与发布覆盖检查使用；不记录耗时与输出正文。此前的版本在同一 Task 内对同参数调用直接返回第一次的结果。
 
-未完成（在此之前不得宣称完整的生产脚本平台）：Mac mini 上 `python-skill` 场景的真实验收（仓库中没有 Mac mini 执行该场景的记录）。`python_execute` 读取原始 xlsx 已有真实 Docker 用例；2026-11-04 在本机开发环境（真实 DSH 与执行容器）按验收目录 `SKILL-PY-P2` 走通样例脚本型 Skill 的安装、严格试运行、发布与员工上传 xlsx 汇总。
+真实验收只在本机进行，不跟踪 Mac mini 等目标环境。`python_execute` 读取原始 xlsx 已有真实 Docker 用例；2026-11-04 在本机开发环境（真实 DSH 与执行容器）按验收目录 `SKILL-PY-P2` 走通样例脚本型 Skill 的安装、严格试运行、发布与员工上传 xlsx 汇总。
 
 ## 7. 自动任务（AG-03）
 
