@@ -109,10 +109,7 @@ export class PostgresMcpConnectorService implements McpScopePort {
              p.capability_snapshot as "capabilitySnapshot", p.approved_snapshot as "approvedSnapshot",
              p.discovered_at as "discoveredAt", p.reviewed_at as "reviewedAt", reviewer.display_name as "reviewedBy",
              p.employee_identity_enabled as "employeeIdentityEnabled",
-             (c.credential_ref_id is not null and exists (
-               select 1 from connectors other
-                where other.tenant_id = c.tenant_id and other.credential_ref_id = c.credential_ref_id and other.id <> c.id
-             )) as "credentialShared"
+             ${credentialSharedColumn(this.database)}
         from connectors c
         join mcp_connector_profiles p on p.tenant_id = c.tenant_id and p.connector_id = c.id
         join users creator on creator.tenant_id = c.tenant_id and creator.id = c.created_by
@@ -573,27 +570,28 @@ export class PostgresMcpConnectorService implements McpScopePort {
   async setMcpEmployeeIdentity(input: { connectorId: string; enabled: boolean; actor: string }): Promise<ConnectorDefinition> {
     if (typeof input.enabled !== 'boolean') throw invalidRequest('enabled 必须是布尔值')
     const actor = await requireAdminModuleActor(this.database, input.actor, 'connector', 'write')
-    await this.database.begin(async transaction => {
-      const [connector] = await transaction<{ authType: string; credentialShared: boolean }[]>`
-        select c.auth_type as "authType",
-               (c.credential_ref_id is not null and exists (
-                 select 1 from connectors other
-                  where other.tenant_id = c.tenant_id and other.credential_ref_id = c.credential_ref_id and other.id <> c.id
-               )) as "credentialShared"
+    const changed = await this.database.begin(async transaction => {
+      const [connector] = await transaction<{ authType: string; credentialShared: boolean; enabled: boolean }[]>`
+        select c.auth_type as "authType", p.employee_identity_enabled as enabled,
+               ${credentialSharedColumn(transaction)}
           from connectors c
+          join mcp_connector_profiles p on p.tenant_id = c.tenant_id and p.connector_id = c.id
          where c.tenant_id = ${tenantId} and c.id = ${input.connectorId}
            and c.protocol = 'mcp' and c.deleted_at is null
-         for update of c
+         for update of c, p
       `
       if (!connector) throw notFound('目标不是 MCP Connector')
+      // 状态未变：不更新、不写审计。
+      if (connector.enabled === input.enabled) return false
       const availability = employeeIdentityAvailability(connector)
       if (input.enabled && !availability.available) throw stateConflict(availability.unavailableReason!)
       await transaction`
         update mcp_connector_profiles set employee_identity_enabled = ${input.enabled}, updated_at = now()
          where tenant_id = ${tenantId} and connector_id = ${input.connectorId}
       `
+      return true
     })
-    await this.audit(actor.id, `connector.mcp.employee_identity.${input.enabled ? 'enable' : 'disable'}`, input.connectorId, 'success',
+    if (changed) await this.audit(actor.id, `connector.mcp.employee_identity.${input.enabled ? 'enable' : 'disable'}`, input.connectorId, 'success',
       input.enabled ? '开启“发送员工身份”：此后新运行向该 MCP 服务附带调用上下文' : '关闭“发送员工身份”')
     return this.requireConnector(input.connectorId)
   }
@@ -671,10 +669,7 @@ export class PostgresMcpConnectorService implements McpScopePort {
              c.status as "connectorStatus", cr.id as "credentialRefId", cr.status as "credentialStatus",
              cr.backend as "credentialBackend", cs.version as "credentialVersion",
              p.employee_identity_enabled as "employeeIdentityEnabled",
-             (c.credential_ref_id is not null and exists (
-               select 1 from connectors other
-                where other.tenant_id = c.tenant_id and other.credential_ref_id = c.credential_ref_id and other.id <> c.id
-             )) as "credentialShared"
+             ${credentialSharedColumn(this.database)}
         from connectors c
         join mcp_connector_profiles p on p.tenant_id = c.tenant_id and p.connector_id = c.id
         left join credential_refs cr on cr.tenant_id = c.tenant_id and cr.id = c.credential_ref_id
@@ -877,6 +872,17 @@ function toConnectorDefinition(row: McpConnectorRow): ConnectorDefinition {
       },
     },
   }
+}
+
+/**
+ * 本 Connector（别名 `c`）的 Bearer 凭据是否与其他 Connector 共用（EA-S1 开启条件）。现有代码不会把一份凭据
+ * 分给新的 Connector，共用只可能来自旧数据。
+ */
+function credentialSharedColumn(sql: DatabaseClient | DatabaseTransaction) {
+  return sql`(c.credential_ref_id is not null and exists (
+    select 1 from connectors other
+     where other.tenant_id = c.tenant_id and other.credential_ref_id = c.credential_ref_id and other.id <> c.id
+  )) as "credentialShared"`
 }
 
 /** EA-S1 开启条件：Bearer 认证且凭据为本 Connector 独占（方案 5.1“开启条件”）。 */

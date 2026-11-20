@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, h, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import { ArrowDown, Check, Clock, Close, Connection, Delete, DocumentCopy, Key, Loading, Plus, Refresh, Search, SwitchButton, View } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -746,7 +746,7 @@ async function setEmployeeIdentity(connector: ConnectorDefinition, enabled: bool
   try {
     if (enabled) {
       await ElMessageBox.confirm(
-        `${employeeIdentityHelp}\n\n开启只影响此后新启动的运行。`,
+        h('div', [h('p', employeeIdentityHelp), h('p', { style: 'margin-top: 8px' }, '开启只影响此后新启动的运行。')]),
         `向“${connector.name}”发送员工身份？`,
         { confirmButtonText: '确认开启', cancelButtonText: '取消', type: 'warning' },
       )
@@ -926,7 +926,7 @@ onUnmounted(() => clearSkillTestPoll())
 
       <template v-else>
       <el-table class="data-table" v-loading="contentStore.loading" :data="pagedConnectors" empty-text="暂无匹配的 MCP 连接器">
-        <el-table-column label="名称" min-width="180"><template #default="scope"><strong class="mcp-name">{{ scope.row.name }}</strong><el-tag v-if="scope.row.mcp?.employeeIdentity?.enabled" size="small" type="info" class="mcp-pending-tag" data-testid="employee-identity-tag">发送员工身份</el-tag></template></el-table-column>
+        <el-table-column label="名称" min-width="180"><template #default="scope"><strong class="mcp-name">{{ scope.row.name }}</strong><el-tag v-if="scope.row.mcp?.employeeIdentity?.enabled" size="small" :type="scope.row.mcp.employeeIdentity.available ? 'info' : 'warning'" class="mcp-pending-tag" data-testid="employee-identity-tag">{{ scope.row.mcp.employeeIdentity.available ? '发送员工身份' : '发送员工身份（未生效）' }}</el-tag></template></el-table-column>
         <el-table-column label="Endpoint" min-width="280"><template #default="scope"><code class="mcp-endpoint">{{ scope.row.endpoint }}</code></template></el-table-column>
         <el-table-column label="认证方式" width="120"><template #default="scope">{{ scope.row.authType === 'bearer' ? 'Bearer Token' : '无认证' }}</template></el-table-column>
         <el-table-column label="工具数量" width="130" align="center" header-align="center"><template #default="scope"><el-button link type="primary" data-action="view-mcp-tools" @click="openMcpTools(scope.row)">{{ scope.row.mcp?.capabilityCount ?? 0 }} 个</el-button><el-tag v-if="scope.row.mcp?.pendingCapabilities.length" size="small" type="warning" class="mcp-pending-tag">{{ scope.row.mcp.pendingCapabilities.length }} 待确认</el-tag></template></el-table-column>

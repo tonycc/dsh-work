@@ -315,6 +315,25 @@ test('connector administrator turns “发送员工身份” on and off for a Be
   await expect(row.getByText('发送员工身份', { exact: true })).toHaveCount(0)
 })
 
+test('a Connector without authentication cannot turn on “发送员工身份” and says why (PF-MCP-03)', async ({ page }) => {
+  // 冒烟夹具只有一个 Bearer 连接器：在列表响应中追加一个无认证连接器，开关状态与原因由服务端给出。
+  await page.route('**/api/admin/v1/connectors', async route => {
+    const response = await route.fetch()
+    const body = await response.json() as { data: Array<Record<string, unknown> & { mcp?: Record<string, unknown> }> }
+    const source = body.data.find(item => item.id === 'connector-mcp-knowledge')!
+    body.data.push({
+      ...source, id: 'connector-mcp-open', name: '公开查询 MCP', authType: 'none', credentialRef: '无独立凭据',
+      mcp: { ...source.mcp, serverName: 'open_query', employeeIdentity: { enabled: false, available: false, unavailableReason: '无认证的连接器任何人都能伪造员工身份，只有 Bearer 认证的连接器可以开启' } },
+    })
+    await route.fulfill({ response, json: body })
+  })
+  await page.goto(`${adminUrl}/connectors`)
+  const row = page.getByRole('row', { name: /公开查询 MCP/ })
+  await row.getByRole('button', { name: '查看' }).click()
+  await expect(page.getByRole('switch', { name: '发送员工身份' })).toBeDisabled()
+  await expect(page.getByRole('note')).toHaveText('无认证的连接器任何人都能伪造员工身份，只有 Bearer 认证的连接器可以开启')
+})
+
 test('platform administrator can review one Agent experience iteration application', async ({ page }) => {
   const application = {
     id: 'memory-proposal-e2e', agentId: 'agent-quality', agentName: '质量分析 Agent',

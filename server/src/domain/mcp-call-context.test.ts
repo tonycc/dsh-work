@@ -57,8 +57,10 @@ test('identifiers that cannot travel as ASCII headers are dropped, never the who
     'X-DSH-Work-Attempt-Id': 'attempt-1',
     'X-DSH-Work-Viewer-User-Id': 'U003',
   })
-  // 旧账号名既不是手机号也不是邮箱：只发平台用户 ID。
-  assert.equal(mcpCallContextHeaders({
-    runId: 'r', attemptId: 'a', visibility: 'personal', viewer: { userId: 'U004', loginAccount: 'linlan' },
-  })['X-DSH-Work-Viewer-Email'], undefined)
+  // 旧账号名既不是手机号也不是邮箱（与登录同一判定）：只发平台用户 ID。
+  for (const legacy of ['linlan', 'zhang@corp', 'a@b@example.com']) {
+    const headers = mcpCallContextHeaders({ runId: 'r', attemptId: 'a', visibility: 'personal', viewer: { userId: 'U004', loginAccount: legacy } })
+    assert.equal(headers['X-DSH-Work-Viewer-Email'], undefined, legacy)
+    assert.equal(headers['X-DSH-Work-Viewer-Mobile'], undefined, legacy)
+  }
 })

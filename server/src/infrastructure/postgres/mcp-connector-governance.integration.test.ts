@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { after, before, test } from 'node:test'
 
 import { PostgresMcpConnectorService } from '../../modules/tool/postgres-mcp-connector-service.ts'
+import { adminModulePermission } from '../../domain/admin-permissions.ts'
 import { PostgresEncryptedCredentialStore } from '../../modules/tool/postgres-encrypted-credential-store.ts'
 import { MAX_MCP_CONNECTIONS_PER_ATTEMPT, type AgentRuntimePort, type McpInspectionResult, type McpRuntimeConnection, type RuntimeManifest } from '../../modules/runtime/runtime-types.ts'
 import type { DatabaseClient } from './database.ts'
@@ -752,6 +753,48 @@ test('EA-S1 sends employee identity only to enabled, Bearer, exclusive Connector
   // 改动后的连接器快照变了，本次只固定应收连接器。
   const afterSharing = await attempt({ workspaceId: personal!.id, pins: await service.resolveConnections({ mode: 'selected', connectorIds: [bearer.id] }) })
   assert.deepEqual(Object.keys(afterSharing.bearerHeaders).filter(name => name.startsWith('X-DSH-Work-')), [])
-  await assert.rejects(service.setMcpEmployeeIdentity({ connectorId: bearer.id, enabled: true, actor: 'U00008' }), { status: 409 })
+  // 已开启时重复开启不做任何事；关闭后在凭据共用时不能再开启。
   assert.equal((await service.setMcpEmployeeIdentity({ connectorId: bearer.id, enabled: false, actor: 'U00008' })).mcp?.employeeIdentity.enabled, false)
+  await assert.rejects(service.setMcpEmployeeIdentity({ connectorId: bearer.id, enabled: true, actor: 'U00008' }), { status: 409 })
+})
+
+test('EA-S1 switch changes are audited once, and read-only connector administrators cannot change them', async () => {
+  const suffix = randomUUID().slice(0, 8)
+  const audits: Array<{ actor: string; action: string; objectId: string }> = []
+  const audited = new PostgresMcpConnectorService(database, runtime, {
+    async appendAudit(actor, action, objectId) { audits.push({ actor, action, objectId }) },
+  } as ConstructorParameters<typeof PostgresMcpConnectorService>[2], credentialSecrets)
+  discovered = [{ name: 'orders_list', description: 'List orders.', inputSchema: { type: 'object', properties: {} } }]
+  const connector = await audited.registerMcpConnector({
+    name: `订单 MCP ${suffix}`, endpoint: `https://orders-${suffix}.example.test/mcp`, authType: 'bearer',
+    bearerToken: `orders-token-${suffix}`, scopeDescription: '订单', actor: 'U00008',
+  })
+  audits.length = 0
+
+  await audited.setMcpEmployeeIdentity({ connectorId: connector.id, enabled: true, actor: 'U00008' })
+  await audited.setMcpEmployeeIdentity({ connectorId: connector.id, enabled: true, actor: 'U00008' })
+  await audited.setMcpEmployeeIdentity({ connectorId: connector.id, enabled: false, actor: 'U00008' })
+  assert.deepEqual(audits.map(item => [item.actor, item.action, item.objectId]), [
+    ['U00008', 'connector.mcp.employee_identity.enable', connector.id],
+    ['U00008', 'connector.mcp.employee_identity.disable', connector.id],
+  ], 'repeating the current value changes nothing and is not audited')
+
+  // 只读的连接器管理员只能查看。
+  const roleId = `role-connector-reader-${suffix}`
+  const readerId = `user-connector-reader-${suffix}`
+  await database`
+    insert into roles (id, tenant_id, code, name, permissions)
+    values (${roleId}, 'tenant-dsh-work', ${roleId.replaceAll('-', '_')}, ${roleId}, ${database.json([adminModulePermission('connector', 'read')])})
+  `
+  await database`
+    insert into users (id, tenant_id, external_subject, display_name, status, identity_provider, business_user)
+    values (${readerId}, 'tenant-dsh-work', ${`directory:${readerId}`}, '只读管理员', 'active', 'local', true)
+  `
+  await database`insert into user_roles (tenant_id, user_id, role_id, source_key) values ('tenant-dsh-work', ${readerId}, ${roleId}, 'local')`
+  await assert.rejects(audited.setMcpEmployeeIdentity({ connectorId: connector.id, enabled: true, actor: readerId }), { status: 403 })
+  const [state] = await database<{ enabled: boolean }[]>`
+    select employee_identity_enabled as enabled from mcp_connector_profiles where tenant_id = 'tenant-dsh-work' and connector_id = ${connector.id}
+  `
+  assert.equal(state?.enabled, false)
+  assert.equal(audits.length, 2)
 })

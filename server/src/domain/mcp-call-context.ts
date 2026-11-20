@@ -1,3 +1,5 @@
+import { classifyLoginAccount } from './login-account-kind.ts'
+
 /**
  * 外部业务应用调用上下文（外部业务应用接入方案 5.1，EA-S1）：开启“发送员工身份”的 MCP Connector
  * 在每次请求中以明文请求头收到本次结果的可见类型与员工标识，外部应用凭该 Connector 的 Bearer 凭据
@@ -8,7 +10,7 @@ export type McpCallVisibility = 'personal' | 'shared'
 
 export interface McpCallContextViewer {
   userId: string
-  /** 登录账号（手机号或邮箱，或旧账号名）；手机号去掉 `+86`，邮箱只在全为 ASCII 时发送。 */
+  /** 登录账号（手机号或邮箱，或旧账号名）；按登录规则判定，手机号去掉 `+86`，旧账号名不发送。 */
   loginAccount?: string | null
   dingtalkUserId?: string | null
 }
@@ -22,7 +24,6 @@ export interface McpCallContext {
   agentId?: string | null
 }
 
-const MOBILE = /^(?:\+86)?(1[3-9]\d{9})$/
 const ASCII_HEADER_VALUE = /^[\x21-\x7e]{1,254}$/
 
 /**
@@ -52,10 +53,10 @@ export function mcpCallContextHeaders(context: McpCallContext): Record<string, s
   if (context.visibility === 'personal' && context.viewer) {
     const { userId, loginAccount, dingtalkUserId } = context.viewer
     headers['X-DSH-Work-Viewer-User-Id'] = userId
-    const account = loginAccount?.trim().toLowerCase() ?? ''
-    const mobile = account.match(MOBILE)?.[1]
-    if (mobile) headers['X-DSH-Work-Viewer-Mobile'] = mobile
-    else if (account.includes('@')) headers['X-DSH-Work-Viewer-Email'] = account
+    // 与登录同一判定（normalizeLoginAccount）：旧账号名（如 `zhang@corp`）既不是手机号也不是邮箱，不发送。
+    const account = loginAccount ? classifyLoginAccount(loginAccount) : null
+    if (account?.kind === 'mobile') headers['X-DSH-Work-Viewer-Mobile'] = account.value
+    if (account?.kind === 'email') headers['X-DSH-Work-Viewer-Email'] = account.value
     if (dingtalkUserId) headers['X-DSH-Work-Viewer-Dingtalk-Userid'] = dingtalkUserId
   }
   return Object.fromEntries(Object.entries(headers).filter(([, value]) => ASCII_HEADER_VALUE.test(value)))

@@ -291,7 +291,9 @@ describe('Skill installation sibling tab', () => {
     expect(wrapper.text()).toContain('调用上下文 个人')
     await section.get('[data-action="toggle-employee-identity"]').trigger('click')
     await flushPromises()
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('结果只给一个人看的调用'), `向“${connector.name}”发送员工身份？`, expect.anything())
+    expect(confirm).toHaveBeenCalledWith(expect.anything(), `向“${connector.name}”发送员工身份？`, expect.anything())
+    const message = confirm.mock.calls[0]![0] as unknown as { children: Array<{ children: string }> }
+    expect(message.children.map(child => child.children)).toEqual([expect.stringContaining('结果只给一个人看的调用'), '开启只影响此后新启动的运行。'])
     expect(update).toHaveBeenCalledWith({ connectorId: connector.id, enabled: true })
     expect(wrapper.get('[data-testid="employee-identity-tag"]').text()).toBe('发送员工身份')
 
@@ -301,6 +303,13 @@ describe('Skill installation sibling tab', () => {
     const blocked = wrapper.get('[data-testid="employee-identity-section"]')
     expect(blocked.text()).toContain('无认证的连接器任何人都能伪造员工身份')
     expect(blocked.get('[data-action="toggle-employee-identity"]').classes()).toContain('is-disabled')
+
+    // 已开启但当前不满足条件（如凭据变为共用）：列表标为“未生效”，开关仍可关闭。
+    content.connectors.splice(0, content.connectors.length, { ...connector, mcp: { ...connector.mcp!, employeeIdentity: { enabled: true, available: false, unavailableReason: 'Bearer 凭据与其他连接器共用' } } })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="employee-identity-tag"]').text()).toBe('发送员工身份（未生效）')
+    expect(wrapper.get('[data-testid="employee-identity-section"]').text()).toContain('当前不满足开启条件，运行时不发送员工身份')
+    expect(wrapper.get('[data-action="toggle-employee-identity"]').classes()).not.toContain('is-disabled')
   })
 
   it('shows the “发送员工身份” switch read-only to readers', async () => {
