@@ -290,6 +290,31 @@ test('platform administrator reconciles an unknown MCP call and sees the conflic
   await expect(page.getByText('没有待核对的调用')).toBeVisible()
 })
 
+test('connector administrator turns “发送员工身份” on and off for a Bearer MCP Connector (PF-MCP-03)', async ({ page }) => {
+  await page.goto(`${adminUrl}/connectors`)
+  const row = page.getByRole('row', { name: /企业知识 MCP/ })
+  await expect(row).toBeVisible()
+  await expect(row.getByText('发送员工身份', { exact: true })).toHaveCount(0)
+  await row.getByRole('button', { name: '查看' }).click()
+
+  const toggle = page.getByRole('switch', { name: '发送员工身份' })
+  // Element Plus 把真实开关输入框视觉隐藏，点击其可见的开关本体；状态仍按可访问的 switch 断言。
+  const switchControl = page.locator('[data-action="toggle-employee-identity"]')
+  await expect(toggle).not.toBeChecked()
+  await expect(page.getByText(/结果只给一个人看的调用.*Agent 主动任务/)).toBeVisible()
+  await switchControl.click()
+  const dialog = page.getByRole('dialog', { name: '向“企业知识 MCP”发送员工身份？' })
+  await expect(dialog).toContainText('平台用户 ID、手机号、邮箱和钉钉账号')
+  await dialog.getByRole('button', { name: '确认开启' }).click()
+  await expect(toggle).toBeChecked()
+  await expect(row.getByText('发送员工身份', { exact: true })).toBeVisible()
+
+  // 关闭不再确认，冒烟数据恢复原状，不影响其他用例。
+  await switchControl.click()
+  await expect(toggle).not.toBeChecked()
+  await expect(row.getByText('发送员工身份', { exact: true })).toHaveCount(0)
+})
+
 test('platform administrator can review one Agent experience iteration application', async ({ page }) => {
   const application = {
     id: 'memory-proposal-e2e', agentId: 'agent-quality', agentName: '质量分析 Agent',

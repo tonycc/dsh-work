@@ -636,3 +636,122 @@ test('PF-03 has no tenant-wide Connector cap; the per-Attempt limit applies to e
   await assert.rejects(service.resolveConnections({ mode: 'selected', connectorIds: ids }), { status: 422 })
   assert.equal((await service.resolveConnections({ mode: 'selected', connectorIds: ids.slice(0, MAX_MCP_CONNECTIONS_PER_ATTEMPT) })).length, MAX_MCP_CONNECTIONS_PER_ATTEMPT)
 })
+
+test('EA-S1 sends employee identity only to enabled, Bearer, exclusive Connectors and audits the call context', async () => {
+  const suffix = randomUUID().slice(0, 8)
+  discovered = [{ name: 'receivables_list', description: 'List my receivables.', inputSchema: { type: 'object', properties: {} } }]
+  const bearer = await service.registerMcpConnector({
+    name: `应收 MCP ${suffix}`, endpoint: `https://ar-${suffix}.example.test/mcp`, authType: 'bearer',
+    bearerToken: `ar-token-${suffix}`, scopeDescription: '按员工权限返回应收', actor: 'U00008',
+  })
+  const open = await service.registerMcpConnector({
+    name: `公开 MCP ${suffix}`, endpoint: `https://open-${suffix}.example.test/mcp`, authType: 'none',
+    scopeDescription: '公开查询', actor: 'U00008',
+  })
+  assert.deepEqual(bearer.mcp?.employeeIdentity, { enabled: false, available: true })
+  assert.equal(open.mcp?.employeeIdentity.available, false)
+  await assert.rejects(service.setMcpEmployeeIdentity({ connectorId: open.id, enabled: true, actor: 'U00008' }), { status: 409 },
+    'a Connector without credentials could be impersonated by anyone')
+  const enabled = await service.setMcpEmployeeIdentity({ connectorId: bearer.id, enabled: true, actor: 'U00008' })
+  assert.deepEqual(enabled.mcp?.employeeIdentity, { enabled: true, available: true })
+
+  // 员工：手机号登录（带 +86 保存）并已绑定钉钉。
+  await database`
+    insert into local_user_credentials (tenant_id, user_id, username, password_hash, must_change_password)
+    values ('tenant-dsh-work', 'U00008', '+8613800138008', 'test-hash', false)
+    on conflict (tenant_id, user_id) do update set username = excluded.username
+  `
+  await database`
+    insert into external_account_bindings (id, tenant_id, channel, user_id, external_user_id, bound_by, status)
+    values (${`binding-${suffix}`}, 'tenant-dsh-work', 'dingtalk', 'U00008', ${`ding-${suffix}`}, 'self', 'valid')
+    on conflict do nothing
+  `
+  const [personal] = await database<{ id: string }[]>`
+    select id from workspaces where tenant_id = 'tenant-dsh-work' and workspace_type = 'personal' and created_by = 'U00008' limit 1
+  `
+  const [team] = await database<{ id: string }[]>`
+    select id from workspaces where tenant_id = 'tenant-dsh-work' and workspace_type = 'team' limit 1
+  `
+  assert.ok(personal && team, 'seed data has a personal and a team workspace')
+  const pins = await service.resolveConnections({ mode: 'selected', connectorIds: [bearer.id, open.id] })
+  const [agentVersion] = await database<{ id: string; agentId: string }[]>`
+    select id, agent_id as "agentId" from agent_versions where tenant_id = 'tenant-dsh-work' limit 1
+  `
+
+  let sequence = 0
+  async function attempt(input: { workspaceId: string; purpose?: string; disclosureUserId?: string; pins?: typeof pins }) {
+    sequence += 1
+    const runId = `run-ea-${suffix}-${sequence}`
+    const taskId = `task-ea-${suffix}-${sequence}`
+    const attemptId = `attempt-ea-${suffix}-${sequence}`
+    await database`
+      insert into tasks (id, tenant_id, requested_by, source_type, correlation_key, budget_scope_task_id, status)
+      values (${taskId}, 'tenant-dsh-work', 'U00008', 'api', ${`ea-${suffix}-${sequence}`}, ${taskId}, 'running')
+    `
+    await database`
+      insert into runs (id, tenant_id, session_id, task_id, requested_by, idempotency_key, status)
+      values (${runId}, 'tenant-dsh-work', null, ${taskId}, 'U00008', ${`ea-${suffix}-${sequence}`}, 'running')
+    `
+    await database`
+      insert into run_attempts (id, tenant_id, run_id, attempt_no, runtime_id, manifest, manifest_sha256, model_route_snapshot, status)
+      values (${attemptId}, 'tenant-dsh-work', ${runId}, 1, 'runtime-local-01', '{}'::jsonb, ${'a'.repeat(64)}, '{}'::jsonb, 'running')
+    `
+    const manifest = {
+      run_id: runId, attempt_id: attemptId, workspace_id: input.workspaceId,
+      agent_version_id: agentVersion?.id ?? null,
+      ...(input.purpose ? { purpose: input.purpose } : {}),
+      user_context: { user_id: 'U00008', tenant_id: 'tenant-dsh-work', role_ids: ['role-platform-admin'] },
+      principal_context: { initiated_by: 'U00008', executed_as: 'principal-x', disclosure_user_id: input.disclosureUserId ?? 'U00008', executor_authorization_version: 1 },
+      mcp_connections: input.pins ?? pins,
+    } as unknown as RuntimeManifest
+    const connections = await service.resolveRuntimeConnections(manifest)
+    const byConnector = (id: string) => connections.find(item => item.snapshot.connector_id === id)?.headers ?? {}
+    return { manifest, bearerHeaders: byConnector(bearer.id), openHeaders: byConnector(open.id), attemptId }
+  }
+
+  // 个人空间：personal，带员工标识；未开启的连接器什么都不带。
+  const own = await attempt({ workspaceId: personal!.id })
+  assert.match(own.bearerHeaders['Authorization'] ?? '', /^Bearer /)
+  assert.equal(own.bearerHeaders['X-DSH-Work-Visibility'], 'personal')
+  assert.equal(own.bearerHeaders['X-DSH-Work-Viewer-User-Id'], 'U00008')
+  assert.equal(own.bearerHeaders['X-DSH-Work-Viewer-Mobile'], '13800138008')
+  assert.equal(own.bearerHeaders['X-DSH-Work-Viewer-Dingtalk-Userid'], `ding-${suffix}`)
+  assert.equal(own.bearerHeaders['X-DSH-Work-Attempt-Id'], own.attemptId)
+  if (agentVersion) assert.equal(own.bearerHeaders['X-DSH-Work-Agent-Id'], agentVersion.agentId)
+  assert.deepEqual(Object.keys(own.openHeaders).filter(name => name.startsWith('X-DSH-Work-')), [])
+  await service.recordMcpInvocation(own.manifest, {
+    serverName: bearer.mcp!.serverName, callId: 'call-ea-1', capabilityName: 'receivables_list', parameterDigest: 'd'.repeat(64), result: 'success',
+  })
+  await service.recordMcpInvocation(own.manifest, {
+    serverName: open.mcp!.serverName, callId: 'call-ea-2', capabilityName: 'receivables_list', parameterDigest: 'e'.repeat(64), result: 'success',
+  })
+  const audits = await service.listMcpInvocationAudits(bearer.id)
+  assert.equal(audits.find(item => item.attemptId === own.attemptId)?.callContext, 'personal')
+  assert.equal((await service.listMcpInvocationAudits(open.id)).find(item => item.attemptId === own.attemptId)?.callContext, null)
+
+  // 项目空间：shared，不带任何员工标识。
+  const shared = await attempt({ workspaceId: team!.id })
+  assert.equal(shared.bearerHeaders['X-DSH-Work-Visibility'], 'shared')
+  assert.deepEqual(Object.keys(shared.bearerHeaders).filter(name => name.startsWith('X-DSH-Work-Viewer-')), [])
+
+  // 放在项目空间的主动任务只给接收人：personal，员工标识为接收人。
+  const routine = await attempt({ workspaceId: team!.id, purpose: 'agent-routine', disclosureUserId: 'U00008' })
+  assert.equal(routine.bearerHeaders['X-DSH-Work-Visibility'], 'personal')
+  assert.equal(routine.bearerHeaders['X-DSH-Work-Viewer-User-Id'], 'U00008')
+
+  // 发布验证不发送，以免把发起验证的管理员标识发给外部应用。
+  const trial = await attempt({ workspaceId: personal!.id, purpose: 'agent-release-trial' })
+  assert.deepEqual(Object.keys(trial.bearerHeaders).filter(name => name.startsWith('X-DSH-Work-')), [])
+
+  // 凭据与其他连接器共用：不能开启，已开启的本次运行不发送员工身份。
+  const [credential] = await database<{ id: string }[]>`select credential_ref_id as id from connectors where tenant_id = 'tenant-dsh-work' and id = ${bearer.id}`
+  await database`update connectors set credential_ref_id = ${credential!.id}, auth_type = 'bearer' where tenant_id = 'tenant-dsh-work' and id = ${open.id}`
+  const [listed] = (await service.getMcpConnectors()).filter(item => item.id === bearer.id)
+  assert.deepEqual(listed?.mcp?.employeeIdentity.enabled, true)
+  assert.equal(listed?.mcp?.employeeIdentity.available, false)
+  // 改动后的连接器快照变了，本次只固定应收连接器。
+  const afterSharing = await attempt({ workspaceId: personal!.id, pins: await service.resolveConnections({ mode: 'selected', connectorIds: [bearer.id] }) })
+  assert.deepEqual(Object.keys(afterSharing.bearerHeaders).filter(name => name.startsWith('X-DSH-Work-')), [])
+  await assert.rejects(service.setMcpEmployeeIdentity({ connectorId: bearer.id, enabled: true, actor: 'U00008' }), { status: 409 })
+  assert.equal((await service.setMcpEmployeeIdentity({ connectorId: bearer.id, enabled: false, actor: 'U00008' })).mcp?.employeeIdentity.enabled, false)
+})
