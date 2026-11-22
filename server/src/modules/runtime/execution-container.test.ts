@@ -597,3 +597,27 @@ async function waitFor(predicate: () => boolean) {
     await new Promise(resolve => setTimeout(resolve, 10))
   }
 }
+
+test('rechecks the execution image after startup, caches the answer and recovers when it is pulled again', async () => {
+  class ImageBackend extends FakeExecBackend {
+    present = true
+    inspections = 0
+    override async inspectImage() {
+      this.inspections += 1
+      if (!this.present) throw new Error('No such image')
+    }
+  }
+  const backend = new ImageBackend()
+  const containers = new AttemptExecutionContainers(backend, { image, user: '501:20', imageRecheckMs: 30 })
+  assert.equal(await containers.imageAvailable(), true)
+  backend.present = false
+  assert.equal(await containers.imageAvailable(), true, 'within the recheck interval the last answer is reused')
+  assert.equal(backend.inspections, 1)
+  await new Promise(resolve => setTimeout(resolve, 40))
+  const [first, second] = await Promise.all([containers.imageAvailable(), containers.imageAvailable()])
+  assert.deepEqual([first, second], [false, false])
+  assert.equal(backend.inspections, 2, 'concurrent callers share one inspection')
+  backend.present = true
+  await new Promise(resolve => setTimeout(resolve, 40))
+  assert.equal(await containers.imageAvailable(), true)
+})

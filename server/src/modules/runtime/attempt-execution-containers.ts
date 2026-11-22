@@ -14,12 +14,16 @@ import {
 /** A registry digest (`name@sha256:…`) or a local image ID (`sha256:…`); both are immutable. */
 const IMAGE_PATTERN = /^(?:[A-Za-z0-9./:_-]+@)?sha256:[a-f0-9]{64}$/
 const REMOVAL_RETRY_INTERVAL_MS = 30_000
+/** 启动后执行镜像可能被清理（例如腾磁盘空间），按这个间隔复查一次，期间复用上次结果。 */
+const IMAGE_RECHECK_INTERVAL_MS = 15_000
 
 export interface AttemptExecutionContainersOptions {
   /** The execution image, pinned by digest or local image ID; must contain `rg`. */
   image: string
   /** Non-root `uid:gid` that can write the Attempt workspaces. */
   user: string
+  /** 复查执行镜像是否仍在本机的间隔；测试可调小。 */
+  imageRecheckMs?: number
   /** Workspace and free-space measurement (plan 4.7); tests replace it. */
   usage?: {
     measure(workspace: string): Promise<WorkspaceUsage>
@@ -107,17 +111,37 @@ export class AttemptExecutionContainers {
   private retryTimer: NodeJS.Timeout | undefined
   private retrying = false
   private readonly usage: Required<NonNullable<AttemptExecutionContainersOptions['usage']>>
+  private readonly imageRecheckMs: number
+  private imageCheck: { at: number; present: boolean } | undefined
+  private imageCheckInflight: Promise<boolean> | undefined
 
   constructor(backend: ExecutionBackend, options: AttemptExecutionContainersOptions) {
     if (!IMAGE_PATTERN.test(options.image)) throw invalidRequest('DSH_WORK_EXECUTION_IMAGE 必须使用 sha256 摘要锁定容器镜像')
     this.backend = backend
     this.image = options.image
     this.user = options.user
+    this.imageRecheckMs = options.imageRecheckMs ?? IMAGE_RECHECK_INTERVAL_MS
     this.usage = {
       measure: options.usage?.measure ?? (workspace => measureWorkspace(workspace)),
       freeSpace: options.usage?.freeSpace ?? freeSpace,
       pollMs: options.usage?.pollMs ?? WORKSPACE_LIMITS.pollMs,
     }
+  }
+
+  /**
+   * 执行镜像是否仍在本机。启动检查只做一次，镜像之后被删除时新的执行容器起不来；
+   * 健康检查与新建运行前按此复查（结果缓存 imageRecheckMs），镜像恢复后自动转为可用。
+   */
+  async imageAvailable(): Promise<boolean> {
+    const now = Date.now()
+    if (this.imageCheck && now - this.imageCheck.at < this.imageRecheckMs) return this.imageCheck.present
+    this.imageCheckInflight ??= this.backend.inspectImage(this.image).then(() => true, () => false).then(present => {
+      if (this.imageCheck?.present !== false && !present) console.warn(`execution image is missing; Agent runs are refused until it is pulled again: ${this.image}`)
+      if (this.imageCheck?.present === false && present) console.warn('execution image is available again')
+      this.imageCheck = { at: Date.now(), present }
+      return present
+    }).finally(() => { this.imageCheckInflight = undefined })
+    return this.imageCheckInflight
   }
 
   /** Why the Attempt was failed, if it was; the Adapter reports it. */
