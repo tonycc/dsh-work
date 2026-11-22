@@ -61,6 +61,7 @@ import { RequestError, dependencyTimeout, dependencyUnavailable, invalidRequest,
 import { isDshBuiltinTool } from './builtin-tools.ts'
 import { isBuiltinSkillReference } from '../../domain/builtin-skill-ref.ts'
 import { skillPythonEntries, undeclaredPythonEntry } from '../../domain/skill-python-entries.ts'
+import { describeActivatableSkills, resolveSkillActivationTarget } from './skill-activation-target.ts'
 
 const execFileAsync = promisify(execFile)
 const DEFAULT_SETUP_TIMEOUT_MS = 120_000
@@ -637,9 +638,12 @@ export class DshAcpRuntimeAdapter implements AgentRuntimePort {
       if (record.manifest.tools.some(tool => tool.id === 'activate_skill')) {
         registerPlatformTool('activate_skill', async (input) => {
           const requested = typeof input['name'] === 'string' ? input['name'].trim() : ''
-          const matches = record.manifest.agent_configuration.skill_instructions.filter(skill => (skill.name ?? skill.id) === requested || skill.id === requested)
-          if (!requested || matches.length !== 1) throw toolPreconditionFailed(`当前 Run 中没有唯一匹配的 Skill：${requested || '未提供名称'}`)
-          const skill = matches[0]!
+          const skills = record.manifest.agent_configuration.skill_instructions
+          const skill = resolveSkillActivationTarget(skills, requested)
+          if (!skill) {
+            const available = describeActivatableSkills(skills.filter(item => !item.disable_model_invocation))
+            throw toolPreconditionFailed(`当前 Run 中没有唯一匹配的 Skill：${requested || '未提供名称'}${available ? `。可激活：${available}` : ''}`)
+          }
           const exactName = skill.name ?? skill.id
           if (skill.disable_model_invocation && !record.manifest.input.message.includes(exactName)) {
             throw new PlatformToolError({ status: 403, code: 'TOOL_PERMISSION_DENIED', message: `Skill ${exactName} 只允许用户显式激活` })
