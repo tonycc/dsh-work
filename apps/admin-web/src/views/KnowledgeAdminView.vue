@@ -205,12 +205,15 @@ async function removeBase(base: KnowledgeAdminBase) {
 const connectionForm = reactive({ baseUrl: '', apiKey: '', editingKey: false, credentialExpiresAt: '', embeddingModelId: '', enabled: true })
 const testResult = ref<{ ok: boolean; reason: string | null } | null>(null)
 const verifying = ref(false)
-const verifyResult = ref<{ modelId: string; ok: boolean; reason: string | null; detail: string | null; cleanupFailed: boolean } | null>(null)
-watch(() => connectionForm.embeddingModelId.trim(), modelId => {
-  if (verifyResult.value && verifyResult.value.modelId !== modelId) verifyResult.value = null
-})
+const verifyResult = ref<{ signature: string; ok: boolean; reason: string | null; detail: string | null; cleanupFailed: boolean } | null>(null)
+/** 校验结果只对发起时的模型 ID、地址与 Key 有效；表单任一项变了（包括校验进行中改的）就不再显示。 */
+const verifySignature = computed(() => JSON.stringify([
+  connectionForm.embeddingModelId.trim(), comparableBaseUrl(connectionForm.baseUrl),
+  connectionForm.editingKey ? connectionForm.apiKey.trim() : '',
+]))
+const currentVerifyResult = computed(() => verifyResult.value?.signature === verifySignature.value ? verifyResult.value : null)
 const verifyAlert = computed(() => {
-  const result = verifyResult.value
+  const result = currentVerifyResult.value
   if (!result) return null
   if (result.ok) return { type: 'success' as const, title: '嵌入模型可用：已用它解析了一份测试文本。' }
   if (result.reason === 'parse_failed') {
@@ -261,10 +264,11 @@ async function verifyEmbeddingModel() {
   if (!modelId) return
   verifyResult.value = null
   verifying.value = true
+  const signature = verifySignature.value
   try {
     const apiKey = connectionForm.editingKey ? connectionForm.apiKey.trim() || undefined : undefined
     const result = await adminApi.verifyKnowledgeEmbeddingModel({ embeddingModelId: modelId, baseUrl: connectionForm.baseUrl.trim() || undefined, apiKey })
-    verifyResult.value = { modelId, ...result }
+    verifyResult.value = { signature, ...result }
   } catch (cause) {
     ElMessage.error(cause instanceof Error ? cause.message : '校验失败')
   } finally {
@@ -451,8 +455,8 @@ onMounted(load)
                   <span class="knowledge-admin__hint">在 WeKnora 中临时建一个知识库并解析一份很小的文本，约需几十秒，结束后自动删除；不会保存配置。</span>
                 </div>
                 <el-alert v-if="verifyAlert" :type="verifyAlert.type" :closable="false" show-icon :title="verifyAlert.title" class="knowledge-connection__verify-result" />
-                <el-alert v-if="verifyResult?.cleanupFailed" type="warning" :closable="false" show-icon class="knowledge-connection__verify-result"
-                  title="临时知识库未能删除，请到 WeKnora 中删除名称以“dsh-work 嵌入模型校验”开头的知识库。" />
+                <el-alert v-if="currentVerifyResult?.cleanupFailed" type="warning" :closable="false" show-icon class="knowledge-connection__verify-result"
+                  title="临时知识库可能未删除，请到 WeKnora 中删除名称以“dsh-work 嵌入模型校验”开头的知识库。" />
               </el-form-item>
               <el-alert v-if="modelChanged" type="warning" :closable="false" show-icon
                 :title="`更换嵌入模型只影响之后新建的知识库。现有 ${activeBaseCount} 个知识库仍按原模型检索，将标为“需重建”；原模型从 WeKnora 删除前它们都能正常使用。`" />
@@ -462,8 +466,8 @@ onMounted(load)
               <el-alert v-if="!connectionForm.enabled" type="error" :closable="false" show-icon
                 title="停用后：员工端不显示“知识库”与“添加知识库”，对话不再检索企业知识；知识库与授权保留。" />
               <div v-if="canManage" class="knowledge-connection__actions">
-                <el-button :loading="saving" @click="testConnection">测试连接</el-button>
-                <el-button type="primary" :loading="saving" native-type="submit">保存</el-button>
+                <el-button :loading="saving" :disabled="verifying" @click="testConnection">测试连接</el-button>
+                <el-button type="primary" :loading="saving" :disabled="verifying" native-type="submit">保存</el-button>
               </div>
               <el-alert v-if="testResult" :type="testResult.ok ? 'success' : 'error'" :closable="false" show-icon
                 :title="testResult.ok ? '连接正常：地址与 API Key 可用。' : `连接失败：${failureLabels[testResult.reason ?? ''] ?? testResult.reason}`" />

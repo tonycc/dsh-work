@@ -276,35 +276,53 @@ export class PostgresKnowledgeAdminService {
     const baseUrl = input.baseUrl ? normalizeBaseUrl(input.baseUrl) : undefined
     const apiKey = normalizeApiKey(input.apiKey)
     const probe = await this.connection.probeClient({ ...(baseUrl ? { baseUrl } : {}), ...(apiKey ? { apiKey } : {}) })
-    if ('reason' in probe) return { ok: false, reason: probe.reason, detail: null, cleanupFailed: false }
+    if ('reason' in probe) {
+      await this.recordEmbeddingCheck(actorId, { ok: false, reason: probe.reason }, null)
+      return { ok: false, reason: probe.reason, detail: null, cleanupFailed: false }
+    }
     const client = probe.client
     let temporaryBaseId: string | null = null
-    let result: Omit<EmbeddingModelCheck, 'cleanupFailed'>
+    // 建库请求已发出但没拿到 ID（超时、响应格式不符）时，WeKnora 中可能已经建好了临时库，无法按 ID 删除。
+    let possiblyCreated = false
+    let result: Omit<EmbeddingModelCheck, 'cleanupFailed'> = { ok: false, reason: 'protocol', detail: null }
+    let cleanupFailed = false
     try {
-      const created = await client.createKnowledgeBase({
-        name: `dsh-work 嵌入模型校验 ${randomUUID().slice(0, 8)}`,
-        description: '平台“校验嵌入模型”临时创建，校验结束即删除。',
-        embeddingModelId,
-      })
-      temporaryBaseId = created.id
-      const document = await client.uploadDocument(created.id, {
+      try {
+        const created = await client.createKnowledgeBase({
+          name: `dsh-work 嵌入模型校验 ${randomUUID().slice(0, 8)}`,
+          description: '平台“校验嵌入模型”临时创建，校验结束即删除。',
+          embeddingModelId,
+        })
+        temporaryBaseId = created.id
+      } catch (error) {
+        possiblyCreated = error instanceof WeKnoraUnavailableError && (error.reason === 'timeout' || error.reason === 'protocol')
+        throw error
+      }
+      const document = await client.uploadDocument(temporaryBaseId, {
         fileName: 'dsh-work-embedding-check.txt',
         mimeType: 'text/plain',
         bytes: Buffer.from('dsh-work 嵌入模型校验：这是一段用于确认嵌入模型可用的短文本。\nEmbedding model check from dsh-work.\n', 'utf8'),
       })
-      result = await this.awaitParse(client, created.id, document.id)
+      result = await this.awaitParse(client, temporaryBaseId, document.id)
     } catch (error) {
       if (error instanceof WeKnoraUnavailableError) result = { ok: false, reason: error.reason, detail: null }
       else if (error instanceof WeKnoraRequestError) result = { ok: false, reason: 'request_rejected', detail: error.message.slice(0, 200) || null }
       else throw error
+    } finally {
+      // 任何结果（包括意外异常）都删除临时库；已不存在（404）不算失败。
+      if (temporaryBaseId) {
+        try { await client.deleteKnowledgeBase(temporaryBaseId) } catch (error) {
+          cleanupFailed = !(error instanceof WeKnoraRequestError && error.status === 404)
+        }
+      } else if (possiblyCreated) cleanupFailed = true
+      await this.recordEmbeddingCheck(actorId, result, cleanupFailed ? temporaryBaseId ?? '（未拿到 ID）' : null)
     }
-    let cleanupFailed = false
-    if (temporaryBaseId) {
-      try { await client.deleteKnowledgeBase(temporaryBaseId) } catch { cleanupFailed = true }
-    }
-    await this.record(actorId, 'knowledge.embedding_model.verify', this.connection.connectionId,
-      `${result.ok ? '有效' : `无效或无法确认（${result.reason}）`}${cleanupFailed ? `；临时知识库 ${temporaryBaseId} 未能删除` : ''}`, 'knowledge_connection')
     return { ...result, cleanupFailed }
+  }
+
+  private async recordEmbeddingCheck(actorId: string, result: { ok: boolean; reason: string | null }, leftover: string | null) {
+    await this.record(actorId, 'knowledge.embedding_model.verify', this.connection.connectionId,
+      `${result.ok ? '有效' : `无效或无法确认（${result.reason}）`}${leftover ? `；临时知识库 ${leftover} 可能未删除` : ''}`, 'knowledge_connection')
   }
 
   private async awaitParse(client: WeKnoraClient, knowledgeBaseId: string, documentId: string): Promise<Omit<EmbeddingModelCheck, 'cleanupFailed'>> {

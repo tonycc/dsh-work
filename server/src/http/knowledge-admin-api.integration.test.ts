@@ -379,6 +379,9 @@ test('KB-ADM-08 校验嵌入模型：临时库上传小文件等解析，结束�
   double.embeddingModels = new Set(['embed-valid'])
   double.failDeleteKnowledgeBaseWith = 500
   assert.deepEqual((await verify({ embeddingModelId: 'embed-valid' })).data, { ok: true, reason: null, detail: null, cleanupFailed: true })
+  // 临时库已不存在（404）不算删除失败。
+  double.failDeleteKnowledgeBaseWith = 404
+  assert.equal((await verify({ embeddingModelId: 'embed-valid' })).data.cleanupFailed, false)
   double.failDeleteKnowledgeBaseWith = null
 
   // 已保存的 Key 只发往已保存的地址；连接类故障返回原因分类。
@@ -393,5 +396,6 @@ test('KB-ADM-08 校验嵌入模型：临时库上传小文件等解析，结束�
   const [audit] = await database<{ count: number }[]>`
     select count(*)::int as count from audit_events where tenant_id = ${tenantId} and action = 'knowledge.embedding_model.verify'
   `
-  assert.ok((audit?.count ?? 0) >= 5, 'each check is audited')
+  // 实际执行的 7 次（含未发往 WeKnora 的 api_key_required）都写审计；422 与 403 不算执行。
+  assert.equal(audit?.count, 7, 'each executed check is audited')
 })
