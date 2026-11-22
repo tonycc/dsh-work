@@ -11,6 +11,11 @@ import {
   type FreeSpace, type WorkspaceUsage,
 } from './workspace-usage.ts'
 
+/** docker 对不存在的镜像的答复（`No such image` / `No such object`）。 */
+function isMissingImageError(error: unknown): boolean {
+  return /No such (?:image|object)/i.test(error instanceof Error ? error.message : String(error))
+}
+
 /** A registry digest (`name@sha256:…`) or a local image ID (`sha256:…`); both are immutable. */
 const IMAGE_PATTERN = /^(?:[A-Za-z0-9./:_-]+@)?sha256:[a-f0-9]{64}$/
 const REMOVAL_RETRY_INTERVAL_MS = 30_000
@@ -135,7 +140,14 @@ export class AttemptExecutionContainers {
   async imageAvailable(): Promise<boolean> {
     const now = Date.now()
     if (this.imageCheck && now - this.imageCheck.at < this.imageRecheckMs) return this.imageCheck.present
-    this.imageCheckInflight ??= this.backend.inspectImage(this.image).then(() => true, () => false).then(present => {
+    this.imageCheckInflight ??= this.backend.inspectImage(this.image).then((): boolean | undefined => true, (error: unknown) => {
+      // 只有 docker 明确答复镜像不存在才算缺失。超时、守护进程卡住、命令起不来时保留上一次结论，
+      // 不缓存，下次再查：一次抖动不能把排队中的运行判为失败（调度器会把不可用的运行直接标为失败）。
+      if (isMissingImageError(error)) return false
+      console.warn(`execution image check failed; keeping the last result: ${error instanceof Error ? error.message.slice(0, 300) : String(error)}`)
+      return undefined
+    }).then(present => {
+      if (present === undefined) return this.imageCheck?.present ?? true
       if (this.imageCheck?.present !== false && !present) console.warn(`execution image is missing; Agent runs are refused until it is pulled again: ${this.image}`)
       if (this.imageCheck?.present === false && present) console.warn('execution image is available again')
       this.imageCheck = { at: Date.now(), present }
