@@ -14,7 +14,7 @@
  */
 import assert from 'node:assert/strict'
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
-import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -69,6 +69,8 @@ interface ObservedCall { tool: string; authorized: boolean; headers: Record<stri
 /** 假外部业务应用：只认自己的 Bearer 凭据，按手机号识别员工，shared 只返回公开数据并拒绝写入。 */
 async function startFakeExternalApp(token: string) {
   const calls: ObservedCall[] = []
+  /** 每个通过 Bearer 校验的 HTTP 请求（含 initialize、tools/list）收到的调用上下文请求头。 */
+  const requests: Array<Record<string, string>> = []
   const records = [
     { id: 'AR-1', owner: '13800138008', amount: 1200, public: false },
     { id: 'AR-2', owner: '13900139009', amount: 800, public: false },
@@ -85,6 +87,7 @@ async function startFakeExternalApp(token: string) {
       return
     }
     const headers = contextHeaders(request)
+    requests.push(headers)
     const mcp = new McpServer({ name: 'ea-p1-external-app', version: '1.0.0' }, { capabilities: { tools: {} } })
     mcp.registerTool(LIST_TOOL, { description: 'List the receivables the current viewer may see.', inputSchema: {} }, async () => {
       calls.push({ tool: LIST_TOOL, authorized: true, headers })
@@ -117,19 +120,25 @@ async function startFakeExternalApp(token: string) {
   return {
     url: `http://127.0.0.1:${(server.address() as { port: number }).port}/mcp`,
     calls,
+    requests,
     close: () => new Promise<void>(resolveClose => server.close(() => resolveClose())),
   }
 }
 
+/** 假上游每次收到的模型请求：工具清单里的查询工具与已返回的工具结果文本。 */
+interface ObservedModelRequest { listTools: string[]; toolResults: string[] }
+
 /** OpenAI 兼容假上游：第一轮调用请求中工具清单里名字含 receivables_list 的工具，拿到工具结果后作答。 */
-function startFakeModel() {
+function startFakeModel(observed: ObservedModelRequest[]) {
   const handle = async (request: IncomingMessage, response: ServerResponse) => {
     let body = ''
     for await (const chunk of request) body += chunk
-    const parsed = JSON.parse(body) as { model: string; tools?: Array<{ function?: { name?: string } }>; messages?: Array<{ role: string }> }
+    const parsed = JSON.parse(body) as { model: string; tools?: Array<{ function?: { name?: string } }>; messages?: Array<{ role: string; content?: unknown }> }
     // 选定的每个外部应用都有同名的查询工具（mcp__<server>__receivables_list），一轮里都调用一次。
     const toolNames = parsed.tools?.map(tool => tool.function?.name ?? '').filter(name => name.endsWith(LIST_TOOL)) ?? []
-    const answered = (parsed.messages ?? []).some(message => message.role === 'tool')
+    const toolMessages = (parsed.messages ?? []).filter(message => message.role === 'tool')
+    observed.push({ listTools: toolNames, toolResults: toolMessages.map(message => typeof message.content === 'string' ? message.content : JSON.stringify(message.content)) })
+    const answered = toolMessages.length > 0
     const calling = toolNames.length > 0 && !answered
     const delta = calling
       ? { role: 'assistant', content: null, tool_calls: toolNames.map((name, index) => ({ index, id: `call_${randomUUID().slice(0, 8)}`, type: 'function', function: { name, arguments: '{}' } })) }
@@ -149,16 +158,6 @@ function startFakeModel() {
   })
 }
 
-async function listFiles(root: string): Promise<string[]> {
-  const found: string[] = []
-  for (const entry of await readdir(root, { withFileTypes: true }).catch(() => [])) {
-    const path = join(root, entry.name)
-    if (entry.isDirectory()) found.push(...await listFiles(path))
-    else if (entry.isFile()) found.push(path)
-  }
-  return found
-}
-
 describe('EA-S1 P1：受控真实 DSH 下发调用上下文请求头', { skip, timeout: 900_000 }, () => {
   const nonce = randomUUID().slice(0, 8)
   const enabledToken = randomBytes(32).toString('hex')
@@ -170,6 +169,7 @@ describe('EA-S1 P1：受控真实 DSH 下发调用上下文请求头', { skip, t
   let enabledApp: Awaited<ReturnType<typeof startFakeExternalApp>>
   let plainApp: Awaited<ReturnType<typeof startFakeExternalApp>>
   let modelUpstream: Server
+  const modelRequests: ObservedModelRequest[] = []
   let gateway: ModelGateway
   let runtime: DshAcpRuntimeAdapter
   let orchestration: RunOrchestrationService
@@ -189,7 +189,7 @@ describe('EA-S1 P1：受控真实 DSH 下发调用上下文请求头', { skip, t
     directory = await mkdtemp(join(tmpdir(), 'ea-p1-'))
     enabledApp = await startFakeExternalApp(enabledToken)
     plainApp = await startFakeExternalApp(plainToken)
-    modelUpstream = startFakeModel()
+    modelUpstream = startFakeModel(modelRequests)
     await new Promise<void>(resolveListen => modelUpstream.listen(0, '127.0.0.1', resolveListen))
     const upstreamBase = `http://127.0.0.1:${(modelUpstream.address() as { port: number }).port}`
     gateway = new ModelGateway({
@@ -336,21 +336,27 @@ describe('EA-S1 P1：受控真实 DSH 下发调用上下文请求头', { skip, t
     return { status, attemptId: attempt?.id ?? '', manifest: attempt?.manifest, errorCode: attempt?.errorCode ?? null }
   }
 
-  /** 请求头只经环境变量注入：员工标识与凭据不出现在持久化的 Manifest 与 Attempt 目录的任何文件中。 */
-  async function assertNotPersisted(runId: string, attemptId: string, manifest: unknown) {
-    const secrets = ['13800138008', `ding-ea-${nonce}`, enabledToken, plainToken]
+  /**
+   * 请求头只经环境变量注入：员工标识与凭据不出现在持久化的 Manifest 中。
+   * （成功的 Attempt 结束后工作区即被删除，DSH 侧注入内容由 dsh-attempt-patch 的单元测试覆盖。）
+   */
+  function assertNotPersisted(manifest: unknown) {
     const serialized = JSON.stringify(manifest)
-    for (const value of secrets) assert.ok(!serialized.includes(value), `Manifest must not contain ${value.slice(0, 6)}…`)
-    const attemptRoot = resolve(directory, 'attempts')
-    for (const file of await listFiles(attemptRoot)) {
-      if (!file.includes(attemptId) && !file.includes(runId)) continue
-      if ((await stat(file)).size > 5 * 1024 * 1024) continue
-      const text = await readFile(file, 'utf8').catch(() => '')
-      for (const value of secrets) assert.ok(!text.includes(value), `${file} must not contain ${value.slice(0, 6)}…`)
+    for (const value of ['13800138008', `ding-ea-${nonce}`, enabledToken, plainToken]) {
+      assert.ok(!serialized.includes(value), `Manifest must not contain ${value.slice(0, 6)}…`)
     }
   }
 
-  async function auditContext(runId: string) {
+  async function auditContext(runId: string, expectRows: boolean) {
+    const deadline = Date.now() + 15_000
+    for (;;) {
+      const rows = await auditRows(runId)
+      if (!expectRows || rows.length > 0 || Date.now() > deadline) return rows
+      await new Promise(resolveWait => setTimeout(resolveWait, 200))
+    }
+  }
+
+  async function auditRows(runId: string) {
     return disposable.client<{ serverName: string; callContext: string | null }[]>`
       select c.server_name as "serverName", a.call_context as "callContext"
         from mcp_invocation_audits a
@@ -365,21 +371,27 @@ describe('EA-S1 P1：受控真实 DSH 下发调用上下文请求头', { skip, t
    */
   async function assertRunContext(
     runId: string,
-    before: { enabled: number; plain: number },
+    before: { enabled: number; plain: number; enabledRequests: number; plainRequests: number; model: number },
     expected: { visibility: 'personal' | 'shared'; agentId: string } | 'no-external-call',
   ) {
     const { status, attemptId, manifest, errorCode } = await waitForRun(runId)
     assert.equal(status, 'succeeded', `run ${runId} did not succeed: ${errorCode ?? 'no error code'}`)
     const enabledCalls = enabledApp.calls.slice(before.enabled).filter(call => call.tool === LIST_TOOL)
     const plainCalls = plainApp.calls.slice(before.plain).filter(call => call.tool === LIST_TOOL)
-    const audits = await auditContext(runId)
     if (expected === 'no-external-call') {
-      // 发布验证没有审批人，有外部效果的工具调用在 DSH 内直接拒绝（功能规则 F-01），请求根本不到外部应用。
-      assert.deepEqual([enabledCalls.length, plainCalls.length], [0, 0], 'release trials never reach an external app')
-      assert.ok(audits.every(row => row.callContext === null))
-      await assertNotPersisted(runId, attemptId, manifest)
+      // 发布验证仍装载选定的 MCP，但工具调用由 DSH 策略返回 trial_only、不执行（功能规则第 9 节）；
+      // 列出工具等请求仍会到达外部应用，平台不为发布验证发送调用上下文（外部应用接入方案 5.1）。
+      const seen = modelRequests.slice(before.model)
+      assert.ok(seen.some(request => request.listTools.length === 2), 'the model was offered both external apps\' tools')
+      assert.ok(seen.some(request => request.toolResults.some(text => text.includes('trial_only'))), 'DSH answered the calls with trial_only')
+      assert.deepEqual([enabledCalls.length, plainCalls.length], [0, 0], 'no tool call reached an external app')
+      const arrived = [...enabledApp.requests.slice(before.enabledRequests), ...plainApp.requests.slice(before.plainRequests)]
+      assert.ok(arrived.every(headers => Object.keys(headers).length === 0), 'requests that did arrive (e.g. tools/list) carry no call context')
+      assert.ok((await auditRows(runId)).every(row => row.callContext === null))
+      assertNotPersisted(manifest)
       return { attemptId, headers: {} as Record<string, string> }
     }
+    const audits = await auditContext(runId, true)
     assert.ok(plainCalls.length >= 1, 'the app without the switch was called in this run')
     assert.ok(plainCalls.every(call => Object.keys(call.headers).length === 0), 'the app without the switch never sees call context')
     assert.ok(audits.every(row => row.serverName !== plainServer || row.callContext === null))
@@ -393,14 +405,14 @@ describe('EA-S1 P1：受控真实 DSH 下发调用上下文请求头', { skip, t
       assert.deepEqual(Object.keys(headers).filter(name => name.startsWith('x-dsh-work-viewer-')), [], 'shared carries no employee identity')
     }
     assert.ok(audits.some(row => row.serverName === enabledServer && row.callContext === expected.visibility))
-    await assertNotPersisted(runId, attemptId, manifest)
+    assertNotPersisted(manifest)
     return { attemptId, headers }
   }
 
   it('员工本人在个人空间的对话：personal，带本人标识；未开启的外部应用不带调用上下文', async () => {
     const agent = await publishedAgent('personal')
     const session = await orchestration.createSession({ userId: employee, workspaceId: personalWorkspace, title: 'EA P1 个人对话', agentVersionId: agent.version.id })
-    const before = { enabled: enabledApp.calls.length, plain: plainApp.calls.length }
+    const before = { enabled: enabledApp.calls.length, plain: plainApp.calls.length, enabledRequests: enabledApp.requests.length, plainRequests: plainApp.requests.length, model: modelRequests.length }
     const run = await orchestration.startRun({
       userId: employee, sessionId: session.id, prompt: '查一下我的应收。', idempotencyKey: `ea-personal-${nonce}`,
     })
@@ -417,7 +429,7 @@ describe('EA-S1 P1：受控真实 DSH 下发调用上下文请求头', { skip, t
     const agent = await publishedAgent('project')
     const member = await agentMembers.addAgentMember(projectWorkspace, agent.agent.id, employee, ['role-employee'])
     const session = await orchestration.createSession({ userId: employee, workspaceId: projectWorkspace, title: 'EA P1 项目对话', agentVersionId: agent.version.id })
-    const before = { enabled: enabledApp.calls.length, plain: plainApp.calls.length }
+    const before = { enabled: enabledApp.calls.length, plain: plainApp.calls.length, enabledRequests: enabledApp.requests.length, plainRequests: plainApp.requests.length, model: modelRequests.length }
     const run = await orchestration.startRun({
       userId: employee, sessionId: session.id, prompt: '查一下项目的应收。', idempotencyKey: `ea-project-${nonce}`, workspaceAgentMemberId: member.id,
     })
@@ -432,7 +444,7 @@ describe('EA-S1 P1：受控真实 DSH 下发调用上下文请求头', { skip, t
       schedule: { kind: 'manual', timezone: 'Asia/Shanghai' }, inputTemplate: { prompt: '查一下我的应收。' },
     })
     await automations.enable(employee, created.id)
-    const before = { enabled: enabledApp.calls.length, plain: plainApp.calls.length }
+    const before = { enabled: enabledApp.calls.length, plain: plainApp.calls.length, enabledRequests: enabledApp.requests.length, plainRequests: plainApp.requests.length, model: modelRequests.length }
     const accepted = await automations.runNow(employee, created.id, `ea-automation-personal-${nonce}`)
     assert.equal(accepted.admissionStatus, 'accepted')
     const { headers } = await assertRunContext(accepted.runId!, before, { visibility: 'personal', agentId: agent.agent.id })
@@ -448,7 +460,7 @@ describe('EA-S1 P1：受控真实 DSH 下发调用上下文请求头', { skip, t
       schedule: { kind: 'manual', timezone: 'Asia/Shanghai' }, inputTemplate: { prompt: '查一下项目的应收。' },
     })
     await automations.enable(employee, created.id)
-    const before = { enabled: enabledApp.calls.length, plain: plainApp.calls.length }
+    const before = { enabled: enabledApp.calls.length, plain: plainApp.calls.length, enabledRequests: enabledApp.requests.length, plainRequests: plainApp.requests.length, model: modelRequests.length }
     const accepted = await automations.runNow(employee, created.id, `ea-automation-project-${nonce}`)
     assert.equal(accepted.admissionStatus, 'accepted')
     await assertRunContext(accepted.runId!, before, { visibility: 'shared', agentId: agent.agent.id })
@@ -464,7 +476,7 @@ describe('EA-S1 P1：受控真实 DSH 下发调用上下文请求头', { skip, t
     await routines.enable('U00008', agent.agent.id, routine.id, {
       expectedRevision: routine.revision, roleIds: ['role-employee'], dataScopes: ['workspace:authorized'],
     })
-    const before = { enabled: enabledApp.calls.length, plain: plainApp.calls.length }
+    const before = { enabled: enabledApp.calls.length, plain: plainApp.calls.length, enabledRequests: enabledApp.requests.length, plainRequests: plainApp.requests.length, model: modelRequests.length }
     const accepted = await routines.runNow('U00008', agent.agent.id, routine.id, `ea-routine-${nonce}`)
     assert.equal(accepted.admissionStatus, 'accepted')
     const { headers } = await assertRunContext(accepted.runId!, before, { visibility: 'personal', agentId: agent.agent.id })
@@ -472,7 +484,7 @@ describe('EA-S1 P1：受控真实 DSH 下发调用上下文请求头', { skip, t
     assert.equal(headers['x-dsh-work-viewer-mobile'], '13800138008')
   })
 
-  it('发布验证：MCP 调用在 DSH 内被拒绝，请求不到外部应用，自然不带调用上下文', async () => {
+  it('发布验证：工具调用由 DSH 返回 trial_only、不到外部应用，到达的请求不带调用上下文', async () => {
     // 发布验证由有 Agent 管理权限的平台管理员发起（种子数据中的 U00008），与员工身份无关。
     const agent = await publishedAgent('trial', ['role-employee', 'role-platform-admin'])
     // 与 AgentValidationService 建验证会话的方式一致：管理受众、不绑定工作空间。
@@ -481,7 +493,7 @@ describe('EA-S1 P1：受控真实 DSH 下发调用上下文请求头', { skip, t
       insert into sessions (id, tenant_id, created_by, title, status, audience, workspace_id, agent_version_id)
       values (${session.id}, ${tenantId}, 'U00008', 'EA P1 发布验证', 'active', 'admin', null, null)
     `
-    const before = { enabled: enabledApp.calls.length, plain: plainApp.calls.length }
+    const before = { enabled: enabledApp.calls.length, plain: plainApp.calls.length, enabledRequests: enabledApp.requests.length, plainRequests: plainApp.requests.length, model: modelRequests.length }
     const { runId } = await orchestration.startReleaseTrialCase({
       userId: 'U00008', sessionId: session.id, agentVersionId: agent.version.id, message: '查一下应收。', idempotencyKey: `ea-trial-${nonce}`,
     })
