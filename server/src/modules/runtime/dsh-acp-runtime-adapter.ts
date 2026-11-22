@@ -675,12 +675,13 @@ export class DshAcpRuntimeAdapter implements AgentRuntimePort {
         if (!executePython) throw dependencyUnavailable('Python Skill 不可用：未配置平台脚本沙箱')
         registerPlatformTool('python_execute', async (input, signal) => {
           const requested = typeof input['skill'] === 'string' ? input['skill'].trim() : ''
-          const skill = record.manifest.agent_configuration.skill_instructions.find(item => item.id === requested || (item.name ?? item.id) === requested)
+          // 与 activate_skill 同一套名称规则（含目录中的 id@版本 写法）。
+          const skill = resolveSkillActivationTarget(record.manifest.agent_configuration.skill_instructions, requested)
           if (!skill || !record.activatedSkills.has(skill.id)) throw toolPreconditionFailed('执行 Python 前必须先激活对应 Skill')
           // 功能规则第 6 节：SKILL.md 登记了 python-entries 时只能运行登记的入口。
           const undeclared = undeclaredPythonEntry(record.materializedSkills.get(skill.id)?.files ?? [], typeof input['entry'] === 'string' ? input['entry'].trim() : '')
           if (undeclared) throw toolPreconditionFailed(undeclared)
-          const result = await executePython(input, record.manifest, workspaceDirectory, signal)
+          const result = await executePython({ ...input, skill: skill.id }, record.manifest, workspaceDirectory, signal)
           const succeeded = typeof result === 'object' && result !== null && 'exitCode' in result && (result as { exitCode: unknown }).exitCode === 0
           await this.configuration.recordPythonExecution?.(record.manifest, skill.id, String(input['entry'] ?? ''), succeeded)
           return result
