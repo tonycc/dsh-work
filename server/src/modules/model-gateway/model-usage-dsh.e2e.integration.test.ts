@@ -7,6 +7,9 @@
  * 核对三处数字一致：用量记录 `model_usage_events`（对话与联网搜索各一行，实际模型、请求次数、失败次数、缓存读）、
  * 管理端“模型用量”页的执行明细（PostgresModelUsageService.getExecutions），以及 Task 预算结算 `attempt_budget_usage`。
  *
+ * 同一套环境还覆盖模型路由方案第 8 节 P1（MR-S2）的两条路由时机：停用默认路由不影响进行中的 Attempt（之后新建的运行被拒绝），
+ * 更换默认路由后重试的新 Attempt 使用新路由。
+ *
  * Opt-in，不进 CI：`pnpm --filter @dsh-work/server test:model-usage:e2e`（设置 DSH_WORK_MODEL_USAGE_E2E=1）。
  * 需要 `.env` 的 DSH_RUNTIME_HOME（锁定版本的 DSH）、DSH_WORK_EXECUTION_IMAGE（已按摘要拉取的执行镜像）
  * 与 DSH_WORK_TEST_DATABASE_URL（只接受回环地址）。执行容器启动检查会清扫遗留的 dsh-exec-* 容器，
@@ -59,13 +62,23 @@ const SEARCH_USAGE = { input: 9, output: 6 }
 /**
  * 假上游的脚本：
  * - search-with-retry：第一轮先返回一次 503（DSH 按 retryPolicy 重试），随后调用 web_search，拿到结果后作答；
- * - unauthorized：每次都返回 401（不被重试，运行失败）。
+ * - unauthorized：每次都返回 401（不被重试，运行失败）；
+ * - answer：直接作答；设置 gate 时第一次对话请求先停在上游，等测试放行后再作答。
  */
-type Script = 'search-with-retry' | 'unauthorized'
+type Script = 'search-with-retry' | 'unauthorized' | 'answer'
+
+interface UpstreamState {
+  script: Script
+  hits: UpstreamHit[]
+  failedOnce: boolean
+  /** 第一次对话请求到达时调用 onArrive，然后等 gate 放行再作答。 */
+  gate: Promise<void> | null
+  onArrive: (() => void) | null
+}
 
 interface UpstreamHit { path: string; status: number }
 
-function startFakeUpstream(state: { script: Script; hits: UpstreamHit[]; failedOnce: boolean }) {
+function startFakeUpstream(state: UpstreamState) {
   const handle = async (request: IncomingMessage, response: ServerResponse) => {
     let body = ''
     for await (const chunk of request) body += chunk
@@ -88,12 +101,18 @@ function startFakeUpstream(state: { script: Script; hits: UpstreamHit[]; failedO
       reply(401, { error: { message: 'bad key', type: 'authentication_error' } })
       return
     }
-    if (!state.failedOnce) {
+    if (state.gate) {
+      const gate = state.gate
+      state.gate = null
+      state.onArrive?.()
+      await gate
+    }
+    if (state.script === 'search-with-retry' && !state.failedOnce) {
       state.failedOnce = true
       reply(503, { error: { message: 'temporarily unavailable', code: 'status_503' } })
       return
     }
-    const searching = (parsed.messages ?? []).filter(message => message.role === 'tool').length === 0
+    const searching = state.script === 'search-with-retry' && (parsed.messages ?? []).filter(message => message.role === 'tool').length === 0
     const delta = searching
       ? { role: 'assistant', content: null, tool_calls: [{ index: 0, id: 'call_search', type: 'function', function: { name: 'web_search', arguments: JSON.stringify({ queries: ['dsh-work 模型用量'] }) } }] }
       : { role: 'assistant', content: 'MR-S3 回答完成' }
@@ -124,10 +143,10 @@ interface GatewayRow {
   inputTokens: number | null; outputTokens: number | null; cacheReadTokens: number | null
 }
 
-describe('MR-S3 P1：受控真实 DSH 下用量记录与网关计量一致', { skip, timeout: 900_000 }, () => {
+describe('MR-S3 与 MR-S2 P1：受控真实 DSH 下的用量计量与路由时机', { skip, timeout: 900_000 }, () => {
   const nonce = randomUUID().slice(0, 8)
   const employee = `user-mr-s3-${nonce}`
-  const upstreamState: { script: Script; hits: UpstreamHit[]; failedOnce: boolean } = { script: 'search-with-retry', hits: [], failedOnce: false }
+  const upstreamState: UpstreamState = { script: 'search-with-retry', hits: [], failedOnce: false, gate: null, onArrive: null }
   let directory: string
   let disposable: Awaited<ReturnType<typeof createThrowawayDatabase>>
   let execution: Awaited<ReturnType<typeof startExecutionContainers>>
@@ -138,6 +157,7 @@ describe('MR-S3 P1：受控真实 DSH 下用量记录与网关计量一致', { s
   let runs: PostgresRunRepository
   let agents: PostgresAgentService
   let usage: PostgresModelUsageService
+  let models: ModelGovernanceService
   let personalWorkspace: string
 
   before(async () => {
@@ -184,8 +204,9 @@ describe('MR-S3 P1：受控真实 DSH 下用量记录与网关计量一致', { s
     })
     const operations = new PostgresOperationsService(database, runtime, authorization, 'mock')
     agents = new PostgresAgentService(database, operations)
+    models = new ModelGovernanceService(new PostgresModelGovernanceRepository(database))
     orchestration = new RunOrchestrationService(
-      runs, conversations, new ModelGovernanceService(new PostgresModelGovernanceRepository(database)),
+      runs, conversations, models,
       runtime, content, operations, agents, undefined, authorization,
       {
         tasks: new PostgresTaskRepository(database),
@@ -419,5 +440,110 @@ describe('MR-S3 P1：受控真实 DSH 下用量记录与网关计量一致', { s
     assert.equal(budget.tokenMeasurement, 'reported')
     assert.equal(budget.inputTokens, 0)
     assert.equal(budget.outputTokens, 0)
+  })
+
+  async function defaultRoute() {
+    const route = (await models.listRoutes()).find(item => item.id === 'route-default')
+    assert.ok(route, 'the seeded default route exists')
+    return route
+  }
+
+  async function setDefaultRoute(change: { enabled?: boolean; providerModelId?: string }) {
+    const route = await defaultRoute()
+    await models.updateRoute({
+      routeId: route.id, name: route.name, actor: 'U00008',
+      providerModelId: change.providerModelId ?? route.providerModelId, enabled: change.enabled ?? route.enabled,
+    })
+  }
+
+  async function chatModelsOf(attemptId: string) {
+    return (await gatewayRows(attemptId)).filter(row => row.endpoint === 'chat').map(row => row.modelKey)
+  }
+
+  it('MR-S2：停用默认路由不影响进行中的 Attempt，之后新建的运行被拒绝', async () => {
+    upstreamState.script = 'answer'
+    upstreamState.hits.length = 0
+    let release!: () => void
+    let arrived!: () => void
+    const arrival = new Promise<void>(resolveArrival => { arrived = resolveArrival })
+    upstreamState.gate = new Promise<void>(resolveGate => { release = resolveGate })
+    upstreamState.onArrive = arrived
+    const runId = await startConversation('disable', '你好')
+    const original = await defaultRoute()
+    try {
+      // 第一次模型请求已到达上游、尚未返回时停用默认路由。
+      await arrival
+      await setDefaultRoute({ enabled: false })
+      assert.equal((await defaultRoute()).enabled, false)
+      await assert.rejects(startConversation('after-disable', '你好'), (error: { code?: string }) => error.code === 'MODEL_ROUTE_NOT_READY',
+        'a run created after disabling has no default route')
+      release()
+      const { status, attemptId, errorCode } = await waitForRun(runId)
+      assert.equal(status, 'succeeded', `the in-progress run must finish on its pinned route: ${errorCode ?? 'no error code'}`)
+      const records = await disposable.client<{ routeId: string; modelKey: string; outcome: string }[]>`
+        select route_id as "routeId", model_key as "modelKey", outcome from model_gateway_requests
+         where tenant_id = ${tenantId} and attempt_id = ${attemptId}
+      `
+      assert.ok(records.length >= 1)
+      assert.ok(records.every(record => record.routeId === original.id && record.modelKey === original.modelKey && record.outcome === 'succeeded'),
+        'every request of the in-progress Attempt used the pinned route')
+    } finally {
+      release?.()
+      upstreamState.gate = null
+      upstreamState.onArrive = null
+      await setDefaultRoute({ enabled: true })
+    }
+  })
+
+  it('MR-S2：更换默认路由后重试，新 Attempt 使用新路由', async () => {
+    const original = await defaultRoute()
+    upstreamState.script = 'unauthorized'
+    upstreamState.hits.length = 0
+    const runId = await startConversation('retry', '你好')
+    const first = await waitForRun(runId)
+    assert.equal(first.status, 'failed')
+    assert.equal(first.errorCode, 'MODEL_CREDENTIAL_INVALID')
+    assert.deepEqual(await chatModelsOf(first.attemptId), [original.modelKey])
+
+    // 管理员在同一 Provider 下添加模型并把默认路由指向它（能力与原模型一致）。
+    const providerModels = await disposable.client<{ providerId: string; capabilities: string[] }[]>`
+      select provider_id as "providerId", capabilities from provider_models where tenant_id = ${tenantId} and id = ${original.providerModelId}
+    `
+    await models.createProviderModel({
+      providerId: providerModels[0]!.providerId, modelKey: `deepseek-mr-s2-${nonce}`, displayName: 'MR-S2 替换模型',
+      capabilities: providerModels[0]!.capabilities, actor: 'U00008',
+    })
+    // createProviderModel 返回所属 Provider，按模型标识取新模型。
+    const [replacement] = await disposable.client<{ id: string }[]>`
+      select id from provider_models where tenant_id = ${tenantId} and model_key = ${`deepseek-mr-s2-${nonce}`}
+    `
+    assert.ok(replacement, 'the replacement model was created')
+    try {
+      await setDefaultRoute({ providerModelId: replacement.id })
+      upstreamState.script = 'answer'
+      upstreamState.hits.length = 0
+      await orchestration.retry(runId, employee)
+      const deadline = Date.now() + 30_000
+      let second = await waitForRun(runId)
+      while (second.attemptId === first.attemptId && Date.now() < deadline) {
+        await new Promise(resolveWait => setTimeout(resolveWait, 200))
+        second = await waitForRun(runId)
+      }
+      assert.notEqual(second.attemptId, first.attemptId, 'retry created a new Attempt')
+      assert.equal(second.status, 'succeeded', `retry did not succeed: ${second.errorCode ?? 'no error code'}`)
+      const [attempt] = await disposable.client<{ manifest: { model_route?: { route_id: string; model_key: string } } }[]>`
+        select manifest from run_attempts where tenant_id = ${tenantId} and id = ${second.attemptId}
+      `
+      assert.equal(attempt?.manifest.model_route?.route_id, original.id)
+      assert.equal(attempt?.manifest.model_route?.model_key, `deepseek-mr-s2-${nonce}`, 'the retry pinned the new default route target')
+      const retried = await chatModelsOf(second.attemptId)
+      assert.ok(retried.length >= 1 && retried.every(model => model === `deepseek-mr-s2-${nonce}`), 'the gateway forwarded the new model')
+      const rows = await usageRows(second.attemptId)
+      assert.equal(rows.find(row => row.endpoint === 'chat')?.model, `deepseek-mr-s2-${nonce}`)
+      // 原 Attempt 的记录不受影响。
+      assert.deepEqual(await chatModelsOf(first.attemptId), [original.modelKey])
+    } finally {
+      await setDefaultRoute({ providerModelId: original.providerModelId })
+    }
   })
 })
