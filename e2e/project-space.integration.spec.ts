@@ -629,14 +629,13 @@ test.describe('TW-E2E-11 空间内对话视图', () => {
     await expect(page.getByText(/受控测试运行已完成/).first()).toBeVisible({ timeout: 20_000 })
     const sessionId = await sessionIdFromUrl(page)
 
-    // 返回：回到所属空间页（默认页签），不回工作台。
+    // 返回：回到所属空间的“对话 › 历史对话”，刚才的会话在列表中。
     await page.getByRole('button', { name: '返回', exact: true }).click()
-    await expect(page).toHaveURL(new RegExp(`/workspaces/${seed.workspaceId}(\\?[^/]*)?$`))
-    await expect(page.getByRole('tab', { name: /^任务/ })).toHaveAttribute('aria-selected', 'true')
+    await expect(page).toHaveURL(new RegExp(`/workspaces/${seed.workspaceId}\\?tab=conversations&view=history$`))
+    await expect(page.getByRole('tab', { name: /^对话/ })).toHaveAttribute('aria-selected', 'true')
+    await expect(page.getByRole('tab', { name: '历史对话' })).toHaveAttribute('aria-selected', 'true')
 
     // 历史对话打开：同样在空间内。
-    await page.getByRole('tab', { name: /^对话/ }).click()
-    await page.getByRole('tab', { name: '历史对话' }).click()
     await page.getByTestId('session-history-row').filter({ hasText: first }).click()
     await expect(page).toHaveURL(inSpace)
 

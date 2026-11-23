@@ -41,12 +41,12 @@
 **spec：** `e2e/project-space.integration.spec.ts`（`pnpm test:e2e:project-space`）；组件行为另由 `WorkspaceDetailView`/`ConversationView` 单测固化
 
 1. 成员在空间「对话 › 新对话」发送消息：不离开空间上下文，地址进入 `/workspaces/:id/conversations/:target`，空间页签行与右栏“工作空间信息”保持可见。
-2. 在对话视图内点「返回」：回到所属空间页 `/workspaces/:id`（落在空间默认页签“任务”）。
+2. 在对话视图内点「返回」：回到所属空间的「对话 › 历史对话」，刚才的会话在列表中（协作模式下回到群聊）。
 3. 「对话 › 历史对话」打开该会话：同样落在空间内对话视图。
 4. 从空间外的旧链接 `/conversations/:sessionId` 打开团队会话：自动归位到 `/workspaces/:id/conversations/:sessionId`，空间外壳完整。
 5. 个人空间会话（工作台首页发起）停留在 `/conversations/:id` 独立页，不发生跳转。
 
-**验收：** 空间内发起/打开团队会话始终停留在空间上下文；返回键回到所属空间页而非工作台；空间外旧链接可解析并归位到空间 URL；个人空间路径行为不变。
+**验收：** 空间内发起/打开团队会话始终停留在空间上下文；返回键回到所属空间的对话列表，而非默认的任务页签或工作台；空间外旧链接可解析并归位到空间 URL；个人空间路径行为不变。
 
 ### PS-E2E-00 Agent 可交付数据范围随成员收紧与恢复（项目空间 S0）
 
