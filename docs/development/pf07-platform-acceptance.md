@@ -1,6 +1,6 @@
 # PF-07 平台能力验收与运行手册
 
-**矩阵版本：** `agent-platform-capabilities/v2`，代码基线 `3217cbb`。矩阵在 [agent-platform-capabilities.v2.json](agent-platform-capabilities.v2.json)；基线只是能力实现的起点，实际验收必须填写参考环境运行的精确提交和版本。门禁内的五项能力包括无 Session 任务、外部动作回执、累计预算、MCP 和受控记忆（Agent 委派已于 2026-10-16 删除）。持久化等待已于 2026-11-09 移出门禁（原因与恢复条件见矩阵 `deferred`）。Token/成本硬预算、MCP Resources/Prompts/stdio、原 ACP Session 恢复、持久化等待及通用外部异步写连接器仍不在可发布能力之列。
+**矩阵版本：** `agent-platform-capabilities/v2`，代码基线 `3217cbb`。矩阵在 [agent-platform-capabilities.v2.json](agent-platform-capabilities.v2.json)；基线只是能力实现的起点，实际验收必须填写参考环境运行的精确提交和版本。门禁内的五项能力包括无 Session 任务、外部动作回执、累计预算、MCP 和受控记忆（Agent 委派已于 2026-10-16 删除）。持久化等待于 2026-11-09 移出门禁，2026-11-23 决定不再作为门禁能力（见矩阵 `removed` 与下文）。Token/成本硬预算、MCP Resources/Prompts/stdio、原 ACP Session 恢复、持久化等待及通用外部异步写连接器仍不在可发布能力之列。
 
 ## 门禁范围
 
@@ -11,8 +11,8 @@ PF-07 是**平台能力门禁**，在受控的参考环境中证明能力实现�
 ## 分层执行
 
 1. **P0 契约：** 在代码版本固定后运行 `pnpm test:pf07:matrix`、`pnpm test:m1` 和 `pnpm test:review:unit`。矩阵检查确保能力有 P0/P1 命令和 P2 场景；它不运行能力测试。
-2. **P1 服务：** 只用专用可丢弃 PostgreSQL 运行 `pnpm test:pf07:p1`。MCP 管理的 P1 浏览器旅程另运行 `pnpm test:e2e:mcp-admin`；个人任务、审批与记忆的前端旅程按 [TEST-CATALOG](../../e2e/TEST-CATALOG.md) 选用现有 P0/P1 套件。记录每条命令、提交、运行环境、退出结果和失败日志引用。CI 执行 PF-01～PF-05 的服务集成套件；浏览器套件按对应配置单独执行。
-3. **P2 真实链路：** 先固定参考环境、代码提交、登录身份、DSH Lock、Adapter、模型和批准连接。按矩阵逐场景执行真实 Run/Attempt，记录操作回执、审计/成果引用以及故障和撤权后的拒绝结果。MCP 及记忆的具体动作见验收目录的 `PF-MCP-P2`（[管理端与平台](../../e2e/catalog/admin-platform.md)）与 `PF-MEMORY-P2`（[Agent](../../e2e/catalog/agents.md)）；`PF-WAIT-P2` 随持久化等待移出门禁，恢复时再执行。`pnpm test:pf07:p1` 继续运行 PF-04 集成套件，作为代码回归，不构成该能力的发布依据。无 Session、外部动作和预算按矩阵场景逐项执行。
+2. **P1 服务：** 只用专用可丢弃 PostgreSQL 运行 `pnpm test:pf07:p1`。MCP 管理的 P1 浏览器旅程另运行 `pnpm test:e2e:mcp-admin`；个人任务与记忆的前端旅程按 [TEST-CATALOG](../../e2e/TEST-CATALOG.md) 选用现有 P0/P1 套件。记录每条命令、提交、运行环境、退出结果和失败日志引用。CI 执行全部服务集成套件（含 PF-04 的代码回归）；浏览器套件按对应配置单独执行。
+3. **P2 真实链路：** 先固定参考环境、代码提交、登录身份、DSH Lock、Adapter、模型和批准连接。按矩阵逐场景执行真实 Run/Attempt，记录操作回执、审计/成果引用以及故障和撤权后的拒绝结果。MCP 及记忆的具体动作见验收目录的 `PF-MCP-P2`（[管理端与平台](../../e2e/catalog/admin-platform.md)）与 `PF-MEMORY-P2`（[Agent](../../e2e/catalog/agents.md)）；`PF-WAIT-P2` 不属于本门禁。无 Session、外部动作和预算按矩阵场景逐项执行。
 
 ## P2 记录与发布门禁
 
@@ -28,9 +28,11 @@ PF-07 是**平台能力门禁**，在受控的参考环境中证明能力实现�
 |---|---|---|
 | 验收人已确认（本地账号） | 15 | `session-neutral-task`：`real-dsh-task-result`、`revocation`、`runtime-failure`；`external-action`：`accepted-receipt`、`duplicate-delivery`；`cumulative-budget`：全部 4 项；`mcp-connector`：`real-discovery-and-call`、`credential-failure`、`catalog-change`、`disable-and-delete`；`controlled-memory`：`real-recall`、`version-isolation` |
 | 验收人已确认（补测，本地账号） | 4 | `mcp-connector/secret-boundary`；`external-action`：`unknown-reconciliation`、`revocation`；`controlled-memory/identity-and-role-change` |
-| 已移出门禁（未通过，不计入） | 5 | `persistent-wait`：全部 4 项；`controlled-memory/revocation-while-waiting` |
+| 已移出门禁（未通过，不计入；2026-11-23 起从矩阵删除） | 5 | `persistent-wait`：全部 4 项；`controlled-memory/revocation-while-waiting` |
 
-**移出门禁的原因：** 真实 Agent 的 `approvalMode` 固定为 `never`（[postgres-agent-service.ts](../../server/src/modules/agent/postgres-agent-service.ts)），真实 Run 进不了持久化等待，当前也没有需要人工审批的业务动作。这些场景没有通过，只是不再属于本门禁；持久化等待不得开放给 Agent 发布，首个需要人工审批的动作准入时恢复并在该版本重跑 P0、P1、P2。
+**移出门禁的原因：** 真实 Agent 的 `approvalMode` 固定为 `never`（[postgres-agent-service.ts](../../server/src/modules/agent/postgres-agent-service.ts)），真实 Run 进不了持久化等待，当前也没有需要人工审批的业务动作。这些场景没有通过，只是不再属于本门禁。
+
+**2026-11-23 决定移出 PF-07：** 外部业务应用写入的授权由外部应用凭调用上下文负责（[外部业务应用接入方案](../design/external-app-integration-plan.md)），平台不设写入准入，看不到近期需要人工审批的业务动作，因此持久化等待不再以“恢复条件”挂在门禁上。矩阵把这 5 个场景记入 `removed`，`pnpm test:pf07:p1` 不再包含 PF-04 集成套件（CI 的 `pnpm test:integration` 仍运行它，作为代码回归）。PF-04 代码保留但不是可发布能力，不得开放给 Agent 发布；出现需要人工审批的业务动作时重新设计，并作为新能力进入门禁，在该版本重跑 P0、P1、P2。
 
 **受控记忆口径：** 员工端受控记忆已按产品决定移除（`MEMORY-EMPLOYEE-REMOVAL`），经验由管理员审核后按组织可见发布。`identity-and-role-change` 按现行模型验收：其他 Agent 不召回；Agent 岗位角色变化、来源员工停用、经验版本停用后不再使用；员工失去工作台权限时拒绝运行。
 
