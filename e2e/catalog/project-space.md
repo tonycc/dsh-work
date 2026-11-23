@@ -58,11 +58,11 @@
 **方案：** [项目空间方案第 3 节](../../docs/design/project-space-plan.md#3-团队交付边界s0)
 
 1. 负责人打开空间信息中的「管理 Agent」：区域数据助手显示“本空间可交付数据范围：华东区域、华南区域”。
-2. 负责人在「管理成员」添加顾远：加入前提示“加入后 Agent 的可用数据范围会缩小”，并说明区域数据助手将不能再使用华南区域；选择“取消”则不加入。
+2. 负责人在「管理成员」添加顾远：加入前提示“加入后 Agent 的可用数据范围会缩小”，并说明区域数据助手将不能再使用华南区域；选择“取消”则不加入，可交付范围仍为“华东区域、华南区域”。
 3. 再次添加并选择“仍然添加”：顾远成为成员，「管理 Agent」中可交付范围变为“华东区域”。
 4. 负责人移除顾远后：可交付范围恢复为“华东区域、华南区域”。
 
-**验收：** 名册中的可交付范围始终等于 Agent 授权与全体现任成员（含只读成员）数据范围的交集；加入成员收紧范围时有前置提示，取消不产生变化。
+**验收：** 名册中的可交付范围等于 Agent 授权与全体现任成员数据范围的交集；加入成员收紧范围时有前置提示，取消不产生变化。只读成员计入交集由服务端集成测试覆盖，本旅程的空间里没有只读成员。
 
 **不在本旅程：** 执行结果按收紧后的范围裁剪、岗位角色只取 Agent 授权、在途执行按收权链路收敛——合成 Runtime 不按数据范围查询数据，这些由服务端集成测试覆盖（`server/src/infrastructure/postgres/team-workspace-authorization.integration.test.ts`、`m4-authorization.integration.test.ts`、`m5-revocation-pipeline.integration.test.ts`、`server/src/http/workspace-agent-member-api.integration.test.ts`）。
 

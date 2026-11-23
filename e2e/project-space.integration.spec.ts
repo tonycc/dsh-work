@@ -576,6 +576,9 @@ test.describe('TW-E2E-10 团队共享讨论与 @Agent 触发（工作模式）',
       await owner.page.goto(`/workspaces/${seed.workspaceId}?tab=conversations&view=history`)
       await owner.page.getByTestId('session-history-row').filter({ hasText: first }).click()
       await expect(owner.page).toHaveURL(new RegExp(`/workspaces/${seed.workspaceId}/conversations/`))
+      // 历史行打开的是该会话最近一次执行；确认属于同一会话，再进入会话视图看完整讨论。
+      await expect(owner.page.getByRole('main', { name: '对话内容' }).getByText(first)).toBeVisible()
+      expect(await sessionIdFromUrl(owner.page)).toBe(sessionId)
       await owner.page.goto(`/workspaces/${seed.workspaceId}/conversations/${sessionId}`)
       const thread = owner.page.getByRole('main', { name: '对话内容' })
       await expect(thread.getByText(first)).toBeVisible()
@@ -629,6 +632,7 @@ test.describe('TW-E2E-11 空间内对话视图', () => {
     // 返回：回到所属空间页（默认页签），不回工作台。
     await page.getByRole('button', { name: '返回', exact: true }).click()
     await expect(page).toHaveURL(new RegExp(`/workspaces/${seed.workspaceId}(\\?[^/]*)?$`))
+    await expect(page.getByRole('tab', { name: /^任务/ })).toHaveAttribute('aria-selected', 'true')
 
     // 历史对话打开：同样在空间内。
     await page.getByRole('tab', { name: /^对话/ }).click()
@@ -654,14 +658,14 @@ test.describe('TW-E2E-11 空间内对话视图', () => {
 test.describe('PS-E2E-00 Agent 可交付数据范围随成员收紧与恢复', () => {
   test.use({ extraHTTPHeaders: { 'x-test-user-id': 'U00001' } })
 
-  async function deliverableScopes(page: Page) {
+  /** 名册在加入/移除成员后于后台刷新：用会重试的断言等它收敛。 */
+  async function expectDeliverableScopes(page: Page, scopes: string) {
     await page.getByRole('button', { name: '管理 Agent' }).first().click()
     const dialog = page.getByRole('dialog', { name: '管理 Agent' })
-    const text = await dialog.getByTestId('agent-member-row').filter({ hasText: '区域数据助手' })
-      .getByTestId('agent-deliverable-scopes').innerText()
+    await expect(dialog.getByTestId('agent-member-row').filter({ hasText: '区域数据助手' })
+      .getByTestId('agent-deliverable-scopes')).toHaveText(`本空间可交付数据范围：${scopes}`)
     await dialog.getByRole('button', { name: '关闭', exact: true }).click()
     await expect(dialog).toBeHidden()
-    return text
   }
 
   async function openMemberSearch(page: Page) {
@@ -678,7 +682,7 @@ test.describe('PS-E2E-00 Agent 可交付数据范围随成员收紧与恢复', (
     await page.request.delete(`/api/workbench/v1/workspaces/${seed.scopedWorkspaceId}/members/U00004`)
     try {
       await page.goto(`/workspaces/${seed.scopedWorkspaceId}`)
-      expect(await deliverableScopes(page)).toBe('本空间可交付数据范围：华东区域、华南区域')
+      await expectDeliverableScopes(page, '华东区域、华南区域')
 
       // 取消：不加入，范围不变。
       let dialog = await openMemberSearch(page)
@@ -687,7 +691,13 @@ test.describe('PS-E2E-00 Agent 可交付数据范围随成员收紧与恢复', (
       await expect(warning).toContainText('“区域数据助手”将不能再使用：华南区域')
       await warning.getByRole('button', { name: '取消' }).click()
       await expect(warning).toBeHidden()
-      await expect(dialog.getByTestId('member-row').filter({ hasText: '顾远' })).toHaveCount(0)
+      await expect(dialog.getByTestId('member-candidate-row').filter({ hasText: '顾远' })).toHaveCount(1)
+      const membersAfterCancel = await page.request.get(`/api/workbench/v1/workspaces/${seed.scopedWorkspaceId}/members`)
+      expect(JSON.stringify((await membersAfterCancel.json()).data)).not.toContain('U00004')
+      await dialog.getByTestId('member-dialog-close').click()
+      await expect(dialog).toBeHidden()
+      await expectDeliverableScopes(page, '华东区域、华南区域')
+      dialog = await openMemberSearch(page)
 
       // 仍然添加：顾远成为成员，可交付范围只剩华东区域。
       await dialog.getByTestId('member-candidate-row').filter({ hasText: '顾远' }).getByRole('button', { name: '加入' }).click()
@@ -695,7 +705,7 @@ test.describe('PS-E2E-00 Agent 可交付数据范围随成员收紧与恢复', (
       await expect(dialog.getByTestId('member-row').filter({ hasText: '顾远' })).toHaveCount(1)
       await dialog.getByTestId('member-dialog-close').click()
       await expect(dialog).toBeHidden()
-      expect(await deliverableScopes(page)).toBe('本空间可交付数据范围：华东区域')
+      await expectDeliverableScopes(page, '华东区域')
 
       // 移除后恢复。
       await page.getByRole('button', { name: '管理成员' }).first().click()
@@ -704,7 +714,7 @@ test.describe('PS-E2E-00 Agent 可交付数据范围随成员收紧与恢复', (
       await page.getByRole('dialog', { name: '移除成员“顾远”？' }).getByRole('button', { name: '移除成员' }).click()
       await expect(dialog.getByTestId('member-row').filter({ hasText: '顾远' })).toHaveCount(0)
       await dialog.getByTestId('member-dialog-close').click()
-      expect(await deliverableScopes(page)).toBe('本空间可交付数据范围：华东区域、华南区域')
+      await expectDeliverableScopes(page, '华东区域、华南区域')
     } finally {
       await page.request.delete(`/api/workbench/v1/workspaces/${seed.scopedWorkspaceId}/members/U00004`)
     }
@@ -742,13 +752,16 @@ test.describe('MODE-E2E-17 @ 同事站内提醒（P1）', () => {
       await page.goto(`/c/chats/group/${seed.workspaceId}`)
       const chat = page.getByRole('region', { name: '群聊' })
       await expect(page.getByLabel('对话输入')).toBeVisible()
+      // 群聊里已有其他用例留下的同文案回复：按回复条数加 1 判断这次确实执行了。
+      const replies = chat.locator('.conversation-message--assistant', { hasText: '受控测试运行已完成' })
+      const repliesBefore = await replies.count()
       await mention(page, '陈默')
       await mention(page, '项目空间助手')
       const ask = uniqueTitle('MODE-17 请一起看')
       await page.getByLabel('对话输入').pressSequentially(ask)
       await page.getByRole('button', { name: '发送消息', exact: true }).click()
-      await expect(chat.locator('.conversation-message--assistant', { hasText: '受控测试运行已完成' }).last())
-        .toContainText('由 周衡 发起', { timeout: 20_000 })
+      await expect(replies).toHaveCount(repliesBefore + 1, { timeout: 20_000 })
+      await expect(replies.last()).toContainText('由 周衡 发起')
 
       await expect.poll(async () => {
         const response = await receiver.page.request.get('/api/workbench/v1/me/mentions')
@@ -782,7 +795,10 @@ test.describe('MODE-E2E-17 @ 同事站内提醒（P1）', () => {
 
       // 第 5 步：再被 @ 一次后移出空间，提醒不再显示。
       const preset = page.getByRole('button', { name: '改为讨论' })
+      const handOver = page.getByRole('button', { name: /^交给 @/ })
+      await expect(preset.or(handOver)).toBeVisible()
       if (await preset.isVisible()) await preset.click()
+      await expect(handOver).toBeVisible()
       await mention(page, '陈默')
       const again = uniqueTitle('MODE-17 再提醒')
       await page.getByLabel('对话输入').pressSequentially(again)
@@ -798,6 +814,8 @@ test.describe('MODE-E2E-17 @ 同事站内提醒（P1）', () => {
       const after = await receiver.page.request.get('/api/workbench/v1/me/mentions')
       expect((await after.json()).data.items).toHaveLength(0)
       await receiver.page.goto('/workspaces')
+      // 陈默没有其他空间：等列表加载完成（计数为 0）再断言已不在“P1 项目空间”。
+      await expect(receiver.page.getByText('0 个可访问工作空间')).toBeVisible()
       await expect(receiver.page.getByRole('button', { name: /P1 项目空间/ })).toHaveCount(0)
     } finally {
       await owner.page.request.delete(`${members}/U00005`)
