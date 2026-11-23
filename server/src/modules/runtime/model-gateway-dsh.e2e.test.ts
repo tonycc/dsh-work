@@ -88,7 +88,8 @@ describe('受控 DSH 经平台模型网关执行（MR-S2 P1）', { skip, timeout
     })
 
     // 探测路径（工具目录、MCP 连接检查）不走路由与网关，使用基础部署 patch 的默认 Provider `deepseek-official`（llm-deepseek）。
-    // 这里把它的地址指向同一个记录请求的假上游并给一个假凭据：探测若发出模型请求，必然出现在上游记录里。
+    // 这里把它的地址指向同一个记录请求的假上游并给一个假凭据：探测若经这个 Provider 发出模型请求，必然出现在上游记录里。
+    // 已知限制：只拦这一个 Provider；联网搜索插件与其他 Provider 仍指向真实厂商且未禁止外网，探测若改走它们本用例发现不了。
     const probeHome = join(root, 'dsh-home-probe')
     await mkdir(probeHome, { recursive: true })
     await writeFile(join(probeHome, 'settings.yaml'), [
@@ -274,7 +275,8 @@ describe('受控 DSH 经平台模型网关执行（MR-S2 P1）', { skip, timeout
   })
 
   it('工具目录探测与 MCP 连接检查不发出模型请求', async () => {
-    // 对照：同一配置下不经网关的正式执行（无路由）确实把模型请求发到陷阱地址，说明下面的“零请求”不是假阴性。
+    // 对照：probeAdapter 未接网关，正式执行会忽略 Manifest 中的路由、改用基础部署 patch 的默认 Provider，
+    // 与探测路径相同；它确实把模型请求发到陷阱地址，说明下面的“零请求”不是假阴性。
     behaviour = 'answer'
     requests.length = 0
     const control = await (await probeAdapter.execute(manifest('run-p1-probe-control'))).done
