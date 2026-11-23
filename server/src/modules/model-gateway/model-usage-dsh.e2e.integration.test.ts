@@ -301,8 +301,14 @@ describe('MR-S3 P1：受控真实 DSH 下用量记录与网关计量一致', { s
   }
 
   async function executionDetail(attemptId: string) {
-    const page = await usage.getExecutions({ range: 'today' }, 1, 50)
+    // 用“近 7 天”而非“今天”：测试跨平台时区零点时仍能查到本次执行。
+    const page = await usage.getExecutions({ range: '7d' }, 1, 50)
     return page.items.find(item => item.attemptId === attemptId)
+  }
+
+  /** 网关记录中厂商成功返回的最后一次请求的模型（模型路由方案 4.6 的实际模型）。 */
+  function succeededModel(rows: GatewayRow[], endpoint: 'chat' | 'search') {
+    return rows.filter(row => row.endpoint === endpoint && row.origin === 'upstream' && row.outcome === 'succeeded').at(-1)?.modelKey
   }
 
   /** 由网关记录按请求类型求和，作为三处数字的共同基准。 */
@@ -338,6 +344,8 @@ describe('MR-S3 P1：受控真实 DSH 下用量记录与网关计量一致', { s
 
     // 1. 用量记录：对话与联网搜索各一行，实际模型取厂商成功返回的请求，measurement 为 gateway。
     const rows = await usageRows(attemptId)
+    assert.equal(rows.find(row => row.endpoint === 'chat')?.model, succeededModel(gatewayRecords, 'chat'), 'chat model comes from the vendor-succeeded request')
+    assert.equal(rows.find(row => row.endpoint === 'search')?.model, succeededModel(gatewayRecords, 'search'), 'search model comes from the vendor-succeeded request')
     assert.deepEqual(rows, [
       {
         endpoint: 'chat', provider: 'deepseek-official', model: 'deepseek-v4-pro', status: 'success', measurement: 'gateway', estimated: false,
@@ -403,5 +411,13 @@ describe('MR-S3 P1：受控真实 DSH 下用量记录与网关计量一致', { s
     assert.equal(detail.failedRequests, 1)
     assert.equal(detail.totalTokens, 0)
     assert.equal(detail.search, null)
+
+    // 网关有记录（虽无用量）即以网关计量结算：零 token，与用量页一致。
+    const budget = await budgetRow(attemptId)
+    assert.ok(budget, 'the attempt budget is settled')
+    assert.equal(budget.terminalStatus, 'failed')
+    assert.equal(budget.tokenMeasurement, 'reported')
+    assert.equal(budget.inputTokens, 0)
+    assert.equal(budget.outputTokens, 0)
   })
 })
