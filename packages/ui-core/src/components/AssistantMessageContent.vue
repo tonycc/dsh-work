@@ -181,10 +181,14 @@ function parseBlocks(value: string): Block[] {
 function parseTable(lines: string[], start: number): { block: TableBlock; next: number } | null {
   if (start + 1 >= lines.length || !hasTableSeparator(lines[start]!)) return null
   const headers = splitTableRow(lines[start]!)
-  const delimiters = splitTableRow(lines[start + 1]!)
-  if (!headers.length || headers.length !== delimiters.length || delimiters.some(cell => !/^:?-{3,}:?$/.test(cell))) return null
+  const delimiterLine = lines[start + 1]!
+  const delimiters = splitTableRow(delimiterLine)
+  // 分隔行列数与表头不一致时以表头为准（多的忽略、少的左对齐），模型偶尔多写或少写一列不至于整表退化为文字。
+  // 分隔行自身须含 `|`，避免把“标题行 + 单独的 ---”误认作表格。
+  if (!headers.length || !hasTableSeparator(delimiterLine) || delimiters.some(cell => !/^:?-{3,}:?$/.test(cell))) return null
 
-  const alignments = delimiters.map<TableAlignment>((cell) => {
+  const alignments = headers.map<TableAlignment>((_, cellIndex) => {
+    const cell = delimiters[cellIndex] ?? ''
     if (cell.startsWith(':') && cell.endsWith(':')) return 'center'
     if (cell.endsWith(':')) return 'right'
     return 'left'
