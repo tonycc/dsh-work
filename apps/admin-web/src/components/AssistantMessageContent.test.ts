@@ -67,6 +67,22 @@ describe('AssistantMessageContent', () => {
     expect(tables[1]!.findAll('tbody td').map(item => item.text())).toEqual(['销售部', '60,161.00', '11'])
   })
 
+  it('keeps every data column when the header row is the one missing a cell', () => {
+    const wrapper = mount(AssistantMessageContent, { props: { text: [
+      '| 部门 | 9月 | 10月 | 合计 |',
+      '|---|---:|---:|---:|---:|',
+      '| 研发部 | 1 | 2 | 3 | 18 |',
+      '| 销售部 | 4 | 5 | 9 |',
+    ].join('\n') } })
+
+    expect(wrapper.findAll('th').map(item => item.text())).toEqual(['部门', '9月', '10月', '合计', ''])
+    expect(wrapper.findAll('th')[4]!.attributes('style')).toContain('text-align: right')
+    expect(wrapper.findAll('tbody tr').map(row => row.findAll('td').map(cell => cell.text()))).toEqual([
+      ['研发部', '1', '2', '3', '18'],
+      ['销售部', '4', '5', '9', ''],
+    ])
+  })
+
   it('does not treat a pipe line followed by a bare horizontal rule as a table', () => {
     const wrapper = mount(AssistantMessageContent, { props: { text: ['甲 | 乙', '---', '正文'].join('\n') } })
 
