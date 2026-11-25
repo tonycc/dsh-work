@@ -3,6 +3,8 @@ import { extname } from 'node:path'
 
 const maxExtractedCharacters = 512_000
 const maxSpreadsheetCells = 20_000
+/** 按列号补空后的总格数上限：正常表格远低于此值，只拦截稀疏表展开成巨量空列。 */
+const maxSpreadsheetLayoutCells = 200_000
 const maxCsvRows = 10_000
 const maxPdfInflatedStreamBytes = 8 * 1024 * 1024
 const maxPdfInflatedTotalBytes = 32 * 1024 * 1024
@@ -57,13 +59,64 @@ function extractDocx(bytes: Buffer): DocumentExtractionResult {
   const archive = readZip(bytes)
   const document = archive.get('word/document.xml')
   if (!document) throw extractionError('DOCX_STRUCTURE_INVALID', 'DOCX 缺少 word/document.xml')
-  const xml = document.toString('utf8')
-  const text = decodeXmlEntities(xml
-    .replaceAll(/<w:tab\b[^>]*\/>/g, '\t')
-    .replaceAll(/<w:(?:br|cr)\b[^>]*\/>/g, '\n')
-    .replaceAll(/<\/w:p>/g, '\n')
-    .replaceAll(/<[^>]+>/g, ''))
+  const text = docxText(document.toString('utf8'))
   return { detectedType: 'docx', text, pageCount: null, sheetCount: null, rowCount: lineCount(text) }
+}
+
+interface DocxTable { rows: string[][]; row: string[] | null; cell: string[] | null; span: number }
+
+/**
+ * 正文按段落换行；表格按行输出、单元格以制表符分隔（与 XLSX 文本一致），横向合并（gridSpan）与行首
+ * 跳过的网格（gridBefore）补空单元格，使同一列上下对齐。单元格内多个段落以空格连接；嵌套表格压成
+ * 一行放进外层单元格。
+ */
+function docxText(xml: string) {
+  const output: string[] = []
+  const tables: DocxTable[] = []
+  const current = () => tables.at(-1)
+  const write = (value: string) => {
+    const table = current()
+    if (table?.cell) table.cell.push(value)
+    else if (!table) output.push(value)
+  }
+  const cellValue = (value: string) => value.replaceAll(/\s+/g, ' ').trim()
+  // 第二个分支吞掉 XML 声明、注释等其他 <...>，不当作正文。
+  for (const token of xml.matchAll(/<(\/?)([A-Za-z][A-Za-z0-9:]*)\b([^>]*?)(\/?)>|<[^>]*>|([^<]+)/g)) {
+    const [, closing, name, attributes = '', selfClosing, textNode] = token
+    if (textNode !== undefined) { write(decodeXmlEntities(textNode)); continue }
+    if (name === undefined) continue
+    const table = current()
+    if (name === 'w:tab' && selfClosing) write(table ? ' ' : '\t')
+    else if ((name === 'w:br' || name === 'w:cr') && selfClosing) write(table ? ' ' : '\n')
+    else if (name === 'w:p' && closing) write(table ? ' ' : '\n')
+    else if (name === 'w:tbl' && !closing && !selfClosing) tables.push({ rows: [], row: null, cell: null, span: 1 })
+    else if (name === 'w:tbl' && closing && table) {
+      tables.pop()
+      const rendered = table.rows.map(row => row.join('\t'))
+      const parent = current()
+      if (parent?.cell) parent.cell.push(` ${rendered.join(' / ')} `)
+      else if (!parent) output.push(`\n${rendered.join('\n')}\n`)
+    } else if (!table) continue
+    else if (name === 'w:tr' && !closing && !selfClosing) table.row = []
+    else if (name === 'w:tr' && closing && table.row) { table.rows.push(table.row); table.row = null }
+    else if (name === 'w:gridBefore' && table.row && !table.cell) {
+      const count = gridCount(attributes)
+      for (let index = 0; index < count; index += 1) table.row.push('')
+    } else if (name === 'w:tc' && !closing && !selfClosing) { table.cell = []; table.span = 1 }
+    else if (name === 'w:gridSpan' && table.cell) table.span = gridCount(attributes)
+    else if (name === 'w:tc' && closing && table.cell) {
+      table.row ??= []
+      table.row.push(cellValue(table.cell.join('')))
+      for (let index = 1; index < table.span; index += 1) table.row.push('')
+      table.cell = null
+    }
+  }
+  return output.join('')
+}
+
+function gridCount(attributes: string) {
+  const value = Number(/\bw:val="(\d+)"/.exec(attributes)?.[1] ?? '1')
+  return Number.isInteger(value) && value >= 1 ? Math.min(value, 64) : 1
 }
 
 function extractXlsx(bytes: Buffer): DocumentExtractionResult {
@@ -76,18 +129,14 @@ function extractXlsx(bytes: Buffer): DocumentExtractionResult {
   if (sheets.length > 30) throw extractionError('XLSX_SHEET_LIMIT_EXCEEDED', 'XLSX 超过 30 个工作表限制')
 
   let totalRows = 0
-  let totalCells = 0
+  const budget = { cells: 0, layoutCells: 0 }
   const sections: string[] = []
   for (const [path, sheet] of sheets) {
-    const rows = parseSheet(sheet.toString('utf8'), sharedStrings)
+    const rows = parseSheet(sheet.toString('utf8'), sharedStrings, budget)
     totalRows += rows.length
-    totalCells += rows.reduce((count, row) => count + row.length, 0)
-    if (totalCells > maxSpreadsheetCells) {
-      throw extractionError('XLSX_CELL_LIMIT_EXCEEDED', `XLSX 超过 ${maxSpreadsheetCells} 个单元格限制`)
-    }
     sections.push(`## ${path.split('/').at(-1)?.replace('.xml', '') ?? '工作表'}\n${rows.map(row => row.join('\t')).join('\n')}`)
   }
-  const text = `# XLSX 文件摘要\n工作表：${sheets.length}；数据行：${totalRows}；单元格：${totalCells}\n\n${sections.join('\n\n')}`
+  const text = `# XLSX 文件摘要\n工作表：${sheets.length}；数据行：${totalRows}；单元格：${budget.cells}\n\n${sections.join('\n\n')}`
   return { detectedType: 'xlsx', text, pageCount: null, sheetCount: sheets.length, rowCount: totalRows }
 }
 
@@ -237,24 +286,49 @@ function parseSharedStrings(bytes: Buffer | undefined) {
   )
 }
 
-function parseSheet(xml: string, sharedStrings: string[]) {
+/**
+ * XLSX 省略空单元格，单元格按 `r`（如 F3）给出的列号放置，中间缺的补空，否则右侧的值会左移到错误的列。
+ * 没有 `r` 的单元格紧接上一个单元格。`cells` 只计实际出现的单元格；`layoutCells` 另计补空后的格数，
+ * 用来拦住“稀疏但列号极大”的表（例如单个单元格位于 XFD 列）在内存与文本中展开。
+ */
+function parseSheet(xml: string, sharedStrings: string[], budget: { cells: number; layoutCells: number }) {
   const rows: string[][] = []
-  for (const rowMatch of xml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)) {
+  for (const rowMatch of xml.matchAll(/<row\b[^>]*?(?:\/>|>([\s\S]*?)<\/row>)/g)) {
     const row: string[] = []
-    for (const cellMatch of (rowMatch[1] ?? '').matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)) {
+    for (const cellMatch of (rowMatch[1] ?? '').matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
       const attributes = cellMatch[1] ?? ''
       const body = cellMatch[2] ?? ''
+      const reference = /\br="([A-Za-z]{1,3})\d*"/.exec(attributes)?.[1]
+      // 列号不递增（不合规范的生成器）时退回紧接上一个单元格，与修改前一致，不拒收文件。
+      const column = Math.max(reference ? columnIndex(reference) : row.length, row.length)
       const type = /\bt="([^"]+)"/.exec(attributes)?.[1]
       const raw = /<v\b[^>]*>([\s\S]*?)<\/v>/.exec(body)?.[1]
-      const inline = /<t\b[^>]*>([\s\S]*?)<\/t>/.exec(body)?.[1]
+      const inline = type === 'inlineStr'
+        ? [...body.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)].map(item => item[1] ?? '').join('')
+        : undefined
       let value = decodeXmlEntities(inline ?? raw ?? '')
       if (type === 's' && raw && Number.isInteger(Number(raw))) value = sharedStrings[Number(raw)] ?? ''
       if (type === 'b') value = raw === '1' ? 'TRUE' : 'FALSE'
+      if (!value && !cellMatch[2]) continue
+      budget.layoutCells += column + 1 - row.length
+      budget.cells += 1
+      if (budget.cells > maxSpreadsheetCells || budget.layoutCells > maxSpreadsheetLayoutCells) {
+        throw extractionError('XLSX_CELL_LIMIT_EXCEEDED', `XLSX 超过 ${maxSpreadsheetCells} 个单元格限制`)
+      }
+      while (row.length < column) row.push('')
       row.push(value.replaceAll(/[\r\n\t]+/g, ' '))
     }
-    rows.push(row)
+    while (row.length && !row.at(-1)) row.pop()
+    if (row.length) rows.push(row)
   }
   return rows
+}
+
+/** A → 0、Z → 25、AA → 26；XLSX 最多到 XFD（16384 列）。 */
+function columnIndex(letters: string) {
+  let index = 0
+  for (const letter of letters.toUpperCase()) index = index * 26 + (letter.charCodeAt(0) - 64)
+  return index - 1
 }
 
 function parseCsv(source: string) {
