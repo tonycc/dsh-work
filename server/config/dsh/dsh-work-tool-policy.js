@@ -61,12 +61,6 @@ export function apply(ctx) {
     }
 
     if (!Number.isInteger(maximumCalls) || maximumCalls < 0 || ++calls > maximumCalls) return { kind: 'deny', reason: '当前 Attempt 工具调用次数已达上限，请停止调用并报告原因' }
-    // 读取网页方案 6.2：每次读取前由服务端复核来源、数据防护、次数与地址；不受当前授权复核开关控制，
-    // 通道不可用、超时或回复无法解析时拒绝（失败即关闭）。
-    if (execution.name === 'web_fetch') {
-      const verdict = await checkWebFetchUrl(authorizationSocket, execution.signal, execution.arguments?.url)
-      if (!verdict.allowed) return { kind: 'deny', reason: verdict.reason }
-    }
     const currentAuthorizationDenial = async () => {
       if (!requireCurrentAuthorization) return undefined
       const result = await authorizeCurrentExecution(authorizationSocket, execution.signal, execution.name)
@@ -80,6 +74,13 @@ export function apply(ctx) {
     if (downstream.kind === 'deny') return downstream
     const after = await currentAuthorizationDenial()
     if (after !== undefined) return { kind: 'deny', reason: after }
+    // 读取网页方案 6.2：每次读取前由服务端复核来源、数据防护、次数与地址；不受当前授权复核开关控制，
+    // 通道不可用、超时或回复无法解析时拒绝（失败即关闭）。放在其他拒绝（执行容器忙、工具停用、授权撤销）之后，
+    // 服务端只为确实要取页的调用计次。
+    if (execution.name === 'web_fetch') {
+      const verdict = await checkWebFetchUrl(authorizationSocket, execution.signal, execution.arguments?.url)
+      if (!verdict.allowed) return { kind: 'deny', reason: verdict.reason }
+    }
     const requiresApproval = downstream.kind === 'ask' || approvalMode !== 'never'
     if (!requiresApproval) return downstream
     if (!recordApprovalRequest(approvalLog, execution)) {

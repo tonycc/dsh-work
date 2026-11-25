@@ -53,6 +53,7 @@
 | 复核被绕过 | `web_fetch` 的复核不依赖 `DSH_REQUIRE_CURRENT_AUTHORIZATION`，始终执行；平台工具通道不可用或复核超时时拒绝（失败即关闭） |
 | 上下文与费用膨胀 | DSH 的上限同时作用在转换前的源 HTML 上（第 4 节），调小会让正文缺失，因此单次结果沿用默认（实际约 100,000 字符以内），截断时 DSH 标注。现有运行限制只管时长、工具调用次数与输出字节，Token 不在其中（Manifest 中为 `unsupported`），不能约束网页正文量；因此平台限制每个 Attempt 最多 10 次读取（复核时计数，超出即拒绝并说明）；精简版不设累计字符上限，长上下文由 DSH 的上下文压缩处理。需要更低的单次上限时在 DSH 中把源 HTML 上限与输出上限拆开（按 AGENTS.md，能力不足时完善 DSH），不在平台截断工具结果 |
 | 审计泄露敏感值 | 不另建审计（WF4）；数据防护拒绝的原因只写类别，不回显网址 |
+| 已知限制（实施评审） | 代理检查在派发时进行，DSH 在 Attempt 启动时才读取 `.env`：两者之间新加的代理不会被发现（运维上修改 `.env` 后应重启服务）。复核计次放在工具策略的其他拒绝（执行容器忙、工具停用、授权撤销）之后，但审批模式非 `never` 时被拒绝的审批仍会占用次数（真实 Agent 固定为 `never`）。没有平台工具通道的运行（仅测试配置）一律拒绝读取网页 |
 
 ## 6. 方案
 
@@ -67,7 +68,7 @@
 工具策略插件对 `web_fetch` 去掉 `validateWebExecution` 中的无条件拒绝，改为在 `tools/pre-execute` 中经平台工具通道（`DSH_PLATFORM_TOOL_SOCKET`）请求服务端复核（新的内部路径 `/web-fetch/check`，不计入工具调用次数），参数为 URL；该复核**不受** `DSH_REQUIRE_CURRENT_AUTHORIZATION` 控制，通道不可用、超时或回复无法解析即拒绝（失败即关闭）。服务端返回放行或拒绝原因，拒绝时插件以 `deny` 返回，DSH 不发出请求，模型看到拒绝原因。服务端复核（Runtime Adapter 内，按本 Attempt 的 Manifest）：
 
 1. 当前授权复核（与其他平台工具相同）。
-2. 数据防护：对完整 URL 及其百分号解码后的文本按 D5 的类别（密钥、个人信息、保密词）检测，命中即拒绝；原因只写类别。
+2. 数据防护：对完整 URL、其百分号解码文本、把 `+` 视为空格后的解码文本，以及国际化域名的 Unicode 形式，按 D5 的类别（密钥、个人信息、保密词）检测，命中即拒绝；原因只写类别。
 3. 来源：URL 规范化后须出现在以下集合中——Manifest 中员工本轮消息（`input.message`，定时与主动任务为任务指令）与近期对话历史中员工的消息（`input.conversation_history` 中 `role: user` 的内容）里出现的网址；本 Attempt 内网关转发的搜索回复中 `web_search_result` 条目的 `url`（网关在解析 JSON 回复时按 Attempt 记录，见第 7 节第 4 项；Attempt 结束时随令牌吊销清除）。对话摘要由模型生成，不算来源。规范化只做主机名小写与去掉片段，不做模糊匹配。
 4. 次数：本 Attempt 第 11 次起拒绝。
 5. IP 字面量：私网、回环、链路本地与保留地址直接拒绝（DSH 本身也拒绝，这里作纵深防护）。
@@ -75,7 +76,7 @@
 ### 6.3 DSH 配置
 
 - 部署 patch（`acp-managed-credentials.cordis.yml`）为 `dsh-web-fetch-http` 设置 `userAgent` 为平台标识 `dsh-work`（不含租户与员工信息），`dsh-web` 的 `fetchProvider` 写明 `http`（`dsh-base` 已是如此，写明是为了防止其他插件注册的 provider 生效）；上限全部沿用 DSH 默认（见第 5 节）。
-- **代理：** 平台启动 DSH 时本就不传代理变量（第 4 节），保持不变，并加单元测试防止白名单日后加入代理变量。`$DSH_HOME/.env` 由 DSH 在每次启动时自己读取：按 DSH 的规则确定实际使用的 DSH_HOME（服务环境中的 `DSH_HOME` 或 DSH 默认目录），**每个 Attempt 派发时**读取其 `.env`（只读一个小文件；DSH 只允许该文件设置代理，且按大写名称比较），其中有 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`（任意大小写）时本次不装配 `web_fetch`。精简版不在管理端 Runtime 页面另行提示。
+- **代理：** 平台启动 DSH 时本就不传代理变量（第 4 节），保持不变，并加单元测试防止白名单日后加入代理变量。`$DSH_HOME/.env` 由 DSH 在每次启动时自己读取：按 DSH 的规则确定实际使用的 DSH_HOME（服务环境中的 `DSH_HOME` 先展开 `~`、再按 DSH 进程工作目录 `DSH_RUNTIME_HOME` 解析相对路径，无法确定时按有代理处理；未设置时为 `~/.dsh`），**每个 Attempt 派发时**读取其 `.env`（只读一个小文件；DSH 只允许该文件设置代理，且按大写名称比较），其中有 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`（任意大小写）时本次不装配 `web_fetch`。精简版不在管理端 Runtime 页面另行提示。
 
 ## 7. 实施前探针（WF-S0，2026-11-25 已完成）
 

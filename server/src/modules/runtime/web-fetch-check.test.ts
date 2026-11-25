@@ -71,6 +71,14 @@ describe('web_fetch server check (web fetch plan 6.2)', () => {
     await assert.rejects(checkWebFetch({ ...input({ url, message: url }), detectCategories: async () => { throw new Error('unavailable') } }))
   })
 
+  it('also checks plus-as-space and the Unicode form of internationalized domains', async () => {
+    const seen: string[][] = []
+    const url = 'https://xn--fiqs8s.example/search?q=Project+Phoenix'
+    await checkWebFetch(input({ url, message: url, onDetect: texts => seen.push(texts) }))
+    assert.ok(seen[0]!.includes('https://xn--fiqs8s.example/search?q=Project Phoenix'))
+    assert.ok(seen[0]!.includes('中国.example'))
+  })
+
   it('caps allowed fetches per Attempt', async () => {
     const message = 'https://example.com/'
     assert.equal((await checkWebFetch(input({ url: message, message, allowedSoFar: WEB_FETCH_MAX_PER_ATTEMPT - 1 }))).allowed, true)

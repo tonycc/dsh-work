@@ -7,10 +7,25 @@ import { test } from 'node:test'
 import { inheritedEnvironmentKeys } from './acp-json-rpc-client.ts'
 import { dshHomeDirectory, dshHomeProxyConfigured } from './dsh-home-proxy.ts'
 
-test('DSH home follows DSH_HOME and falls back to ~/.dsh like DSH itself', () => {
+test('DSH home is resolved like DSH itself: ~ expanded, relative to the DSH working directory, ~/.dsh by default', () => {
   assert.equal(dshHomeDirectory({ DSH_HOME: '/srv/dsh-home' }), '/srv/dsh-home')
+  assert.equal(dshHomeDirectory({ DSH_HOME: '/srv/a/../dsh-home' }), '/srv/dsh-home')
   assert.equal(dshHomeDirectory({ DSH_HOME: '  ' }), join(homedir(), '.dsh'))
   assert.equal(dshHomeDirectory({}), join(homedir(), '.dsh'))
+  assert.equal(dshHomeDirectory({ DSH_HOME: '~' }), homedir())
+  assert.equal(dshHomeDirectory({ DSH_HOME: '~/dsh-home' }), join(homedir(), 'dsh-home'))
+  // DSH 的工作目录是 DSH_RUNTIME_HOME；相对路径按它解析，无法确定时返回 undefined（调用方失败即关闭）。
+  assert.equal(dshHomeDirectory({ DSH_HOME: 'state/home', DSH_RUNTIME_HOME: '/opt/dsh' }), '/opt/dsh/state/home')
+  assert.equal(dshHomeDirectory({ DSH_HOME: 'state/home' }), undefined)
+})
+
+test('a relative DSH_HOME whose base cannot be determined fails closed', async () => {
+  assert.equal(await dshHomeProxyConfigured({ DSH_HOME: 'state/home' }), true)
+  const runtime = await mkdtemp(join(tmpdir(), 'dsh-runtime-home-'))
+  await mkdir(join(runtime, 'state'))
+  await writeFile(join(runtime, 'state', '.env'), 'HTTPS_PROXY=http://proxy:8080\n')
+  assert.equal(await dshHomeProxyConfigured({ DSH_HOME: 'state', DSH_RUNTIME_HOME: runtime }), true)
+  assert.equal(await dshHomeProxyConfigured({ DSH_HOME: 'missing', DSH_RUNTIME_HOME: runtime }), false)
 })
 
 test('a proxy in the DSH home .env disables web_fetch; comments, other names and empty values do not', async () => {

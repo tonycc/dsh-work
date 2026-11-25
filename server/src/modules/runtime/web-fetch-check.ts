@@ -1,4 +1,5 @@
 import { BlockList, isIP } from 'node:net'
+import { domainToUnicode } from 'node:url'
 
 import type { RuntimeManifest } from './runtime-types.ts'
 
@@ -50,9 +51,9 @@ export async function checkWebFetch(input: WebFetchCheckInput): Promise<WebFetch
   const parsed = parseFetchUrl(input.url)
   if (!parsed) return deny('invalid_url', '网址无效：只能打开不带账号密码、长度不超过 2048 个字符的 http 或 https 网址')
 
-  // 数据防护先于来源检查：命中时原因只写类别，不回显网址。
-  const decoded = safeDecode(parsed.href)
-  const categories = await input.detectCategories(decoded === parsed.href ? [parsed.href] : [parsed.href, decoded])
+  // 数据防护先于来源检查：命中时原因只写类别，不回显网址。检测原样、百分号解码、`+` 视为空格，
+  // 以及国际化域名（xn--）的 Unicode 形式，避免编码绕过。
+  const categories = await input.detectCategories(detectionTexts(parsed))
   if (categories.length) {
     const labels = [...new Set(categories)].map(category => categoryLabels[category] ?? category).join('、')
     return deny('data_protection', `网址中包含${labels}，为防止数据外流，平台拒绝打开该网址`)
@@ -89,6 +90,16 @@ function parseFetchUrl(value: unknown): URL | undefined {
 
 function safeDecode(value: string): string {
   try { return decodeURIComponent(value) } catch { return value }
+}
+
+function detectionTexts(url: URL): string[] {
+  const unicodeHost = domainToUnicode(url.hostname)
+  return [...new Set([
+    url.href,
+    safeDecode(url.href),
+    safeDecode(url.href.replace(/\+/g, ' ')),
+    ...(unicodeHost && unicodeHost !== url.hostname ? [unicodeHost] : []),
+  ])]
 }
 
 /** 规范化只做主机名小写（URL 解析已完成）与去掉片段，不做模糊匹配。 */
