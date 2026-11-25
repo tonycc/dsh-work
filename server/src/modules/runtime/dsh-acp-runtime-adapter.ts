@@ -1554,7 +1554,8 @@ export function renderUserPrompt(manifest: RuntimeManifest) {
 /** Office, PDF and image inputs: revising them means writing a new binary file, which needs bash. */
 const BINARY_INPUT_PATTERN = /\.(xlsx|docx|pptx|pdf|png|jpe?g)$/i
 /**
- * 表格附件：解析文本丢失日期格式、公式、合并单元格与工作表名，计算与核对须以原始文件为准。只在同时挂载了
+ * 表格附件：解析文本可能丢失日期格式、公式、合并单元格等信息（上传附件与平台生成的成果由不同解析器生成，
+ * 丢失的内容不同，说法取两者都成立的范围），计算与核对须以原始文件为准。只在同时挂载了
  * 原始文件（有 bash 时，执行隔离 2b-4）才这样引导；没有原始文件时解析文本是唯一来源，说法不变。
  */
 const SPREADSHEET_INPUT_PATTERN = /\.xlsx$/i
@@ -1664,7 +1665,7 @@ export function renderSystemPrompt(manifest: RuntimeManifest, options: { executi
       ...[...inputFiles.values()].map((file, index) => [
         `${index + 1}. ${file.sourceName}`,
         ...(file.textPath ? [spreadsheetWithOriginal(file)
-          ? `   - 解析文本（只用于了解结构与快速浏览：日期显示为数字序号，不含公式、合并单元格与工作表的真实名称）：${file.textPath.slice('/workspace/'.length)}`
+          ? `   - 解析文本（只用于了解结构与快速浏览：可能丢失日期格式、公式、合并单元格等信息）：${file.textPath.slice('/workspace/'.length)}`
           : `   - 读取路径（解析文本）：${file.textPath.slice('/workspace/'.length)}`] : []),
         ...(file.originalPath ? [`   - 原始文件（只读，供 bash 中的程序或 python_execute 运行的 Skill 脚本处理，如 pandas、openpyxl、LibreOffice；传给 python_execute 时按“Python 脚本”一节拼成工作区绝对路径${spreadsheetWithOriginal(file) ? '；计算、汇总、统计或核对数据以它为准' : ''}）：${file.originalPath.slice('/workspace/'.length)}`] : []),
         `   - 媒体类型：${file.mediaType}`,

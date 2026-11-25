@@ -483,7 +483,7 @@ describe('Runtime Manifest compiler', () => {
     }]
     const withOriginal = renderSystemPrompt(compileRuntimeManifest(input).manifest)
     // 表格附件有原始文件时：解析文本只用于浏览并说明丢失的内容，计算与核对以原始文件为准。
-    assert.match(withOriginal, /解析文本（只用于了解结构与快速浏览：日期显示为数字序号，不含公式、合并单元格与工作表的真实名称）：input\/01-revenue\.txt/)
+    assert.match(withOriginal, /解析文本（只用于了解结构与快速浏览：可能丢失日期格式、公式、合并单元格等信息）：input\/01-revenue\.txt/)
     assert.doesNotMatch(withOriginal, /读取路径（解析文本）：input\/01-revenue\.txt/)
     assert.match(withOriginal, /原始文件（只读[^）]*；计算、汇总、统计或核对数据以它为准）：input\/original\/01-revenue\.xlsx/)
     assert.match(withOriginal, /表格附件需要计算、汇总、统计、去重或核对数据时，先在 bash 中用程序（如 pandas、openpyxl）读取原始文件/)
