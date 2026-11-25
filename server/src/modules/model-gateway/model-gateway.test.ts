@@ -276,6 +276,19 @@ describe('模型网关（DLP-S1 最小链路）', () => {
     assert.deepEqual([...gateway.searchResultUrls(binding.attemptId)], [])
   })
 
+  it('读取网页方案 6.2：未吊销的令牌过期清理时，一并清除该 Attempt 的搜索结果网址', async () => {
+    let now = Date.now()
+    const clocked = new ModelGateway({ dataProtection: new DataProtectionService(new MemoryDataProtectionStore(), Buffer.alloc(32, 1)), log, credentials: { readSecret: async () => 'sk' }, now: () => now })
+    clocked.issueToken(deepSeekBinding({ attemptId: 'attempt-crashed', expiresAt: now + 10 }))
+    const internals = clocked as unknown as { searchResultUrlsByAttempt: Map<string, Set<string>> }
+    internals.searchResultUrlsByAttempt.set('attempt-crashed', new Set(['https://news.example.com/c']))
+    clocked.issueToken(deepSeekBinding({ attemptId: 'attempt-live', expiresAt: now + 10_000 }))
+    assert.equal(clocked.searchResultUrls('attempt-crashed').size, 1, '尚未过期时保留')
+    now += 100
+    clocked.issueToken(deepSeekBinding({ attemptId: 'attempt-new', expiresAt: now + 10_000 }))
+    assert.equal(clocked.searchResultUrls('attempt-crashed').size, 0)
+  })
+
   it('联网搜索：默认路由不是 DeepSeek 官方，或搜索模型不符时拒绝', async () => {
     const other = gateway.issueToken(deepSeekBinding({ attemptId: 'attempt-other', route: { ...deepSeekBinding().route, baseUrl: 'https://llm.acme.example/v1' } }))
     assert.equal((await post('/anthropic/v1/messages', other, { model: 'deepseek-v4-flash' })).status, 403)

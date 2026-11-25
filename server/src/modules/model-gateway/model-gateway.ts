@@ -172,7 +172,11 @@ export class ModelGateway {
     for (const [digest, binding] of this.bindings) {
       if (binding.expiresAt <= now) {
         this.bindings.delete(digest)
-        if (this.attemptTokens.get(binding.attemptId) === digest) this.attemptTokens.delete(binding.attemptId)
+        if (this.attemptTokens.get(binding.attemptId) === digest) {
+          this.attemptTokens.delete(binding.attemptId)
+          // 未正常吊销（例如 Attempt 崩溃）的令牌过期清理时，一并清掉该 Attempt 的搜索结果网址。
+          this.searchResultUrlsByAttempt.delete(binding.attemptId)
+        }
       }
     }
   }

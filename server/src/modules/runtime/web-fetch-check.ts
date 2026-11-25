@@ -104,9 +104,12 @@ const URL_PATTERN = /https?:\/\/[^\s<>"'`，。；：！？、（）【】《》
 export function urlsInText(text: string): string[] {
   const urls: string[] = []
   for (const match of text.matchAll(URL_PATTERN)) {
+    // 原样匹配与去掉句末标点后的形式都收入：两者都是员工原文中的子串，不放宽来源；
+    // 这样 `https://en.wikipedia.org/wiki/Mercury_(planet)` 这类以括号结尾的网址也能匹配。
     let candidate = match[0]
-    while (/[.,;:!?)\]}'"]$/.test(candidate)) candidate = candidate.slice(0, -1)
     if (candidate.length > 8) urls.push(candidate)
+    while (/[.,;:!?)\]}'"]$/.test(candidate)) candidate = candidate.slice(0, -1)
+    if (candidate.length > 8 && candidate !== match[0]) urls.push(candidate)
   }
   return urls
 }

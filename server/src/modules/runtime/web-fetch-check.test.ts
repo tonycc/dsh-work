@@ -96,9 +96,17 @@ describe('web_fetch server check (web fetch plan 6.2)', () => {
 })
 
 describe('urlsInText', () => {
-  it('stops at whitespace, quotes and Chinese punctuation and drops trailing punctuation', () => {
+  it('stops at whitespace, quotes and Chinese punctuation and also keeps the form without trailing punctuation', () => {
     assert.deepEqual(urlsInText('见 https://a.example/x，以及“https://b.example/y”。还有 (https://c.example/z). 和 https://d.example/中文路径'), [
-      'https://a.example/x', 'https://b.example/y', 'https://c.example/z', 'https://d.example/中文路径',
+      'https://a.example/x', 'https://b.example/y', 'https://c.example/z).', 'https://c.example/z', 'https://d.example/中文路径',
     ])
+  })
+
+  it('keeps URLs that legitimately end with a closing parenthesis', async () => {
+    const url = 'https://en.wikipedia.org/wiki/Mercury_(planet)'
+    assert.equal((await checkWebFetch(input({ url, message: `看看 ${url}` }))).allowed, true)
+    assert.equal((await checkWebFetch(input({ url: 'https://en.wikipedia.org/wiki/Mercury_(planet', message: `看看 ${url}` }))).allowed, true,
+      'the trimmed form is a substring of the employee text too')
+    assert.equal((await checkWebFetch(input({ url: 'https://example.com/x', message: '（见 https://example.com/x）' }))).allowed, true)
   })
 })
