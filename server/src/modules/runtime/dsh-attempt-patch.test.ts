@@ -79,7 +79,7 @@ describe('每 Attempt patch 生成器（模型路由方案 4.4）', () => {
           contextWindow: 1_000_000,
           maxTokens: 256_000,
           reasoningEfforts: { off: null, low: 'low', high: 'high', max: 'max' },
-          compat: { thinkingFormat: 'deepseek', supportsReasoningEffort: true },
+          compat: { thinkingFormat: 'deepseek', supportsReasoningEffort: true, maxTokensField: 'max_tokens' },
         }],
       })
       assert.deepEqual(byId.get('acp')?.config, { provider: routeName, model: 'deepseek-v4-pro' })

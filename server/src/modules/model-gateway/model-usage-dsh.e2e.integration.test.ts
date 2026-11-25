@@ -86,6 +86,7 @@ interface UpstreamHit {
   thinking?: unknown
   reasoningEffort?: unknown
   maxTokens?: unknown
+  maxCompletionTokens?: unknown
 }
 
 function startFakeUpstream(state: UpstreamState) {
@@ -103,7 +104,8 @@ function startFakeUpstream(state: UpstreamState) {
     const reasoning = {
       thinking: parsed.thinking,
       reasoningEffort: parsed.reasoning_effort,
-      maxTokens: parsed.max_tokens ?? parsed.max_completion_tokens,
+      maxTokens: parsed.max_tokens,
+      maxCompletionTokens: parsed.max_completion_tokens,
     }
     const path = request.url ?? ''
     const reply = (status: number, payload: unknown) => {
@@ -380,10 +382,11 @@ describe('MR-S3 与 MR-S2 P1：受控真实 DSH 下的用量计量与路由时�
       '/chat/completions 503', '/chat/completions 200', '/anthropic/v1/messages 200', '/chat/completions 200',
     ])
     // DeepSeek 官方路由的对话请求与 DSH 自带 DeepSeek 适配器一致：开启思考、档位 high、输出上限 256,000（经网关原样转发）。
+    // 输出上限必须用 DeepSeek 文档列出的 max_tokens：网关地址不含 deepseek.com，pi-ai 默认会改发 max_completion_tokens。
     for (const hit of upstreamState.hits.filter(candidate => candidate.path === '/chat/completions')) {
       assert.deepEqual(
-        { thinking: hit.thinking, reasoningEffort: hit.reasoningEffort, maxTokens: hit.maxTokens },
-        { thinking: { type: 'enabled' }, reasoningEffort: 'high', maxTokens: 256_000 },
+        { thinking: hit.thinking, reasoningEffort: hit.reasoningEffort, maxTokens: hit.maxTokens, maxCompletionTokens: hit.maxCompletionTokens },
+        { thinking: { type: 'enabled' }, reasoningEffort: 'high', maxTokens: 256_000, maxCompletionTokens: undefined },
       )
     }
     const gatewayRecords = await gatewayRows(attemptId)

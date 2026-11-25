@@ -29,6 +29,8 @@ export const MODEL_ROUTE_RETRY_POLICY = Object.freeze({
  * 默认思考档位 `high`，单次输出上限 256,000，上下文 1,000,000）。平台改经 pi-ai 接入后，手工声明的
  * 模型不带这些值：不声明档位时 pi-ai 视为不支持推理，请求既不开启思考也不带 `reasoning_effort`，
  * 由厂商服务端默认决定；输出上限与上下文则落到 pi-ai 的兜底值（32,768 与 262,144）。
+ * pi-ai 只按地址含 `deepseek.com` 识别 DeepSeek 并改用 `max_tokens`；patch 的地址是平台网关，
+ * 不显式指定时输出上限以 DeepSeek 文档未列出的 `max_completion_tokens` 发出。
  * `off` 不写协议值：显式关闭思考的请求（如会话标题）发送 `thinking: {type: disabled}`。
  */
 export const DEEPSEEK_ROUTE_DEFAULTS = Object.freeze({
@@ -145,6 +147,7 @@ function modelRouteRows(input: AttemptModelRoutePatch): string[] {
       '            compat:',
       '              thinkingFormat: deepseek',
       '              supportsReasoningEffort: true',
+      '              maxTokensField: max_tokens',
     ] : []),
     '',
     '- id: acp',
