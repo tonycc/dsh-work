@@ -3,8 +3,11 @@ import { extname } from 'node:path'
 
 const maxExtractedCharacters = 512_000
 const maxSpreadsheetCells = 20_000
-/** 按列号补空后的总格数上限：正常表格远低于此值，只拦截稀疏表展开成巨量空列。 */
-const maxSpreadsheetLayoutCells = 200_000
+/**
+ * 按列号补空后的总格数上限，与解析文本字符上限相同：每个格至少占一个分隔符，超过时文本本来也会超限。
+ * 提前判断只是为了不在内存中展开“单元格位于 XFD 列”一类稀疏表。
+ */
+const maxSpreadsheetLayoutCells = maxExtractedCharacters
 const maxCsvRows = 10_000
 const maxPdfInflatedStreamBytes = 8 * 1024 * 1024
 const maxPdfInflatedTotalBytes = 32 * 1024 * 1024
@@ -33,7 +36,7 @@ export function extractDocument(name: string, bytes: Buffer): DocumentExtraction
   const text = normalizeExtractedText(result.text)
   if (!text) throw extractionError('FILE_NO_EXTRACTABLE_TEXT', '文件中没有可提取的文本内容')
   if (text.length > maxExtractedCharacters) {
-    throw extractionError('FILE_EXTRACTED_TEXT_TOO_LARGE', '文件解析后的文本超过 512000 字符，请拆分后重试')
+    throw extractedTextTooLarge()
   }
   return { ...result, text }
 }
@@ -282,7 +285,7 @@ function parseSharedStrings(bytes: Buffer | undefined) {
   if (!bytes) return []
   const xml = bytes.toString('utf8')
   return [...xml.matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/g)].map(match =>
-    decodeXmlEntities([...(match[1] ?? '').matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)].map(item => item[1] ?? '').join('')),
+    decodeXmlEntities(richText(match[1] ?? '')),
   )
 }
 
@@ -303,18 +306,17 @@ function parseSheet(xml: string, sharedStrings: string[], budget: { cells: numbe
       const column = Math.max(reference ? columnIndex(reference) : row.length, row.length)
       const type = /\bt="([^"]+)"/.exec(attributes)?.[1]
       const raw = /<v\b[^>]*>([\s\S]*?)<\/v>/.exec(body)?.[1]
-      const inline = type === 'inlineStr'
-        ? [...body.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)].map(item => item[1] ?? '').join('')
-        : undefined
+      const inline = type === 'inlineStr' ? richText(body) : undefined
       let value = decodeXmlEntities(inline ?? raw ?? '')
       if (type === 's' && raw && Number.isInteger(Number(raw))) value = sharedStrings[Number(raw)] ?? ''
       if (type === 'b') value = raw === '1' ? 'TRUE' : 'FALSE'
       if (!value && !cellMatch[2]) continue
       budget.layoutCells += column + 1 - row.length
       budget.cells += 1
-      if (budget.cells > maxSpreadsheetCells || budget.layoutCells > maxSpreadsheetLayoutCells) {
+      if (budget.cells > maxSpreadsheetCells) {
         throw extractionError('XLSX_CELL_LIMIT_EXCEEDED', `XLSX 超过 ${maxSpreadsheetCells} 个单元格限制`)
       }
+      if (budget.layoutCells > maxSpreadsheetLayoutCells) throw extractedTextTooLarge()
       while (row.length < column) row.push('')
       row.push(value.replaceAll(/[\r\n\t]+/g, ' '))
     }
@@ -369,11 +371,22 @@ function decodeXmlEntities(value: string) {
 
 /** Line endings, trailing blanks and runs of blank lines, as every stored extraction is normalized. */
 export function normalizeExtractedText(value: string) {
-  return value.replaceAll('\r\n', '\n').replaceAll('\r', '\n').replaceAll(/[ \t]+\n/g, '\n').replaceAll(/\n{4,}/g, '\n\n\n').trim()
+  // 开头只去掉整行空白：首行的前导制表符是空单元格的占位（例如以左上角为空的表格开头的 DOCX），去掉会让该行整体左移。
+  return value.replaceAll('\r\n', '\n').replaceAll('\r', '\n').replaceAll(/[ \t]+\n/g, '\n').replaceAll(/\n{4,}/g, '\n\n\n')
+    .replace(/^\s*\n/, '').trimEnd()
 }
 
 function lineCount(value: string) {
   return value ? value.split(/\r?\n/).length : 0
+}
+
+function extractedTextTooLarge() {
+  return extractionError('FILE_EXTRACTED_TEXT_TOO_LARGE', `文件解析后的文本超过 ${maxExtractedCharacters} 字符，请拆分后重试`)
+}
+
+/** 富文本中的全部文本段；跳过注音（rPh，例如日文假名读音），只保留正文。 */
+function richText(xml: string) {
+  return [...xml.replaceAll(/<rPh\b[\s\S]*?<\/rPh>/g, '').matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)].map(item => item[1] ?? '').join('')
 }
 
 function extractionError(code: string, message: string) {

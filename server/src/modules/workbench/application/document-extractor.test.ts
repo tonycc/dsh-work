@@ -61,9 +61,31 @@ describe('document extractor', () => {
   it('rejects a sparse XLSX sheet that would expand into an enormous number of empty columns', () => {
     const row = (index: number) => `<row r="${index}"><c r="XFD${index}"><v>1</v></c></row>`
     const bytes = createStoredZip({
+      'xl/worksheets/sheet1.xml': Buffer.from(`<worksheet><sheetData>${Array.from({ length: 40 }, (_, index) => row(index + 1)).join('')}</sheetData></worksheet>`),
+    })
+    assert.throws(() => extractDocument('sparse.xlsx', bytes), { code: 'FILE_EXTRACTED_TEXT_TOO_LARGE' })
+    // 同样稀疏但展开后仍在文本上限内的表照常解析，不比修改前的文本上限更严格。
+    const fits = createStoredZip({
       'xl/worksheets/sheet1.xml': Buffer.from(`<worksheet><sheetData>${Array.from({ length: 20 }, (_, index) => row(index + 1)).join('')}</sheetData></worksheet>`),
     })
-    assert.throws(() => extractDocument('sparse.xlsx', bytes), { code: 'XLSX_CELL_LIMIT_EXCEEDED' })
+    assert.equal(extractDocument('sparse.xlsx', fits).rowCount, 20)
+  })
+
+  it('skips phonetic runs in shared and inline rich strings', () => {
+    const phonetic = '<r><t>東京</t></r><rPh sb="0" eb="2"><t>トウキョウ</t></rPh>'
+    const bytes = createStoredZip({
+      'xl/sharedStrings.xml': Buffer.from(`<sst><si>${phonetic}</si></sst>`),
+      'xl/worksheets/sheet1.xml': Buffer.from(`<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="inlineStr"><is>${phonetic}</is></c></row></sheetData></worksheet>`),
+    })
+    assert.ok(extractDocument('cities.xlsx', bytes).text.split('\n').includes('東京\t東京'))
+  })
+
+  it('keeps the leading empty cell when a DOCX opens with a table', () => {
+    const cell = (text: string) => `<w:tc><w:p>${text ? `<w:r><w:t>${text}</w:t></w:r>` : ''}</w:p></w:tc>`
+    const bytes = createStoredZip({
+      'word/document.xml': Buffer.from(`<w:document xmlns:w="urn:w"><w:body><w:tbl><w:tr>${cell('')}${cell('金额')}${cell('期限')}</w:tr><w:tr>${cell('A')}${cell('1')}${cell('2')}</w:tr></w:tbl></w:body></w:document>`),
+    })
+    assert.equal(extractDocument('matrix.docx', bytes).text, '\t金额\t期限\nA\t1\t2')
   })
 
   it('keeps DOCX table rows and columns, padding merged cells so columns stay aligned', () => {
