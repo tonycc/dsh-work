@@ -537,7 +537,7 @@
 
 **优先级：** P1 · **角色：** 平台管理员；员工 · **运行层级：** PostgreSQL 集成测试 + 单元测试（受控 Runtime 的真实取页验证随 P2 另行执行）<br>
 **前置数据：** 专用可丢弃 PostgreSQL；运维参数表为空<br>
-**spec：** `server/src/infrastructure/postgres/platform-settings.integration.test.ts`、`server/src/modules/runtime/web-fetch-check.test.ts`
+**spec：** `server/src/infrastructure/postgres/platform-settings.integration.test.ts`（保存、平台管理员复核、通知/页面访问/错误记录保留）、`server/src/modules/runtime/runtime-adapter.test.ts`（读取网页上限在受理时固定并写入系统提示）、`server/src/modules/runtime/web-fetch-check.test.ts`、`server/src/modules/runtime/workspace-usage.test.ts`（磁盘阈值）、`server/src/modules/run/run-orchestration-options.test.ts`（自动任务并发每次调度读取）；失败工作区保留天数只经代码传入清扫函数，清扫规则本身由 `workspace-usage.test.ts` 覆盖
 
 1. 读取网页上限改为 1：之后新建的运行在第二次读取时被拒，拒绝原因与系统提示都写“1 次”；改值前已开始的运行仍按原上限。
 2. 通知保留天数缩短后，员工通知列表与未读数立即只统计新保留期内的通知；清理任务按新天数删除。

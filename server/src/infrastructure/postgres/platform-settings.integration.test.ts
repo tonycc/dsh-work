@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto'
 import { after, before, test } from 'node:test'
 
 import { platformSettingsFromValues } from '../../domain/platform-settings.ts'
+import { parseClientErrorBatch, type ErrorRecordInput } from '../../modules/observability/client-error-report.ts'
+import { PostgresErrorRecordsService } from '../../modules/observability/postgres-error-records-service.ts'
 import { PostgresUsageAnalyticsService } from '../../modules/observability/postgres-usage-analytics-service.ts'
 import { PostgresPlatformSettingsService } from '../../modules/platform-settings/postgres-platform-settings-service.ts'
 import { PostgresUserNotificationService } from '../../modules/workbench/application/postgres-user-notification-service.ts'
@@ -84,6 +86,16 @@ test('a stale revision rejects the whole batch; invalid values and unknown keys 
   await assert.rejects(settings.save([{ key: 'disk.min_free_gb', value: 20, revision: 'x' }], actor), /版本号/)
 })
 
+test('the service rechecks the platform administrator inside the transaction (RP10, rule 13)', async () => {
+  const settings = new PostgresPlatformSettingsService(database)
+  await settings.load()
+  await assert.rejects(settings.save([{ key: 'disk.min_free_gb', value: 30, revision: 0 }], 'U00001'),
+    (error: Error & { status?: number }) => error.status === 403 && /只有平台管理员/.test(error.message))
+  const [row] = await database`select 1 from platform_settings where tenant_id = ${tenantId} and key = 'disk.min_free_gb'`
+  assert.equal(row, undefined)
+  assert.equal(settings.get('disk.min_free_gb'), 10)
+})
+
 test('the overview counts published Agents whose timeout exceeds the Runtime timeout', async () => {
   const settings = new PostgresPlatformSettingsService(database)
   const overview = await settings.overview({ sessionTtl: { seconds: 28_800, fromEnvironment: false }, canEdit: () => true })
@@ -129,4 +141,23 @@ test('notification and page view retention follow the saved number of days', asy
     settings: platformSettingsFromValues(new Map([['page_views.retention_days', 90]])),
   }).purgeExpired()
   assert.equal(await pageViews(), 0)
+
+  // 错误记录：120 天前的样本在保留 365 天时保留，按默认 90 天清理。
+  const { reports: [report] } = parseClientErrorBatch({ app: 'workbench', reports: [{
+    kind: 'render', message: `rp retention ${tag}`, stack: '    at render (https://w/assets/index-aaaaaaaa.js:1:5)', route: 'conversation', release: '2026.11.26-01',
+  }] })
+  const input = { ...report!, source: 'workbench', client: 'Chrome 131 / macOS', userId: user } as ErrorRecordInput
+  await new PostgresErrorRecordsService(database).record(input)
+  const inGroup = database`group_id in (select id from error_groups where tenant_id = ${tenantId} and message like ${`%${tag}%`})`
+  await database`update error_occurrences set occurred_at = now() - interval '120 days' where tenant_id = ${tenantId} and ${inGroup}`
+  const occurrences = async () => (await database<{ count: number }[]>`
+    select count(*)::integer as count from error_occurrences where tenant_id = ${tenantId} and ${inGroup}
+  `)[0]!.count
+  assert.equal(await occurrences(), 1)
+  await new PostgresErrorRecordsService(database, {
+    settings: platformSettingsFromValues(new Map([['error_records.retention_days', 365]])),
+  }).purgeExpired()
+  assert.equal(await occurrences(), 1)
+  await new PostgresErrorRecordsService(database).purgeExpired()
+  assert.equal(await occurrences(), 0)
 })

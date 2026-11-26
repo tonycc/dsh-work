@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { defaultPlatformSettings } from '../../domain/platform-settings.ts'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
@@ -700,6 +701,24 @@ describe('DSH ACP Runtime Adapter', () => {
     const prompt = await readFile(log, 'utf8')
     assert.match(prompt, /- LibreOffice（soffice） 25\.2\.3\.2：/)
     assert.match(prompt, /- pdftoppm 25\.03\.0：/)
+  })
+  it('fixes the web fetch limit from the runtime parameters when the Attempt is accepted (RP-S1)', async () => {
+    const log = join(await mkdtemp(join(tmpdir(), 'dsh-work-prompt-log-')), 'prompt.log')
+    let limit = 3
+    const adapter = await createAdapter(500, undefined, async () => ({ published: [], skipped: [], skippedTotal: 0 }), {
+      platformSettings: { get: key => key === 'web_fetch.max_per_attempt' ? limit : defaultPlatformSettings.get(key) },
+      process: {
+        command: process.execPath, args: ['--experimental-strip-types', mockWorker], cwd: process.cwd(),
+        env: { MOCK_SYSTEM_PROMPT_LOG: log },
+      },
+    })
+    const input = manifest('run-web-fetch-limit', 'attempt-web-fetch-limit')
+    input.tools = [...input.tools, { id: 'web_fetch', version: '1.0.0' }]
+    const handle = await adapter.execute(input)
+    limit = 7
+    const result = await handle.done
+    assert.equal(result.status, 'completed', result.errorMessage ?? undefined)
+    assert.match(await readFile(log, 'utf8'), /每次运行最多读取 3 次/)
   })
   it('routes the agent recommendation tools through the platform bridge and explains them in the prompt', async () => {
     const calls: Array<{ name: string; input: Record<string, unknown> }> = []

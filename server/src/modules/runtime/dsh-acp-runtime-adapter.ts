@@ -1124,13 +1124,15 @@ export class DshAcpRuntimeAdapter implements AgentRuntimePort {
       manifest: record.manifest,
       searchResultUrls: this.configuration.modelGateway?.searchResultUrls?.(record.manifest.attempt_id) ?? new Set(),
       allowedSoFar: record.webFetchAllowed ?? 0,
-      limit: record.webFetchLimit,
+      limit: record.webFetchLimit ?? WEB_FETCH_MAX_PER_ATTEMPT,
       detectCategories: texts => detect(record.manifest.user_context.tenant_id, texts),
     })
     if (!decision.allowed) return { allowed: false, reason: decision.reason }
     // web_fetch 可并行调用：复核期间其他调用可能已放行，计数前同步再查一次。
-    if ((record.webFetchAllowed ?? 0) >= record.webFetchLimit) {
-      return { allowed: false, reason: webFetchLimitReason(record.webFetchLimit) }
+    // 记录缺少上限时按默认上限处理，不放开次数。
+    const limit = record.webFetchLimit ?? WEB_FETCH_MAX_PER_ATTEMPT
+    if ((record.webFetchAllowed ?? 0) >= limit) {
+      return { allowed: false, reason: webFetchLimitReason(limit) }
     }
     record.webFetchAllowed = (record.webFetchAllowed ?? 0) + 1
     return { allowed: true }

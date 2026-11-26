@@ -10,8 +10,9 @@ import {
   type PlatformSettingsReader,
   type PlatformSettingView,
 } from '../../domain/platform-settings.ts'
-import { invalidRequest, stateConflict } from '../../domain/request-errors.ts'
+import { accessDenied, invalidRequest, stateConflict } from '../../domain/request-errors.ts'
 import type { DatabaseClient } from '../../infrastructure/postgres/database.ts'
+import { isPlatformAdminActor } from '../authorization/admin-actor.ts'
 import {
   buildRuntimeParametersOverview,
   type DingTalkSummary,
@@ -79,8 +80,8 @@ export class PostgresPlatformSettingsService implements PlatformSettingsReader {
   }
 
   /**
-   * 一次保存多项（同一事务、逐项乐观锁）；值等于默认值时删除保存的记录（来源回到“默认值”）。保存权限由路由对照表判定（RP10，功能规则第 13 节），
-   * 这里只校验值与版本，并逐项写审计 `platform.setting.update`。
+   * 一次保存多项（同一事务、逐项乐观锁）；值等于默认值时删除保存的记录（来源回到“默认值”）。保存权限先由路由对照表判定，
+   * 这里在事务内按本地授予的 `admin:*` 复核（RP10，功能规则第 13 节“判定位置”），再校验值与版本，并逐项写审计 `platform.setting.update`。
    */
   async save(changes: PlatformSettingChange[], actorId: string): Promise<PlatformSettingView[]> {
     const validated = changes.map(change => {
@@ -93,6 +94,7 @@ export class PostgresPlatformSettingsService implements PlatformSettingsReader {
     })
     const traceId = `trace-platform-settings-${randomUUID()}`
     await this.database.begin(async sql => {
+      if (!(await isPlatformAdminActor(sql, actorId))) throw accessDenied('运行参数只有平台管理员可以修改')
       for (const { definition, value, revision } of validated) {
         const [current] = await sql<{ value: unknown; revision: number }[]>`
           select value, revision from platform_settings
