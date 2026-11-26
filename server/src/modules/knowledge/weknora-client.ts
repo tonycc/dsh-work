@@ -96,7 +96,7 @@ export interface WeKnoraClientConfig {
 export const weknoraSearchTimeoutMs = 10000
 /** 员工端管理操作不在执行链路上，可以多等一会儿；上传与下载按文件大小再放宽。 */
 const managementTimeoutMs = 15000
-const uploadTimeoutMs = 120000
+export const uploadTimeoutMs = 120000
 
 /**
  * WeKnora 服务根地址：去掉末尾斜杠与 `/api/v1`（WeKnora 文档给出的地址常带这一段，客户端自己拼接）。

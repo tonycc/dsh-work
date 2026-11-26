@@ -14,8 +14,6 @@ export type ErrorKind = ClientErrorKind | 'http' | 'uncaught' | 'overflow'
 export const ERROR_RANGE_DAYS = { '7d': 7, '30d': 30, '90d': 90 } as const
 export type ErrorRange = keyof typeof ERROR_RANGE_DAYS
 
-/** 样本保留天数（OB10）。 */
-export const ERROR_RETENTION_DAYS = 90
 /** 每个租户每小时最多新增的问题组（评审第 2 条）；超出后新指纹并入汇总组。 */
 export const NEW_GROUPS_PER_HOUR = 200
 /** 同一员工同一问题在该窗口内的重复只累加次数，不新增样本。 */

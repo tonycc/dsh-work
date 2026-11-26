@@ -14,6 +14,8 @@ export const useNotificationStore = defineStore('workbench-notifications', () =>
   const unread = ref(0)
   const items = ref<UserNotification[]>([])
   const nextCursor = ref<string | null>(null)
+  /** 管理员在“运行参数”中设定的保留天数，随列表返回。 */
+  const retentionDays = ref(90)
   const tab = ref<NotificationTab>('all')
   const loading = ref(false)
   const loadingMore = ref(false)
@@ -42,6 +44,7 @@ export const useNotificationStore = defineStore('workbench-notifications', () =>
       if (current !== generation) return
       items.value = page.items
       nextCursor.value = page.nextCursor
+      retentionDays.value = page.retentionDays ?? retentionDays.value
     } catch (cause) {
       if (current !== generation) return
       error.value = cause instanceof Error ? cause.message : '通知加载失败'
@@ -119,7 +122,7 @@ export const useNotificationStore = defineStore('workbench-notifications', () =>
   }
 
   return {
-    unread, items, nextCursor, tab, loading, loadingMore, error,
+    unread, items, nextCursor, retentionDays, tab, loading, loadingMore, error,
     refreshUnread, load, loadMore, markRead, markAllRead, markWorkspaceMentionsRead, reset,
   }
 })

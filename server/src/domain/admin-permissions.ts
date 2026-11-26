@@ -91,6 +91,16 @@ export function hasAuditAccess(permissions: Iterable<string>) {
   return granted.has(PLATFORM_ADMIN_PERMISSION) || granted.has(AUDIT_READ_PERMISSION)
 }
 
+/**
+ * 运行参数总览里“能否修改”的判定（运行参数配置方案 RP8、RP10）：平台管理员专属，或某模块的修改权限。
+ * 只用于展示链接；真正的保存仍由路由对照表判定。
+ */
+export function canEditAdminSetting(permissions: Iterable<string>, owner: { kind: 'platform-admin' } | { kind: 'module'; module: AdminModule }) {
+  const granted = toSet(permissions)
+  if (owner.kind === 'platform-admin') return isPlatformAdmin(granted)
+  return !READ_ONLY_MODULES.has(owner.module) && hasAdminModuleAccess(granted, owner.module, 'write')
+}
+
 /** 管理类权限码（功能规则第 13 节）：不能经部门授予，非平台管理员不能授给 Agent。 */
 export function isManagementPermission(code: string) {
   return code.startsWith('admin:') || code.startsWith('audit:') || code.startsWith('data-protection:')
@@ -224,6 +234,9 @@ const ROUTE_SEGMENT_RULES: Record<string, AdminRouteRule> = {
   // 系统健康（含知识库检索、执行容器等组件状态）供各模块页面提示可用性，任一模块管理员可读。
   health: { kind: 'any-admin-read' },
   'platform-status': { kind: 'module', module: 'ops' },
+  // 运行参数（运行参数配置方案 RP8、RP10）：总览按运维查看；保存只限平台管理员（登记表中的键全部为平台管理员保存）。
+  'runtime-parameters': { kind: 'module', module: 'ops' },
+  'platform-settings': { kind: 'module', module: 'ops', writePlatformOnly: true },
   'audit-events': { kind: 'audit' },
   operations: { kind: 'audit' },
   identity: { kind: 'module', module: 'identity' },
@@ -315,10 +328,11 @@ export function decideAdminRouteAccess(permissions: Iterable<string>, path: stri
         ? ALLOW
         : { allowed: false, message: write ? '当前用户没有数据防护的修改权限' : '当前用户没有数据防护的查看权限' }
     case 'module': {
-      if (write && READ_ONLY_MODULES.has(rule.module)) return { allowed: false, message: `${ADMIN_MODULE_LABELS[rule.module]}只提供查看` }
+      // 平台管理员专属的保存（钉钉应用配置、运行参数）先于只读模块判定：只读模块的这类保存仍只限平台管理员。
       if (write && rule.writePlatformOnly) {
-        return isPlatformAdmin(granted) ? ALLOW : { allowed: false, message: `${ADMIN_MODULE_LABELS[rule.module]}的应用配置只有平台管理员可以修改` }
+        return isPlatformAdmin(granted) ? ALLOW : { allowed: false, message: rule.module === 'ops' ? '运行参数只有平台管理员可以修改' : `${ADMIN_MODULE_LABELS[rule.module]}的应用配置只有平台管理员可以修改` }
       }
+      if (write && READ_ONLY_MODULES.has(rule.module)) return { allowed: false, message: `${ADMIN_MODULE_LABELS[rule.module]}只提供查看` }
       const level: AdminLevel = write ? 'write' : 'read'
       if (hasAdminModuleAccess(granted, rule.module, level)) return ALLOW
       if (!write && (SELECTOR_PATHS.get(path) ?? []).some(([module, needed]) => hasAdminModuleAccess(granted, module, needed))) {

@@ -1,0 +1,66 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+
+import {
+  PLATFORM_SETTING_DEFINITIONS,
+  defaultPlatformSettings,
+  diskThresholds,
+  parsePlatformSettingChanges,
+  platformSettingsFromValues,
+  validatePlatformSettingValue,
+} from './platform-settings.ts'
+
+test('registry: every runtime parameter is an ops setting saved only by platform admins, default within range (RP10)', () => {
+  assert.equal(new Set(PLATFORM_SETTING_DEFINITIONS.map(item => item.key)).size, PLATFORM_SETTING_DEFINITIONS.length)
+  for (const definition of PLATFORM_SETTING_DEFINITIONS) {
+    assert.equal(definition.module, 'ops')
+    assert.equal(definition.savePermission, 'platform-admin')
+    assert.ok(definition.min <= definition.defaultValue && definition.defaultValue <= definition.max, definition.key)
+  }
+})
+
+test('registry: retention lower bounds keep the 90-day views complete (RP6)', () => {
+  const byKey = new Map(PLATFORM_SETTING_DEFINITIONS.map(item => [item.key, item]))
+  assert.equal(byKey.get('error_records.retention_days')!.min, 90)
+  assert.equal(byKey.get('page_views.retention_days')!.min, 90)
+  assert.equal(byKey.get('error_records.retention_days')!.defaultValue, 90)
+  assert.equal(byKey.get('page_views.retention_days')!.defaultValue, 180)
+})
+
+test('validation: only registered keys and integers within range are accepted', () => {
+  assert.equal(validatePlatformSettingValue('web_fetch.max_per_attempt', 1), 1)
+  assert.throws(() => validatePlatformSettingValue('web_fetch.max_per_attempt', 0), /1～50/)
+  assert.throws(() => validatePlatformSettingValue('web_fetch.max_per_attempt', 2.5), /整数/)
+  assert.throws(() => validatePlatformSettingValue('web_fetch.max_per_attempt', '3'), /整数/)
+  assert.throws(() => validatePlatformSettingValue('session.secret', 3), /未登记/)
+})
+
+test('reader: saved values win; missing, invalid or out-of-range values fall back to the default', () => {
+  const reader = platformSettingsFromValues(new Map<string, unknown>([
+    ['web_fetch.max_per_attempt', 3],
+    ['automation.max_concurrent', 999],
+    ['notifications.retention_days', 'x'],
+  ]))
+  assert.equal(reader.get('web_fetch.max_per_attempt'), 3)
+  assert.equal(reader.get('automation.max_concurrent'), 2)
+  assert.equal(reader.get('notifications.retention_days'), 90)
+  assert.equal(reader.get('page_views.retention_days'), 180)
+  assert.equal(defaultPlatformSettings.get('disk.min_free_gb'), 10)
+})
+
+test('disk thresholds convert GB and percent into bytes and a ratio', () => {
+  const reader = platformSettingsFromValues(new Map<string, unknown>([['disk.min_free_gb', 20], ['disk.min_free_percent', 5]]))
+  assert.deepEqual(diskThresholds(reader), { minFreeBytes: 20 * 1024 ** 3, minFreeRatio: 0.05 })
+  assert.deepEqual(diskThresholds(defaultPlatformSettings), { minFreeBytes: 10 * 1024 ** 3, minFreeRatio: 0.1 })
+})
+
+test('changes: a non-empty list without duplicate keys', () => {
+  assert.deepEqual(parsePlatformSettingChanges({ changes: [{ key: 'disk.min_free_gb', value: 12, revision: 0 }] }),
+    [{ key: 'disk.min_free_gb', value: 12, revision: 0 }])
+  assert.throws(() => parsePlatformSettingChanges({ changes: [] }), /请提交/)
+  assert.throws(() => parsePlatformSettingChanges({}), /请提交/)
+  assert.throws(() => parsePlatformSettingChanges({ changes: [{ value: 1 }] }), /缺少键/)
+  assert.throws(() => parsePlatformSettingChanges({
+    changes: [{ key: 'disk.min_free_gb', value: 12, revision: 0 }, { key: 'disk.min_free_gb', value: 13, revision: 0 }],
+  }), /重复/)
+})

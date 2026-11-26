@@ -700,12 +700,19 @@ function sameRuntimeMutationSnapshot(left: RuntimeMutationSnapshot, right: Runti
     && left.revision === right.revision
 }
 
+/** Runtime 配置的正式边界；管理助手预校验与本服务共用（运行参数配置方案 4.4）。 */
+export const RUNTIME_CONFIGURATION_BOUNDS = {
+  maxConcurrentWorkers: { min: 1, max: 128 },
+  attemptTimeoutMinutes: { min: 1, max: 60 },
+} as const
+
 function assertRuntimeConfiguration(input: UpdateRuntimeConfigurationInput) {
-  if (!Number.isInteger(input.maxConcurrentWorkers) || input.maxConcurrentWorkers < 1 || input.maxConcurrentWorkers > 128) {
-    throw invalidRequest('最大并发 Worker 数必须是 1～128 之间的整数')
+  const { maxConcurrentWorkers: workers, attemptTimeoutMinutes: timeout } = RUNTIME_CONFIGURATION_BOUNDS
+  if (!Number.isInteger(input.maxConcurrentWorkers) || input.maxConcurrentWorkers < workers.min || input.maxConcurrentWorkers > workers.max) {
+    throw invalidRequest(`最大并发 Worker 数必须是 ${workers.min}～${workers.max} 之间的整数`)
   }
-  if (!Number.isInteger(input.attemptTimeoutMinutes) || input.attemptTimeoutMinutes < 1 || input.attemptTimeoutMinutes > 60) {
-    throw invalidRequest('单次执行超时时间必须是 1～60 分钟之间的整数')
+  if (!Number.isInteger(input.attemptTimeoutMinutes) || input.attemptTimeoutMinutes < timeout.min || input.attemptTimeoutMinutes > timeout.max) {
+    throw invalidRequest(`单次执行超时时间必须是 ${timeout.min}～${timeout.max} 分钟之间的整数`)
   }
   if (!['accepting', 'draining', 'disabled'].includes(input.schedulingStatus)) {
     throw invalidRequest('Runtime 调度状态无效')

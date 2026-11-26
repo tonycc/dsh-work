@@ -4,8 +4,7 @@ import type { IncomingMessage } from 'node:http'
 import type { AdminSkillInstallationService } from '../../modules/skill/admin-skill-installation-service.ts'
 import { envelope, httpResult, readJsonBody, requireRequestIdentity, type Router } from '../router.ts'
 import { RequestError, invalidRequest } from '../../domain/request-errors.ts'
-
-const maxUploadBytes = 20 * 1024 * 1024
+import { MAX_SKILL_UPLOAD_BYTES } from '../../domain/skill-package-limits.ts'
 
 export function registerSkillInstallationRoutes(router: Router, service?: AdminSkillInstallationService) {
   const base = '/api/admin/v1/skill-installations'
@@ -16,7 +15,7 @@ export function registerSkillInstallationRoutes(router: Router, service?: AdminS
 
   router.post(base, async (request, context) => {
     const fileName = decodeHeader(request, 'x-file-name')
-    const bytes = await readBinaryBody(request, maxUploadBytes)
+    const bytes = await readBinaryBody(request, MAX_SKILL_UPLOAD_BYTES)
     const result = await available().prepareZip(requireRequestIdentity(context, 'admin').userId, { fileName, bytes })
     return httpResult(201, envelope('admin', result, 'postgres'))
   })

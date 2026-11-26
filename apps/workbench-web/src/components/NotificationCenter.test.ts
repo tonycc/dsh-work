@@ -48,7 +48,7 @@ afterEach(() => {
 async function setup(unread = 1) {
   vi.mocked(workbenchApi.getNotificationUnreadCount).mockResolvedValue({ unread })
   vi.mocked(workbenchApi.listNotifications).mockImplementation(async query =>
-    ({ items: (query?.status === 'unread' ? notifications.filter(item => !item.read) : notifications).map(item => ({ ...item })), nextCursor: null }))
+    ({ items: (query?.status === 'unread' ? notifications.filter(item => !item.read) : notifications).map(item => ({ ...item })), nextCursor: null, retentionDays: 60 }))
   vi.mocked(workbenchApi.markNotificationRead).mockResolvedValue({ id: 'n', read: true })
   vi.mocked(workbenchApi.markAllNotificationsRead).mockResolvedValue({ read: 1 })
   vi.mocked(workbenchApi.listConversationTargets).mockResolvedValue({ items: [], nextCursor: null })
@@ -95,6 +95,8 @@ describe('NotificationCenter', () => {
     expect(itemButton('周敏 在 「供应链经营分析」 中 @ 了你')?.getAttribute('aria-label')).toMatch(/^未读：/)
     expect(itemButton('周敏 把任务 「核对库存」 指派给你')?.querySelectorAll('strong')).toHaveLength(2)
     expect(itemButton('一条通知（该内容已不可见）')).toBeDefined()
+    // 运行参数 RP-S1：保留天数随列表返回，说明文案不写死。
+    expect(panel()?.textContent).toContain('只保留最近 60 天的通知')
     wrapper.unmount()
   })
 
@@ -149,7 +151,7 @@ describe('NotificationCenter', () => {
     expect(workbenchApi.markAllNotificationsRead).toHaveBeenCalled()
     expect(wrapper.get('[data-testid="notification-bell"]').attributes('aria-label')).toBe('通知')
 
-    vi.mocked(workbenchApi.listNotifications).mockResolvedValue({ items: [], nextCursor: null })
+    vi.mocked(workbenchApi.listNotifications).mockResolvedValue({ items: [], nextCursor: null, retentionDays: 90 })
     const unreadTab = [...document.body.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(tab => tab.textContent?.trim() === '未读')
     unreadTab!.click()
     await flushPromises()
@@ -214,14 +216,14 @@ describe('NotificationCenter', () => {
 
   it('does not let a slow list load undo mark-all-read', async () => {
     const { wrapper } = await setup(1)
-    let finishSlowLoad: (value: { items: UserNotification[]; nextCursor: null }) => void = () => undefined
+    let finishSlowLoad: (value: { items: UserNotification[]; nextCursor: null; retentionDays: number }) => void = () => undefined
     vi.mocked(workbenchApi.listNotifications).mockImplementationOnce(() => new Promise(resolve => { finishSlowLoad = resolve }))
     await wrapper.get('[data-testid="notification-bell"]').trigger('click')
     const store = useNotificationStore()
-    vi.mocked(workbenchApi.listNotifications).mockResolvedValue({ items: notifications.map(item => ({ ...item, read: true })), nextCursor: null })
+    vi.mocked(workbenchApi.listNotifications).mockResolvedValue({ items: notifications.map(item => ({ ...item, read: true })), nextCursor: null, retentionDays: 90 })
     vi.mocked(workbenchApi.getNotificationUnreadCount).mockResolvedValue({ unread: 0 })
     await store.markAllRead()
-    finishSlowLoad({ items: notifications.map(item => ({ ...item })), nextCursor: null })
+    finishSlowLoad({ items: notifications.map(item => ({ ...item })), nextCursor: null, retentionDays: 90 })
     await flushPromises()
     expect(store.items.every(item => item.read)).toBe(true)
     expect(store.unread).toBe(0)

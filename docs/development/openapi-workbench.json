@@ -371,7 +371,7 @@
       "get": {
         "operationId": "listMyNotifications",
         "summary": "本人的站内通知",
-        "description": "功能规则 3.7：与本人相关的事件（@ 我、任务指派给我、我创建的任务完成、被加入项目、定时执行暂停或停止、定时任务没成功、Skill 审核结论），按时间倒序，只含最近 90 天。每条读取时按本人当前权限重新判断：不可见时 visible=false，且不返回名称与跳转目标。",
+        "description": "功能规则 3.7：与本人相关的事件（@ 我、任务指派给我、我创建的任务完成、被加入项目、定时执行暂停或停止、定时任务没成功、Skill 审核结论），按时间倒序，只含保留期内的通知（运行参数“站内通知保留天数”，默认 90 天）。每条读取时按本人当前权限重新判断：不可见时 visible=false，且不返回名称与跳转目标。",
         "parameters": [
           { "name": "status", "in": "query", "required": false, "schema": { "type": "string", "enum": ["all", "unread"], "default": "all" } },
           { "name": "cursor", "in": "query", "required": false, "schema": { "type": "string" } },
@@ -382,7 +382,7 @@
             "description": "通知分页",
             "content": {
               "application/json": {
-                "schema": { "allOf": [{ "$ref": "#/components/schemas/Envelope" }, { "type": "object", "properties": { "data": { "type": "object", "required": ["items", "nextCursor"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/UserNotification" } }, "nextCursor": { "type": ["string", "null"] } } } } }] }
+                "schema": { "allOf": [{ "$ref": "#/components/schemas/Envelope" }, { "type": "object", "properties": { "data": { "type": "object", "required": ["items", "nextCursor", "retentionDays"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/UserNotification" } }, "nextCursor": { "type": ["string", "null"] }, "retentionDays": { "type": "integer", "description": "当前保留天数（运行参数 notifications.retention_days，默认 90）" } } } } }] }
               }
             }
           },

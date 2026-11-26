@@ -3,6 +3,7 @@ import { AttemptExecutionContainers, assertExclusiveToolScheduling, resolveExecu
 import { DockerExecutionBackend } from './docker-execution-backend.ts'
 import { DshAcpRuntimeAdapter } from './dsh-acp-runtime-adapter.ts'
 import { preflightDshRuntime, withExecutionContainerOverlay, type DshRuntimeInstallation } from './dsh-runtime-installation.ts'
+import type { DiskThresholds } from './workspace-usage.ts'
 
 /**
  * Execution container startup check (execution isolation plan 4.9), shared by the server and the real-DSH
@@ -13,11 +14,12 @@ import { preflightDshRuntime, withExecutionContainerOverlay, type DshRuntimeInst
  */
 export async function startExecutionContainers(
   base: DshRuntimeInstallation,
-  options: { projectRoot: string; dataRoot: string; image: string | undefined },
+  options: { projectRoot: string; dataRoot: string; image: string | undefined; diskThresholds?: () => DiskThresholds },
 ): Promise<{ containers: AttemptExecutionContainers; installation: DshRuntimeInstallation }> {
   const containers = new AttemptExecutionContainers(new DockerExecutionBackend(), {
     image: options.image ?? '',
     user: resolveExecutionContainerUser(),
+    ...(options.diskThresholds ? { diskThresholds: options.diskThresholds } : {}),
   })
   await containers.preflight()
   const installation = await withExecutionContainerOverlay(base, { projectRoot: options.projectRoot })

@@ -16,6 +16,7 @@ import {
   Key,
   Menu,
   Monitor,
+  Odometer,
   Warning,
   Notebook,
   Reading,
@@ -125,6 +126,7 @@ const navigationGroups: Array<{ label: string; items: NavigationItem[] }> = [
       { label: '审计记录', path: '/audit', icon: Tickets, permission: 'audit' },
       { label: '系统健康', path: '/health', icon: Monitor, permission: 'ops' },
       { label: '错误记录', path: '/error-records', icon: Warning, permission: 'ops' },
+      { label: '运行参数', path: '/runtime-parameters', icon: Odometer, permission: 'ops' },
     ],
   },
   {

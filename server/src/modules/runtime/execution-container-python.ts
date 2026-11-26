@@ -9,7 +9,7 @@ import { resolveSkillActivationTarget } from './skill-activation-target.ts'
 const ENTRY_PATTERN = /^(?:scripts\/)?[A-Za-z0-9._/-]+\.py$/
 
 /** One `python_execute` call may run at most this long (dsh-work-tool-policy.js gives the tool 300 s). */
-const PYTHON_CALL_TIMEOUT_MS = 290_000
+export const PYTHON_CALL_TIMEOUT_MS = 290_000
 const MAX_LISTED_FILES = 20
 /** The contract's per-file bound for listed outputs; larger files are still collected by 2b-2 rules. */
 const MAX_LISTED_BYTES = 20 * 1024 * 1024

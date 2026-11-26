@@ -1,0 +1,312 @@
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref } from 'vue'
+import { Search } from '@element-plus/icons-vue'
+
+import { adminApi } from '@/api/client'
+import type { PlatformSetting, RuntimeParameterEntry, RuntimeParameterSource, RuntimeParameters } from '@/types/domain'
+
+/**
+ * 运行参数（运行参数配置方案 6.4，RP-S1）：“运维设置”修改运维参数（只有平台管理员能保存，RP10）；
+ * “参数总览”只读汇总各模块参数的当前值、来源、生效时机与修改位置，以及超时链路。
+ */
+type Tab = 'settings' | 'overview'
+
+const tab = ref<Tab>('settings')
+const data = ref<RuntimeParameters>()
+const loading = ref(false)
+const error = ref('')
+const savedNotice = ref('')
+const drafts = reactive<Record<string, string>>({})
+const confirmOpen = ref(false)
+const riskAcknowledged = ref(false)
+const saving = ref(false)
+const sourceFilter = ref<RuntimeParameterSource | 'all'>('all')
+const query = ref('')
+
+const sourceLabels: Record<RuntimeParameterSource, string> = {
+  page: '页面配置', default: '默认值', env: '环境变量', builtin: '系统内置', deploy: '部署脚本',
+}
+const groupTitles: Record<RuntimeParameterEntry['group'], string> = {
+  ops: '运维（本页修改）', run: '运行与模型', identity: '身份与钉钉', fixed: '只读：系统内置与启动参数',
+}
+const moduleLabels: Record<string, string> = { agent: 'Agent', connector: '连接器' }
+
+const canSave = computed(() => data.value?.canSave === true)
+
+function formatValue(setting: Pick<PlatformSetting, 'unit'>, value: number | string) {
+  return setting.unit === '%' ? `${value}%` : `${value} ${setting.unit}`
+}
+
+function parsed(setting: PlatformSetting) {
+  const text = (drafts[setting.key] ?? '').trim()
+  return /^-?\d+$/.test(text) ? Number(text) : Number.NaN
+}
+
+function invalid(setting: PlatformSetting) {
+  const value = parsed(setting)
+  return !Number.isInteger(value) || value < setting.min || value > setting.max
+}
+
+function changed(setting: PlatformSetting) {
+  return (drafts[setting.key] ?? '').trim() !== String(setting.value)
+}
+
+function warning(setting: PlatformSetting) {
+  if (invalid(setting)) return `请输入 ${setting.min}～${setting.max} 之间的整数`
+  if (changed(setting) && setting.lowerRisk && parsed(setting) < setting.value) return setting.lowerRisk
+  return ''
+}
+
+const settingGroups = computed(() => (data.value?.groups ?? []).map(group => ({
+  ...group,
+  settings: (data.value?.settings ?? []).filter(setting => setting.group === group.id),
+})))
+const changes = computed(() => (data.value?.settings ?? []).filter(changed))
+const anyInvalid = computed(() => (data.value?.settings ?? []).some(invalid))
+const risky = computed(() => changes.value.some(setting => warning(setting) !== ''))
+const pendingText = computed(() => {
+  if (!canSave.value) return '只有平台管理员能保存'
+  if (anyInvalid.value) return '有数值超出范围，修正后才能保存'
+  return changes.value.length ? `有 ${changes.value.length} 项未保存的修改` : '没有未保存的修改'
+})
+
+const filteredEntries = computed(() => {
+  const text = query.value.trim()
+  return (data.value?.overview.entries ?? []).filter(entry =>
+    (sourceFilter.value === 'all' || entry.source === sourceFilter.value)
+    && (!text || entry.name.includes(text) || entry.where.includes(text)))
+})
+const entryGroups = computed(() => (Object.keys(groupTitles) as RuntimeParameterEntry['group'][])
+  .map(group => ({ group, title: groupTitles[group], entries: filteredEntries.value.filter(entry => entry.group === group) }))
+  .filter(group => group.entries.length > 0))
+const sourceOptions = computed(() => {
+  const text = query.value.trim()
+  const matches = (data.value?.overview.entries ?? []).filter(entry => !text || entry.name.includes(text) || entry.where.includes(text))
+  return [
+    { value: 'all' as const, label: '全部', count: matches.length },
+    ...(Object.keys(sourceLabels) as RuntimeParameterSource[]).map(source => ({
+      value: source, label: sourceLabels[source], count: matches.filter(entry => entry.source === source).length,
+    })),
+  ]
+})
+
+function noEditText(entry: RuntimeParameterEntry) {
+  if (!entry.owner) return entry.where
+  return entry.owner.kind === 'platform-admin' ? '需要平台管理员' : `需要“${moduleLabels[entry.owner.module]}”修改权限`
+}
+
+function resetDrafts() {
+  for (const setting of data.value?.settings ?? []) drafts[setting.key] = String(setting.value)
+}
+
+async function load() {
+  loading.value = true
+  error.value = ''
+  try {
+    data.value = await adminApi.getRuntimeParameters()
+    resetDrafts()
+  } catch (caught) {
+    error.value = caught instanceof Error ? caught.message : '运行参数加载失败'
+  } finally {
+    loading.value = false
+  }
+}
+
+function restoreDefault(setting: PlatformSetting) {
+  drafts[setting.key] = String(setting.defaultValue)
+  savedNotice.value = ''
+}
+
+function openConfirm() {
+  if (!canSave.value || anyInvalid.value || !changes.value.length) return
+  riskAcknowledged.value = false
+  confirmOpen.value = true
+}
+
+async function confirmSave() {
+  if (risky.value && !riskAcknowledged.value) return
+  saving.value = true
+  const count = changes.value.length
+  try {
+    await adminApi.savePlatformSettings(changes.value.map(setting => ({ key: setting.key, value: parsed(setting), revision: setting.revision })))
+    confirmOpen.value = false
+    await load()
+    savedNotice.value = `已保存 ${count} 项，已写入审计记录。数值在各项标注的时机生效。`
+  } catch (caught) {
+    confirmOpen.value = false
+    error.value = caught instanceof Error ? caught.message : '保存失败'
+    await load()
+  } finally {
+    saving.value = false
+  }
+}
+
+function time(value?: string) {
+  return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : ''
+}
+
+onMounted(load)
+</script>
+
+<template>
+  <div v-loading="loading" class="ops-page runtime-parameters-page">
+    <el-alert v-if="error" :title="error" type="error" show-icon @close="error = ''" />
+
+    <div class="status-tabs" role="tablist" aria-label="运行参数视图">
+      <button class="status-tab" :class="{ active: tab === 'settings' }" type="button" role="tab" :aria-selected="tab === 'settings'" @click="tab = 'settings'">运维设置</button>
+      <button class="status-tab" :class="{ active: tab === 'overview' }" type="button" role="tab" :aria-selected="tab === 'overview'" @click="tab = 'overview'">参数总览</button>
+    </div>
+
+    <template v-if="data && tab === 'settings'">
+      <el-alert v-if="!canSave" type="info" :closable="false" show-icon title="你可以查看这些参数；只有平台管理员能修改和保存。" />
+      <el-alert v-if="savedNotice" type="success" show-icon :title="savedNotice" @close="savedNotice = ''" />
+
+      <section v-for="group in settingGroups" :key="group.id" class="content-panel parameter-group" :aria-labelledby="`parameter-group-${group.id}`">
+        <header class="parameter-group__header">
+          <h2 :id="`parameter-group-${group.id}`">{{ group.title }}</h2>
+          <p>{{ group.description }}</p>
+        </header>
+        <div v-for="setting in group.settings" :key="setting.key" class="parameter-row" :class="{ 'is-changed': changed(setting) }">
+          <div class="parameter-row__text">
+            <label :for="`parameter-${setting.key}`">{{ setting.label }}</label>
+            <span>{{ setting.description }}</span>
+          </div>
+          <div class="parameter-row__input">
+            <el-input
+              :id="`parameter-${setting.key}`"
+              v-model="drafts[setting.key]"
+              :disabled="!canSave"
+              inputmode="numeric"
+              :aria-invalid="invalid(setting)"
+              @input="savedNotice = ''"
+            >
+              <template #suffix>{{ setting.unit }}</template>
+            </el-input>
+          </div>
+          <div class="parameter-row__meta">
+            <span>默认 {{ formatValue(setting, setting.defaultValue) }} · 范围 {{ setting.min }}～{{ setting.max }}</span>
+            <span>生效：{{ setting.timing }}</span>
+            <span v-if="setting.source === 'page'">{{ setting.updatedBy }} 于 {{ time(setting.updatedAt) }} 修改</span>
+          </div>
+          <div class="parameter-row__actions">
+            <el-button v-if="canSave && (drafts[setting.key] ?? '').trim() !== String(setting.defaultValue)" size="small" @click="restoreDefault(setting)">恢复默认</el-button>
+          </div>
+          <p v-if="warning(setting)" class="parameter-row__warning" role="note">{{ warning(setting) }}</p>
+        </div>
+      </section>
+
+      <div class="content-panel parameter-footer">
+        <span>{{ pendingText }}</span>
+        <el-button :disabled="!changes.length" @click="resetDrafts">放弃修改</el-button>
+        <el-button type="primary" :disabled="!canSave || anyInvalid || !changes.length" @click="openConfirm">保存</el-button>
+      </div>
+    </template>
+
+    <template v-if="data && tab === 'overview'">
+      <section class="content-panel" aria-labelledby="timeout-chains-title">
+        <header class="parameter-group__header">
+          <h2 id="timeout-chains-title">超时链路 · 实际生效</h2>
+          <p>多层超时取最小值。每条链路标出实际生效的值和起限制作用的一项。</p>
+        </header>
+        <div class="timeout-chains" role="list" aria-label="超时链路">
+          <div v-for="chain in data.overview.timeoutChains" :key="chain.id" class="timeout-chain" :class="{ 'is-warning': chain.warning }" role="listitem" :aria-label="chain.name">
+            <strong>{{ chain.name }}</strong>
+            <span class="timeout-chain__value">{{ chain.actual }}</span>
+            <small>由“{{ chain.limiter }}”限制</small>
+            <small v-for="layer in chain.layers" :key="layer" class="timeout-chain__layer">{{ layer }}</small>
+            <small v-if="chain.warning" class="timeout-chain__warning">{{ chain.warning }}</small>
+          </div>
+        </div>
+      </section>
+
+      <div class="parameter-filters">
+        <el-radio-group v-model="sourceFilter" aria-label="按来源筛选">
+          <el-radio-button v-for="option in sourceOptions" :key="option.value" :value="option.value">{{ option.label }} {{ option.count }}</el-radio-button>
+        </el-radio-group>
+        <el-input v-model="query" class="parameter-filters__search" :prefix-icon="Search" clearable placeholder="参数名，如：超时" aria-label="搜索参数" />
+      </div>
+
+      <section v-for="group in entryGroups" :key="group.group" class="content-panel content-panel--flush" :aria-label="group.title">
+        <header class="parameter-group__header parameter-group__header--table">
+          <h2>{{ group.title }}</h2>
+          <span>{{ group.entries.length }} 项</span>
+        </header>
+        <el-table :data="group.entries" row-key="id" class="parameter-table" table-layout="fixed">
+          <el-table-column prop="name" label="参数" min-width="240" />
+          <el-table-column label="当前值" min-width="200">
+            <template #default="{ row }"><span class="parameter-table__value">{{ row.value }}</span></template>
+          </el-table-column>
+          <el-table-column label="来源" width="120">
+            <template #default="{ row }"><span class="parameter-source" :class="`is-${row.source}`">{{ sourceLabels[row.source as RuntimeParameterSource] }}</span></template>
+          </el-table-column>
+          <el-table-column prop="timing" label="生效时机" min-width="200" />
+          <el-table-column label="修改位置" min-width="200">
+            <template #default="{ row }">
+              <a v-if="row.canEdit && row.link === '/runtime-parameters'" href="#" @click.prevent="tab = 'settings'">{{ row.where }} ›</a>
+              <router-link v-else-if="row.canEdit && row.link" :to="row.link">{{ row.where }} ›</router-link>
+              <span v-else class="parameter-muted">{{ noEditText(row) }}</span>
+            </template>
+          </el-table-column>
+        </el-table>
+      </section>
+      <p v-if="!entryGroups.length" class="content-panel parameter-muted">没有符合条件的参数</p>
+    </template>
+
+    <el-dialog v-model="confirmOpen" :title="`确认保存 ${changes.length} 项修改`" width="560px">
+      <p class="parameter-muted">修改只有平台管理员能保存，并逐项写入审计记录。</p>
+      <ul class="parameter-changes" aria-label="待保存的修改">
+        <li v-for="setting in changes" :key="setting.key">
+          <div class="parameter-changes__line">
+            <strong>{{ setting.label }}</strong>
+            <span>{{ formatValue(setting, setting.value) }} → <strong>{{ formatValue(setting, drafts[setting.key] ?? '') }}</strong></span>
+          </div>
+          <small>生效：{{ setting.timing }}</small>
+          <small v-if="warning(setting)" class="parameter-row__warning">{{ warning(setting) }}</small>
+        </li>
+      </ul>
+      <el-checkbox v-if="risky" v-model="riskAcknowledged">我已了解上面标出的影响</el-checkbox>
+      <template #footer>
+        <el-button @click="confirmOpen = false">取消</el-button>
+        <el-button type="primary" :loading="saving" :disabled="risky && !riskAcknowledged" @click="confirmSave">确认保存</el-button>
+      </template>
+    </el-dialog>
+  </div>
+</template>
+
+<style scoped>
+.runtime-parameters-page { display: flex; flex-direction: column; gap: 14px; }
+.parameter-group { padding: 0; }
+.parameter-group__header { display: flex; flex-direction: column; gap: 2px; padding: 14px 20px; border-bottom: 1px solid var(--color-border); }
+.parameter-group__header h2 { margin: 0; color: var(--color-text-heading); font-size: var(--font-size-title); }
+.parameter-group__header p, .parameter-group__header span { margin: 0; color: var(--color-text-secondary); font-size: var(--font-size-caption); }
+.parameter-group__header--table { flex-direction: row; justify-content: space-between; align-items: center; }
+.parameter-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; padding: 14px 20px; border-top: 1px solid var(--color-border); }
+.parameter-row:first-of-type { border-top: 0; }
+.parameter-row.is-changed { background: var(--color-primary-light); }
+.parameter-row__text { display: flex; flex: 1 1 320px; flex-direction: column; gap: 3px; min-width: 0; }
+.parameter-row__text label { color: var(--color-text-heading); font-weight: var(--font-weight-title); }
+.parameter-row__text span, .parameter-row__meta { color: var(--color-text-secondary); font-size: var(--font-size-caption); }
+.parameter-row__input { flex: 0 0 132px; }
+.parameter-row__meta { display: flex; flex: 0 0 220px; flex-direction: column; gap: 2px; }
+.parameter-row__actions { display: flex; flex: 0 0 88px; justify-content: flex-end; }
+.parameter-row__warning { flex: 1 1 100%; margin: 0; padding: 6px 10px; border-radius: 8px; background: var(--color-warning-light); color: var(--color-warning-strong); font-size: var(--font-size-caption); }
+.parameter-footer { display: flex; position: sticky; bottom: 0; justify-content: flex-end; align-items: center; gap: 12px; }
+.parameter-footer > span { margin-right: auto; color: var(--color-text-secondary); font-size: var(--font-size-caption); }
+.timeout-chains { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; padding: 16px 20px; }
+.timeout-chain { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border: 1px solid var(--color-border); border-radius: 10px; }
+.timeout-chain.is-warning { border-color: var(--color-warning); background: var(--color-warning-light); }
+.timeout-chain strong { color: var(--color-text-heading); }
+.timeout-chain__value { color: var(--color-text-heading); font-size: var(--font-size-heading, 22px); font-weight: var(--font-weight-title); }
+.timeout-chain small { color: var(--color-text-secondary); font-size: var(--font-size-caption); }
+.timeout-chain .timeout-chain__warning { color: var(--color-warning-strong); }
+.parameter-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.parameter-filters__search { width: 260px; margin-left: auto; }
+.parameter-table__value { color: var(--color-text-heading); font-weight: var(--font-weight-title); }
+.parameter-source { display: inline-block; padding: 2px 8px; border-radius: 6px; background: var(--color-bg-subtle); color: var(--color-text-secondary); font-size: var(--font-size-badge, 12px); }
+.parameter-source.is-page { background: var(--color-primary-light); color: var(--color-primary); }
+.parameter-source.is-env { background: var(--color-warning-light); color: var(--color-warning-strong); }
+.parameter-muted { color: var(--color-text-secondary); }
+.parameter-changes { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; padding: 0; list-style: none; }
+.parameter-changes li { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border: 1px solid var(--color-border); border-radius: 8px; }
+.parameter-changes__line { display: flex; justify-content: space-between; gap: 12px; }
+</style>

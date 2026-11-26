@@ -6,8 +6,6 @@
 export const USAGE_RANGE_DAYS = { '7d': 7, '30d': 30, '90d': 90 } as const
 export type UsageRange = keyof typeof USAGE_RANGE_DAYS
 
-/** 页面访问保留天数（OB10）。 */
-export const PRODUCT_EVENT_RETENTION_DAYS = 180
 /** 同一员工同一端同一页面在该窗口内只记一次。 */
 export const PAGE_VIEW_DEDUPE_MINUTES = 30
 /** 按人明细与未使用名单最多返回的人数。 */

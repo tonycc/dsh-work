@@ -9,6 +9,7 @@ import {
   adminModulePermission,
   adminModuleSummary,
   allAdminModulePermissions,
+  canEditAdminSetting,
   adminRouteRule,
   decideAdminRouteAccess,
   hasAdminAudienceAccess,
@@ -79,6 +80,23 @@ test('routes: DingTalk is a module; its application settings stay platform-admin
   assert.ok(allowed(['admin:dingtalk:read'], 'identity/users/u1/dingtalk-binding'))
   assert.ok(allowed(['admin:dingtalk:write'], 'identity/users/u1/dingtalk-binding/confirm', 'POST'))
   assert.ok(!allowed(['admin:identity:write'], 'identity/users/u1/dingtalk-binding/confirm', 'POST'))
+})
+
+test('routes: runtime parameters are read with ops view; saving is platform-admin only (RP10)', () => {
+  assert.equal(allowed(['admin:ops:read'], 'runtime-parameters'), true)
+  assert.equal(allowed(['admin:read'], 'runtime-parameters'), true)
+  assert.equal(allowed(['admin:knowledge:write'], 'runtime-parameters'), false)
+  assert.equal(allowed(['admin:ops:read'], 'platform-settings', 'PUT'), false)
+  assert.equal(allowed(['admin:write'], 'platform-settings', 'PUT'), false)
+  assert.equal(allowed(['admin:*'], 'platform-settings', 'PUT'), true)
+  assert.deepEqual(decideAdminRouteAccess(['admin:write'], api('platform-settings'), 'PUT'), { allowed: false, message: '运行参数只有平台管理员可以修改' })
+  // 其他只读运维接口仍然只读，平台管理员也不能写。
+  assert.equal(allowed(['admin:*'], 'error-records/groups', 'POST'), false)
+  assert.equal(canEditAdminSetting(['admin:*'], { kind: 'platform-admin' }), true)
+  assert.equal(canEditAdminSetting(['admin:write'], { kind: 'platform-admin' }), false)
+  assert.equal(canEditAdminSetting(['admin:connector:write'], { kind: 'module', module: 'connector' }), true)
+  assert.equal(canEditAdminSetting(['admin:connector:read'], { kind: 'module', module: 'connector' }), false)
+  assert.equal(canEditAdminSetting(['admin:write'], { kind: 'module', module: 'ops' }), false)
 })
 
 test('routes: audit needs audit:read; terms need the data-protection module (the route adds terms itself)', () => {

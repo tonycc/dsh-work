@@ -76,7 +76,8 @@ export class RunOrchestrationService {
     knowledge?: KnowledgeProvider,
     authorization?: PostgresAuthorizationService,
     options?: {
-      automationMaxConcurrent?: number
+      /** 自动任务车道上限；传函数时每次调度读取（运行参数 `automation.max_concurrent`）。默认 2。 */
+      automationMaxConcurrent?: number | (() => number)
       /** TW-10：团队会话 @Agent 触发时按成员关联解析固定版本。 */
       agentMembers?: PostgresWorkspaceAgentMemberService
       /**
@@ -103,10 +104,11 @@ export class RunOrchestrationService {
       inputPolicy?: OrchestrationDependencies['inputPolicy']
     },
   ) {
+    const automationLimit = options?.automationMaxConcurrent ?? 2
     this.deps = {
       runs, conversations, models, runtime, content, operations, agents, knowledge, authorization,
       agentMembers: options?.agentMembers,
-      automationMaxConcurrent: options?.automationMaxConcurrent ?? 2,
+      get automationMaxConcurrent() { return typeof automationLimit === 'function' ? automationLimit() : automationLimit },
       timezone: options?.timezone ?? DEFAULT_PLATFORM_TIMEZONE,
       automationStatusLookup: options?.automationStatusLookup,
       toolChecks: options?.toolChecks,

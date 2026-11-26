@@ -108,7 +108,7 @@ import { acquireSkillSource } from './modules/skill/skill-source.ts'
 import { PostgresSkillService } from './modules/skill/postgres-skill-service.ts'
 import { SkillArtifactStore } from './modules/skill/skill-artifact-store.ts'
 import { migrateSkillFilesToFileSystem } from './modules/skill/skill-file-storage-migration.ts'
-import { builtinTools, missingDshBuiltinTools, type BuiltinToolStatus } from './modules/runtime/builtin-tools.ts'
+import { builtinToolsWithParameters, missingDshBuiltinTools, type BuiltinToolStatus } from './modules/runtime/builtin-tools.ts'
 import { PostgresMcpConnectorService } from './modules/tool/postgres-mcp-connector-service.ts'
 import { PostgresEncryptedCredentialStore } from './modules/tool/postgres-encrypted-credential-store.ts'
 import { ModelGateway } from './modules/model-gateway/model-gateway.ts'
@@ -144,6 +144,9 @@ import { installProcessFailureHandlers, serverFailureRecord } from './modules/ob
 import { createSourceMapStackResolver } from './modules/observability/source-map-resolver.ts'
 import { registerClientErrorRoutes } from './http/client-error-routes.ts'
 import { registerErrorRecordsRoutes } from './http/admin/error-records-routes.ts'
+import { registerRuntimeParametersRoutes } from './http/admin/runtime-parameters-routes.ts'
+import { PostgresPlatformSettingsService } from './modules/platform-settings/postgres-platform-settings-service.ts'
+import { diskThresholds } from './domain/platform-settings.ts'
 import { registerUsageAnalyticsRoutes } from './http/admin/usage-analytics-routes.ts'
 import { PostgresUsageAnalyticsService } from './modules/observability/postgres-usage-analytics-service.ts'
 
@@ -163,6 +166,9 @@ async function start() {
   const identityConfiguration = loadStartupIdentityConfiguration()
   const database = createDatabase({ url: databaseUrl })
   await runMigrations(database)
+  // 运行参数（运行参数配置方案 RP-S1）：启动时读入页面保存过的值，之后由保存刷新进程内快照。
+  const platformSettings = new PostgresPlatformSettingsService(database)
+  await platformSettings.load()
   if (identityConfiguration.ignoredLegacySettings?.length) {
     console.warn(`AI Hub 登录已删除，以下旧配置不再读取，可从运行配置中删除：${identityConfiguration.ignoredLegacySettings.join('、')}`)
   }
@@ -188,6 +194,7 @@ async function start() {
   // 错误记录（错误记录方案 OBS-S1）：服务端 5xx、进程异常与浏览器上报写入同一组表。
   const errorRecords = new PostgresErrorRecordsService(database, {
     resolveStack: createSourceMapStackResolver(process.env.DSH_WORK_SOURCE_MAP_DIR),
+    settings: platformSettings,
   })
   installProcessFailureHandlers({ record: input => errorRecords.record(input), release: releaseVersion })
   const router = new Router({
@@ -197,7 +204,7 @@ async function start() {
         .catch(error => console.error('error record write failed', error instanceof Error ? error.message : 'unknown'))
     },
   })
-  const usageAnalytics = new PostgresUsageAnalyticsService(database, resolvePlatformTimezone(process.env.DSH_WORK_TIMEZONE))
+  const usageAnalytics = new PostgresUsageAnalyticsService(database, resolvePlatformTimezone(process.env.DSH_WORK_TIMEZONE), { settings: platformSettings })
   registerClientErrorRoutes(router, {
     record: input => errorRecords.record(input),
     recordPageViews: (userId, app, views) => usageAnalytics.recordPageViews(userId, app, views),
@@ -206,7 +213,10 @@ async function start() {
   })
   registerErrorRecordsRoutes(router, errorRecords)
   registerUsageAnalyticsRoutes(router, usageAnalytics)
-  // 错误记录与页面访问清理：启动后与每天一次，分批删除 90 天前的错误样本与 180 天前的页面访问（与工作区清扫分开）。
+  registerRuntimeParametersRoutes(router, platformSettings, {
+    sessionTtl: { seconds: identityConfiguration.sessionTtlSeconds, fromEnvironment: process.env.DSH_WORK_SESSION_TTL_SECONDS !== undefined },
+  })
+  // 错误记录与页面访问清理：启动后与每天一次，按运行参数的保留天数分批删除（默认错误样本 90 天、页面访问 180 天；与工作区清扫分开）。
   let errorRetentionRun: Promise<void> | null = null
   const purgeErrorRecords = () => {
     if (errorRetentionRun) return
@@ -282,7 +292,7 @@ async function start() {
   if (dsh.value) {
     const baseInstallation = dsh.value
     const probed = await probeExecutionCapability('execution-container', () => startExecutionContainers(baseInstallation, {
-      projectRoot, dataRoot, image: process.env.DSH_WORK_EXECUTION_IMAGE,
+      projectRoot, dataRoot, image: process.env.DSH_WORK_EXECUTION_IMAGE, diskThresholds: () => diskThresholds(platformSettings),
     }), error => {
       console.warn(`execution container unavailable; Agent runs are refused until it is fixed and the service restarts: ${redactSensitiveText(error instanceof Error ? error.message : String(error)).slice(0, 500)}`)
     })
@@ -373,6 +383,7 @@ async function start() {
     runtimeId: 'runtime-local-01',
     runtimeRoot: resolve(dataRoot, 'dsh-attempts'),
     dshRepository: dshInstallation.home,
+    platformSettings,
     runtimeVersion: dshInstallation.version,
     runtimeCommit: dshInstallation.commit,
     protocolVersion: dshInstallation.protocolVersion,
@@ -529,10 +540,10 @@ async function start() {
   const executionContainerStatus = async () => (await currentExecutionContainerCapability()).status === 'available' ? 'available' as const : 'unavailable' as const
   // 方案 4.7：执行容器可用时报告数据卷剩余空间是否低于阈值（低时不运行命令）。
   const executionDiskLow = async () => attemptContainers
-    ? (await freeSpace(dataRoot).catch(() => null))?.low ?? false
+    ? (await freeSpace(dataRoot, diskThresholds(platformSettings)).catch(() => null))?.low ?? false
     : false
   const builtinToolStatus = async (): Promise<BuiltinToolStatus> => ({
-    tools: builtinTools,
+    tools: builtinToolsWithParameters(platformSettings.get('web_fetch.max_per_attempt')),
     disabledTools: [...(await operations.getRuntimePolicy('runtime-local-01')).disabledTools],
     catalog: builtinCatalog,
     executionContainer: { status: await executionContainerStatus(), ...((await executionDiskLow()) ? { diskLow: true } : {}) },
@@ -598,6 +609,7 @@ async function start() {
     // TW-10：团队会话 @Agent 触发经成员关联解析固定版本。
     {
       agentMembers: workspaceAgentMembers,
+      automationMaxConcurrent: () => platformSettings.get('automation.max_concurrent'),
       automationStatusLookup: runId => automationRepository.automationStatusForRun(runId),
       // 领取后、恢复前与每次工具调用时复核 MCP 连接仍有效。
       toolChecks: {
@@ -724,7 +736,7 @@ async function start() {
   registerUserPreferenceRoutes(router, new PostgresUserPreferenceService(database))
   registerDingTalkBindingRoutes(router, new PostgresDingTalkSelfBindingService(database, dingtalkSettings))
   registerConversationTargetRoutes(router, new PostgresConversationTargetService(database, agents), authorization)
-  const userNotifications = new PostgresUserNotificationService(database)
+  const userNotifications = new PostgresUserNotificationService(database, { settings: platformSettings })
   registerUserNotificationRoutes(router, userNotifications, authorization)
   registerKnowledgeRoutes(router, knowledgeBases, authorization)
   registerKnowledgeAdminRoutes(router, knowledgeAdmin)
