@@ -91,12 +91,13 @@ describe('ErrorReporter', () => {
   it('records page views by route name once per 30 minutes, on their own endpoint', () => {
     const transport = vi.fn()
     const reporter = new ErrorReporter({ app: 'workbench', transport })
-    let guard: ((to: { name?: unknown }) => unknown) | undefined
+    let guard: ((to: { name?: unknown; meta?: Record<string, unknown> }) => unknown) | undefined
     reporter.trackRouter({ afterEach: callback => { guard = callback } })
     guard!({ name: 'workbench' })
     guard!({ name: 'workbench' })
     guard!({ name: 'knowledge' })
     guard!({ name: undefined })
+    guard!({ name: 'local-login', meta: { public: true } })
     vi.advanceTimersByTime(2_000)
     expect(transport).toHaveBeenCalledTimes(1)
     expect(transport.mock.calls[0]![0]).toBe('/auth/workbench/page-views')

@@ -5904,6 +5904,9 @@
         "responses": {
           "200": {
             "$ref": "#/components/responses/Ok"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
           }
         }
       }
@@ -5911,7 +5914,7 @@
     "/usage-analytics/people": {
       "get": {
         "operationId": "getUsagePeople",
-        "summary": "按人明细：期间内活跃员工的最近活跃、活跃天数、对话、运行与成功率、Token、常用 AI 同事与常访问页面；以及有账号但期间内未使用的员工（账号创建时间、期间前最近一次活跃）",
+        "summary": "按人明细：期间内活跃员工的最近活跃、活跃天数、对话、运行与成功率、Token、常用 AI 同事与常访问页面；以及有账号但期间内未使用的员工（账号创建时间、期间开始之前、同一口径的最近一次活跃）",
         "parameters": [
           {
             "name": "range",
@@ -5937,6 +5940,9 @@
         "responses": {
           "200": {
             "$ref": "#/components/responses/Ok"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
           }
         }
       }

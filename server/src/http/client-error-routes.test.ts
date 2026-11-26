@@ -116,3 +116,16 @@ test('page views are recorded only for signed-in employees and only by route nam
   assert.equal((await sendViews({ app: 'workbench', views: [{ page: 'workbench' }] }, { cookie: 'session=ok', origin: 'http://evil.test' })).status, 403)
   assert.equal(pageViews.length, 1)
 })
+
+test('page views are limited per address before the body is read or the session is checked', async () => {
+  const anonymous = () => fetch(`${base}/auth/workbench/page-views`, {
+    method: 'POST',
+    headers: { 'content-type': 'text/plain;charset=UTF-8', origin: allowedOrigin, 'x-real-ip': '10.7.0.1' },
+    body: JSON.stringify({ app: 'workbench', views: [{ page: 'workbench' }] }),
+  })
+  const statuses: number[] = []
+  for (let index = 0; index < 61; index += 1) statuses.push((await anonymous()).status)
+  assert.equal(statuses.filter(status => status === 401).length, 60)
+  assert.equal(statuses.at(-1), 202)
+})
+

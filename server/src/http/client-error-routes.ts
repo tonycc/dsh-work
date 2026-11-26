@@ -67,6 +67,8 @@ export function registerClientErrorRoutes(router: Router, options: ClientErrorRo
   const perAddress = new FixedWindowLimiter({ limit: 10, windowMs: MINUTE, now })
   const anonymousTotal = new FixedWindowLimiter({ limit: 300, windowMs: MINUTE, now })
   const pageViewsPerUser = new FixedWindowLimiter({ limit: 120, windowMs: MINUTE, now })
+  // 页面访问接口在读请求体与查身份之前按来源地址限流（PR #172 评审）：未登录的请求不能借它给数据库加压。
+  const pageViewsPerAddress = new FixedWindowLimiter({ limit: 60, windowMs: MINUTE, now })
 
   const readReport = async (request: IncomingMessage, app: 'workbench' | 'admin') => {
     const contentType = String(request.headers['content-type'] ?? '').split(';')[0]!.trim().toLowerCase()
@@ -112,6 +114,7 @@ export function registerClientErrorRoutes(router: Router, options: ClientErrorRo
     const recordPageViews = options.recordPageViews
     // 页面访问只记已登录员工（OBS-S2，OB8）：只有路由名、端与是否在钉钉内，不记网址与页面内容。
     for (const app of ['workbench', 'admin'] as const) router.post(`/auth/${app}/page-views`, async request => {
+      if (!pageViewsPerAddress.take(`ip:${clientAddress(request)}`)) return httpResult(202, { data: { recorded: 0 } })
       const views = parsePageViews(await readReport(request, app), app)
       const identity = await resolveIdentity(request, app)
       if (!identity) throw new RequestError(401, 'authentication_required', '请先登录')

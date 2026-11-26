@@ -166,3 +166,31 @@ test('page views dedupe within 30 minutes and are purged after 180 days', async 
     select page, app from product_events where tenant_id = ${tenantId} and user_id = ${users.dave} order by app`
   assert.deepEqual([...remaining], [{ page: 'workbench', app: 'admin' }, { page: 'workbench', app: 'workbench' }])
 })
+
+test('idle list uses only pre-period employee activity for the last active time; unknown departments are rejected', async () => {
+  const eve = 'U-usage-eve'
+  const dept = `用量测试空闲部-${randomUUID().slice(0, 6)}`
+  await database`
+    insert into users (id, tenant_id, external_subject, display_name, department_id, status, created_at)
+    values (${eve}, ${tenantId}, 'usage-eve', 'eve', ${dept}, 'active', now() - interval '200 days')
+  `
+  // 期间内只有一次发布试运行（不算使用），期间之前有一次真实对话。
+  await seedRun({ userId: eve, trial: true })
+  await seedRun({ userId: eve, daysAgo: 45 })
+  const result = await usage.people({ range: '30d', department: dept })
+  assert.deepEqual(result.active, [])
+  const [idle] = result.idle
+  assert.equal(idle!.userId, eve)
+  const lastActive = Date.parse(idle!.lastActiveAt!)
+  assert.ok(Date.now() - lastActive > 44 * 86_400_000, 'last active must be the pre-period conversation, not the trial run')
+
+  await assert.rejects(usage.overview({ range: '30d', department: '不存在的部门' }), /不存在或没有在职员工/)
+  await assert.rejects(usage.people({ range: '30d', department: '不存在的部门' }), /不存在或没有在职员工/)
+})
+
+test('concurrent page views of the same page are recorded once', async () => {
+  const results = await Promise.all(Array.from({ length: 5 }, () =>
+    usage.recordPageViews(users.carol, 'workbench', [{ page: 'concurrent-page', inDingtalk: false }])))
+  assert.equal(results.reduce((sum, count) => sum + count, 0), 1)
+})
+

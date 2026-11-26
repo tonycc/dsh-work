@@ -1,7 +1,7 @@
 import type { App } from 'vue'
 
 /** 只用到路由器的 afterEach（不让共享包依赖 vue-router）。 */
-interface RouterLike { afterEach(guard: (to: { name?: unknown }) => unknown): unknown }
+interface RouterLike { afterEach(guard: (to: { name?: unknown; meta?: Record<string, unknown> }) => unknown): unknown }
 
 /**
  * 浏览器错误上报（错误记录方案 6.2，OBS-S1），员工端与管理端共用。
@@ -152,6 +152,8 @@ export class ErrorReporter {
   /** 路由切换后记录页面访问（只用路由名，不用网址）。 */
   trackRouter(router: RouterLike): void {
     router.afterEach(to => {
+      // 登录、改密等公开页面不记：此时未登录，服务端也不会记录，先记下反而会让登录后 30 分钟内漏记（PR #172 评审）。
+      if (to.meta?.public === true) return
       if (typeof to.name === 'string') this.reportPageView(to.name)
     })
   }
