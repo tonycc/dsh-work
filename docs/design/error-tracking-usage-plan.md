@@ -1,7 +1,7 @@
 # 错误记录与使用情况方案
 
 **状态：** 决策全部确认（2026-11-26）；未实施，下一步做两个页面的可点击原型。
-**更新日期：** 2026-11-26（OB11 改为“使用情况”放在导航分组“运行治理”、“错误记录”放在“安全与运维”；OB12～OB15 按建议确认）；2026-11-26（OB5 改为两个页面、OB9 改为按人出明细、OB11 归入“安全与运维”；去掉企业评审要求；OB4、OB6、OB7、OB8、OB10 按建议确认；补充第 7 节“覆盖范围”与 OB12～OB15）；2026-11-26（初稿；OB1 选自建上报接口、OB2 选管理端新增页面、OB3 告警第一期不做）
+**更新日期：** 2026-11-26（按 PR #169 评审修订：进程异常处理后显式退出、未登录上报的 IP 来源与新增问题组上限、堆栈与说明脱敏、链路编号与运行的关联方式、页面与接口改名避开已有 `usage`、专用清理任务、上报来源校验、同步清单补全）；2026-11-26（OB11 改为“使用情况”放在导航分组“运行治理”、“错误记录”放在“安全与运维”；OB12～OB15 按建议确认）；2026-11-26（OB5 改为两个页面、OB9 改为按人出明细、OB11 归入“安全与运维”；去掉企业评审要求；OB4、OB6、OB7、OB8、OB10 按建议确认；补充第 7 节“覆盖范围”与 OB12～OB15）；2026-11-26（初稿；OB1 选自建上报接口、OB2 选管理端新增页面、OB3 告警第一期不做）
 **依据：** 2026-11-26 对现有可观测能力的盘点（第 4 节）；[发往模型的数据防护方案](model-data-protection-plan.md) D8（审计不保存原值）；[管理端模块权限](../development/feature-rules.md)第 13 节。
 **关联：** [架构总览第 10 节](../development/overview.md#10-当前边界与独立开发)、[内部端口与契约](../development/internal-ports.md)、[数据模型](data-model.md)、验收目录 `e2e/catalog/admin-platform.md`。
 
@@ -84,10 +84,11 @@
 
 迁移 `0133_error_tracking_usage`：
 
-- **`error_groups`**：按指纹归并的问题。`tenant_id`、`fingerprint`、`source`（`workbench`、`admin`、`server`、`process`、`feedback`）、`kind`（`render`、`script`、`promise`、`api`、`notice`、`load`、`stream`、`http`、`uncaught`、`report`）、`message`（脱敏后首行，≤1,024 字符）、`first_seen_at`、`last_seen_at`、`occurrence_count`、`last_release`。唯一键 `(tenant_id, fingerprint)`。
-- **`error_occurrences`**：每次发生的样本。`group_id`、`occurred_at`、`user_id`（未登录为空）、`release`、`route`（前端路由名或服务端路由模板）、`trace_id`、`run_id`、`client`（浏览器与系统的简称，如“钉钉 iOS”“Chrome 131 / macOS”，不存完整 UA）、`stack`（原始堆栈，脱敏后 ≤8,192 字符）、`note`（仅员工反馈，员工自己填写，≤500 字符）、`repeat_count`。
+- **`error_groups`**：按指纹归并的问题。`tenant_id`、`fingerprint`、`source`（`workbench`、`admin`、`server`、`process`、`feedback`）、`kind`（`render`、`script`、`promise`、`api`、`notice`、`load`、`stream`、`http`、`uncaught`、`report`）、`message`（脱敏后首行，≤1,024 字符；失败提示只存错误码与提示模板编号，不存提示原文）、`first_seen_at`、`last_seen_at`、`occurrence_count`、`last_release`。唯一键 `(tenant_id, fingerprint)`。
+- **`error_occurrences`**：每次发生的样本。`group_id`、`occurred_at`、`user_id`（未登录为空）、`release`、`route`（前端路由名或服务端路由模板）、`trace_id`、`run_id`、`client`（浏览器与系统的简称，如“钉钉 iOS”“Chrome 131 / macOS”，不存完整 UA）、`stack`（按 6.3 只保留帧位置的堆栈，≤8,192 字符）、`note`（仅员工反馈，员工自己填写，≤500 字符；**可能含个人信息**，按 6.3 遮盖后保存，只在错误详情中对 `ops` 管理员显示）、`repeat_count`。
 - **`product_events`**（OB8）：`tenant_id`、`user_id`、`app`（`workbench`/`admin`）、`page`（路由名）、`occurred_at`。同一员工同一页面 30 分钟内只记一次。
-- 清理（OB10）：沿用服务端每 6 小时的清扫定时器，错误样本 90 天、页面访问 180 天；没有样本的 `error_groups` 一并删除。
+- 索引：`error_occurrences (tenant_id, occurred_at)`、`error_occurrences (tenant_id, trace_id)`、`error_occurrences (tenant_id, run_id)`、`product_events (tenant_id, occurred_at)`、`product_events (tenant_id, user_id, occurred_at)`。
+- 清理（OB10）：新增专用清理任务（服务启动后与每天一次，不并入现有的工作区清扫定时器），错误样本 90 天、页面访问 180 天，每批最多删除 5,000 行、批间让出，直到删完；之后删除没有样本的 `error_groups`。
 
 ### 6.2 采集与归并
 
@@ -96,7 +97,7 @@
 - 捕获点：
   - `app.config.errorHandler`（组件渲染）、`window` 的 `error`（含捕获阶段的资源加载失败）与 `unhandledrejection`；
   - `api/client.ts` 中的 `ApiError`：5xx、超时与网络失败，带上响应里的 `traceId`；
-  - 失败提示（OB12）：员工端 `notifyActionFailure`、管理端页面错误提示的公共入口，记为 `notice`，带错误码与 `traceId`，不记提示原文以外的页面内容；
+  - 失败提示（OB12）：员工端 `notifyActionFailure`、管理端页面错误提示的公共入口，记为 `notice`，只带错误码、提示模板编号、页面路由名与 `traceId`，**不上报提示原文**（原文可能含文件名、人名等）；
   - 白屏与分片失效（OB13）：`index.html` 内联脚本（不依赖应用打包代码）与 `vite:preloadError`，记为 `load`；
   - SSE 放弃重连时报一条。
 - 上报：批量发送到 `POST /api/client-errors`，页面隐藏或关闭时用 `navigator.sendBeacon`；同一页面加载内同指纹只报一次并计数，每次加载最多 20 条。上报本身失败直接丢弃，不重试、不再触发上报。
@@ -106,19 +107,28 @@
 **服务端：**
 
 - `logHttpFailure` 在写 stderr 之外，异步写入错误表（`source: server`、`kind: http`），只记 5xx；写库失败只写 stderr，不影响已发出的响应。
-- 新增 `uncaughtException`、`unhandledRejection` 处理：同步写 stderr，尽力在 2 秒内写库，然后保持 Node 现有行为（进程退出，由部署的守护进程拉起）。
+- 记录 5xx 时，若路由模板含运行参数（如 `/runs/:runId`），把该运行编号写入样本的 `run_id`；运行侧的链路编号（`run_events.trace_id`，形如 `trace-<runId>`）与接口的链路编号（`trace-http-<uuid>`）是两套编号，关联只靠样本中的 `run_id`（6.5）。
+- 新增 `uncaughtException`、`unhandledRejection` 处理。注册监听器后 Node 不再自动退出，因此处理器同步写 stderr、尽力在 2 秒内写库（超时放弃），然后**显式 `process.exit(1)`**，由部署的守护进程拉起；重复触发只处理第一次。进行中的运行与现在进程崩溃时一样中断，本方案不改变其恢复行为。
 
 **接口 `POST /api/client-errors`：**
 
-- 请求体 ≤32 KB，每批 ≤20 条；已登录按用户每分钟 60 条，未登录（OB6）按来源 IP 每分钟 10 条，超出直接丢弃并返回 202。
+- **来源校验：** 只接受 `Origin` 为本平台员工端或管理端地址的请求（缺少 `Origin` 或不匹配直接拒绝）；内容类型只接受 `text/plain`（`sendBeacon` 发送）与 `application/json`，按固定结构严格校验字段、类型与长度，多余字段拒绝。登录 Cookie 为 `SameSite=Lax`，其他网站发起的上报不会带上员工身份。
+- **身份与租户：** 已登录时取会话中的员工与租户；未登录（OB6）归入平台租户（`tenant-dsh-work`，与本地登录相同），不记用户。
+- **来源 IP：** 服务只监听本机、由 Nginx 反向代理。只有直连地址是回环地址（即来自本机 Nginx）时才采用 `X-Real-IP`，否则用直连地址；不读取 `X-Forwarded-For`。
+- **限量：** 请求体 ≤32 KB，每批 ≤20 条；已登录按员工每分钟 60 条，未登录按来源 IP 每分钟 10 条，另设未登录全局每分钟 300 条；每个租户每小时新增问题组 ≤200 个，超出后新指纹只计入一个“新增问题过多”的汇总组。超出限额的条目直接丢弃，接口仍返回 202。
 - 指纹在服务端计算：`source` + `kind` + 规范化消息（去掉数字、十六进制串、UUID、引号内值）+ 原始堆栈顶层帧（文件名去掉构建哈希）。服务端失败的指纹为路由模板 + 错误码；失败提示为页面 + 错误码。
 - 同一用户同一指纹 1 分钟内的重复只累加 `repeat_count`，不新增样本。
 
-**员工反馈（OB15）：** `POST /api/runs/{runId}/problem-reports`，只能报告自己能看到的运行；带运行编号与最近的 `trace_id`，说明可选，按员工每小时 20 条限流。每条反馈单独成组（不归并），来源 `feedback`。
+**员工反馈（OB15）：** `POST /api/workbench/v1/runs/{runId}/problem-reports`，只能报告自己能看到的运行；带运行编号与最近的 `trace_id`，说明可选，按员工每小时 20 条限流。每条反馈单独成组（不归并），来源 `feedback`。
 
 ### 6.3 脱敏
 
-`http-error-log.ts` 中的 `diagnosticMessage` 目前是模块私有函数；提取到 `server/src/security/safe-observability.ts`，服务端日志、服务端入库与浏览器上报三条路径共用。浏览器上报的消息与堆栈在服务端再脱敏一次，并额外去掉堆栈中的完整网址（只保留文件名与行列号）。员工反馈的说明同样脱敏后保存。
+按字段分别处理，全部在服务端完成，不信任客户端：
+
+- **消息：** `http-error-log.ts` 中的 `diagnosticMessage` 目前是模块私有函数，只保留首行并遮盖凭据、网址与结构化数据；提取到 `server/src/security/safe-observability.ts`，服务端日志、服务端入库与浏览器上报的消息共用。它不识别手机号、证件号、姓名与文件名，因此入库前再按[数据防护](model-data-protection-plan.md) D5 的识别规则遮盖个人信息与密钥。
+- **堆栈：** 不用 `diagnosticMessage`（它只留首行）。逐行解析，只保留每一帧的函数名、文件名（去掉路径与查询参数）与行列号；无法解析为帧的行一律丢弃，因此异常消息中混入堆栈的内容不会进入 `stack`；最多 50 帧。
+- **失败提示：** 不存原文，只存错误码与提示模板编号（6.2）。
+- **员工反馈说明：** 员工自由填写，可能含个人信息。按 D5 规则遮盖密钥与个人信息后保存；页面上标注“员工填写”。
 
 ### 6.4 源码映射（OB7）
 
@@ -128,7 +138,14 @@
 
 新增两个页面，模块 `ops`，只读：“使用情况”放在导航分组“运行治理”，“错误记录”放在“安全与运维”（OB11）。与“运营概览”的分工：概览看**此刻**（实时运行状态、待关注事项），这两页看**一段时间**。
 
-**使用情况**（路由 `/usage`；周期：近 7 / 30 / 90 天或自选）：
+已有的 `/api/admin/v1/usage`（运营概览的 7 日运行趋势）保持不变；新页面使用新的路由与接口前缀，避免同名：
+
+| 页面 | 前端路由 | 接口前缀 | 路径对照表登记 |
+| --- | --- | --- | --- |
+| 使用情况 | `/usage-analytics` | `/api/admin/v1/usage-analytics/…` | `'usage-analytics': ops` |
+| 错误记录 | `/error-records` | `/api/admin/v1/error-records/…` | `'error-records': ops` |
+
+**使用情况**（周期：近 7 / 30 / 90 天或自选）：
 
 - 指标：活跃员工数（期间内有会话活动或页面访问的人数）、日均活跃、新建对话数、运行数与成功率、Token 消耗。
 - 趋势：日活跃员工与日运行数。
@@ -136,14 +153,14 @@
 - **按人明细（OB9）：** 员工列表（可按部门筛选、按姓名搜索），每人显示最近活跃时间、活跃天数、对话数、运行数与成功率、Token、最常用的 AI 同事、最常访问的页面；单独一栏“期间内未使用”列出组织架构中有账号但期间内没有任何活动的员工。点开某人看其每日趋势与功能分布；不展示对话标题与内容，需要排障时跳转 Session 列表。
 - 数据来源：`sessions`、`runs`、`run_attempts`、`model_usage_events`、`workspace_activity_events`、`product_events`、组织架构。
 
-**错误记录**（路由 `/errors`）：
+**错误记录**：
 
 - 视图：**问题**（归并后的前端与服务端错误、失败提示、白屏、员工反馈）与**运行问题**（OB14）。
 - 筛选：来源（员工端 / 管理端 / 服务端 / 员工反馈）、类型（默认不含“提示”）、周期、版本、员工；按最近发生或次数排序。
 - 列表：消息、来源与类型、次数、影响人数、首次与最近发生、最近版本。
 - 详情：最近 20 个样本（时间、员工、页面或路由、客户端、版本、链路编号、运行编号、反馈说明），还原后的堆栈；有运行编号的跳转到 Session 列表详情。
 - **运行问题：** 按原因汇总失败、超时、取消、空回答的运行，以及工具调用失败或被拒绝的次数（按工具）；点开看具体运行。
-- **链路编号查询：** 输入员工报来的链路编号，列出同一编号的服务端失败与浏览器上报；运行失败按 `run_events.trace_id` 一并列出。
+- **编号查询：** 输入员工报来的链路编号（`trace-http-…`），列出同一编号的服务端失败与浏览器上报；这些样本中带有 `run_id` 的，再列出对应运行及其失败原因。也可直接输入运行编号，或运行侧链路编号（`trace-<runId>`），列出该运行的失败信息与所有带此 `run_id` 的样本。接口链路编号与运行之间没有其他对应关系，样本中没有 `run_id` 时只显示接口与浏览器两侧。
 
 ## 7. 覆盖范围
 
@@ -152,7 +169,7 @@
 | 员工遇到的情况 | 是否覆盖 | 如何覆盖 |
 | --- | --- | --- |
 | 页面报错、组件渲染失败、脚本异常 | 是 | 全局错误处理器 |
-| 接口 5xx、超时、网络失败 | 是 | `ApiError` 上报 + 服务端入库，按链路编号关联 |
+| 接口 5xx、超时、网络失败 | 是 | `ApiError` 上报 + 服务端入库，按链路编号关联；涉及运行的接口经样本中的运行编号关联到运行 |
 | 看到“操作失败/无权限/参数不正确”提示 | 是（OB12） | 统一失败提示入口 |
 | 整个页面白屏、升级后打不开 | 是（OB13） | `index.html` 内联脚本与 `vite:preloadError` |
 | 登录或钉钉免登失败 | 是（OB6） | 未登录上报 |
@@ -181,8 +198,8 @@
 
 只做本机验证。
 
-- **单元：** 指纹规范化、脱敏（密钥、令牌、网址参数、个人信息样例）、限流与去重、源码映射还原。
-- **P1（PostgreSQL 集成）：** 上报 → 归并 → 统计；未登录上报限流；服务端 500 入库并与浏览器上报按链路编号关联；运行失败与空回答可查；按人明细与“期间内未使用”正确；非 `ops` 管理员被拒绝；清理任务按天数删除；员工只能报告自己可见的运行。
+- **单元：** 指纹规范化、脱敏（密钥、令牌、网址参数、个人信息样例；多行消息与堆栈只留帧位置）、来源 IP 取值（回环直连才信任 `X-Real-IP`）、`Origin` 与内容类型校验、限流、去重与新增问题组上限、源码映射还原、进程异常处理器写库超时后退出。
+- **P1（PostgreSQL 集成）：** 上报 → 归并 → 统计；未登录上报限流；服务端 500 入库并与浏览器上报按链路编号关联、带运行参数的路由样本可查到运行；清理任务分批删除；运行失败与空回答可查；按人明细与“期间内未使用”正确；非 `ops` 管理员被拒绝；清理任务按天数删除；员工只能报告自己可见的运行。
 - **P0 浏览器冒烟：** 冒烟服务提供确定性数据，两个页面可打开、筛选与详情可用；员工端触发一次渲染错误与一次失败提示后上报请求发出。
 - 验收旅程先写入 `e2e/catalog/admin-platform.md`（员工反馈写入 `e2e/catalog/workbench.md`，Spec 先行）。
 
@@ -193,6 +210,8 @@
 - [内部端口与契约](../development/internal-ports.md)：上报接口与脱敏函数。
 - [功能规则](../development/feature-rules.md)：采集范围、按人明细的可见范围、保留期、不采集内容的约定。
 - [架构总览第 10 节](../development/overview.md#10-当前边界与独立开发)：第一期不做告警、日志集中存放与性能监控。
-- 管理端导航（`packages/admin-components/src/AdminShell.vue` 的“运行治理”“安全与运维”分组）与 `apps/admin-web/src/App.test.ts`。
+- 管理端导航（`packages/admin-components/src/AdminShell.vue` 的“运行治理”“安全与运维”分组）、管理端路由（`apps/admin-web/src/router/index.ts`，`module: 'ops'`）与 `apps/admin-web/src/App.test.ts`。
+- 管理端接口路径对照表（`server/src/domain/admin-permissions.ts` 的 `ROUTE_SEGMENT_RULES`，登记 `usage-analytics`、`error-records`；未登记的路径一律拒绝）与[功能规则第 13 节](../development/feature-rules.md#13-管理端模块权限amp-s1amp-s2)。
+- 员工端主导航不变（“报告问题”在回答上），不涉及 `personal-workbench.spec.ts`、`collab-mode.spec.ts` 的导航断言。
 - 验收目录 `e2e/catalog/admin-platform.md`、`e2e/catalog/workbench.md`；P0 冒烟服务的确定性数据。
 - 发布打包脚本：源码映射移出前端静态目录。
