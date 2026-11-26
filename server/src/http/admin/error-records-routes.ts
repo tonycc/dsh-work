@@ -12,7 +12,7 @@ export function registerErrorRecordsRoutes(router: Router, records: ErrorRecords
   router.get(`${basePath}/groups`, async (_request, context) =>
     envelope('admin', await records.listGroups(parseErrorGroupFilter(context.url.searchParams)), adapter))
   router.get(`${basePath}/groups/:groupId`, async (_request, context) => {
-    const detail = await records.getGroup(context.params.groupId!)
+    const detail = await records.getGroup(context.params.groupId!, parseErrorRange(context.url.searchParams.get('range')))
     if (!detail) throw Object.assign(new Error('没有找到该问题'), { status: 404, code: 'error_group_not_found' })
     return envelope('admin', detail, adapter)
   })

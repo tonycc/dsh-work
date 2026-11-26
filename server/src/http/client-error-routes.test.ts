@@ -73,6 +73,17 @@ test('anonymous reports are accepted without identity and limited per address', 
   assert.deepEqual((await other.json()).data, { accepted: 1, dropped: 0 })
 })
 
+test('anonymous global allowance is only charged for reports an address was allowed', async () => {
+  // 一个地址每分钟最多 10 条；它反复发满批次也只占全局额度 10 条，其他地址的白屏上报仍能进来。
+  const batch = { app: 'admin', reports: Array.from({ length: 20 }, () => report()) }
+  for (let index = 0; index < 20; index += 1) await send(batch, { app: 'admin', realIp: '10.8.0.1' })
+  // 同一文件前面的未登录用例已占 11 条全局额度：10 + 27×10 + 11 = 291 ≤ 300。
+  for (let index = 2; index <= 28; index += 1) {
+    const response = await send({ app: 'admin', reports: Array.from({ length: 10 }, () => report()) }, { app: 'admin', realIp: `10.8.0.${index}` })
+    assert.equal((await response.json()).data.accepted, 10, `address ${index}`)
+  }
+})
+
 test('cross-site, wrong content type, malformed and oversized reports are rejected', async () => {
   assert.equal((await send({ app: 'workbench', reports: [report()] }, { origin: 'http://evil.test' })).status, 403)
   assert.equal((await send({ app: 'workbench', reports: [report()] }, { contentType: 'multipart/form-data' })).status, 422)

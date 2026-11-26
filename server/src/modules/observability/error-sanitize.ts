@@ -29,9 +29,24 @@ export function maskPersonalData(text: string): string {
   return result
 }
 
+// 中英文引号与书名号括起的内容。
+const QUOTED = /“[^”]{0,500}”|‘[^’]{0,500}’|「[^」]{0,500}」|『[^』]{0,500}』|"[^"]{0,500}"|'[^']{0,500}'|`[^`]{0,500}`/g
+const IDENTIFIER = /^[A-Za-z_$][\w$.-]{0,80}$/
+
+/**
+ * 引号里的内容多是业务文字（对象名、文件名、员工输入），一律替换为“[内容]”（PR #171 评审）；
+ * 只由字母、数字、下划线组成的标识符（如 `'artifacts'`）保留，便于排查。
+ */
+export function maskQuotedText(text: string): string {
+  return text.replace(QUOTED, match => {
+    const inner = match.slice(1, -1)
+    return IDENTIFIER.test(inner) ? match : `${match[0]}[内容]${match.at(-1)}`
+  })
+}
+
 export function sanitizeErrorMessage(value: unknown): string {
   const text = typeof value === 'string' ? value : ''
-  const cleaned = maskPersonalData(diagnosticMessage(text)).trim()
+  const cleaned = maskPersonalData(maskQuotedText(diagnosticMessage(text))).trim()
   return (cleaned || '未提供错误消息').slice(0, 1_024)
 }
 

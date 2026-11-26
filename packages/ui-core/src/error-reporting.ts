@@ -5,7 +5,7 @@ import type { App } from 'vue'
  *
  * - 捕获组件渲染错误、未处理的脚本错误与 Promise 拒绝、接口 5xx/超时/网络失败、失败提示、
  *   升级后分片加载失败与实时流放弃重连；
- * - 同一页面加载内同一问题只上报一次并计数，每次加载最多 20 个问题；
+ * - 同一页面加载内同一问题首次出现时上报，之后只累计次数、最多每分钟（及页面隐藏时）补报一次，每次加载最多 20 个问题；
  * - 批量发送到 `/auth/{app}/client-errors`（登录前的页面也能上报），页面隐藏时用 `sendBeacon`；上报失败直接丢弃，不重试、不再触发上报；
  * - 失败提示只报错误码与提示模板（动作名），不报提示原文；不报请求体、页面文字与查询参数。
  */
@@ -36,6 +36,8 @@ export interface ErrorReporterOptions {
   /** 测试替身；默认 `navigator.sendBeacon`，不可用时用 `fetch(keepalive)`。 */
   transport?: (url: string, body: string) => void
   flushDelayMs?: number
+  /** 已上报问题再次出现时，累计次数最多多久补报一次。 */
+  repeatDelayMs?: number
   maxProblems?: number
 }
 
@@ -62,15 +64,15 @@ function defaultTransport(url: string, body: string) {
 }
 
 export class ErrorReporter {
-  private readonly options: Required<Pick<ErrorReporterOptions, 'app' | 'endpoint' | 'flushDelayMs' | 'maxProblems'>> & ErrorReporterOptions
-  private readonly seen = new Set<string>()
-  private readonly pending = new Map<string, QueuedReport>()
-  private queue: QueuedReport[] = []
+  private readonly options: Required<Pick<ErrorReporterOptions, 'app' | 'endpoint' | 'flushDelayMs' | 'repeatDelayMs' | 'maxProblems'>> & ErrorReporterOptions
+  /** 本次页面加载见过的问题；`unsent` 为尚未发出的次数。 */
+  private readonly entries = new Map<string, { report: QueuedReport; unsent: number; sent: boolean }>()
   private timer: ReturnType<typeof setTimeout> | undefined
+  private repeatTimer: ReturnType<typeof setTimeout> | undefined
   private reporting = false
 
   constructor(options: ErrorReporterOptions) {
-    this.options = { endpoint: `/auth/${options.app}/client-errors`, flushDelayMs: 2_000, maxProblems: 20, ...options }
+    this.options = { endpoint: `/auth/${options.app}/client-errors`, flushDelayMs: 2_000, repeatDelayMs: 60_000, maxProblems: 20, ...options }
   }
 
   report(input: ErrorReport): void {
@@ -80,19 +82,16 @@ export class ErrorReporter {
       const report = this.normalize(input)
       if (!report) return
       const key = [report.kind, report.code ?? '', report.template ?? '', report.route ?? '', (report.message ?? '').slice(0, 200), (report.stack ?? '').split('\n', 2)[1] ?? ''].join('|')
-      const pending = this.pending.get(key)
-      if (pending) {
-        // 尚未发出：只累加次数。
-        pending.count = Math.min(pending.count + 1, 1_000)
+      const entry = this.entries.get(key)
+      if (entry) {
+        // 再次出现只累加次数：未发出的随首次上报一起发；已发出的按 repeatDelayMs 合并一次（或页面隐藏时）补报。
+        entry.unsent = Math.min(entry.unsent + 1, 1_000)
+        if (entry.sent) this.scheduleRepeat()
         return
       }
-      if (!this.seen.has(key)) {
-        if (this.seen.size >= this.options.maxProblems) return
-        this.seen.add(key)
-      }
-      // 第一次出现，或上一批已发出后再次出现：新起一条，次数从 1 开始。
-      this.pending.set(key, report)
-      this.queue.push(report)
+      if (this.entries.size >= this.options.maxProblems) return
+      // 第一次出现：flushDelayMs 后上报。
+      this.entries.set(key, { report, unsent: 1, sent: false })
       this.schedule()
     } catch {
       // 上报器自身的问题不得影响页面。
@@ -126,12 +125,21 @@ export class ErrorReporter {
     })
   }
 
+  /** 发出全部未发出的次数（首次上报与累计的重复次数）。 */
   flush(): void {
     if (this.timer) clearTimeout(this.timer)
+    if (this.repeatTimer) clearTimeout(this.repeatTimer)
     this.timer = undefined
-    this.pending.clear()
-    while (this.queue.length) {
-      const batch = this.queue.splice(0, BATCH_SIZE)
+    this.repeatTimer = undefined
+    const queue: QueuedReport[] = []
+    for (const entry of this.entries.values()) {
+      if (entry.unsent === 0) continue
+      queue.push({ ...entry.report, count: entry.unsent })
+      entry.unsent = 0
+      entry.sent = true
+    }
+    while (queue.length) {
+      const batch = queue.splice(0, BATCH_SIZE)
       const body = JSON.stringify({ app: this.options.app, reports: batch })
       const url = this.options.endpoint
       try {
@@ -146,7 +154,7 @@ export class ErrorReporter {
   install(app: App): void {
     const previous = app.config.errorHandler
     app.config.errorHandler = (error, instance, info) => {
-      this.report({ kind: 'render', message: errorMessage(error), stack: errorStack(error) })
+      this.report({ kind: 'render', ...describeError(error) })
       if (previous) previous(error, instance, info)
       else console.error(error)
     }
@@ -158,10 +166,10 @@ export class ErrorReporter {
         if (tag === 'SCRIPT' || tag === 'LINK') this.report({ kind: 'load', message: `${tag === 'SCRIPT' ? '脚本' : '样式'}加载失败` })
         return
       }
-      this.report({ kind: 'script', message: event.message, stack: errorStack(event.error) })
+      this.report({ kind: 'script', ...(event.error ? describeError(event.error) : { message: event.message }) })
     }, true)
     window.addEventListener('unhandledrejection', event => {
-      this.report({ kind: 'promise', message: errorMessage(event.reason), stack: errorStack(event.reason) })
+      this.report({ kind: 'promise', ...describeError(event.reason) })
     })
     // 升级后旧页面加载新分片失败：提示刷新并上报（Vite 预加载失败事件）。
     window.addEventListener('vite:preloadError', () => {
@@ -174,9 +182,13 @@ export class ErrorReporter {
   }
 
   private schedule() {
-    if (this.queue.length >= BATCH_SIZE) { this.flush(); return }
     if (this.timer) return
     this.timer = setTimeout(() => this.flush(), this.options.flushDelayMs)
+  }
+
+  private scheduleRepeat() {
+    if (this.repeatTimer || this.timer) return
+    this.repeatTimer = setTimeout(() => this.flush(), this.options.repeatDelayMs)
   }
 
   private normalize(input: ErrorReport): QueuedReport | null {
@@ -201,13 +213,23 @@ export class ErrorReporter {
   }
 }
 
-function errorMessage(error: unknown): string {
-  if (error instanceof Error) return `${error.name}: ${error.message}`
-  return typeof error === 'string' ? error : '未知错误'
-}
-
-function errorStack(error: unknown): string | undefined {
-  return error instanceof Error && typeof error.stack === 'string' ? error.stack : undefined
+/**
+ * 平台接口错误（带 `code` 与 HTTP `status`）的消息是给员工看的提示，可能含对象名，只报错误码与链路编号；
+ * 其他异常报名称与消息（服务端再脱敏，引号内容一律去掉）。
+ */
+function describeError(error: unknown): Pick<ErrorReport, 'message' | 'stack' | 'code' | 'traceId'> {
+  const candidate = (error && typeof error === 'object' ? error : {}) as { code?: unknown; status?: unknown; traceId?: unknown; name?: unknown }
+  if (typeof candidate.code === 'string' && typeof candidate.status === 'number') {
+    return {
+      message: `${typeof candidate.name === 'string' ? candidate.name : 'ApiError'} (${candidate.status})`,
+      code: candidate.code,
+      traceId: typeof candidate.traceId === 'string' ? candidate.traceId : undefined,
+    }
+  }
+  if (error instanceof Error) {
+    return { message: `${error.name}: ${error.message}`, stack: typeof error.stack === 'string' ? error.stack : undefined }
+  }
+  return { message: typeof error === 'string' ? error : '未知错误' }
 }
 
 let shared: ErrorReporter | undefined

@@ -91,8 +91,8 @@ export function originalPosition(map: DecodedMap, line: number, column: number) 
   }
 }
 
-const RELEASE_DIR = /^[A-Za-z0-9_.+-]{1,64}$/
-const MAP_FILE = /^[\w.@-]{1,120}\.js$/
+const RELEASE_DIR = /^(?!.*\.\.)[A-Za-z0-9_.+-]{1,64}$/
+const MAP_FILE = /^(?!.*\.\.)[\w.@-]{1,120}\.js$/
 
 export function createSourceMapStackResolver(directory = defaultDirectory()): StackResolver {
   const cache = new Map<string, Promise<DecodedMap | null>>()
@@ -100,7 +100,11 @@ export function createSourceMapStackResolver(directory = defaultDirectory()): St
     const key = `${release}/${file}`
     let pending = cache.get(key)
     if (!pending) {
-      pending = readFile(path.join(directory, release, `${file}.map`), 'utf8')
+      // 只读取映射目录内的文件：版本号或文件名即使绕过格式检查也不能走出目录（PR #171 评审）。
+      const root = path.resolve(directory)
+      const target = path.resolve(root, release, `${file}.map`)
+      if (!target.startsWith(`${root}${path.sep}`)) return Promise.resolve(null)
+      pending = readFile(target, 'utf8')
         .then(decodeSourceMap)
         .catch(() => null)
       if (cache.size > 200) cache.clear()

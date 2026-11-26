@@ -453,7 +453,7 @@ export const adminApi = {
       range: filter.range, source: filter.source, release: filter.release, sort: filter.sort,
       include_notice: filter.includeNotice ? 'true' : undefined,
     })}`),
-  getErrorGroup: (id: string) => request<ErrorGroupDetail>(`/error-records/groups/${encodeURIComponent(id)}`),
+  getErrorGroup: (id: string, range: ErrorRange) => request<ErrorGroupDetail>(`/error-records/groups/${encodeURIComponent(id)}${listQuery({ range })}`),
   getRunProblems: (range: ErrorRange) => request<RunProblemSummary>(`/error-records/run-problems${listQuery({ range })}`),
   lookupErrorRecords: (query: string) => request<ErrorLookupResult>(`/error-records/lookup${listQuery({ q: query })}`),
   getModelProviders: () => request<ModelProvider[]>('/model-providers'),

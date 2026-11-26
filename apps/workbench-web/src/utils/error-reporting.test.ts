@@ -28,10 +28,17 @@ describe('ErrorReporter', () => {
       { kind: 'render', count: 3, message: 'TypeError: boom', stack: 'TypeError\n    at a (x.js:1:2)', route: 'conversation', release: '2026.11.26-01' },
       { kind: 'promise', count: 1, message: 'other', route: 'conversation', release: '2026.11.26-01' },
     ])
-    // 已发出后再次出现：只把新增次数再报一次。
+    // 已发出后反复出现：不逐次发送，累计后最多每分钟补报一次。
+    for (let index = 0; index < 50; index += 1) reporter.report({ kind: 'render', message: 'TypeError: boom', stack: 'TypeError\n    at a (x.js:1:2)' })
+    vi.advanceTimersByTime(59_000)
+    expect(transport).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(1_000)
+    expect(transport).toHaveBeenCalledTimes(2)
+    expect(captured(transport)[1]!.reports).toEqual([expect.objectContaining({ kind: 'render', count: 50 })])
+    // 页面隐藏时补报剩余次数。
     reporter.report({ kind: 'render', message: 'TypeError: boom', stack: 'TypeError\n    at a (x.js:1:2)' })
-    vi.advanceTimersByTime(2_000)
-    expect(captured(transport)[1]!.reports).toEqual([expect.objectContaining({ kind: 'render', count: 1 })])
+    reporter.flush()
+    expect(captured(transport)[2]!.reports).toEqual([expect.objectContaining({ kind: 'render', count: 1 })])
   })
 
   it('caps distinct problems per page load', () => {
@@ -66,6 +73,19 @@ describe('ErrorReporter', () => {
     expect(reports).toEqual([{ kind: 'notice', count: 1, template: '打开项目', route: 'project-space', traceId, code: 'forbidden' }])
     expect(JSON.stringify(reports)).not.toContain('13800138000')
     expect(JSON.stringify(reports)).not.toContain('机密')
+  })
+
+  it('reports platform API errors thrown unhandled by code only, never their message', () => {
+    const transport = vi.fn()
+    const reporter = new ErrorReporter({ app: 'workbench', transport })
+    const app = createApp(defineComponent({ render: () => null }))
+    reporter.install(app)
+    const apiError = Object.assign(new Error('名称“张三的合同”已存在'), { name: 'WorkbenchApiError', code: 'conflict', status: 409, traceId })
+    window.dispatchEvent(Object.assign(new Event('unhandledrejection'), { reason: apiError }))
+    reporter.flush()
+    const reports = captured(transport)[0]!.reports
+    expect(reports).toEqual([expect.objectContaining({ kind: 'promise', message: 'WorkbenchApiError (409)', code: 'conflict', traceId })])
+    expect(JSON.stringify(reports)).not.toContain('张三')
   })
 
   it('captures Vue render errors and never throws from reporting', () => {

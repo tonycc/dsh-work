@@ -81,13 +81,17 @@ export class PostgresErrorRecordsService implements ErrorRecordsQueryPort {
       let fingerprint = input.fingerprint
       let kind: string = input.kind
       let message = input.message
-      if (!groupId) {
+      // 新增问题组上限只约束浏览器上报（可未登录、可被刷），按来源分别计数；服务端 5xx 与进程异常不受限，
+      // 不会因浏览器端被刷而并入汇总组。计数与写入在同一事务内按“租户 + 来源”加锁，并发写入不会越过上限。
+      if (!groupId && (input.source === 'workbench' || input.source === 'admin')) {
+        await sql`select pg_advisory_xact_lock(hashtext(${`error-groups:${tenantId}:${input.source}`}))`
         const [{ recent }] = await sql<{ recent: number }[]>`
           select count(*)::integer as recent from error_groups
-           where tenant_id = ${tenantId} and first_seen_at > now() - interval '1 hour' and kind <> 'overflow'
+           where tenant_id = ${tenantId} and source = ${input.source}
+             and first_seen_at > now() - interval '1 hour' and kind <> 'overflow'
         `
         if (recent >= NEW_GROUPS_PER_HOUR) {
-          // 新增问题过多（评审第 2 条）：新指纹并入每个来源一个的汇总组，避免灌入大量假问题组。
+          // 新增问题过多（PR #169 评审第 2 条）：新指纹并入该来源的汇总组，避免灌入大量假问题组。
           fingerprint = fingerprintOf(['overflow', input.source])
           kind = 'overflow'
           message = '新增问题过多，这段时间的新问题未单独归并'
@@ -160,13 +164,19 @@ export class PostgresErrorRecordsService implements ErrorRecordsQueryPort {
     return { items: rows.map(toSummary), releases: releases.map(row => row.release) }
   }
 
-  async getGroup(id: string): Promise<ErrorGroupDetail | null> {
+  async getGroup(id: string, range: ErrorRange): Promise<ErrorGroupDetail | null> {
     const sql = this.database
-    const [group] = await sql<GroupRow[]>`
+    // 次数、人数与列表同一周期口径（PR #171 评审）；累计次数另给 totalCount。
+    const since = sql`now() - make_interval(days => ${ERROR_RANGE_DAYS[range]})`
+    const [group] = await sql<(GroupRow & { totalCount: number })[]>`
       select g.id, g.source, g.kind, g.message,
-             g.occurrence_count as count,
-             (select count(distinct user_id)::integer from error_occurrences o where o.tenant_id = g.tenant_id and o.group_id = g.id) as people,
-             exists (select 1 from error_occurrences o where o.tenant_id = g.tenant_id and o.group_id = g.id and o.user_id is null) as anonymous,
+             g.occurrence_count as "totalCount",
+             (select coalesce(sum(repeat_count), 0)::integer from error_occurrences o
+               where o.tenant_id = g.tenant_id and o.group_id = g.id and o.occurred_at > ${since}) as count,
+             (select count(distinct user_id)::integer from error_occurrences o
+               where o.tenant_id = g.tenant_id and o.group_id = g.id and o.occurred_at > ${since}) as people,
+             exists (select 1 from error_occurrences o where o.tenant_id = g.tenant_id and o.group_id = g.id
+                      and o.user_id is null and o.occurred_at > ${since}) as anonymous,
              g.first_seen_at as "firstSeenAt", g.last_seen_at as "lastSeenAt", g.last_release as "lastRelease",
              null::text as route
         from error_groups g where g.tenant_id = ${tenantId} and g.id = ${id}
@@ -194,6 +204,7 @@ export class PostgresErrorRecordsService implements ErrorRecordsQueryPort {
     }
     return {
       ...toSummary({ ...group, route: samples[0]?.route ?? null }),
+      totalCount: Number(group.totalCount),
       stack, stackResolved, samples: samples.map(toSample),
     }
   }

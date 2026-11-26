@@ -67,6 +67,8 @@ export interface ErrorSample {
 }
 
 export interface ErrorGroupDetail extends ErrorGroupSummary {
+  /** 自首次出现以来的累计次数；`count`、`people` 与列表同一周期。 */
+  totalCount: number
   /** 最近样本的堆栈：浏览器堆栈按源码映射还原（还原不了时为原始帧位置）。 */
   stack: string | null
   stackResolved: boolean
@@ -102,7 +104,7 @@ export interface ErrorLookupResult {
 
 export interface ErrorRecordsQueryPort {
   listGroups(filter: ErrorGroupFilter): Promise<ErrorGroupList>
-  getGroup(id: string): Promise<ErrorGroupDetail | null>
+  getGroup(id: string, range: ErrorRange): Promise<ErrorGroupDetail | null>
   runProblems(range: ErrorRange): Promise<RunProblemSummary>
   lookup(query: string): Promise<ErrorLookupResult>
 }

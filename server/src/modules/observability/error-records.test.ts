@@ -8,10 +8,14 @@ import {
   clientSummary,
   parseClientErrorBatch,
 } from './client-error-report.ts'
-import { maskPersonalData, normalizeForFingerprint, sanitizeErrorMessage, sanitizeStack } from './error-sanitize.ts'
+import { maskPersonalData, maskQuotedText, normalizeForFingerprint, sanitizeErrorMessage, sanitizeStack } from './error-sanitize.ts'
 import { FixedWindowLimiter } from './fixed-window-limiter.ts'
 import { installProcessFailureHandlers, serverFailureRecord } from './server-failure-records.ts'
-import { decodeSourceMap, originalPosition } from './source-map-resolver.ts'
+import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+
+import { createSourceMapStackResolver, decodeSourceMap, originalPosition } from './source-map-resolver.ts'
 
 const traceId = 'trace-http-7c1e9d20-0f3b-4a8e-9b61-5d2c88e4b42a'
 
@@ -156,4 +160,27 @@ test('source maps resolve minified positions', () => {
   assert.equal(originalPosition(decoded, 1, 12)?.source, 'src/b.ts')
   assert.equal(originalPosition(decoded, 2, 1), null)
   assert.throws(() => decodeSourceMap('{"version":2}'))
+})
+
+test('quoted business text is masked; plain identifiers are kept', () => {
+  assert.equal(maskQuotedText('名称“张三的合同”已存在'), '名称“[内容]”已存在')
+  assert.equal(maskQuotedText("Cannot read properties of undefined (reading 'artifacts')"), "Cannot read properties of undefined (reading 'artifacts')")
+  assert.equal(maskQuotedText('文件 "季度 报表.xlsx" 解析失败'), '文件 "[内容]" 解析失败')
+  assert.equal(sanitizeErrorMessage('项目「华东大客户」无权查看'), '项目「[内容]」无权查看')
+})
+
+test('source map lookups never leave the source map directory', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'dsh-maps-'))
+  const outside = path.join(root, 'outside')
+  await mkdir(path.join(root, 'maps', 'v1'), { recursive: true })
+  await mkdir(outside, { recursive: true })
+  const map = JSON.stringify({ version: 3, sources: ['../src/secret.ts'], names: [], mappings: 'AAAA' })
+  await writeFile(path.join(outside, 'a.js.map'), map)
+  await writeFile(path.join(root, 'maps', 'v1', 'a.js.map'), map)
+  const resolve = createSourceMapStackResolver(path.join(root, 'maps'))
+  const stack = '  at f (a.js:1:1)'
+  assert.equal((await resolve(stack, '..')).resolved, false)
+  assert.equal((await resolve(stack, '../outside')).resolved, false)
+  assert.equal((await resolve(stack, 'v1..')).resolved, false)
+  assert.equal((await resolve(stack, 'v1')).resolved, true)
 })

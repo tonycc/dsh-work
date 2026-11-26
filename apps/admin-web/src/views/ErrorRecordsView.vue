@@ -141,7 +141,7 @@ async function openGroup(item: ErrorGroupSummary) {
   detail.value = undefined
   detailLoading.value = true
   try {
-    detail.value = await adminApi.getErrorGroup(item.id)
+    detail.value = await adminApi.getErrorGroup(item.id, range.value)
   } catch (cause) {
     drawerOpen.value = false
     error.value = cause instanceof Error ? cause.message : '问题详情加载失败'
@@ -309,7 +309,7 @@ onMounted(reload)
           <div class="error-detail__hero">
             <el-tag :type="tagType(detail)" effect="light">{{ sourceText(detail) }}</el-tag>
             <h2>{{ detail.message }}</h2>
-            <p>共 {{ detail.count }} 次 · {{ peopleText(detail) }} 人 · 首次 {{ time(detail.firstSeenAt) }} · 最近 {{ time(detail.lastSeenAt) }}</p>
+            <p>{{ rangeOptions.find(option => option.value === range)?.label }} {{ detail.count }} 次 · {{ peopleText(detail) }} 人 · 累计 {{ detail.totalCount }} 次 · 首次 {{ time(detail.firstSeenAt) }} · 最近 {{ time(detail.lastSeenAt) }}</p>
           </div>
           <section aria-label="最近样本">
             <h3>最近样本</h3>

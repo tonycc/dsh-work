@@ -1265,6 +1265,7 @@ export interface ErrorSample {
 }
 
 export interface ErrorGroupDetail extends ErrorGroupSummary {
+  totalCount: number
   stack: string | null
   stackResolved: boolean
   samples: ErrorSample[]

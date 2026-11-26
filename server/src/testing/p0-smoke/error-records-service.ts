@@ -18,12 +18,12 @@ export const SMOKE_RUN_ID = 'run-smoke-err-001'
 
 const hoursAgo = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString()
 
-const groups: ErrorGroupDetail[] = [
+const groups: Array<Omit<ErrorGroupDetail, 'totalCount'> & { totalCount?: number }> = [
   {
     id: 'err-smoke-render', source: 'workbench', kind: 'render', route: 'conversation',
     message: "TypeError: Cannot read properties of undefined (reading 'artifacts')",
     count: 37, people: 12, anonymous: false, firstSeenAt: hoursAgo(50), lastSeenAt: hoursAgo(1), lastRelease: '2026.11.26-01',
-    stack: '  at renderArtifacts (src/components/ArtifactList.vue:48:22)\n  at setup (src/views/ConversationView.vue:312:9)', stackResolved: true,
+    stack: '  at renderArtifacts (src/components/ArtifactList.vue:48:22)\n  at setup (src/views/ConversationView.vue:312:9)', stackResolved: true, totalCount: 52,
     samples: [
       { occurredAt: hoursAgo(1), userId: 'U00001', userName: '林岚', route: 'conversation', client: 'Chrome 131 / macOS', release: '2026.11.26-01', traceId: null, runId: null, repeatCount: 2 },
       { occurredAt: hoursAgo(3), userId: 'U00002', userName: '赵宁', route: 'conversation', client: '钉钉 iOS', release: '2026.11.26-01', traceId: null, runId: null, repeatCount: 1 },
@@ -77,12 +77,13 @@ export class SmokeErrorRecordsService implements ErrorRecordsQueryPort {
       .filter(group => filter.includeNotice || group.kind !== 'notice')
       .filter(group => !filter.release || group.lastRelease === filter.release)
       .sort((a, b) => filter.sort === 'count' ? b.count - a.count : Date.parse(b.lastSeenAt) - Date.parse(a.lastSeenAt))
-      .map(({ stack: _stack, stackResolved: _resolved, samples: _samples, ...summary }) => summary)
+      .map(({ stack: _stack, stackResolved: _resolved, samples: _samples, totalCount: _total, ...summary }) => summary)
     return { items, releases: ['2026.11.26-01', '2026.11.16-01'] }
   }
 
   async getGroup(id: string) {
-    return groups.find(group => group.id === id) ?? null
+    const group = groups.find(item => item.id === id)
+    return group ? { ...group, totalCount: group.totalCount ?? group.count } : null
   }
 
   async runProblems(): Promise<RunProblemSummary> {

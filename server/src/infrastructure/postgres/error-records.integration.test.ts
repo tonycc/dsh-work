@@ -97,12 +97,19 @@ test('reports of the same problem merge, repeats within a minute only add to the
     select repeat_count as "repeatCount" from error_occurrences where tenant_id = ${tenantId} order by repeat_count desc`
   assert.deepEqual(samples.map(row => row.repeatCount), [3, 1, 1])
 
-  const detail = await records.getGroup(group!.id)
+  const detail = await records.getGroup(group!.id, '7d')
   assert.equal(detail!.samples.length, 3)
   assert.equal(detail!.stackResolved, true)
   assert.match(detail!.stack!, /ConversationView\.vue:312:9/)
   assert.equal(detail!.samples.find(sample => sample.userId === 'U00001')?.userName !== undefined, true)
-  assert.equal(await records.getGroup('err-missing'), null)
+  assert.equal(detail!.count, 5)
+  assert.equal(detail!.totalCount, 5)
+  assert.equal(await records.getGroup('err-missing', '7d'), null)
+  // 详情的次数与列表同一周期口径，累计次数另给。
+  await database`update error_occurrences set occurred_at = now() - interval '10 days' where tenant_id = ${tenantId} and repeat_count = 3`
+  const week = await records.getGroup(group!.id, '7d')
+  assert.deepEqual([week!.count, week!.totalCount, week!.people], [2, 5, 1])
+  assert.equal((await records.getGroup(group!.id, '30d'))!.count, 5)
 })
 
 test('filters: notices are hidden by default, source and sort apply', async () => {
@@ -184,6 +191,32 @@ test('run problems count failures, timeouts, cancellations, empty answers and to
   assert.deepEqual(toolCounts(summary, 'bash').map((value, index) => value - toolCounts(before, 'bash')[index]!), [1, 1])
   assert.deepEqual(toolCounts(summary, 'web_fetch').map((value, index) => value - toolCounts(before, 'web_fetch')[index]!), [0, 1])
   assert.equal((await records.runProblems('90d')).timedOut - before90.timedOut, 2)
+})
+
+test('server failures are never folded by the browser new-group cap, and each browser source has its own cap', async () => {
+  await database`
+    insert into error_groups (id, tenant_id, fingerprint, source, kind, message)
+    select 'err-wb-' || n, ${tenantId}, 'wb-' || n, 'workbench', 'script', 'bulk'
+      from generate_series(1, ${NEW_GROUPS_PER_HOUR}) as n
+  `
+  await records.record(serverFailureRecord({ traceId: 'trace-http-11111111-2222-3333-4444-666666666666', method: 'POST',
+    routePath: '/api/workbench/v1/sessions', status: 500, code: 'operation_failed', errorMessage: 'x', params: {}, userId: null }, null))
+  await records.record({ ...clientRecord({ fingerprint: 'admin-new', message: 'admin' }), source: 'admin' })
+  const rows = await database<{ source: string; kind: string }[]>`
+    select source, kind from error_groups where tenant_id = ${tenantId} and source in ('server', 'admin') order by source`
+  assert.deepEqual([...rows], [{ source: 'admin', kind: 'render' }, { source: 'server', kind: 'http' }])
+})
+
+test('concurrent new browser problems do not exceed the per-hour cap', async () => {
+  await database`
+    insert into error_groups (id, tenant_id, fingerprint, source, kind, message)
+    select 'err-near-' || n, ${tenantId}, 'near-' || n, 'workbench', 'script', 'bulk'
+      from generate_series(1, ${NEW_GROUPS_PER_HOUR - 2}) as n
+  `
+  await Promise.all(Array.from({ length: 6 }, (_, index) => records.record(clientRecord({ fingerprint: `race-${index}`, message: `race ${index}` }))))
+  const [{ created }] = await database<{ created: number }[]>`
+    select count(*)::integer as created from error_groups where tenant_id = ${tenantId} and source = 'workbench' and kind <> 'overflow'`
+  assert.equal(created, NEW_GROUPS_PER_HOUR)
 })
 
 test('too many new problems per hour fold into one overflow group', async () => {

@@ -74,7 +74,8 @@ export function registerClientErrorRoutes(router: Router, options: ClientErrorRo
     const reports = batch.reports
     const allowed = identity
       ? perUser.take(`user:${identity.userId}`, reports.length)
-      : Math.min(perAddress.take(`ip:${clientAddress(request)}`, reports.length), anonymousTotal.take('anonymous', reports.length))
+      // 全局额度只扣按来源地址实际放行的条数，单个来源不能多占全局额度（PR #171 评审）。
+      : anonymousTotal.take('anonymous', perAddress.take(`ip:${clientAddress(request)}`, reports.length))
     const client = clientSummary(request.headers['user-agent'])
     for (const report of reports.slice(0, allowed)) {
       await options.record({ ...report, source: app, client, userId: identity?.userId ?? null })
