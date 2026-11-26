@@ -77,6 +77,13 @@ server {
     include /etc/nginx/proxy_params;
   }
 
+  # Hashed build output. A file missing here is a chunk from an earlier release requested by a tab
+  # opened before the upgrade: answer 404 (not index.html as HTML-with-200) so the page sees a real
+  # load failure and reloads once. No add_header here, so the server-level headers stay inherited.
+  location /assets/ {
+    try_files $uri =404;
+  }
+
   location / {
     try_files $uri $uri/ /index.html;
   }
@@ -127,6 +134,13 @@ server {
   location /auth/ {
     proxy_pass http://dsh_work_server;
     include /etc/nginx/proxy_params;
+  }
+
+  # Hashed build output. A file missing here is a chunk from an earlier release requested by a tab
+  # opened before the upgrade: answer 404 (not index.html as HTML-with-200) so the page sees a real
+  # load failure and reloads once. No add_header here, so the server-level headers stay inherited.
+  location /assets/ {
+    try_files $uri =404;
   }
 
   location / {
