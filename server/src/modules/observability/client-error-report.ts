@@ -3,6 +3,7 @@ import type { IncomingMessage } from 'node:http'
 
 import { CLIENT_ERROR_KINDS, type ClientErrorKind, type ErrorKind, type ErrorSource } from '../../domain/error-records.ts'
 import {
+  maskPersonalData,
   normalizeForFingerprint,
   parseStackFrames,
   sanitizeErrorMessage,
@@ -50,7 +51,8 @@ const TRACE_ID = /^trace-http-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0
 const SAFE_ID = /^[A-Za-z0-9_.:-]{1,128}$/
 const ROUTE_NAME = /^[A-Za-z0-9_.:/-]{1,120}$/
 const CODE = /^[A-Za-z0-9_]{1,80}$/
-const TEMPLATE = /^[A-Za-z0-9_.:-]{1,80}$/
+// 失败提示的动作名是界面固定文案（如“发送消息”），允许中文；入库前仍按数据防护规则遮盖。
+const TEMPLATE = /^[\p{Script=Han}A-Za-z0-9 _.:-]{1,40}$/u
 const RELEASE = /^[A-Za-z0-9_.+-]{1,64}$|^开发构建$/
 
 function invalid(message: string): never {
@@ -92,7 +94,7 @@ export function parseClientErrorBatch(body: unknown): ClientErrorBatch {
     const runId = optionalString(item, 'runId', 128, SAFE_ID)
     const release = optionalString(item, 'release', 64, RELEASE)
     const code = optionalString(item, 'code', 80, CODE)
-    const template = optionalString(item, 'template', 80, TEMPLATE)
+    const template = optionalString(item, 'template', 40, TEMPLATE)
     const rawMessage = optionalString(item, 'message', 2_000)
     const rawStack = optionalString(item, 'stack', 16_000)
 
@@ -100,7 +102,7 @@ export function parseClientErrorBatch(body: unknown): ClientErrorBatch {
       // 失败提示只存错误码与提示模板编号，不收提示原文与堆栈（评审第 3 条）。
       if (rawMessage !== null || rawStack !== null) invalid('失败提示不能包含提示原文或堆栈')
       if (!code) invalid('失败提示必须带错误码')
-      const message = `失败提示 ${template ?? '未命名'}（${code}）`
+      const message = maskPersonalData(`失败提示 ${template ?? '未命名'}（${code}）`)
       return {
         kind, message, stack: null, route, traceId, runId, release, count,
         fingerprint: fingerprintOf([app, 'notice', route ?? '', template ?? '', code]),
