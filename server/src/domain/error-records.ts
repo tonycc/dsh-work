@@ -136,3 +136,17 @@ export const RUN_ERROR_LABELS: Record<string, string> = {
   BACKGROUND_CAPACITY_EXHAUSTED: '后台容量已满',
   EMPTY_ANSWER: '成功但没有回答',
 }
+
+/** 服务端 5xx 的安全摘要，交给错误记录（错误记录方案 6.2）；不含请求体与原始错误对象。 */
+export interface ServerFailure {
+  traceId: string
+  method: string
+  /** 注册的路由模板，不含实际参数值。 */
+  routePath: string
+  status: number
+  code: string
+  /** 原始错误消息（调用方负责脱敏后再保存）。 */
+  errorMessage: string
+  params: Record<string, string>
+  userId: string | null
+}

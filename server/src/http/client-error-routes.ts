@@ -35,7 +35,7 @@ async function readBody(request: IncomingMessage): Promise<string> {
 }
 
 /**
- * 浏览器错误上报（错误记录方案 6.2，OBS-S1）。登录与否都接收：已登录记员工，未登录不记身份、
+ * 浏览器错误上报（`POST /auth/{workbench|admin}/client-errors`，错误记录方案 6.2，OBS-S1）。登录与否都接收：已登录记员工，未登录不记身份、
  * 按来源 IP 更严格限流。超出限额的条目直接丢弃，仍返回 202，不让上报影响页面。
  */
 export function registerClientErrorRoutes(router: Router, options: ClientErrorRouteOptions) {
@@ -44,14 +44,12 @@ export function registerClientErrorRoutes(router: Router, options: ClientErrorRo
   const perAddress = new FixedWindowLimiter({ limit: 10, windowMs: MINUTE, now })
   const anonymousTotal = new FixedWindowLimiter({ limit: 300, windowMs: MINUTE, now })
 
-  router.post('/api/client-errors', async (request, context) => {
+  // 登录前的页面（登录、钉钉免登）也要能上报，因此放在与登录同一前缀 `/auth/{workbench|admin}/` 下，
+  // 不经 `/api/*/v1` 的强制身份校验；身份按需解析。
+  for (const app of ['workbench', 'admin'] as const) router.post(`/auth/${app}/client-errors`, async request => {
     const contentType = String(request.headers['content-type'] ?? '').split(';')[0]!.trim().toLowerCase()
     if (contentType !== 'text/plain' && contentType !== 'application/json') {
       throw Object.assign(new Error('上报内容类型不符合要求'), { status: 422, code: 'invalid_request' })
-    }
-    const app = context.url.searchParams.get('app')
-    if (app !== 'workbench' && app !== 'admin') {
-      throw Object.assign(new Error('缺少上报来源'), { status: 422, code: 'invalid_request' })
     }
     // 来源校验先于读取内容：其他网站发起的上报直接拒绝。
     options.validateOrigin(request, app)

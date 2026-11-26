@@ -1,7 +1,7 @@
 # 错误记录与使用情况方案
 
-**状态：** 决策全部确认，原型已确认（2026-11-26）；OBS-S1 实施中。
-**更新日期：** 2026-11-26（原型确认：使用情况页替代现有“运营概览”并沿用其名称与位置；OB15 改为不做，取消 OBS-S3；详情改为右侧抽屉）；2026-11-26（按 PR #169 评审修订：进程异常处理后显式退出、未登录上报的 IP 来源与新增问题组上限、堆栈与说明脱敏、链路编号与运行的关联方式、页面与接口改名避开已有 `usage`、专用清理任务、上报来源校验、同步清单补全）；2026-11-26（OB11 改为“使用情况”放在导航分组“运行治理”、“错误记录”放在“安全与运维”；OB12～OB15 按建议确认）；2026-11-26（OB5 改为两个页面、OB9 改为按人出明细、OB11 归入“安全与运维”；去掉企业评审要求；OB4、OB6、OB7、OB8、OB10 按建议确认；补充第 7 节“覆盖范围”与 OB12～OB15）；2026-11-26（初稿；OB1 选自建上报接口、OB2 选管理端新增页面、OB3 告警第一期不做）
+**状态：** 决策全部确认，原型已确认（2026-11-26）；OBS-S1 已实现（单元、PostgreSQL 集成、P0 冒烟通过），OBS-S2 未实施。
+**更新日期：** 2026-11-26（OBS-S1 实施：上报接口改为 `POST /auth/{workbench|admin}/client-errors`，与登录同前缀以便登录前上报；迁移改名 `0133_error_tracking`，页面访问表随 OBS-S2 另建迁移；管理端失败提示在请求函数统一上报）；2026-11-26（原型确认：使用情况页替代现有“运营概览”并沿用其名称与位置；OB15 改为不做，取消 OBS-S3；详情改为右侧抽屉）；2026-11-26（按 PR #169 评审修订：进程异常处理后显式退出、未登录上报的 IP 来源与新增问题组上限、堆栈与说明脱敏、链路编号与运行的关联方式、页面与接口改名避开已有 `usage`、专用清理任务、上报来源校验、同步清单补全）；2026-11-26（OB11 改为“使用情况”放在导航分组“运行治理”、“错误记录”放在“安全与运维”；OB12～OB15 按建议确认）；2026-11-26（OB5 改为两个页面、OB9 改为按人出明细、OB11 归入“安全与运维”；去掉企业评审要求；OB4、OB6、OB7、OB8、OB10 按建议确认；补充第 7 节“覆盖范围”与 OB12～OB15）；2026-11-26（初稿；OB1 选自建上报接口、OB2 选管理端新增页面、OB3 告警第一期不做）
 **依据：** 2026-11-26 对现有可观测能力的盘点（第 4 节）；[发往模型的数据防护方案](model-data-protection-plan.md) D8（审计不保存原值）；[管理端模块权限](../development/feature-rules.md)第 13 节。
 **关联：** [架构总览第 10 节](../development/overview.md#10-当前边界与独立开发)、[内部端口与契约](../development/internal-ports.md)、[数据模型](data-model.md)、验收目录 `e2e/catalog/admin-platform.md`。
 
@@ -28,7 +28,7 @@
 
 | 编号 | 决策 | 可选做法 | 结论 |
 | --- | --- | --- | --- |
-| OB1 | 错误怎么采集 | (a) 自托管 Sentry/GlitchTip；(b) 自建上报接口与错误表 | **已确认（2026-11-26）：** (b)。浏览器经 `/api/client-errors` 上报，服务端失败同时写入同一张表；归并、统计、堆栈还原由平台自己做 |
+| OB1 | 错误怎么采集 | (a) 自托管 Sentry/GlitchTip；(b) 自建上报接口与错误表 | **已确认（2026-11-26）：** (b)。浏览器经 `/auth/{workbench|admin}/client-errors` 上报，服务端失败同时写入同一张表；归并、统计、堆栈还原由平台自己做 |
 | OB2 | 使用情况在哪里看 | (a) 管理端新增页面；(b) Grafana 直连只读库 | **已确认（2026-11-26）：** (a) |
 | OB3 | 告警 | (a) 推送钉钉群机器人；(b) 第一期不做 | **已确认（2026-11-26）：** (b) |
 | OB4 | 服务日志轮转与集中存放 | (a) 不做：错误已入库，stderr 日志只作补充；(b) 部署手册加日志轮转；(c) 集中存放（Vector + Loki） | **已确认（2026-11-26）：** (a) |
@@ -81,7 +81,7 @@
 
 ### 6.1 数据
 
-迁移 `0133_error_tracking_usage`：
+迁移 `0133_error_tracking`（错误两张表；`product_events` 随 OBS-S2 另建迁移）：
 
 - **`error_groups`**：按指纹归并的问题。`tenant_id`、`fingerprint`、`source`（`workbench`、`admin`、`server`、`process`）、`kind`（`render`、`script`、`promise`、`api`、`notice`、`load`、`stream`、`http`、`uncaught`）、`message`（脱敏后首行，≤1,024 字符；失败提示只存错误码与提示模板编号，不存提示原文）、`first_seen_at`、`last_seen_at`、`occurrence_count`、`last_release`。唯一键 `(tenant_id, fingerprint)`。
 - **`error_occurrences`**：每次发生的样本。`group_id`、`occurred_at`、`user_id`（未登录为空）、`release`、`route`（前端路由名或服务端路由模板）、`trace_id`、`run_id`、`client`（浏览器与系统的简称，如“钉钉 iOS”“Chrome 131 / macOS”，不存完整 UA）、`stack`（按 6.3 只保留帧位置的堆栈，≤8,192 字符）、`repeat_count`。
@@ -96,10 +96,10 @@
 - 捕获点：
   - `app.config.errorHandler`（组件渲染）、`window` 的 `error`（含捕获阶段的资源加载失败）与 `unhandledrejection`；
   - `api/client.ts` 中的 `ApiError`：5xx、超时与网络失败，带上响应里的 `traceId`；
-  - 失败提示（OB12）：员工端 `notifyActionFailure`、管理端页面错误提示的公共入口，记为 `notice`，只带错误码、提示模板编号、页面路由名与 `traceId`，**不上报提示原文**（原文可能含文件名、人名等）；
+  - 失败提示（OB12）：员工端 `notifyActionFailure`；管理端没有统一的提示入口，在请求函数中把 4xx（401 除外）按“提示”上报、动作名取接口第一段路径；记为 `notice`，只带错误码、提示模板编号、页面路由名与 `traceId`，**不上报提示原文**（原文可能含文件名、人名等）；
   - 白屏与分片失效（OB13）：`index.html` 内联脚本（不依赖应用打包代码）与 `vite:preloadError`，记为 `load`；
   - SSE 放弃重连时报一条。
-- 上报：批量发送到 `POST /api/client-errors`，页面隐藏或关闭时用 `navigator.sendBeacon`；同一页面加载内同指纹只报一次并计数，每次加载最多 20 条。上报本身失败直接丢弃，不重试、不再触发上报。
+- 上报：批量发送到 `POST /auth/{workbench|admin}/client-errors`（与登录同前缀，登录前的页面也能上报），页面隐藏或关闭时用 `navigator.sendBeacon`；同一页面加载内同指纹只报一次并计数，每次加载最多 20 条。上报本身失败直接丢弃，不重试、不再触发上报。
 - 员工端构建也注入版本号（与管理端相同的 `__DSH_WORK_RELEASE_VERSION__`）。
 - 页面访问（OB8）：路由 `afterEach` 记录路由名，与错误一同批量发送。
 
@@ -109,7 +109,7 @@
 - 记录 5xx 时，若路由模板含运行参数（如 `/runs/:runId`），把该运行编号写入样本的 `run_id`；运行侧的链路编号（`run_events.trace_id`，形如 `trace-<runId>`）与接口的链路编号（`trace-http-<uuid>`）是两套编号，关联只靠样本中的 `run_id`（6.5）。
 - 新增 `uncaughtException`、`unhandledRejection` 处理。注册监听器后 Node 不再自动退出，因此处理器同步写 stderr、尽力在 2 秒内写库（超时放弃），然后**显式 `process.exit(1)`**，由部署的守护进程拉起；重复触发只处理第一次。进行中的运行与现在进程崩溃时一样中断，本方案不改变其恢复行为。
 
-**接口 `POST /api/client-errors`：**
+**接口 `POST /auth/{workbench|admin}/client-errors`：**
 
 - **来源校验：** 只接受 `Origin` 为本平台员工端或管理端地址的请求（缺少 `Origin` 或不匹配直接拒绝）；内容类型只接受 `text/plain`（`sendBeacon` 发送）与 `application/json`，按固定结构严格校验字段、类型与长度，多余字段拒绝。登录 Cookie 为 `SameSite=Lax`，其他网站发起的上报不会带上员工身份。
 - **身份与租户：** 已登录时取会话中的员工与租户；未登录（OB6）归入平台租户（`tenant-dsh-work`，与本地登录相同），不记用户。
@@ -186,7 +186,7 @@
 
 | 切片 | 内容 |
 | --- | --- |
-| OBS-S1 错误记录 | 迁移（错误两张表）、脱敏函数提取、`/api/client-errors`、服务端失败与进程异常入库、两端捕获与上报（含失败提示、白屏）、员工端版本号、源码映射、“错误记录”页面（含运行问题与链路编号查询）、清理任务 |
+| OBS-S1 错误记录 | 迁移（错误两张表）、脱敏函数提取、上报接口、服务端失败与进程异常入库、两端捕获与上报（含失败提示、白屏）、员工端版本号、源码映射、“错误记录”页面（含运行问题与链路编号查询）、清理任务 |
 | OBS-S2 使用情况 | `product_events` 与页面访问上报、使用情况与按人明细查询接口、“运营概览”页面改版，删除旧 `/api/admin/v1/usage` |
 
 ## 9. 验收
@@ -200,8 +200,8 @@
 
 ## 10. 同步清单
 
-- 迁移 `0133_error_tracking_usage`；[数据模型](data-model.md)。
-- `docs/development/openapi-admin.json`、`openapi-workbench.json`（`openapi-coverage.test.ts` 会检查）。
+- 迁移 `0133_error_tracking`（OBS-S2 另建页面访问表迁移）；[数据模型](data-model.md)。
+- `docs/development/openapi-admin.json`、`openapi-auth.json`（上报接口）（`openapi-coverage.test.ts` 会检查）。
 - [内部端口与契约](../development/internal-ports.md)：上报接口与脱敏函数。
 - [功能规则](../development/feature-rules.md)：采集范围、按人明细的可见范围、保留期、不采集内容的约定。
 - [架构总览第 10 节](../development/overview.md#10-当前边界与独立开发)：第一期不做告警、日志集中存放与性能监控。

@@ -37,7 +37,7 @@ beforeEach(() => { recorded = [] })
 const report = (overrides: Record<string, unknown> = {}) => ({ kind: 'render', message: 'boom', route: 'conversation', ...overrides })
 
 function send(body: unknown, options: { origin?: string; contentType?: string; cookie?: string; app?: string; realIp?: string } = {}) {
-  return fetch(`${base}/api/client-errors?app=${options.app ?? 'workbench'}`, {
+  return fetch(`${base}/auth/${options.app ?? 'workbench'}/client-errors`, {
     method: 'POST',
     headers: {
       'content-type': options.contentType ?? 'text/plain;charset=UTF-8',
@@ -79,7 +79,7 @@ test('cross-site, wrong content type, malformed and oversized reports are reject
   assert.equal((await send('not json')).status, 422)
   assert.equal((await send({ app: 'admin', reports: [report()] })).status, 422)
   assert.equal((await send({ app: 'workbench', reports: [report({ requestBody: 'x' })] })).status, 422)
-  assert.equal((await send({ app: 'workbench', reports: [report()] }, { app: 'other' })).status, 422)
+  assert.equal((await send({ app: 'workbench', reports: [report()] }, { app: 'other' })).status, 404)
   assert.equal((await send({ app: 'workbench', reports: [report({ message: 'x'.repeat(40_000) })] })).status, 422)
   assert.equal(recorded.length, 0)
 })

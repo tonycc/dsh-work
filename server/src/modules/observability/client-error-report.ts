@@ -12,7 +12,7 @@ import {
 } from './error-sanitize.ts'
 
 /**
- * 浏览器上报（`POST /api/client-errors`）的结构校验、脱敏与指纹（错误记录方案 6.2、6.3）。
+ * 浏览器上报（`POST /auth/{workbench|admin}/client-errors`）的结构校验、脱敏与指纹（错误记录方案 6.2、6.3）。
  * 结构固定：多余字段、类型或长度不符即整批拒绝；所有文本在服务端脱敏，不信任客户端。
  */
 

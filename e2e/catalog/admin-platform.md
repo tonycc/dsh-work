@@ -467,7 +467,7 @@
 
 **优先级：** P1 · **角色：** 员工；平台运维管理员 · **运行层级：** 前端单元测试（上报器）+ PostgreSQL 集成测试（接口入库、限流、脱敏）<br>
 **前置数据：** 测试员工身份；未登录请求<br>
-**spec：** `packages/ui-core/src/error-reporting.test.ts`、`server/src/http/client-error-routes.test.ts`、`server/src/infrastructure/postgres/error-records.integration.test.ts`
+**spec：** `apps/workbench-web/src/utils/error-reporting.test.ts`（上报器在 `packages/ui-core/src/error-reporting.ts`）、`server/src/modules/observability/error-records.test.ts`、`server/src/http/client-error-routes.test.ts`、`server/src/infrastructure/postgres/error-records.integration.test.ts`；浏览器发出上报由 `e2e/error-records.spec.ts` 冒烟
 
 1. 员工端出现组件渲染错误、未处理的 Promise 拒绝、接口 5xx 与失败提示：每类在同一页面加载内只上报一次并计数，失败提示不带提示原文。
 2. 未登录页面（登录、钉钉免登）出错也能上报，不记员工身份。

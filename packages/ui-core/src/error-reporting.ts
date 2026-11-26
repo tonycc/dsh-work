@@ -6,7 +6,7 @@ import type { App } from 'vue'
  * - 捕获组件渲染错误、未处理的脚本错误与 Promise 拒绝、接口 5xx/超时/网络失败、失败提示、
  *   升级后分片加载失败与实时流放弃重连；
  * - 同一页面加载内同一问题只上报一次并计数，每次加载最多 20 个问题；
- * - 批量发送到 `/api/client-errors`，页面隐藏时用 `sendBeacon`；上报失败直接丢弃，不重试、不再触发上报；
+ * - 批量发送到 `/auth/{app}/client-errors`（登录前的页面也能上报），页面隐藏时用 `sendBeacon`；上报失败直接丢弃，不重试、不再触发上报；
  * - 失败提示只报错误码与提示模板（动作名），不报提示原文；不报请求体、页面文字与查询参数。
  */
 
@@ -70,7 +70,7 @@ export class ErrorReporter {
   private reporting = false
 
   constructor(options: ErrorReporterOptions) {
-    this.options = { endpoint: '/api/client-errors', flushDelayMs: 2_000, maxProblems: 20, ...options }
+    this.options = { endpoint: `/auth/${options.app}/client-errors`, flushDelayMs: 2_000, maxProblems: 20, ...options }
   }
 
   report(input: ErrorReport): void {
@@ -133,7 +133,7 @@ export class ErrorReporter {
     while (this.queue.length) {
       const batch = this.queue.splice(0, BATCH_SIZE)
       const body = JSON.stringify({ app: this.options.app, reports: batch })
-      const url = `${this.options.endpoint}?app=${this.options.app}`
+      const url = this.options.endpoint
       try {
         ;(this.options.transport ?? defaultTransport)(url, body)
       } catch {

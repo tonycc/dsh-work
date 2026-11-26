@@ -78,6 +78,12 @@ import type {
   UsagePoint,
   SkillSubmissionReviewDetail,
   SkillSubmissionReviewItem,
+  ErrorGroupDetail,
+  ErrorGroupFilter,
+  ErrorGroupSummary,
+  ErrorLookupResult,
+  ErrorRange,
+  RunProblemSummary,
 } from '../types/domain'
 
 interface ApiEnvelope<T> {
@@ -442,6 +448,14 @@ export const adminApi = {
     request<ModelUsageBreakdownRow[]>(`/model-usage/breakdown${listQuery({ ...filter, dimension })}`),
   getModelUsageExecutions: (filter: ModelUsageFilter, page: number, pageSize: number) =>
     request<ListPage<ModelUsageExecution>>(`/model-usage/executions${listQuery({ ...filter, page, pageSize })}`),
+  getErrorGroups: (filter: ErrorGroupFilter) =>
+    request<{ items: ErrorGroupSummary[]; releases: string[] }>(`/error-records/groups${listQuery({
+      range: filter.range, source: filter.source, release: filter.release, sort: filter.sort,
+      include_notice: filter.includeNotice ? 'true' : undefined,
+    })}`),
+  getErrorGroup: (id: string) => request<ErrorGroupDetail>(`/error-records/groups/${encodeURIComponent(id)}`),
+  getRunProblems: (range: ErrorRange) => request<RunProblemSummary>(`/error-records/run-problems${listQuery({ range })}`),
+  lookupErrorRecords: (query: string) => request<ErrorLookupResult>(`/error-records/lookup${listQuery({ q: query })}`),
   getModelProviders: () => request<ModelProvider[]>('/model-providers'),
   createModelProvider: (input: {
     key: string

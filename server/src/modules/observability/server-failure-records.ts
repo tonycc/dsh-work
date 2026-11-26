@@ -1,4 +1,4 @@
-import type { ServerFailure } from '../../http/router.ts'
+import type { ServerFailure } from '../../domain/error-records.ts'
 import { fingerprintOf, type ErrorRecordInput } from './client-error-report.ts'
 import { sanitizeErrorMessage, sanitizeStack } from './error-sanitize.ts'
 

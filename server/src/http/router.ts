@@ -10,6 +10,9 @@ import type {
 } from '../modules/identity/types.ts'
 import { invalidRequest, stateConflict } from '../domain/request-errors.ts'
 import { decideAdminRouteAccess, type AdminRouteView } from '../domain/admin-permissions.ts'
+import type { ServerFailure } from '../domain/error-records.ts'
+
+export type { ServerFailure }
 
 export interface ApiMeta {
   api: 'workbench' | 'admin' | 'system'
@@ -28,20 +31,6 @@ export interface RouteContext {
   identity?: RequestIdentity
   /** 管理端读取的数据视图（功能规则第 13 节）；未设置等同 `full`。 */
   adminView?: AdminRouteView
-}
-
-/** 服务端 5xx 的安全摘要，交给错误记录（错误记录方案 6.2）；不含请求体与原始错误对象。 */
-export interface ServerFailure {
-  traceId: string
-  method: string
-  /** 注册的路由模板，不含实际参数值。 */
-  routePath: string
-  status: number
-  code: string
-  /** 原始错误消息（调用方负责脱敏后再保存）。 */
-  errorMessage: string
-  params: Record<string, string>
-  userId: string | null
 }
 
 export interface HttpResult {

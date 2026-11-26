@@ -16,7 +16,7 @@
           sent += 1
           try {
             var body = JSON.stringify({ app: app, reports: [{ kind: 'load', message: message }] })
-            var url = '/api/client-errors?app=' + app
+            var url = '/auth/' + app + '/client-errors'
             var blob = new Blob([body], { type: 'text/plain;charset=UTF-8' })
             if (!(navigator.sendBeacon && navigator.sendBeacon(url, blob))) {
               fetch(url, { method: 'POST', body: body, keepalive: true, credentials: 'include', headers: { 'Content-Type': 'text/plain;charset=UTF-8' } })['catch'](function () {})

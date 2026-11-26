@@ -23,7 +23,7 @@ describe('ErrorReporter', () => {
     reporter.report({ kind: 'promise', message: 'other' })
     vi.advanceTimersByTime(2_000)
     const [batch] = captured(transport)
-    expect(batch!.url).toBe('/api/client-errors?app=workbench')
+    expect(batch!.url).toBe('/auth/workbench/client-errors')
     expect(batch!.reports).toEqual([
       { kind: 'render', count: 3, message: 'TypeError: boom', stack: 'TypeError\n    at a (x.js:1:2)', route: 'conversation', release: '2026.11.26-01' },
       { kind: 'promise', count: 1, message: 'other', route: 'conversation', release: '2026.11.26-01' },
@@ -69,15 +69,20 @@ describe('ErrorReporter', () => {
   })
 
   it('captures Vue render errors and never throws from reporting', () => {
-    const transport = vi.fn(() => { throw new Error('network down') })
+    const transport = vi.fn<(url: string, body: string) => void>(() => { throw new Error('network down') })
     const reporter = new ErrorReporter({ app: 'workbench', transport })
-    const app = createApp(defineComponent({ render: () => { throw new Error('render failed') } }))
+    const app = createApp(defineComponent({
+      render() {
+        if (this) throw new Error('render failed')
+        return null
+      },
+    }))
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     reporter.install(app)
     app.mount(document.createElement('div'))
     expect(() => reporter.flush()).not.toThrow()
     expect(transport).toHaveBeenCalledTimes(1)
-    expect(JSON.parse(transport.mock.calls[0]![1] as string).reports[0]).toEqual(expect.objectContaining({ kind: 'render', message: 'Error: render failed' }))
+    expect(JSON.parse(transport.mock.calls[0]![1]).reports[0]).toEqual(expect.objectContaining({ kind: 'render', message: 'Error: render failed' }))
     expect(errors).toHaveBeenCalled()
   })
 })
