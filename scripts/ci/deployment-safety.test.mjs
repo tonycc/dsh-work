@@ -90,6 +90,7 @@ try {
   await verifyEndpointConfigurator(join(fixtureRoot, 'endpoint-config'))
   await verifyEndpointRestartFailure(join(fixtureRoot, 'endpoint-restart'))
   await verifyNativeCertificateIssuance(join(fixtureRoot, 'certificates'))
+  await verifyLaunchdReinstallWaitsForUnload(join(fixtureRoot, 'launchd'))
   for (const app of ['admin-web', 'workbench-web']) {
     const vite = await readFile(join(projectRoot, 'apps', app, 'vite.config.ts'), 'utf8')
     assert.doesNotMatch(vite, /changeOrigin: true/, 'development proxy must preserve the portal Host')
@@ -115,6 +116,123 @@ async function verifyPortalCacheHeaders() {
     // Server level only: an add_header inside a location would drop the inherited security headers.
     assert.match(portal, /\n {2}add_header Cache-Control \$dsh_work_static_cache_control;\n/)
     assert.doesNotMatch(portal, /\n {4,}add_header /, 'add_header inside a location drops the server-level security headers')
+  }
+}
+
+async function verifyLaunchdReinstallWaitsForUnload(fixture) {
+  // Fake launchctl: bootout leaves the job visible for a few `print` calls (launchd unloads
+  // asynchronously) and bootstrap fails with status 5 while the job is still visible.
+  const bin = join(fixture, 'bin')
+  const home = join(fixture, 'home')
+  const deployRoot = join(fixture, 'deploy')
+  const state = join(fixture, 'state')
+  const calls = join(fixture, 'calls')
+  await mkdir(bin, { recursive: true })
+  await mkdir(home, { recursive: true })
+  await mkdir(join(deployRoot, 'current/deploy/launchd'), { recursive: true })
+  await writeFile(
+    join(deployRoot, 'current/deploy/launchd/com.company.dsh-work.server.plist.template'),
+    '<plist><string>__DEPLOY_ROOT__</string></plist>\n',
+  )
+  await writeExecutable(join(bin, 'plutil'), '#!/usr/bin/env bash\nexit 0\n')
+  await writeExecutable(join(bin, 'launchctl'), `#!/usr/bin/env bash
+set -u
+state=${JSON.stringify(state)}
+calls=${JSON.stringify(calls)}
+echo "$1" >> "$calls"
+current=$(cat "$state" 2>/dev/null || echo none)
+case "$1" in
+  print)
+    case "$current" in
+      loaded) exit 0 ;;
+      unloading:0) echo none > "$state"; exit 113 ;;
+      unloading:*) echo "unloading:$(( \${current#unloading:} - 1 ))" > "$state"; exit 0 ;;
+      *) exit 113 ;;
+    esac ;;
+  bootout)
+    if [[ -n "\${FAKE_BOOTOUT_FAIL:-}" ]]; then echo 'Boot-out failed: 1: Operation not permitted' >&2; exit 3; fi
+    echo "unloading:\${FAKE_UNLOAD_PRINTS:-2}" > "$state"; exit 0 ;;
+  bootstrap)
+    if [[ -n "\${FAKE_BOOTSTRAP_ALWAYS_FAIL:-}" ]]; then echo 'Bootstrap failed: 5: Input/output error' >&2; exit 5; fi
+    if [[ "$current" != none ]]; then echo 'Bootstrap failed: 5: Input/output error' >&2; exit 5; fi
+    if [[ -f "$state.fail-once" ]]; then rm -f "$state.fail-once"; echo 'Bootstrap failed: 5: Input/output error' >&2; exit 5; fi
+    echo loaded > "$state"; exit 0 ;;
+  enable|kickstart) exit 0 ;;
+esac
+exit 2
+`)
+  // Ignore any tuning a developer exported locally so the defaults (e.g. 5 attempts) are tested.
+  const baseEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('DSH_WORK_LAUNCHD_')))
+  const run = (extraEnv = {}) => spawnSync('bash', [join(projectRoot, 'scripts/deploy/install-launchd.sh'), deployRoot], {
+    encoding: 'utf8',
+    env: {
+      ...baseEnv,
+      HOME: home,
+      PATH: `${bin}:${process.env.PATH}`,
+      DSH_WORK_LAUNCHD_RETRY_DELAY_SECONDS: '0',
+      ...extraEnv,
+    },
+  })
+  const callLog = async () => (await readFile(calls, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean)
+
+  // A loaded job is booted out, the script waits until it disappears, then bootstraps once.
+  await writeFile(state, 'loaded\n')
+  const reinstall = run()
+  assert.equal(reinstall.status, 0, reinstall.stderr)
+  const reinstallCalls = await callLog()
+  assert.equal(reinstallCalls.filter(call => call === 'bootstrap').length, 1, 'bootstrap ran while the old job was still unloading')
+  assertOrder(reinstallCalls.join('\n'), 'bootout', 'bootstrap')
+  assert.deepEqual(reinstallCalls.slice(-3), ['bootstrap', 'enable', 'kickstart'])
+  assert.equal((await readFile(state, 'utf8')).trim(), 'loaded')
+
+  // A transient bootstrap failure after the unload is retried instead of failing the release.
+  await rm(calls, { force: true })
+  await writeFile(state, 'none\n')
+  await writeFile(`${state}.fail-once`, '')
+  const transient = run()
+  assert.equal(transient.status, 0, transient.stderr)
+  assert.match(transient.stderr, /bootstrap attempt 1\/5 failed/)
+  assert.equal((await callLog()).filter(call => call === 'bootstrap').length, 2)
+
+  // A job that never leaves the domain fails closed within the configured wait.
+  await rm(calls, { force: true })
+  await writeFile(state, 'loaded\n')
+  const stuck = run({ FAKE_UNLOAD_PRINTS: '1000', DSH_WORK_LAUNCHD_UNLOAD_WAIT_SECONDS: '2' })
+  assert.notEqual(stuck.status, 0, 'install-launchd.sh succeeded although the old job never unloaded')
+  assert.match(stuck.stderr, /still loaded 2s after bootout \(bootout exit status 0\)/)
+  assert.ok(!(await callLog()).includes('bootstrap'), 'bootstrap must not run while the old job is still loaded')
+
+  // A real bootout failure is reported with its exit status instead of looking like a slow unload.
+  await rm(calls, { force: true })
+  await writeFile(state, 'loaded\n')
+  const bootoutFailure = run({ FAKE_BOOTOUT_FAIL: '1', DSH_WORK_LAUNCHD_UNLOAD_WAIT_SECONDS: '1' })
+  assert.notEqual(bootoutFailure.status, 0)
+  assert.match(bootoutFailure.stderr, /bootout exit status 3/)
+  assert.ok(!(await callLog()).includes('bootstrap'))
+
+  // Persistent bootstrap failures stop after the configured number of attempts.
+  await rm(calls, { force: true })
+  await writeFile(state, 'none\n')
+  const persistent = run({ FAKE_BOOTSTRAP_ALWAYS_FAIL: '1', DSH_WORK_LAUNCHD_BOOTSTRAP_ATTEMPTS: '3' })
+  assert.notEqual(persistent.status, 0)
+  assert.match(persistent.stderr, /failed after 3 attempts/)
+  assert.equal((await callLog()).filter(call => call === 'bootstrap').length, 3)
+
+  // Malformed tuning values are rejected before launchd is touched, so the running job is never
+  // booted out and the retry loop can never become unbounded.
+  for (const [name, value] of [
+    ['DSH_WORK_LAUNCHD_BOOTSTRAP_ATTEMPTS', '30s'],
+    ['DSH_WORK_LAUNCHD_BOOTSTRAP_ATTEMPTS', '0'],
+    ['DSH_WORK_LAUNCHD_UNLOAD_WAIT_SECONDS', 'abc'],
+    ['DSH_WORK_LAUNCHD_RETRY_DELAY_SECONDS', '1.5'],
+  ]) {
+    await rm(calls, { force: true })
+    await writeFile(state, 'loaded\n')
+    const malformed = run({ [name]: value })
+    assert.notEqual(malformed.status, 0, `${name}=${value} was accepted`)
+    assert.match(malformed.stderr, new RegExp(name))
+    assert.deepEqual(await callLog(), [], `${name}=${value} reached launchctl`)
+    assert.equal((await readFile(state, 'utf8')).trim(), 'loaded', 'the running job must stay loaded')
   }
 }
 
