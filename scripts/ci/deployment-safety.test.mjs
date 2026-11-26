@@ -82,8 +82,27 @@ try {
     assert.doesNotMatch(vite, /changeOrigin: true/, 'development proxy must preserve the portal Host')
     assert.equal(vite.match(/changeOrigin: false/g)?.length, 2)
   }
+  await verifyPortalCacheHeaders()
 } finally {
   await rm(fixtureRoot, { recursive: true, force: true })
+}
+
+async function verifyPortalCacheHeaders() {
+  // After an upgrade browsers must fetch the new index.html instead of reusing the previous
+  // release's entry page through heuristic caching; hashed assets may be cached for a long time.
+  const nginx = await readFile(join(projectRoot, 'deploy/nginx/default.conf.template'), 'utf8')
+  const map = nginx.match(/map \$uri \$dsh_work_static_cache_control \{([^}]*)\}/)
+  assert.ok(map, 'nginx template must map $uri to a Cache-Control value')
+  assert.match(map[1], /default "";/, 'proxied responses must keep the server-provided Cache-Control')
+  assert.match(map[1], /\/index\.html "no-cache";/, 'the SPA entry page must be revalidated on every load')
+  assert.match(map[1], /~\^\/assets\/ "public, max-age=31536000, immutable";/)
+  const portals = nginx.split(/\nserver \{/).filter(block => /\n {2}root \/srv\/(workbench|admin);/.test(block))
+  assert.equal(portals.length, 2, 'both portal server blocks must be present')
+  for (const portal of portals) {
+    // Server level only: an add_header inside a location would drop the inherited security headers.
+    assert.match(portal, /\n {2}add_header Cache-Control \$dsh_work_static_cache_control;\n/)
+    assert.doesNotMatch(portal, /\n {4,}add_header /, 'add_header inside a location drops the server-level security headers')
+  }
 }
 
 async function verifySameFilesystemBackupIsRejected(fixture) {
