@@ -526,6 +526,12 @@ bash "${DWP_ROOT}/current/scripts/deploy/rollback.sh" "${DWP_ROLLBACK_VERSION}" 
    版本与旧 PostgreSQL Compose 配置；本次实际执行了迁移（输出含 `applied`）时，旧版本可能读取
    已删除的表或列，脚本不再自动拉起旧版本，而是保持服务停止并提示处理方式（fail-closed）。
 
+两个前端的 Nginx 对入口页 `index.html`（含所有页面路由的回退）返回 `Cache-Control: no-cache`，
+对带内容哈希的 `/assets/` 返回一年 `immutable`，因此升级后员工与管理员下次打开或刷新页面即拿到新版。
+升级前已打开、没刷新的标签页仍运行旧代码，刷新即可。从没有该响应头的版本升级上来时，浏览器可能还
+按旧响应的 `Last-Modified` 启发式缓存旧入口页数小时，这一次请用户强制刷新（macOS `Cmd+Shift+R`）。
+前置的反向代理不要缓存 `index.html`，也不要去掉上游的 `Cache-Control`。
+
 数据库迁移不会自动降级。因此每次迁移必须保持至少一个版本的向后兼容，确认新版本稳定
 后再进行破坏性清理。包含删除表或列的版本（例如 0083、0085、0087 移除委派、旧发布记录与
 Agent 数据平面）不具备向后兼容，发布前必须确认第 3～4 步的备份已异机校验；迁移后失败只有两条
