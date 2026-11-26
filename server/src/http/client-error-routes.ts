@@ -10,6 +10,7 @@ import {
   type ErrorRecordInput,
 } from '../modules/observability/client-error-report.ts'
 import { FixedWindowLimiter } from '../modules/observability/fixed-window-limiter.ts'
+import { invalidRequest } from '../domain/request-errors.ts'
 import { httpResult, type Router } from './router.ts'
 
 export interface ClientErrorRouteOptions {
@@ -49,7 +50,7 @@ export function registerClientErrorRoutes(router: Router, options: ClientErrorRo
   for (const app of ['workbench', 'admin'] as const) router.post(`/auth/${app}/client-errors`, async request => {
     const contentType = String(request.headers['content-type'] ?? '').split(';')[0]!.trim().toLowerCase()
     if (contentType !== 'text/plain' && contentType !== 'application/json') {
-      throw Object.assign(new Error('上报内容类型不符合要求'), { status: 422, code: 'invalid_request' })
+      throw invalidRequest('上报内容类型不符合要求')
     }
     // 来源校验先于读取内容：其他网站发起的上报直接拒绝。
     options.validateOrigin(request, app)
