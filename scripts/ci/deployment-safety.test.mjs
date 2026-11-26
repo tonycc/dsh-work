@@ -96,11 +96,11 @@ async function verifyPortalCacheHeaders() {
   assert.match(map[1], /default "";/, 'proxied responses must keep the server-provided Cache-Control')
   assert.match(map[1], /\/index\.html "no-cache";/, 'the SPA entry page must be revalidated on every load')
   assert.match(map[1], /~\^\/assets\/ "public, max-age=31536000, immutable";/)
-  const portals = nginx.split(/\nserver \{/).filter(block => /\n  root \/srv\/(workbench|admin);/.test(block))
+  const portals = nginx.split(/\nserver \{/).filter(block => /\n {2}root \/srv\/(workbench|admin);/.test(block))
   assert.equal(portals.length, 2, 'both portal server blocks must be present')
   for (const portal of portals) {
     // Server level only: an add_header inside a location would drop the inherited security headers.
-    assert.match(portal, /\n  add_header Cache-Control \$dsh_work_static_cache_control;\n/)
+    assert.match(portal, /\n {2}add_header Cache-Control \$dsh_work_static_cache_control;\n/)
     assert.doesNotMatch(portal, /\n {4,}add_header /, 'add_header inside a location drops the server-level security headers')
   }
 }
