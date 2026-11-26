@@ -215,6 +215,11 @@ async function start() {
   registerUsageAnalyticsRoutes(router, usageAnalytics)
   registerRuntimeParametersRoutes(router, platformSettings, {
     sessionTtl: { seconds: identityConfiguration.sessionTtlSeconds, fromEnvironment: process.env.DSH_WORK_SESSION_TTL_SECONDS !== undefined },
+    // 请求时才读取（启动完成后 dataRoot 已确定）。
+    diskStatus: async () => {
+      const space = await freeSpace(dataRoot)
+      return { freeBytes: space.freeBytes, totalBytes: space.totalBytes }
+    },
   })
   // 错误记录与页面访问清理：启动后与每天一次，按运行参数的保留天数分批删除（默认错误样本 90 天、页面访问 180 天；与工作区清扫分开）。
   let errorRetentionRun: Promise<void> | null = null

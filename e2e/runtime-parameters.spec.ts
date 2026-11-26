@@ -4,6 +4,18 @@ import { expect, test, type Page } from '@playwright/test'
 // 只有查看权限的管理员只读。P0 冒烟数据为确定性内存数据（server/src/testing/p0-smoke/runtime-parameters-service.ts）。
 const adminUrl = `http://localhost:${process.env.DSH_WORK_ADMIN_PORT ?? 4180}`
 
+// 用例结束（含中途失败）后把运维参数恢复为默认值，避免影响同一冒烟服务中的其他用例（AGENTS.md：显式清理测试数据）。
+test.afterEach(async ({ request }) => {
+  const response = await request.get(`${adminUrl}/api/admin/v1/runtime-parameters`)
+  const { data } = await response.json() as { data: { settings: Array<{ key: string; value: number; defaultValue: number; revision: number }> } }
+  const changes = data.settings.filter(item => item.value !== item.defaultValue)
+    .map(item => ({ key: item.key, value: item.defaultValue, revision: item.revision }))
+  if (changes.length) {
+    const restored = await request.put(`${adminUrl}/api/admin/v1/platform-settings`, { data: { changes } })
+    expect(restored.ok()).toBe(true)
+  }
+})
+
 function navigation(page: Page) {
   return page.getByRole('navigation', { name: '管理后台主导航' })
 }
@@ -61,7 +73,7 @@ test('RP-E2E-01 a platform administrator changes ops parameters and sees them in
   await expect(ops.getByRole('row', { name: /站内通知保留天数/ })).toBeVisible()
   await expect(ops.getByRole('row', { name: /磁盘最低剩余空间/ })).toHaveCount(0)
 
-  // 恢复默认并保存，避免影响同一冒烟服务中的其他用例。
+  // 恢复默认：值回到默认、来源回到“默认值”。
   await page.getByRole('tab', { name: '运维设置' }).click()
   const restore = page.getByRole('button', { name: '恢复默认' })
   await expect(restore).toHaveCount(2)
@@ -69,7 +81,9 @@ test('RP-E2E-01 a platform administrator changes ops parameters and sees them in
   await restore.first().click()
   await expect(restore).toHaveCount(0)
   await page.getByRole('button', { name: '保存', exact: true }).click()
-  await page.getByRole('dialog', { name: '确认保存 2 项修改' }).getByRole('button', { name: '确认保存' }).click()
+  const restoreDialog = page.getByRole('dialog', { name: '确认保存 2 项修改' })
+  await restoreDialog.getByText('我已了解上面标出的影响').click()
+  await restoreDialog.getByRole('button', { name: '确认保存' }).click()
   await expect(page.getByRole('textbox', { name: '每次运行最多读取网页次数', exact: true })).toHaveValue('10')
   await page.getByRole('tab', { name: '参数总览' }).click()
   await page.getByRole('textbox', { name: '搜索参数' }).fill('')

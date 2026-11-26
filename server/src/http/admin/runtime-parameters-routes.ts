@@ -23,17 +23,23 @@ export interface RuntimeParametersPort {
 export function registerRuntimeParametersRoutes(
   router: Router,
   parameters: RuntimeParametersPort,
-  options: { sessionTtl: { seconds: number; fromEnvironment: boolean }; adapter?: 'postgres' | 'prototype-memory' },
+  options: {
+    sessionTtl: { seconds: number; fromEnvironment: boolean }
+    /** 数据卷当前剩余空间，供页面在调高磁盘阈值前提示“保存后将立即判定为磁盘不足”；读取失败时为 null。 */
+    diskStatus?: () => Promise<{ freeBytes: number; totalBytes: number } | null>
+    adapter?: 'postgres' | 'prototype-memory'
+  },
 ) {
   const adapter = options.adapter ?? 'postgres'
   router.get('/api/admin/v1/runtime-parameters', async (_request, context) => {
     const identity = requireRequestIdentity(context, 'admin')
     const canEdit = (owner: NonNullable<RuntimeParameterOwner>) => canEditAdminSetting(identity.permissions, owner)
-    const [settings, overview] = await Promise.all([
+    const [settings, overview, disk] = await Promise.all([
       parameters.list(),
       parameters.overview({ sessionTtl: options.sessionTtl, canEdit }),
+      options.diskStatus ? options.diskStatus().catch(() => null) : Promise.resolve(null),
     ])
-    return envelope('admin', { groups: PLATFORM_SETTING_GROUPS, settings, canSave: canEdit({ kind: 'platform-admin' }), overview }, adapter)
+    return envelope('admin', { groups: PLATFORM_SETTING_GROUPS, settings, canSave: canEdit({ kind: 'platform-admin' }), disk, overview }, adapter)
   })
   router.put('/api/admin/v1/platform-settings', async (request, context) => {
     const identity = requireRequestIdentity(context, 'admin')

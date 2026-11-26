@@ -1356,6 +1356,8 @@ export interface PlatformSetting {
   max: number
   timing: string
   lowerRisk?: string
+  belowDefaultRisk?: string
+  raiseRisk?: string
   source: 'page' | 'default'
   revision: number
   updatedAt?: string
@@ -1390,5 +1392,7 @@ export interface RuntimeParameters {
   groups: Array<{ id: PlatformSettingGroup; title: string; description: string }>
   settings: PlatformSetting[]
   canSave: boolean
+  /** 数据卷当前剩余空间；读取失败时为 null。 */
+  disk: { freeBytes: number; totalBytes: number } | null
   overview: { entries: RuntimeParameterEntry[]; timeoutChains: TimeoutChain[] }
 }

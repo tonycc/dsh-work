@@ -32,8 +32,12 @@ export interface PlatformSettingDefinition {
   max: number
   /** 生效时机，原样展示给管理员。 */
   timing: string
-  /** 改小（低于已保存值）时的影响说明；保存确认框据此要求管理员确认。 */
+  /** 改小（低于当前值）时的影响说明；保存确认框据此要求管理员确认。 */
   lowerRisk?: string
+  /** 低于默认值时的影响说明（方案第 5 节：磁盘阈值低于默认值时二次确认）。 */
+  belowDefaultRisk?: string
+  /** 改大（高于当前值）时的影响说明。 */
+  raiseRisk?: string
 }
 
 export const PLATFORM_SETTING_GROUPS: ReadonlyArray<{ id: PlatformSettingGroup; title: string; description: string }> = [
@@ -46,14 +50,16 @@ export const PLATFORM_SETTING_DEFINITIONS: readonly PlatformSettingDefinition[] 
   {
     key: 'disk.min_free_gb', module: 'ops', savePermission: 'platform-admin', group: 'disk',
     label: '磁盘最低剩余空间', description: '数据盘剩余低于该值（或下方比例）时，执行容器拒绝运行命令，已在运行的命令会被终止。',
-    unit: 'GB', defaultValue: 10, min: 2, max: 500, timing: '下一条命令',
-    lowerRisk: '调低后，磁盘被写满的风险上升；盘满会影响数据库与所有运行。',
+    unit: 'GB', defaultValue: 10, min: 2, max: 500, timing: '立即（包括正在运行的命令）',
+    belowDefaultRisk: '低于默认值后，磁盘被写满的风险上升；盘满会影响数据库与所有运行。',
+    raiseRisk: '调高后立即生效，包括正在运行的命令：剩余空间低于新阈值时，执行容器拒绝运行命令，正在运行的命令会被终止。',
   },
   {
     key: 'disk.min_free_percent', module: 'ops', savePermission: 'platform-admin', group: 'disk',
     label: '磁盘最低剩余比例', description: '与上一项取较大者。',
-    unit: '%', defaultValue: 10, min: 0, max: 50, timing: '下一条命令',
-    lowerRisk: '调低后，大容量磁盘上的保护会明显变弱。',
+    unit: '%', defaultValue: 10, min: 0, max: 50, timing: '立即（包括正在运行的命令）',
+    belowDefaultRisk: '低于默认值后，大容量磁盘上的保护会明显变弱。',
+    raiseRisk: '调高后立即生效，包括正在运行的命令：剩余空间低于新阈值时，执行容器拒绝运行命令，正在运行的命令会被终止。',
   },
   {
     key: 'workspace.failed_retention_days', module: 'ops', savePermission: 'platform-admin', group: 'disk',
@@ -76,6 +82,7 @@ export const PLATFORM_SETTING_DEFINITIONS: readonly PlatformSettingDefinition[] 
     label: '站内通知保留天数', description: '员工的通知列表与未读数只统计保留期内的通知。',
     unit: '天', defaultValue: 90, min: 30, max: 365, timing: '列表立即生效；删除在下次清理（每天）',
     lowerRisk: '缩短后，早于新天数的通知立即从员工的列表与未读数中消失，下次清理时删除。',
+    raiseRisk: '调大后，尚未清理的更早通知会重新出现在员工的列表与未读数中。',
   },
   {
     key: 'error_records.retention_days', module: 'ops', savePermission: 'platform-admin', group: 'retention',
@@ -150,12 +157,35 @@ export interface PlatformSettingView {
   max: number
   timing: string
   lowerRisk?: string
-  /** `page`：页面保存过；`default`：从未保存，按默认值。 */
+  belowDefaultRisk?: string
+  raiseRisk?: string
+  /** `page`：页面保存过；`default`：从未保存或已恢复默认，按默认值。 */
   source: 'page' | 'default'
-  /** 乐观锁：从未保存时为 0。 */
+  /** 乐观锁：从未保存时为 0；恢复默认后继续递增，不回到 0。 */
   revision: number
   updatedAt?: string
   updatedBy?: string
+}
+
+/** 由登记项与保存记录生成视图；记录的值为 `null`（已恢复默认）或不合法时按默认值，来源为“默认值”。 */
+export function platformSettingView(
+  definition: PlatformSettingDefinition,
+  saved?: { value: unknown; revision: number; updatedAt?: string; updatedBy?: string },
+): PlatformSettingView {
+  const value = saved?.value
+  const valid = typeof value === 'number' && Number.isInteger(value) && value >= definition.min && value <= definition.max
+  return {
+    key: definition.key, group: definition.group, label: definition.label, description: definition.description,
+    unit: definition.unit, value: valid ? value : definition.defaultValue, defaultValue: definition.defaultValue,
+    min: definition.min, max: definition.max, timing: definition.timing,
+    ...(definition.lowerRisk ? { lowerRisk: definition.lowerRisk } : {}),
+    ...(definition.belowDefaultRisk ? { belowDefaultRisk: definition.belowDefaultRisk } : {}),
+    ...(definition.raiseRisk ? { raiseRisk: definition.raiseRisk } : {}),
+    source: valid ? 'page' : 'default',
+    revision: saved?.revision ?? 0,
+    ...(saved?.updatedAt ? { updatedAt: saved.updatedAt } : {}),
+    ...(saved?.updatedBy ? { updatedBy: saved.updatedBy } : {}),
+  }
 }
 
 export interface PlatformSettingChange {

@@ -82,7 +82,12 @@ export function createSmokeRouter() {
   // 冒烟只校验上报能发出并通过结构校验（OBS-E2E-03）；不入库，来源校验由服务端单测覆盖。
   registerClientErrorRoutes(router, { record: async () => undefined, recordPageViews: async (...args) => args[2].length, authenticate: testApiAuthenticator, validateOrigin: () => undefined })
   registerUsageAnalyticsRoutes(router, new SmokeUsageAnalyticsService(), 'prototype-memory')
-  registerRuntimeParametersRoutes(router, new SmokeRuntimeParametersService(), { sessionTtl: { seconds: 8 * 60 * 60, fromEnvironment: false }, adapter: 'prototype-memory' })
+  const runtimeParameters = new SmokeRuntimeParametersService()
+  registerRuntimeParametersRoutes(router, runtimeParameters, {
+    sessionTtl: { seconds: 8 * 60 * 60, fromEnvironment: false },
+    diskStatus: () => runtimeParameters.diskStatus(),
+    adapter: 'prototype-memory',
+  })
   registerDataProtectionRoutes(router, new SmokeDataProtectionService(), 'prototype-memory')
   registerModelGovernanceRoutes(router, new ModelGovernanceService(new MemoryModelGovernanceRepository()))
   registerOrganizationRoutes(router, new MemoryOrganizationStore(), 'prototype-memory')

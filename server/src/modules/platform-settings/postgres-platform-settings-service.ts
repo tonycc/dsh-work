@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import {
   PLATFORM_SETTING_DEFINITIONS,
   platformSettingDefinition,
+  platformSettingView,
   platformSettingsFromValues,
   validatePlatformSettingValue,
   type PlatformSettingChange,
@@ -64,24 +65,17 @@ export class PostgresPlatformSettingsService implements PlatformSettingsReader {
        where s.tenant_id = ${tenantId}
     `
     const saved = new Map(rows.map(row => [row.key, row]))
-    const reader = platformSettingsFromValues(new Map(rows.map(row => [row.key, row.value])))
     return PLATFORM_SETTING_DEFINITIONS.map(definition => {
       const row = saved.get(definition.key)
-      return {
-        key: definition.key, group: definition.group, label: definition.label, description: definition.description,
-        unit: definition.unit, value: reader.get(definition.key), defaultValue: definition.defaultValue,
-        min: definition.min, max: definition.max, timing: definition.timing,
-        ...(definition.lowerRisk ? { lowerRisk: definition.lowerRisk } : {}),
-        source: row ? 'page' : 'default',
-        revision: row?.revision ?? 0,
-        ...(row ? { updatedAt: row.updatedAt.toISOString(), updatedBy: row.updatedBy } : {}),
-      }
+      return platformSettingView(definition, row && { value: row.value, revision: row.revision, updatedAt: row.updatedAt.toISOString(), updatedBy: row.updatedBy })
     })
   }
 
   /**
-   * 一次保存多项（同一事务、逐项乐观锁）；值等于默认值时删除保存的记录（来源回到“默认值”）。保存权限先由路由对照表判定，
-   * 这里在事务内按本地授予的 `admin:*` 复核（RP10，功能规则第 13 节“判定位置”），再校验值与版本，并逐项写审计 `platform.setting.update`。
+   * 一次保存多项（同一事务、逐项乐观锁）。保存权限先由路由对照表判定，这里在事务内按本地授予的 `admin:*` 复核
+   * （RP10，功能规则第 13 节“判定位置”），再校验值与版本，并逐项写审计 `platform.setting.update`。
+   * 恢复默认时保留该行、值存 JSON `null`（来源回到“默认值”），版本号始终递增，旧版本号不会再次生效；
+   * 值与当前生效值相同的项不写入、不记审计。
    */
   async save(changes: PlatformSettingChange[], actorId: string): Promise<PlatformSettingView[]> {
     const validated = changes.map(change => {
@@ -96,27 +90,28 @@ export class PostgresPlatformSettingsService implements PlatformSettingsReader {
     await this.database.begin(async sql => {
       if (!(await isPlatformAdminActor(sql, actorId))) throw accessDenied('运行参数只有平台管理员可以修改')
       for (const { definition, value, revision } of validated) {
+        const conflict = () => stateConflict(`“${definition.label}”已被其他管理员修改，请刷新后重试`)
         const [current] = await sql<{ value: unknown; revision: number }[]>`
           select value, revision from platform_settings
            where tenant_id = ${tenantId} and key = ${definition.key} for update
         `
-        if ((current?.revision ?? 0) !== revision) {
-          throw stateConflict(`“${definition.label}”已被其他管理员修改，请刷新后重试`)
-        }
-        const previous = current ? current.value : definition.defaultValue
-        if (value === definition.defaultValue) {
-          // 恢复默认：删除保存的值，来源回到“默认值”（方案第 5 节：恢复默认回到系统默认）。
-          await sql`delete from platform_settings where tenant_id = ${tenantId} and key = ${definition.key}`
-        } else if (current) {
+        if ((current?.revision ?? 0) !== revision) throw conflict()
+        const previous = typeof current?.value === 'number' ? current.value : definition.defaultValue
+        if (value === previous) continue
+        const stored = value === definition.defaultValue ? sql`'null'::jsonb` : sql`${sql.json(value)}`
+        if (current) {
           await sql`
-            update platform_settings set value = ${sql.json(value)}, revision = revision + 1, updated_by = ${actorId}, updated_at = now()
+            update platform_settings set value = ${stored}, revision = revision + 1, updated_by = ${actorId}, updated_at = now()
              where tenant_id = ${tenantId} and key = ${definition.key}
           `
         } else {
-          await sql`
+          // 第一次保存时没有行可锁：两个并发请求都读到版本 0，后插入者在这里落空，按冲突返回而不是主键错误。
+          const inserted = await sql`
             insert into platform_settings (tenant_id, key, value, revision, updated_by)
-            values (${tenantId}, ${definition.key}, ${sql.json(value)}, 1, ${actorId})
+            values (${tenantId}, ${definition.key}, ${stored}, 1, ${actorId})
+            on conflict (tenant_id, key) do nothing
           `
+          if (inserted.count === 0) throw conflict()
         }
         await sql`
           insert into audit_events (id, tenant_id, actor_type, actor_id, action, object_type, object_id, result, trace_id, safe_context)
@@ -143,13 +138,14 @@ export class PostgresPlatformSettingsService implements PlatformSettingsReader {
     return this.database<RuntimeSummary[]>`
       with configured as (
         select r.id, r.node_name as name, r.capacity, r.scheduling_status,
+               exists (select 1 from runtime_configurations c where c.tenant_id = r.tenant_id and c.runtime_id = r.id) as configured,
                coalesce((select timeout_seconds from runtime_configurations c
                           where c.tenant_id = r.tenant_id and c.runtime_id = r.id
                           order by revision desc limit 1), 300)::integer as "timeoutSeconds"
           from runtimes r
          where r.tenant_id = ${tenantId}
       )
-      select c.id, c.name, c.capacity, c."timeoutSeconds",
+      select c.id, c.name, c.capacity, c."timeoutSeconds", c.configured,
              (select count(*)::integer from agents a
                 join agent_versions av on av.tenant_id = a.tenant_id and av.id = a.active_version_id
                where a.tenant_id = ${tenantId} and a.status = 'published'

@@ -47,14 +47,52 @@ function invalid(setting: PlatformSetting) {
   return !Number.isInteger(value) || value < setting.min || value > setting.max
 }
 
+/** 数值相同（例如“05”与 5）不算修改；不合法的输入算修改，以便提示。 */
 function changed(setting: PlatformSetting) {
-  return (drafts[setting.key] ?? '').trim() !== String(setting.value)
+  return invalid(setting) || parsed(setting) !== setting.value
 }
 
-function warning(setting: PlatformSetting) {
-  if (invalid(setting)) return `请输入 ${setting.min}～${setting.max} 之间的整数`
-  if (changed(setting) && setting.lowerRisk && parsed(setting) < setting.value) return setting.lowerRisk
-  return ''
+function draftValue(key: string) {
+  const setting = data.value?.settings.find(item => item.key === key)
+  if (!setting) return undefined
+  return invalid(setting) ? setting.value : parsed(setting)
+}
+
+function gigabytes(bytes: number) {
+  return `${Number((bytes / 1024 ** 3).toFixed(1))} GB`
+}
+
+/** 按草稿中的两个磁盘参数计算新阈值，超过当前剩余空间时提示保存后会立即判定为磁盘不足。 */
+const diskWarning = computed(() => {
+  const disk = data.value?.disk
+  const gb = draftValue('disk.min_free_gb')
+  const percent = draftValue('disk.min_free_percent')
+  if (!disk || gb === undefined || percent === undefined) return ''
+  const threshold = Math.max(gb * 1024 ** 3, (percent / 100) * disk.totalBytes)
+  return disk.freeBytes < threshold
+    ? `当前数据盘剩余 ${gigabytes(disk.freeBytes)}，低于新阈值 ${gigabytes(threshold)}：保存后会立即判定为磁盘不足，执行容器拒绝运行命令，正在运行的命令会被终止。`
+    : ''
+})
+const diskSummary = computed(() => {
+  const disk = data.value?.disk
+  if (!disk || !disk.totalBytes) return ''
+  return `当前数据盘剩余 ${gigabytes(disk.freeBytes)}，共 ${gigabytes(disk.totalBytes)}（${Math.round((disk.freeBytes / disk.totalBytes) * 100)}%）。`
+})
+
+/** 保存前需要管理员确认的影响说明（方案第 5 节）。 */
+function risks(setting: PlatformSetting): string[] {
+  if (invalid(setting) || !changed(setting)) return []
+  const value = parsed(setting)
+  const items: string[] = []
+  if (setting.lowerRisk && value < setting.value) items.push(setting.lowerRisk)
+  if (setting.belowDefaultRisk && value < setting.defaultValue) items.push(setting.belowDefaultRisk)
+  if (setting.raiseRisk && value > setting.value) items.push(setting.raiseRisk)
+  if (setting.key.startsWith('disk.') && diskWarning.value) items.push(diskWarning.value)
+  return items
+}
+
+function warnings(setting: PlatformSetting): string[] {
+  return invalid(setting) ? [`请输入 ${setting.min}～${setting.max} 之间的整数`] : risks(setting)
 }
 
 const settingGroups = computed(() => (data.value?.groups ?? []).map(group => ({
@@ -63,7 +101,7 @@ const settingGroups = computed(() => (data.value?.groups ?? []).map(group => ({
 })))
 const changes = computed(() => (data.value?.settings ?? []).filter(changed))
 const anyInvalid = computed(() => (data.value?.settings ?? []).some(invalid))
-const risky = computed(() => changes.value.some(setting => warning(setting) !== ''))
+const risky = computed(() => changes.value.some(setting => risks(setting).length > 0))
 const pendingText = computed(() => {
   if (!canSave.value) return '只有平台管理员能保存'
   if (anyInvalid.value) return '有数值超出范围，修正后才能保存'
@@ -134,11 +172,24 @@ async function confirmSave() {
     savedNotice.value = `已保存 ${count} 项，已写入审计记录。数值在各项标注的时机生效。`
   } catch (caught) {
     confirmOpen.value = false
-    error.value = caught instanceof Error ? caught.message : '保存失败'
+    const message = caught instanceof Error ? caught.message : '保存失败'
+    // 先重新读取最新值（会清空提示），再显示失败原因，避免 409 等失败被悄悄清掉。
     await load()
+    error.value = `保存失败：${message}。页面已刷新为最新值，请确认后重新修改。`
   } finally {
     saving.value = false
   }
+}
+
+const tabs: Tab[] = ['settings', 'overview']
+
+/** 页签支持左右方向键切换（WAI-ARIA tabs）。 */
+function moveTab(event: KeyboardEvent) {
+  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+  event.preventDefault()
+  const next = tabs[(tabs.indexOf(tab.value) + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length]!
+  tab.value = next
+  document.getElementById(`runtime-parameters-tab-${next}`)?.focus()
 }
 
 function time(value?: string) {
@@ -152,19 +203,25 @@ onMounted(load)
   <div v-loading="loading" class="ops-page runtime-parameters-page">
     <el-alert v-if="error" :title="error" type="error" show-icon @close="error = ''" />
 
-    <div class="status-tabs" role="tablist" aria-label="运行参数视图">
-      <button class="status-tab" :class="{ active: tab === 'settings' }" type="button" role="tab" :aria-selected="tab === 'settings'" @click="tab = 'settings'">运维设置</button>
-      <button class="status-tab" :class="{ active: tab === 'overview' }" type="button" role="tab" :aria-selected="tab === 'overview'" @click="tab = 'overview'">参数总览</button>
+    <div class="status-tabs" role="tablist" aria-label="运行参数视图" @keydown="moveTab">
+      <button
+        id="runtime-parameters-tab-settings" class="status-tab" :class="{ active: tab === 'settings' }" type="button" role="tab"
+        :aria-selected="tab === 'settings'" aria-controls="runtime-parameters-panel-settings" :tabindex="tab === 'settings' ? 0 : -1" @click="tab = 'settings'"
+      >运维设置</button>
+      <button
+        id="runtime-parameters-tab-overview" class="status-tab" :class="{ active: tab === 'overview' }" type="button" role="tab"
+        :aria-selected="tab === 'overview'" aria-controls="runtime-parameters-panel-overview" :tabindex="tab === 'overview' ? 0 : -1" @click="tab = 'overview'"
+      >参数总览</button>
     </div>
 
-    <template v-if="data && tab === 'settings'">
+    <div v-if="data && tab === 'settings'" id="runtime-parameters-panel-settings" class="runtime-parameters-panel" role="tabpanel" aria-labelledby="runtime-parameters-tab-settings">
       <el-alert v-if="!canSave" type="info" :closable="false" show-icon title="你可以查看这些参数；只有平台管理员能修改和保存。" />
       <el-alert v-if="savedNotice" type="success" show-icon :title="savedNotice" @close="savedNotice = ''" />
 
       <section v-for="group in settingGroups" :key="group.id" class="content-panel parameter-group" :aria-labelledby="`parameter-group-${group.id}`">
         <header class="parameter-group__header">
           <h2 :id="`parameter-group-${group.id}`">{{ group.title }}</h2>
-          <p>{{ group.description }}</p>
+          <p>{{ group.description }}<template v-if="group.id === 'disk' && diskSummary"> {{ diskSummary }}</template></p>
         </header>
         <div v-for="setting in group.settings" :key="setting.key" class="parameter-row" :class="{ 'is-changed': changed(setting) }">
           <div class="parameter-row__text">
@@ -178,6 +235,7 @@ onMounted(load)
               :disabled="!canSave"
               inputmode="numeric"
               :aria-invalid="invalid(setting)"
+              :aria-describedby="warnings(setting).length ? `parameter-warning-${setting.key}` : undefined"
               @input="savedNotice = ''"
             >
               <template #suffix>{{ setting.unit }}</template>
@@ -189,9 +247,9 @@ onMounted(load)
             <span v-if="setting.source === 'page'">{{ setting.updatedBy }} 于 {{ time(setting.updatedAt) }} 修改</span>
           </div>
           <div class="parameter-row__actions">
-            <el-button v-if="canSave && (drafts[setting.key] ?? '').trim() !== String(setting.defaultValue)" size="small" @click="restoreDefault(setting)">恢复默认</el-button>
+            <el-button v-if="canSave && (invalid(setting) || parsed(setting) !== setting.defaultValue)" size="small" @click="restoreDefault(setting)">恢复默认</el-button>
           </div>
-          <p v-if="warning(setting)" class="parameter-row__warning" role="note">{{ warning(setting) }}</p>
+          <p v-if="warnings(setting).length" :id="`parameter-warning-${setting.key}`" class="parameter-row__warning" role="note">{{ warnings(setting).join(' ') }}</p>
         </div>
       </section>
 
@@ -200,9 +258,9 @@ onMounted(load)
         <el-button :disabled="!changes.length" @click="resetDrafts">放弃修改</el-button>
         <el-button type="primary" :disabled="!canSave || anyInvalid || !changes.length" @click="openConfirm">保存</el-button>
       </div>
-    </template>
+    </div>
 
-    <template v-if="data && tab === 'overview'">
+    <div v-if="data && tab === 'overview'" id="runtime-parameters-panel-overview" class="runtime-parameters-panel" role="tabpanel" aria-labelledby="runtime-parameters-tab-overview">
       <section class="content-panel" aria-labelledby="timeout-chains-title">
         <header class="parameter-group__header">
           <h2 id="timeout-chains-title">超时链路 · 实际生效</h2>
@@ -250,7 +308,7 @@ onMounted(load)
         </el-table>
       </section>
       <p v-if="!entryGroups.length" class="content-panel parameter-muted">没有符合条件的参数</p>
-    </template>
+    </div>
 
     <el-dialog v-model="confirmOpen" :title="`确认保存 ${changes.length} 项修改`" width="560px">
       <p class="parameter-muted">修改只有平台管理员能保存，并逐项写入审计记录。</p>
@@ -261,7 +319,7 @@ onMounted(load)
             <span>{{ formatValue(setting, setting.value) }} → <strong>{{ formatValue(setting, drafts[setting.key] ?? '') }}</strong></span>
           </div>
           <small>生效：{{ setting.timing }}</small>
-          <small v-if="warning(setting)" class="parameter-row__warning">{{ warning(setting) }}</small>
+          <small v-for="item in risks(setting)" :key="item" class="parameter-row__warning">{{ item }}</small>
         </li>
       </ul>
       <el-checkbox v-if="risky" v-model="riskAcknowledged">我已了解上面标出的影响</el-checkbox>
@@ -274,7 +332,7 @@ onMounted(load)
 </template>
 
 <style scoped>
-.runtime-parameters-page { display: flex; flex-direction: column; gap: 14px; }
+.runtime-parameters-page, .runtime-parameters-panel { display: flex; flex-direction: column; gap: 14px; }
 .parameter-group { padding: 0; }
 .parameter-group__header { display: flex; flex-direction: column; gap: 2px; padding: 14px 20px; border-bottom: 1px solid var(--color-border); }
 .parameter-group__header h2 { margin: 0; color: var(--color-text-heading); font-size: var(--font-size-title); }

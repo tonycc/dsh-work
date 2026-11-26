@@ -16,7 +16,7 @@ function settings(overrides: Record<string, number> = {}): PlatformSettingView[]
 function input(overrides: Partial<RuntimeParametersOverviewInput> = {}): RuntimeParametersOverviewInput {
   return {
     settings: settings({ 'web_fetch.max_per_attempt': 3 }),
-    runtimes: [{ id: 'runtime-local-01', name: 'runtime-local-01', capacity: 4, timeoutSeconds: 180, agentsOverTimeout: 2 }],
+    runtimes: [{ id: 'runtime-local-01', name: 'runtime-local-01', capacity: 4, timeoutSeconds: 180, configured: true, agentsOverTimeout: 2 }],
     sessionTtl: { seconds: 28_800, fromEnvironment: false },
     dingtalk: { source: 'admin', sessionTtlSeconds: 43_200, bindingTicketTtlSeconds: 300, adminDailyBindLimit: 50, timeoutMs: 10_000 },
     canEdit: owner => owner.kind === 'platform-admin',
@@ -66,9 +66,13 @@ test('timeout chains show the effective value, the limiting layer and truncated 
   assert.deepEqual({ actual: chains.get('knowledge')!.actual, limiter: chains.get('knowledge')!.limiter }, { actual: '20 秒', limiter: '检索超时 × 2 个请求' })
 
   const shortRuntime = new Map(buildRuntimeParametersOverview(input({
-    runtimes: [{ id: 'r', name: 'r', capacity: 2, timeoutSeconds: 60, agentsOverTimeout: 0 }],
+    runtimes: [{ id: 'r', name: 'r', capacity: 2, timeoutSeconds: 60, configured: false, agentsOverTimeout: 0 }],
   })).timeoutChains.map(chain => [chain.id, chain]))
   assert.equal(shortRuntime.get('conversation')!.warning, undefined)
+  const unconfigured = buildRuntimeParametersOverview(input({
+    runtimes: [{ id: 'r', name: 'r', capacity: 2, timeoutSeconds: 300, configured: false, agentsOverTimeout: 0 }],
+  })).entries.find(entry => entry.id === 'runtime.r.timeout')!
+  assert.equal(unconfigured.source, 'default', 'a Runtime never configured on the Runtimes page is not page-configured')
   assert.deepEqual({ actual: shortRuntime.get('admin-assistant')!.actual, limiter: shortRuntime.get('admin-assistant')!.limiter }, { actual: '1 分钟', limiter: 'Runtime 单次执行超时' })
 
   const noRuntime = buildRuntimeParametersOverview(input({ runtimes: [] })).timeoutChains.map(chain => chain.id)

@@ -54,6 +54,8 @@ export interface RuntimeSummary {
   name: string
   capacity: number
   timeoutSeconds: number
+  /** 是否在 Runtimes 页保存过配置；没有时容量来自初始数据、超时为默认 300 秒。 */
+  configured: boolean
   /** 运行超时大于本 Runtime 单次执行超时的已发布 Agent 数。 */
   agentsOverTimeout: number
 }
@@ -119,11 +121,11 @@ export function buildRuntimeParametersOverview(input: RuntimeParametersOverviewI
     const label = input.runtimes.length > 1 ? `（${runtime.name}）` : ''
     add({
       id: `runtime.${runtime.id}.capacity`, group: 'run', name: `Runtime 容量${label}`, value: String(runtime.capacity),
-      source: 'page', timing: '立即', where: 'Runtimes', link: '/runtimes', owner: { kind: 'module', module: 'connector' },
+      source: runtime.configured ? 'page' : 'default', timing: '立即', where: 'Runtimes', link: '/runtimes', owner: { kind: 'module', module: 'connector' },
     })
     add({
       id: `runtime.${runtime.id}.timeout`, group: 'run', name: `Runtime 单次执行超时${label}`, value: formatDuration(runtime.timeoutSeconds),
-      source: 'page', timing: '之后新建的运行', where: 'Runtimes', link: '/runtimes', owner: { kind: 'module', module: 'connector' },
+      source: runtime.configured ? 'page' : 'default', timing: '之后新建的运行', where: 'Runtimes', link: '/runtimes', owner: { kind: 'module', module: 'connector' },
     })
   }
   add({
@@ -164,8 +166,8 @@ export function buildRuntimeParametersOverview(input: RuntimeParametersOverviewI
     ['fixed.commands', '单条命令最长 / bash 默认 / Python 调用', `${EXECUTION_CONTAINER_LIMITS.maxCommandMs / 1000} / ${BASH_DEFAULT_TIMEOUT_SECONDS} / ${PYTHON_CALL_TIMEOUT_MS / 1000} 秒`, 'builtin', '—', '不可修改（Python 在执行容器内运行）'],
     ['fixed.extraction', '成果解析沙箱', `${PYTHON_SANDBOX_LIMITS.memory.toUpperCase()}B · ${PYTHON_SANDBOX_LIMITS.cpus} 核 · ${EXTRACTION_TIMEOUT_SECONDS} 秒 · 并发 ${EXTRACTION_SLOTS}`, 'builtin', '—', '不可修改（安全隔离）'],
     ['fixed.worker_setup', 'Worker 启动超时', formatDuration(DEFAULT_SETUP_TIMEOUT_MS / 1000), 'builtin', '—', '不可修改'],
-    ['fixed.workspace', '工作区上限', `${formatMegabytes(WORKSPACE_LIMITS.maxBytes)} · ${WORKSPACE_LIMITS.maxEntries / 10_000} 万文件`, 'builtin', '—', '不可修改'],
-    ['fixed.sizes', '大小上限', `产物 ${formatMegabytes(ARTIFACT_LIMITS.maxFileBytes)} / 合计 ${formatMegabytes(ARTIFACT_LIMITS.maxTotalBytes)} · 知识库文档 ${formatMegabytes(maxKnowledgeUploadBytes)} · Skill 包 ${formatMegabytes(MAX_SKILL_UPLOAD_BYTES)}`, 'builtin', '—', '不可修改（前后端共用）'],
+    ['fixed.workspace', '工作区上限', `${formatMegabytes(WORKSPACE_LIMITS.maxBytes)} · ${WORKSPACE_LIMITS.maxEntries / 10_000} 万文件 · 超过 ${formatMegabytes(WORKSPACE_LIMITS.failBytes)} 判失败`, 'builtin', '—', '不可修改'],
+    ['fixed.sizes', '大小上限', `产物 ${formatMegabytes(ARTIFACT_LIMITS.maxFileBytes)} / 合计 ${formatMegabytes(ARTIFACT_LIMITS.maxTotalBytes)} / ${ARTIFACT_LIMITS.maxFiles} 个 · 知识库文档 ${formatMegabytes(maxKnowledgeUploadBytes)} · Skill 包 ${formatMegabytes(MAX_SKILL_UPLOAD_BYTES)}`, 'builtin', '—', '不可修改（前后端共用）'],
     ['fixed.model_retry', '模型请求重试', `最多 ${MODEL_ROUTE_RETRY_POLICY.maxRetries} 次`, 'builtin', '—', '不可修改（与 DSH 耦合）'],
     ['fixed.tool_timeouts', '平台工具超时', `${Math.min(...toolTimeouts)}～${Math.max(...toolTimeouts)} 秒`, 'builtin', '—', '不可修改（工具契约）'],
     ['fixed.background_lanes', '后台车道并发', `发布试运行 ${backgroundLaneMaxConcurrent['agent-release-trial']} · 项目档案员 ${backgroundLaneMaxConcurrent['project-archive']} · 会话摘要 ${backgroundLaneMaxConcurrent['session-summary']}`, 'builtin', '—', '不可修改'],

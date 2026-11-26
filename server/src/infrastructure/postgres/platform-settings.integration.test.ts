@@ -61,12 +61,37 @@ test('saving writes the value, bumps the revision, refreshes the snapshot and au
   await restarted.load()
   assert.equal(restarted.get('web_fetch.max_per_attempt'), 1)
 
-  // 恢复默认：删除保存的值，来源回到默认值，并记审计。
+  // 恢复默认：保留该行（值为 null），来源回到默认值，版本号继续递增；旧版本号不能再次生效（丢失更新）。
   const automation = saved.find(item => item.key === 'automation.max_concurrent')!
   const restored = (await settings.save([{ key: 'automation.max_concurrent', value: 2, revision: automation.revision }], actor))
     .find(item => item.key === 'automation.max_concurrent')!
-  assert.deepEqual({ value: restored.value, source: restored.source, revision: restored.revision }, { value: 2, source: 'default', revision: 0 })
+  assert.deepEqual({ value: restored.value, source: restored.source, revision: restored.revision }, { value: 2, source: 'default', revision: 2 })
   assert.equal(settings.get('automation.max_concurrent'), 2)
+  await assert.rejects(settings.save([{ key: 'automation.max_concurrent', value: 4, revision: automation.revision }], actor),
+    (error: Error & { status?: number }) => error.status === 409)
+  await assert.rejects(settings.save([{ key: 'automation.max_concurrent', value: 4, revision: 0 }], actor),
+    (error: Error & { status?: number }) => error.status === 409)
+
+  // 值与当前生效值相同：不写入、不递增版本号、不记审计。
+  const auditCount = async () => (await database<{ count: number }[]>`
+    select count(*)::integer as count from audit_events where tenant_id = ${tenantId} and action = 'platform.setting.update'
+  `)[0]!.count
+  const auditsBefore = await auditCount()
+  const unchanged = (await settings.save([{ key: 'automation.max_concurrent', value: 2, revision: 2 }], actor))
+    .find(item => item.key === 'automation.max_concurrent')!
+  assert.equal(unchanged.revision, 2)
+  assert.equal(await auditCount(), auditsBefore)
+})
+
+test('two first saves of the same key at once: one wins, the other gets 409 instead of a server error', async () => {
+  const settings = new PostgresPlatformSettingsService(database)
+  const results = await Promise.allSettled([
+    settings.save([{ key: 'workspace.failed_retention_days', value: 5, revision: 0 }], actor),
+    settings.save([{ key: 'workspace.failed_retention_days', value: 6, revision: 0 }], actor),
+  ])
+  assert.equal(results.filter(result => result.status === 'fulfilled').length, 1)
+  const rejected = results.find(result => result.status === 'rejected') as PromiseRejectedResult
+  assert.equal((rejected.reason as { status?: number }).status, 409)
 })
 
 test('a stale revision rejects the whole batch; invalid values and unknown keys are refused', async () => {
@@ -120,6 +145,18 @@ test('notification and page view retention follow the saved number of days', asy
   const remaining = async () => (await database<{ id: string }[]>`
     select id from user_notifications where id like ${`n-rp-${tag}-%`} order by id
   `).map(row => row.id)
+
+  // 列表与未读数立即按保留期过滤（不等清理）。
+  const shortRetention = new PostgresUserNotificationService(database, {
+    settings: platformSettingsFromValues(new Map([['notifications.retention_days', 30]])),
+  })
+  const defaultRetention = new PostgresUserNotificationService(database)
+  const listed = async (service: PostgresUserNotificationService) =>
+    (await service.list({ userId: user, limit: 50 })).items.map(item => item.id).filter(id => id.startsWith(`n-rp-${tag}-`)).sort()
+  assert.deepEqual(await listed(defaultRetention), [`n-rp-${tag}-20`, `n-rp-${tag}-40`])
+  assert.deepEqual(await listed(shortRetention), [`n-rp-${tag}-20`])
+  assert.equal((await shortRetention.list({ userId: user, limit: 1 })).retentionDays, 30)
+  assert.equal((await defaultRetention.unreadCount(user)).unread - (await shortRetention.unreadCount(user)).unread, 1)
 
   await new PostgresUserNotificationService(database).purgeExpired()
   assert.deepEqual(await remaining(), [`n-rp-${tag}-20`, `n-rp-${tag}-40`])

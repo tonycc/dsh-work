@@ -1,6 +1,7 @@
 import {
   PLATFORM_SETTING_DEFINITIONS,
   platformSettingDefinition,
+  platformSettingView,
   validatePlatformSettingValue,
   type PlatformSettingChange,
   type PlatformSettingView,
@@ -18,20 +19,13 @@ import {
  * 短于 2 个已发布 Agent 的运行超时，用于展示超时链路的截断提示。不代表真实数据库读写。
  */
 export class SmokeRuntimeParametersService implements RuntimeParametersPort {
-  private readonly saved = new Map<string, { value: number; revision: number; updatedAt: string }>()
+  /** 与数据库实现同一语义：恢复默认后值为 null、版本号继续递增；值不变的项不写入。 */
+  private readonly saved = new Map<string, { value: number | null; revision: number; updatedAt: string }>()
 
   async list(): Promise<PlatformSettingView[]> {
     return PLATFORM_SETTING_DEFINITIONS.map(definition => {
       const row = this.saved.get(definition.key)
-      return {
-        key: definition.key, group: definition.group, label: definition.label, description: definition.description,
-        unit: definition.unit, value: row?.value ?? definition.defaultValue, defaultValue: definition.defaultValue,
-        min: definition.min, max: definition.max, timing: definition.timing,
-        ...(definition.lowerRisk ? { lowerRisk: definition.lowerRisk } : {}),
-        source: row ? 'page' : 'default',
-        revision: row?.revision ?? 0,
-        ...(row ? { updatedAt: row.updatedAt, updatedBy: '系统管理员' } : {}),
-      }
+      return platformSettingView(definition, row && { ...row, updatedBy: '系统管理员' })
     })
   }
 
@@ -43,14 +37,20 @@ export class SmokeRuntimeParametersService implements RuntimeParametersPort {
       if ((this.saved.get(change.key)?.revision ?? 0) !== change.revision) {
         throw stateConflict(`“${definition.label}”已被其他管理员修改，请刷新后重试`)
       }
-      return { key: change.key, value, defaultValue: definition.defaultValue }
+      return { definition, value }
     })
     const updatedAt = new Date().toISOString()
-    for (const { key, value, defaultValue } of validated) {
-      if (value === defaultValue) this.saved.delete(key)
-      else this.saved.set(key, { value, revision: (this.saved.get(key)?.revision ?? 0) + 1, updatedAt })
+    for (const { definition, value } of validated) {
+      const row = this.saved.get(definition.key)
+      if (value === (row?.value ?? definition.defaultValue)) continue
+      this.saved.set(definition.key, { value: value === definition.defaultValue ? null : value, revision: (row?.revision ?? 0) + 1, updatedAt })
     }
     return this.list()
+  }
+
+  /** P0 冒烟的固定磁盘状态：500 GB 中剩余 120 GB。 */
+  async diskStatus() {
+    return { freeBytes: 120 * 1024 ** 3, totalBytes: 500 * 1024 ** 3 }
   }
 
   async overview(input: {
@@ -59,7 +59,7 @@ export class SmokeRuntimeParametersService implements RuntimeParametersPort {
   }): Promise<RuntimeParametersOverview> {
     return buildRuntimeParametersOverview({
       settings: await this.list(),
-      runtimes: [{ id: 'runtime-local-01', name: 'runtime-local-01', capacity: 4, timeoutSeconds: 180, agentsOverTimeout: 2 }],
+      runtimes: [{ id: 'runtime-local-01', name: 'runtime-local-01', capacity: 4, timeoutSeconds: 180, configured: true, agentsOverTimeout: 2 }],
       sessionTtl: input.sessionTtl,
       dingtalk: { source: 'admin', sessionTtlSeconds: 43_200, bindingTicketTtlSeconds: 300, adminDailyBindLimit: 50, timeoutMs: 10_000 },
       canEdit: input.canEdit,
