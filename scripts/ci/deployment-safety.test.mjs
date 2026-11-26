@@ -62,6 +62,19 @@ assert.match(backup, /storage_class": "off-host"/)
 assert.match(backup, /shasum -a 256 -c/)
 assert.match(backup, /off-host backup filesystem changed while the backup was being written/)
 
+{
+  // A tab opened before an upgrade lazy-loads chunks of the previous release. Those must 404 so the
+  // page reloads, instead of falling back to index.html with 200 ("Failed to fetch dynamically imported module").
+  const nginx = await readFile(join(projectRoot, 'deploy/nginx/default.conf.template'), 'utf8')
+  const portalBlocks = nginx.split(/\nserver \{/).filter(block => /\n {2}root \/srv\/(workbench|admin);/.test(block))
+  assert.equal(portalBlocks.length, 2, 'both portal server blocks must be present')
+  for (const block of portalBlocks) {
+    assert.match(block, /\n {2}location \/assets\/ \{\n {4}try_files \$uri =404;\n {2}\}\n/, 'missing hashed assets must return 404, not the SPA entry page')
+    assert.match(block, /\n {2}location \/ \{\n {4}try_files \$uri \$uri\/ \/index\.html;\n {2}\}\n/, 'client routes still fall back to index.html')
+    assert.doesNotMatch(block, /\n {4,}add_header /, 'add_header inside a location drops the server-level security headers')
+  }
+}
+
 for (const [script, version] of [[buildPath, '0.1.0'], [releasePath, '2026.9.7-01']]) {
   const result = spawnSync('bash', [script, version], { encoding: 'utf8' })
   assert.notEqual(result.status, 0, `${script} accepted non-stable version ${version}`)
