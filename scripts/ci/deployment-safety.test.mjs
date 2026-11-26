@@ -149,8 +149,11 @@ case "$1" in
       unloading:*) echo "unloading:$(( \${current#unloading:} - 1 ))" > "$state"; exit 0 ;;
       *) exit 113 ;;
     esac ;;
-  bootout) echo "unloading:\${FAKE_UNLOAD_PRINTS:-2}" > "$state"; exit 0 ;;
+  bootout)
+    if [[ -n "\${FAKE_BOOTOUT_FAIL:-}" ]]; then echo 'Boot-out failed: 1: Operation not permitted' >&2; exit 3; fi
+    echo "unloading:\${FAKE_UNLOAD_PRINTS:-2}" > "$state"; exit 0 ;;
   bootstrap)
+    if [[ -n "\${FAKE_BOOTSTRAP_ALWAYS_FAIL:-}" ]]; then echo 'Bootstrap failed: 5: Input/output error' >&2; exit 5; fi
     if [[ "$current" != none ]]; then echo 'Bootstrap failed: 5: Input/output error' >&2; exit 5; fi
     if [[ -f "$state.fail-once" ]]; then rm -f "$state.fail-once"; echo 'Bootstrap failed: 5: Input/output error' >&2; exit 5; fi
     echo loaded > "$state"; exit 0 ;;
@@ -158,17 +161,19 @@ case "$1" in
 esac
 exit 2
 `)
+  // Ignore any tuning a developer exported locally so the defaults (e.g. 5 attempts) are tested.
+  const baseEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('DSH_WORK_LAUNCHD_')))
   const run = (extraEnv = {}) => spawnSync('bash', [join(projectRoot, 'scripts/deploy/install-launchd.sh'), deployRoot], {
     encoding: 'utf8',
     env: {
-      ...process.env,
+      ...baseEnv,
       HOME: home,
       PATH: `${bin}:${process.env.PATH}`,
       DSH_WORK_LAUNCHD_RETRY_DELAY_SECONDS: '0',
       ...extraEnv,
     },
   })
-  const callLog = async () => (await readFile(calls, 'utf8')).trim().split('\n')
+  const callLog = async () => (await readFile(calls, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean)
 
   // A loaded job is booted out, the script waits until it disappears, then bootstraps once.
   await writeFile(state, 'loaded\n')
@@ -194,8 +199,41 @@ exit 2
   await writeFile(state, 'loaded\n')
   const stuck = run({ FAKE_UNLOAD_PRINTS: '1000', DSH_WORK_LAUNCHD_UNLOAD_WAIT_SECONDS: '2' })
   assert.notEqual(stuck.status, 0, 'install-launchd.sh succeeded although the old job never unloaded')
-  assert.match(stuck.stderr, /still loaded 2s after bootout/)
+  assert.match(stuck.stderr, /still loaded 2s after bootout \(bootout exit status 0\)/)
   assert.ok(!(await callLog()).includes('bootstrap'), 'bootstrap must not run while the old job is still loaded')
+
+  // A real bootout failure is reported with its exit status instead of looking like a slow unload.
+  await rm(calls, { force: true })
+  await writeFile(state, 'loaded\n')
+  const bootoutFailure = run({ FAKE_BOOTOUT_FAIL: '1', DSH_WORK_LAUNCHD_UNLOAD_WAIT_SECONDS: '1' })
+  assert.notEqual(bootoutFailure.status, 0)
+  assert.match(bootoutFailure.stderr, /bootout exit status 3/)
+  assert.ok(!(await callLog()).includes('bootstrap'))
+
+  // Persistent bootstrap failures stop after the configured number of attempts.
+  await rm(calls, { force: true })
+  await writeFile(state, 'none\n')
+  const persistent = run({ FAKE_BOOTSTRAP_ALWAYS_FAIL: '1', DSH_WORK_LAUNCHD_BOOTSTRAP_ATTEMPTS: '3' })
+  assert.notEqual(persistent.status, 0)
+  assert.match(persistent.stderr, /failed after 3 attempts/)
+  assert.equal((await callLog()).filter(call => call === 'bootstrap').length, 3)
+
+  // Malformed tuning values are rejected before launchd is touched, so the running job is never
+  // booted out and the retry loop can never become unbounded.
+  for (const [name, value] of [
+    ['DSH_WORK_LAUNCHD_BOOTSTRAP_ATTEMPTS', '30s'],
+    ['DSH_WORK_LAUNCHD_BOOTSTRAP_ATTEMPTS', '0'],
+    ['DSH_WORK_LAUNCHD_UNLOAD_WAIT_SECONDS', 'abc'],
+    ['DSH_WORK_LAUNCHD_RETRY_DELAY_SECONDS', '1.5'],
+  ]) {
+    await rm(calls, { force: true })
+    await writeFile(state, 'loaded\n')
+    const malformed = run({ [name]: value })
+    assert.notEqual(malformed.status, 0, `${name}=${value} was accepted`)
+    assert.match(malformed.stderr, new RegExp(name))
+    assert.deepEqual(await callLog(), [], `${name}=${value} reached launchctl`)
+    assert.equal((await readFile(state, 'utf8')).trim(), 'loaded', 'the running job must stay loaded')
+  }
 }
 
 async function verifySameFilesystemBackupIsRejected(fixture) {

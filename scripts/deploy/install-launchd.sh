@@ -30,13 +30,35 @@ service_target="gui/${UID}/${label}"
 unload_wait_seconds=${DSH_WORK_LAUNCHD_UNLOAD_WAIT_SECONDS:-30}
 bootstrap_attempts=${DSH_WORK_LAUNCHD_BOOTSTRAP_ATTEMPTS:-5}
 retry_delay_seconds=${DSH_WORK_LAUNCHD_RETRY_DELAY_SECONDS:-2}
+# Validate before touching launchd: a malformed value must not boot the running job out and then
+# abort (outage), nor turn the bounded retry loop into an endless one.
+for setting in \
+  "DSH_WORK_LAUNCHD_UNLOAD_WAIT_SECONDS=${unload_wait_seconds}" \
+  "DSH_WORK_LAUNCHD_BOOTSTRAP_ATTEMPTS=${bootstrap_attempts}" \
+  "DSH_WORK_LAUNCHD_RETRY_DELAY_SECONDS=${retry_delay_seconds}"; do
+  value=${setting#*=}
+  if [[ ! "${value}" =~ ^[0-9]{1,4}$ ]]; then
+    echo "${setting%%=*} must be a whole number of at most 4 digits: ${value}" >&2
+    exit 1
+  fi
+done
+if ((10#${bootstrap_attempts} < 1)); then
+  echo "DSH_WORK_LAUNCHD_BOOTSTRAP_ATTEMPTS must be at least 1" >&2
+  exit 1
+fi
+unload_wait_seconds=$((10#${unload_wait_seconds}))
+bootstrap_attempts=$((10#${bootstrap_attempts}))
+retry_delay_seconds=$((10#${retry_delay_seconds}))
 
 if launchctl print "${service_target}" >/dev/null 2>&1; then
-  launchctl bootout "${service_target}" || true
+  # bootout can report an error for a job that is already going away; the unload wait below is
+  # what decides success, but keep the status so a real failure is not reported as a slow unload.
+  bootout_status=0
+  launchctl bootout "${service_target}" || bootout_status=$?
   deadline=$((SECONDS + unload_wait_seconds))
   while launchctl print "${service_target}" >/dev/null 2>&1; do
     if ((SECONDS >= deadline)); then
-      echo "launchd job ${service_target} is still loaded ${unload_wait_seconds}s after bootout" >&2
+      echo "launchd job ${service_target} is still loaded ${unload_wait_seconds}s after bootout (bootout exit status ${bootout_status})" >&2
       exit 1
     fi
     sleep 1
