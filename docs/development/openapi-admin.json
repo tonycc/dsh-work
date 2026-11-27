@@ -5986,7 +5986,7 @@
     "/runtime-parameters": {
       "get": {
         "operationId": "getRuntimeParameters",
-        "summary": "安全与运维 › 运行参数（运行参数配置方案 RP-S1）：运维参数（磁盘最低剩余空间与比例、失败工作区保留天数、每次运行最多读取网页次数、自动任务并发、站内通知/错误记录/页面访问保留天数）的当前值、默认值、范围、生效时机、来源（page / default）与版本号；当前管理员能否保存（canSave，只有平台管理员）；参数总览（各模块参数的当前值、来源 page / default / env / builtin / deploy、生效时机、修改位置与能否修改）与超时链路（每条链路实际生效的超时与起限制作用的一项）。不返回任何密钥。需要运维的查看权限（admin:ops:read）",
+        "summary": "安全与运维 › 运行参数（运行参数配置方案 RP-S1）：运维参数（磁盘最低剩余空间与比例、失败工作区保留天数、每次运行最多读取网页次数、自动任务并发、站内通知/错误记录/页面访问保留天数）的当前值、默认值、范围、生效时机、来源（page / default）、版本号与影响说明（lowerRisk / belowDefaultRisk / raiseRisk）；数据卷当前剩余空间（disk：freeBytes、totalBytes，读取失败为 null）；当前管理员能否保存（canSave，只有平台管理员）；参数总览（各模块参数的当前值、来源 page / default / env / builtin / deploy、生效时机、修改位置与能否修改）与超时链路（每条链路实际生效的超时与起限制作用的一项）。不返回任何密钥。需要运维的查看权限（admin:ops:read）",
         "responses": {
           "200": {
             "$ref": "#/components/responses/Ok"
@@ -5997,7 +5997,7 @@
     "/platform-settings": {
       "put": {
         "operationId": "savePlatformSettings",
-        "summary": "一次保存多项运维参数（同一事务）：每项带读取时的 revision（从未保存为 0），任何一项已被他人修改时整体返回 409 state_conflict 且不保存；值必须是登记范围内的整数（422 invalid_request）；未登记的键被拒绝。保存后立即刷新服务进程内的参数快照，逐项写审计 platform.setting.update（旧值 → 新值）。只限平台管理员（运行参数配置方案 RP10）",
+        "summary": "一次保存多项运维参数（同一事务）：每项带读取时的 revision（从未保存为 0，恢复默认后继续递增），任何一项已被他人修改时整体返回 409 state_conflict 且不保存；第一次并发保存时后到者同样返回 409；值与当前生效值相同的项不写入、不记审计；值等于默认值时恢复默认（保留记录、来源回到 default）；值必须是登记范围内的整数（422 invalid_request）；未登记的键被拒绝。保存后立即刷新服务进程内的参数快照，逐项写审计 platform.setting.update（旧值 → 新值）。只限平台管理员（运行参数配置方案 RP10）",
         "requestBody": {
           "required": true,
           "content": {

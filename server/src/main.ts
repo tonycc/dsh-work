@@ -745,7 +745,7 @@ async function start() {
   registerUserNotificationRoutes(router, userNotifications, authorization)
   registerKnowledgeRoutes(router, knowledgeBases, authorization)
   registerKnowledgeAdminRoutes(router, knowledgeAdmin)
-  // 站内通知 NC-S4：启动后与每天清扫一次 90 天前的通知，不阻塞启动；清扫可重复执行。
+  // 站内通知 NC-S4：启动后与每天按运行参数的保留天数（默认 90 天）清扫一次更早的通知，不阻塞启动；清扫可重复执行。
   const purgeNotifications = () => {
     // 上一轮还没结束时不重叠；关闭服务时等进行中的一轮结束再关数据库。
     if (notificationRetentionRun) return

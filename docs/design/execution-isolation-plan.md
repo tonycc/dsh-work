@@ -284,7 +284,7 @@ DSH Worker（每 Attempt 一个，宿主进程）
 
 `python_execute` 并入执行容器（阶段 1b②，未实施）会改变脚本路径契约：现有 Skill 脚本依赖每次调用的固定挂载（`/skill` 为当前 Skill 目录并作为工作目录、`/input` 只读、`/output` 为本 Skill 的输出目录），而每 Attempt 一个的执行容器无法按调用重新挂载。须先确定新契约（例如改用工作区内的固定路径并提供兼容方案），并同步修改[功能规则第 6 节](../development/feature-rules.md#6-skill-python-执行)。并入后同一 Attempt 内的调用不再各自使用干净容器，可看到此前命令留下的文件。在此之前 Python 仍为每次调用一个容器。
 
-**并发：** 执行容器每 Attempt 一个，数量受 Runtime 并发上限（`runtimes.capacity`）约束，不占全局槽位，因而不会等待槽位；Python 每次调用的容器仍占用全局槽位（`DSH_WORK_EXECUTION_MAX_CONTAINERS`）。两类容器分开计数，不会出现执行容器占着槽位等待 Python 槽位的死锁；1b② 并入后 Python 直接使用所在 Attempt 的执行容器，不再单独占槽位。
+**并发：** 执行容器每 Attempt 一个，数量受 Runtime 并发上限（`runtimes.capacity`）约束，不占全局槽位，因而不会等待槽位。`python_execute` 已并入所在 Attempt 的执行容器（1b②），不再单独占用槽位；`DSH_WORK_EXECUTION_MAX_CONTAINERS` 已删除，设置时只在启动日志告警（2026-11-27 运行参数方案核对时更正）。
 
 ### 4.5 执行后端
 

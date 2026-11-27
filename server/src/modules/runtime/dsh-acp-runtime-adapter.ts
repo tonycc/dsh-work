@@ -942,7 +942,7 @@ export class DshAcpRuntimeAdapter implements AgentRuntimePort {
       await this.configuration.remoteExecution?.release(record.manifest.attempt_id).catch(error => {
         console.warn('execution container release failed', safeErrorMessage(error))
       })
-      // 方案 4.7：成果已入存储、检查点已读出，工作区随 Attempt 结束删除（失败的保留 3 天供排查）。
+      // 方案 4.7：成果已入存储、检查点已读出，工作区随 Attempt 结束删除（失败的按运行参数保留，默认 3 天，供排查）。
       await retireAttemptWorkspace(record.snapshot.attemptDirectory, record.snapshot.status).catch(error => {
         console.warn('attempt workspace cleanup failed', safeErrorMessage(error))
       })
