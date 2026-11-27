@@ -283,6 +283,8 @@ const SELECTOR_PATHS: ReadonlyMap<string, ReadonlyArray<readonly [AdminModule, A
   [`${ADMIN_API_PREFIX}identity/roles`, [['skill', 'write']]],
   // 主动任务选择接收人
   [`${ADMIN_API_PREFIX}identity/users`, [['agent', 'write']]],
+  // Agent 能力页提示实际生效的运行超时（运行参数配置方案 RP-S3）：只返回 Runtime 名称与单次执行超时
+  [`${ADMIN_API_PREFIX}platform-config/runtime-limits`, [['agent', 'read']]],
 ])
 
 export type AdminRouteView = 'full' | 'selector'

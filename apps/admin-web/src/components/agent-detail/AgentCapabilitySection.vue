@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+
+import { adminApi } from '@/api/client'
 
 import { AGENT_DRAFT_BOUNDS, useAgentDraftEditor } from '@/composables/use-agent-draft'
 import { useContentStore } from '@/stores/content'
-import type { AgentMcpScope, ConnectorDefinition } from '@/types/domain'
+import type { AgentMcpScope, ConnectorDefinition, RuntimeLimit } from '@/types/domain'
 
 const editor = useAgentDraftEditor()
 const form = editor.form
@@ -21,6 +23,18 @@ const restrictedSelectedSkills = computed(() => publishedSkills.value.filter(ski
 const mcpConnectors = computed(() => contentStore.connectors.filter(connector => connector.protocol === 'mcp'))
 const selectedMcpConnectors = computed(() => form.mcpScope.connectorIds.map(id =>
   mcpConnectors.value.find(connector => connector.id === id)))
+/** 主 Runtime 的单次执行超时（只读选择器）；读取失败时不提示。 */
+const runtimeLimit = ref<RuntimeLimit | null>(null)
+onMounted(async () => {
+  try {
+    runtimeLimit.value = (await adminApi.getRuntimeLimits())[0] ?? null
+  } catch {
+    runtimeLimit.value = null
+  }
+})
+/** 运行超时大于 Runtime 单次执行超时时实际按 Runtime 截断（运行参数配置方案 RP7）。 */
+const effectiveTimeout = computed(() => runtimeLimit.value && form.timeoutSeconds > runtimeLimit.value.timeoutSeconds
+  ? runtimeLimit.value : null)
 const limitsSummary = computed(() =>
   `${form.timeoutSeconds} 秒 · ${form.maxToolCalls} 次工具调用 · ${form.maxOutputBytes.toLocaleString()} 字节输出`)
 
@@ -108,6 +122,7 @@ function showMcpTools(connector: ConnectorDefinition) {
         <div class="limits__grid">
           <el-form-item label="运行超时（秒）" :error="editor.errors.timeoutSeconds">
             <el-input-number v-model="form.timeoutSeconds" :min="AGENT_DRAFT_BOUNDS.timeoutSeconds.min" :max="AGENT_DRAFT_BOUNDS.timeoutSeconds.max" :step="30" :disabled="readonly" aria-label="运行超时（秒）" />
+            <p v-if="effectiveTimeout" class="field-help field-help--warning" role="status" data-testid="agent-effective-timeout">实际生效 {{ effectiveTimeout.timeoutSeconds }} 秒：Runtime“{{ effectiveTimeout.name }}”的单次执行超时为 {{ effectiveTimeout.timeoutSeconds }} 秒，运行到时会被结束。</p>
           </el-form-item>
           <el-form-item label="工具调用上限" :error="editor.errors.maxToolCalls">
             <el-input-number v-model="form.maxToolCalls" :min="AGENT_DRAFT_BOUNDS.maxToolCalls.min" :max="AGENT_DRAFT_BOUNDS.maxToolCalls.max" :disabled="readonly" aria-label="工具调用上限" />

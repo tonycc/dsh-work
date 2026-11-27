@@ -84,7 +84,6 @@ export function createSmokeRouter() {
   registerUsageAnalyticsRoutes(router, new SmokeUsageAnalyticsService(), 'prototype-memory')
   const runtimeParameters = new SmokePlatformConfigService(repository)
   registerPlatformConfigRoutes(router, runtimeParameters, {
-    sessionTtl: { seconds: 8 * 60 * 60, fromEnvironment: false },
     diskStatus: () => runtimeParameters.diskStatus(),
     adapter: 'prototype-memory',
   })

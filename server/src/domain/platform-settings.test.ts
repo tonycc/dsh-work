@@ -19,7 +19,17 @@ test('registry: ops parameters are stored in platform_settings and saved with th
   for (const definition of [...PLATFORM_SETTING_DEFINITIONS, ...DINGTALK_PARAMETER_DEFINITIONS]) {
     assert.ok(definition.min <= definition.defaultValue && definition.defaultValue <= definition.max, definition.key)
   }
-  assert.ok(PLATFORM_SETTING_DEFINITIONS.every(item => item.storage === 'platform' && item.savePermission === 'config'))
+  assert.ok(PLATFORM_SETTING_DEFINITIONS.every(item => item.storage === 'platform'))
+  // 登录会话有效期是安全类参数（RP-S3）：只有平台管理员能保存；其余由“平台配置”修改权限保存。
+  assert.deepEqual(PLATFORM_SETTING_DEFINITIONS.filter(item => item.savePermission !== 'config').map(item => item.key), ['session.ttl_hours'])
+})
+
+test('reader: the session lifetime starts from the environment value until the page saves one (RP-S3)', () => {
+  assert.equal(platformSettingsFromValues(new Map(), { 'session.ttl_hours': 12 }).get('session.ttl_hours'), 12)
+  assert.equal(platformSettingsFromValues(new Map([['session.ttl_hours', 24]]), { 'session.ttl_hours': 12 }).get('session.ttl_hours'), 24)
+  // 恢复默认（值为 null）回到 8 小时，而不是环境变量。
+  assert.equal(platformSettingsFromValues(new Map([['session.ttl_hours', null]]), { 'session.ttl_hours': 12 }).get('session.ttl_hours'), 8)
+  assert.equal(platformSettingsFromValues(new Map()).get('knowledge.search_timeout_seconds'), 10)
 })
 
 test('registry: DingTalk lifetimes and the daily bind limit are platform-admin only; the API timeout is config (RP16)', () => {

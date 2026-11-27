@@ -407,6 +407,36 @@ describe('模型网关（DLP-S1 最小链路）', () => {
     }
   })
 
+  it('首个响应超时每次请求读取平台配置（RP-S3）', async () => {
+    let configuredMs = 50
+    let reads = 0
+    const configured = new ModelGateway({
+      dataProtection: new DataProtectionService(new MemoryDataProtectionStore(), Buffer.alloc(32, 1)),
+      log, credentials: { readSecret: async () => 'sk' },
+      headersTimeoutMs: () => { reads += 1; return configuredMs },
+      fetch: (_url, init) => new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+      }),
+    })
+    const configuredBase = await configured.start()
+    try {
+      const send = async (attemptId: string) => {
+        const token = configured.issueToken(deepSeekBinding({ attemptId }))
+        const response = await fetch(`${configuredBase}/v1/chat/completions`, {
+          method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ model: 'deepseek-v4-pro' }),
+        })
+        await response.text()
+        return response.status
+      }
+      assert.equal(await send('attempt-timeout-1'), 502)
+      configuredMs = 60
+      assert.equal(await send('attempt-timeout-2'), 502)
+      assert.equal(reads, 2)
+    } finally {
+      await configured.stop()
+    }
+  })
+
   it('签发新令牌时清理已过期的令牌', async () => {
     let now = Date.now()
     const clocked = new ModelGateway({ dataProtection: new DataProtectionService(new MemoryDataProtectionStore(), Buffer.alloc(32, 1)), log, credentials: { readSecret: async () => 'sk' }, now: () => now })

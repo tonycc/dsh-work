@@ -22,9 +22,13 @@ import type { SmokeRepository } from './smoke-repository.ts'
 
 /** 冒烟数据中已发布 Agent 的运行超时（秒），用于超时链路的截断统计。 */
 const PUBLISHED_AGENT_TIMEOUTS = [300, 600]
+/** 冒烟数据中已启用自动任务的预算超时（秒）：用于总览“自动任务与主动任务”的截断数。 */
+const ENABLED_AUTOMATION_BUDGETS = [3600]
+/** 冒烟中环境变量 `DSH_WORK_SESSION_TTL_SECONDS` 对应的登录会话有效期（小时）。 */
+const SESSION_TTL_HOURS_FROM_ENVIRONMENT = 12
 
 /**
- * P0 冒烟的平台配置（RP-E2E-01、02、04）：确定性内存数据，与数据库实现同一语义（恢复默认值为 null、版本递增、
+ * P0 冒烟的平台配置（RP-E2E-01、02、04、05）：确定性内存数据，与数据库实现同一语义（恢复默认值为 null、版本递增、
  * 值不变不写、按存储行比对版本）。Runtime 容量与超时读写冒烟仓库中的 Runtime，Runtimes 页看到同一份数据。
  * 不判定权限：保存权限由路由对照表判定，冒烟只按身份展示。
  */
@@ -41,6 +45,10 @@ export class SmokePlatformConfigService implements PlatformConfigPort {
   async list(): Promise<PlatformSettingView[]> {
     const platform = PLATFORM_SETTING_DEFINITIONS.map(definition => {
       const row = this.saved.get(definition.key)
+      // 登录会话有效期从未在页面保存过时沿用环境变量（冒烟固定为 12 小时），与数据库实现一致（RP-E2E-05）。
+      if (!row && definition.key === 'session.ttl_hours') {
+        return settingView(definition, { value: SESSION_TTL_HOURS_FROM_ENVIRONMENT, exact: true, source: 'env', revision: 0, versionKey: `platform:${definition.key}` })
+      }
       return platformSettingView(definition, row && { ...row, updatedBy: '系统管理员' })
     })
     const runtimes = (await this.repository.read('runtimes')).flatMap(runtime => {
@@ -110,8 +118,13 @@ export class SmokePlatformConfigService implements PlatformConfigPort {
     return { freeBytes: 120 * 1024 ** 3, totalBytes: 500 * 1024 ** 3 }
   }
 
+  async runtimeLimits() {
+    return (await this.repository.read('runtimes'))
+      .filter(runtime => runtime.schedulingStatus === 'accepting')
+      .map(runtime => ({ id: runtime.id, name: runtime.name, timeoutSeconds: runtime.attemptTimeoutMinutes * 60 }))
+  }
+
   async overview(input: {
-    sessionTtl: { seconds: number; fromEnvironment: boolean }
     canEdit(owner: NonNullable<RuntimeParameterOwner>): boolean
   }): Promise<RuntimeParametersOverview> {
     const runtimes: RuntimeSummary[] = (await this.repository.read('runtimes'))
@@ -120,7 +133,8 @@ export class SmokePlatformConfigService implements PlatformConfigPort {
         id: runtime.id, name: runtime.name, capacity: runtime.maxConcurrentWorkers, timeoutSeconds: runtime.attemptTimeoutMinutes * 60,
         configured: (this.runtimeRevisions.get(runtime.id) ?? 0) > 0,
         agentsOverTimeout: PUBLISHED_AGENT_TIMEOUTS.filter(seconds => seconds > runtime.attemptTimeoutMinutes * 60).length,
+        automationsOverTimeout: ENABLED_AUTOMATION_BUDGETS.filter(seconds => seconds > runtime.attemptTimeoutMinutes * 60).length,
       }))
-    return buildRuntimeParametersOverview({ settings: await this.list(), runtimes, sessionTtl: input.sessionTtl, canEdit: input.canEdit })
+    return buildRuntimeParametersOverview({ settings: await this.list(), runtimes, canEdit: input.canEdit })
   }
 }

@@ -126,7 +126,7 @@ test('the service rechecks the platform config permission inside the transaction
 
 test('the overview counts published Agents whose timeout exceeds the Runtime timeout', async () => {
   const settings = new PostgresPlatformSettingsService(database)
-  const overview = await settings.overview({ sessionTtl: { seconds: 28_800, fromEnvironment: false }, canEdit: () => true })
+  const overview = await settings.overview({ canEdit: () => true })
   assert.ok(overview.entries.some(entry => entry.id === 'runtime.runtime-local-01.timeout_minutes'))
   const conversation = overview.timeoutChains.find(chain => chain.id === 'conversation')
   assert.ok(conversation)
@@ -390,4 +390,99 @@ test('DingTalk: a credential save racing a platform config save keeps the new pa
     select admin_daily_bind_limit as limit, parameters_revision as revision, session_ttl_seconds as session from dingtalk_app_configurations
   `
   assert.deepEqual({ limit: row!.limit, revision: row!.revision, session: row!.session }, { limit: 3, revision: session.revision + 1, session: 1_800 })
+})
+
+test('session lifetime: the environment value is the initial value until the page saves one; restoring the default means 8 hours (RP-S3)', async () => {
+  const admin = await adminWith('admin:*')
+  const view = async (settings: PostgresPlatformSettingsService) => (await settings.list()).find(item => item.key === 'session.ttl_hours')!
+
+  // 环境变量是整小时：显示为“环境变量”，填同一个值视为无变化，不写行、不记审计。
+  const exact = new PostgresPlatformSettingsService(database, { sessionTtlSecondsFromEnvironment: 12 * 3600 })
+  await exact.load()
+  assert.equal(exact.sessionTtlSeconds(), 12 * 3600)
+  assert.deepEqual(await view(exact).then(item => ({ value: item.value, source: item.source, exact: item.exact, revision: item.revision })),
+    { value: 12, source: 'env', exact: true, revision: 0 })
+  await exact.save([{ key: 'session.ttl_hours', value: 12, revision: 0 }], admin)
+  const [none] = await database`select 1 from platform_settings where tenant_id = ${tenantId} and key = 'session.ttl_hours'`
+  assert.equal(none, undefined)
+
+  // 环境变量不是整小时：显示真实值，任何输入都算修改（含与取整后相同的 2 小时）。
+  const inexact = new PostgresPlatformSettingsService(database, { sessionTtlSecondsFromEnvironment: 5400 })
+  await inexact.load()
+  assert.equal(inexact.sessionTtlSeconds(), 5400)
+  const initial = await view(inexact)
+  assert.deepEqual({ value: initial.value, exact: initial.exact, actual: initial.actual, source: initial.source }, { value: 2, exact: false, actual: '1 小时 30 分钟', source: 'env' })
+  const saved = (await inexact.save([{ key: 'session.ttl_hours', value: 2, revision: 0 }], admin)).find(item => item.key === 'session.ttl_hours')!
+  assert.deepEqual({ value: saved.value, source: saved.source, revision: saved.revision }, { value: 2, source: 'page', revision: 1 })
+  assert.equal(inexact.sessionTtlSeconds(), 7200)
+  const [audit] = await database<{ context: { from: string; to: string } }[]>`
+    select safe_context as context from audit_events where tenant_id = ${tenantId} and action = 'platform.setting.update' and object_id = 'session.ttl_hours'
+  `
+  assert.deepEqual([audit!.context.from, audit!.context.to], ['5400 秒（环境变量）', '2'])
+
+  // 页面保存后重启仍以页面为准；恢复默认为 8 小时，不回到环境变量。
+  const restarted = new PostgresPlatformSettingsService(database, { sessionTtlSecondsFromEnvironment: 5400 })
+  await restarted.load()
+  assert.equal(restarted.sessionTtlSeconds(), 7200)
+  const restored = (await restarted.save([{ key: 'session.ttl_hours', value: 8, revision: 1 }], admin)).find(item => item.key === 'session.ttl_hours')!
+  assert.deepEqual({ value: restored.value, source: restored.source, revision: restored.revision }, { value: 8, source: 'default', revision: 2 })
+  assert.equal(restarted.sessionTtlSeconds(), 8 * 3600)
+
+  // 安全类参数：只有“平台配置”修改权限的管理员不能保存。
+  await assert.rejects(restarted.save([{ key: 'session.ttl_hours', value: 24, revision: 2 }], await configAdmin()),
+    (error: Error & { status?: number }) => error.status === 403)
+
+  // 环境变量越界时收进 1～168 小时。
+  const clamped = new PostgresPlatformSettingsService(database, { sessionTtlSecondsFromEnvironment: 60 })
+  await database`delete from platform_settings where tenant_id = ${tenantId} and key = 'session.ttl_hours'`
+  await clamped.load()
+  assert.equal(clamped.sessionTtlSeconds(), 3600)
+})
+
+test('knowledge and model timeouts are read from the snapshot after each save (RP-S3)', async () => {
+  const settings = new PostgresPlatformSettingsService(database)
+  await settings.load()
+  assert.deepEqual(['knowledge.search_timeout_seconds', 'knowledge.upload_timeout_seconds', 'model.headers_timeout_seconds'].map(key => settings.get(key as never)), [10, 120, 120])
+  const actorId = await configAdmin()
+  await settings.save([
+    { key: 'knowledge.search_timeout_seconds', value: 5, revision: 0 },
+    { key: 'model.headers_timeout_seconds', value: 60, revision: 0 },
+  ], actorId)
+  assert.equal(settings.get('knowledge.search_timeout_seconds'), 5)
+  assert.equal(settings.get('model.headers_timeout_seconds'), 60)
+  const chains = new Map((await settings.overview({ canEdit: () => true })).timeoutChains.map(chain => [chain.id, chain]))
+  assert.equal(chains.get('knowledge')!.actual, '10 秒')
+  assert.equal(chains.get('model')!.actual, '1 分钟')
+  await settings.save([
+    { key: 'knowledge.search_timeout_seconds', value: 10, revision: 1 },
+    { key: 'model.headers_timeout_seconds', value: 120, revision: 1 },
+  ], actorId)
+})
+
+test('the overview counts enabled automations whose budget timeout exceeds the Runtime timeout (RP-S3)', async () => {
+  const settings = new PostgresPlatformSettingsService(database)
+  const [version] = await database<{ id: string }[]>`select id from agent_versions where tenant_id = ${tenantId} order by id limit 1`
+  assert.ok(version, 'seed has an Agent version')
+  const insert = async (status: string, template: unknown) => {
+    const id = `automation-rp-${randomUUID().slice(0, 8)}`
+    await database`
+      insert into agent_automations (id, tenant_id, owner_user_id, name, agent_version_id, workspace_id, schedule, input_template, status)
+      values (${id}, ${tenantId}, 'U00001', ${id}, ${version.id}, 'ws-personal-U00001', ${database.json({ kind: 'manual', timezone: 'Asia/Shanghai' })},
+              ${database.json(template as never)}, ${status})
+    `
+    return id
+  }
+  const ids = [
+    await insert('enabled', { prompt: 'a', budget: { timeoutSeconds: 100_000 } }),
+    await insert('draft', { prompt: 'b', budget: { timeoutSeconds: 100_000 } }),
+    await insert('enabled', { prompt: 'c' }),
+    await insert('enabled', { prompt: 'd', budget: { timeoutSeconds: 10 } }),
+  ]
+  try {
+    const automation = (await settings.overview({ canEdit: () => true })).timeoutChains.find(chain => chain.id === 'automation')!
+    assert.match(automation.warning ?? '', /^1 个已启用任务的预算超时大于/)
+    assert.ok((await settings.overview({ canEdit: () => true })).timeoutChains.some(chain => chain.id === 'release-trial'))
+  } finally {
+    await database`delete from agent_automations where tenant_id = ${tenantId} and id = any(${ids})`
+  }
 })

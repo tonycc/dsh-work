@@ -60,9 +60,12 @@ export class LocalAuthService {
   private readonly limiter: LoginRateLimiter
   /** 钉钉应用配置在每次使用时读取：管理端保存后立即生效。 */
   private readonly dingtalk: DingTalkSettingsProvider | null
+  /** 登录会话有效期（秒）：平台配置“登录会话有效期”，每次签发时读取；未接入时用启动配置。 */
+  private readonly sessionTtl: () => number
 
-  constructor(configuration: LocalIdentityConfiguration, database: DatabaseClient, dingtalk: DingTalkSettingsProvider | null = null) {
+  constructor(configuration: LocalIdentityConfiguration, database: DatabaseClient, dingtalk: DingTalkSettingsProvider | null = null, options: { sessionTtlSeconds?: () => number } = {}) {
     this.configuration = configuration
+    this.sessionTtl = options.sessionTtlSeconds ?? (() => configuration.sessionTtlSeconds)
     this.database = database
     this.repository = new IdentitySessionRepository(database)
     this.limiter = new LoginRateLimiter(database, configuration.sessionSecret)
@@ -161,7 +164,7 @@ export class LocalAuthService {
     const location = result.mustChangePassword
       ? new URL(`/change-password?return_to=${encodeURIComponent(returnTo)}`, origin).toString()
       : returnTo
-    const ttl = result.binding?.status === 'bound' ? dingtalkConfiguration!.sessionTtlSeconds : this.configuration.sessionTtlSeconds
+    const ttl = result.binding?.status === 'bound' ? dingtalkConfiguration!.sessionTtlSeconds : this.sessionTtl()
     return {
       location,
       sessionCookie: serializeCookie(settings.sessionCookieName, sessionToken, ttl, this.configuration.cookieSecure),
@@ -193,7 +196,7 @@ export class LocalAuthService {
 
   /** 密码登录只撤销此前的密码会话，不撤销钉钉会话（按来源撤销，4.3）。 */
   private async insertPasswordSession(transaction: DatabaseTransaction, userId: string, audience: ApiAudience, sessionHash: string, authorizationVersion: number) {
-    const expiresAt = new Date(Date.now() + this.configuration.sessionTtlSeconds * 1000)
+    const expiresAt = new Date(Date.now() + this.sessionTtl() * 1000)
     await transaction`
       update authentication_sessions set revoked_at = now()
        where tenant_id = ${tenantId} and user_id = ${userId}
@@ -349,7 +352,7 @@ export class LocalAuthService {
     })
     if (!changed) throw new IdentityAccessError(401, 'invalid_credentials', '当前密码错误或会话已过期')
     await this.limiter.clear(passwordKey)
-    const ttl = changed.binding?.status === 'bound' ? dingtalkConfiguration!.sessionTtlSeconds : this.configuration.sessionTtlSeconds
+    const ttl = changed.binding?.status === 'bound' ? dingtalkConfiguration!.sessionTtlSeconds : this.sessionTtl()
     return {
       location: normalizeReturnTo(typeof input.returnTo === 'string' ? input.returnTo : null, origin),
       sessionCookie: serializeCookie(settings.sessionCookieName, sessionToken, ttl, this.configuration.cookieSecure),

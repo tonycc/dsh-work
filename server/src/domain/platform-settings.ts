@@ -16,6 +16,10 @@ export type PlatformSettingKey =
   | 'notifications.retention_days'
   | 'error_records.retention_days'
   | 'page_views.retention_days'
+  | 'session.ttl_hours'
+  | 'knowledge.search_timeout_seconds'
+  | 'knowledge.upload_timeout_seconds'
+  | 'model.headers_timeout_seconds'
 
 /** 存在 `dingtalk_app_configurations` 的四项（RP11）。 */
 export type DingTalkParameterKey =
@@ -24,7 +28,7 @@ export type DingTalkParameterKey =
   | 'dingtalk.admin_daily_bind_limit'
   | 'dingtalk.timeout_seconds'
 
-export type PlatformSettingGroup = 'disk' | 'run' | 'retention' | 'runtime' | 'login'
+export type PlatformSettingGroup = 'disk' | 'run' | 'retention' | 'runtime' | 'login' | 'external'
 
 /**
  * 存储位置：`platform` 为 `platform_settings`；`runtime` 为 `runtimes.capacity` 与 `runtime_configurations`；
@@ -64,6 +68,7 @@ export const PLATFORM_SETTING_GROUPS: ReadonlyArray<{ id: PlatformSettingGroup; 
   { id: 'retention', title: '数据保留', description: '到期数据在每天的清理任务中删除。' },
   { id: 'runtime', title: 'Runtime', description: '每个 Runtime 一行；调度状态与停用工具仍在 Runtimes 页操作。' },
   { id: 'login', title: '登录与钉钉', description: '钉钉 CorpId、AppKey、AppSecret 仍在钉钉集成页配置。' },
+  { id: 'external', title: '外部服务', description: '知识库连接地址、密钥与嵌入模型仍在企业知识库页配置。' },
 ]
 
 export const PLATFORM_SETTING_DEFINITIONS: readonly PlatformSettingDefinition[] = [
@@ -115,6 +120,29 @@ export const PLATFORM_SETTING_DEFINITIONS: readonly PlatformSettingDefinition[] 
     label: '页面访问保留天数', description: '下限 90 天，保证使用情况页“近 90 天”数据完整。',
     unit: '天', defaultValue: 180, min: 90, max: 730, timing: '下次清理（每天）',
     lowerRisk: '缩短后，下次清理将删除早于新天数的页面访问记录，使用情况页的历史会变短。',
+  },
+  {
+    key: 'session.ttl_hours', storage: 'platform', savePermission: 'platform-admin', group: 'login',
+    label: '登录会话有效期', description: '员工端与管理端账号密码登录的会话有效期，平台管理员的会话同样受影响。页面从未保存过时沿用环境变量 DSH_WORK_SESSION_TTL_SECONDS。',
+    unit: '小时', defaultValue: 8, min: 1, max: 168, timing: '之后签发的会话', scale: 3600,
+    lowerRisk: '缩短后只影响之后签发的会话，已登录的会话按原有效期到期。',
+  },
+  {
+    key: 'knowledge.search_timeout_seconds', storage: 'platform', savePermission: 'config', group: 'external',
+    label: '知识库检索超时', description: '一次检索串行发两个请求（检索、取文档），各受此超时；Agent 的知识检索工具最多等 25 秒，所以上限 12 秒。',
+    unit: '秒', defaultValue: 10, min: 3, max: 12, timing: '下一次检索',
+    lowerRisk: '调低后较慢的检索会更早判超时，Agent 得不到知识库结果。',
+  },
+  {
+    key: 'knowledge.upload_timeout_seconds', storage: 'platform', savePermission: 'config', group: 'external',
+    label: '知识库上传与下载超时', description: '上传文档、下载原文与预览时等待 WeKnora 的时间。',
+    unit: '秒', defaultValue: 120, min: 30, max: 300, timing: '下一次上传、下载或预览',
+  },
+  {
+    key: 'model.headers_timeout_seconds', storage: 'platform', savePermission: 'config', group: 'external',
+    label: '模型首个响应超时', description: '全平台一个值：模型在这段时间内没有开始返回即判超时，最多重试 2 次；整次运行仍受运行超时限制。',
+    unit: '秒', defaultValue: 120, min: 30, max: 300, timing: '下一次模型请求',
+    lowerRisk: '调低后推理较慢的模型更容易判超时并重试，可能导致运行失败。',
   },
 ]
 
@@ -200,11 +228,15 @@ export const defaultPlatformSettings: PlatformSettingsReader = {
   get: key => DEFINITIONS.get(key)!.defaultValue,
 }
 
-/** 由数据库行构造读取口：值不合法或键未登记时回落到默认值。 */
-export function platformSettingsFromValues(values: ReadonlyMap<string, unknown>): PlatformSettingsReader {
+/**
+ * 由数据库行构造读取口：值不合法或键未登记时回落到默认值。`initial` 为页面从未保存过（没有行）时的初始值
+ * （例如登录会话有效期来自环境变量）；行的值为 null（恢复默认）时仍按登记默认值。
+ */
+export function platformSettingsFromValues(values: ReadonlyMap<string, unknown>, initial: Partial<Record<PlatformSettingKey, number>> = {}): PlatformSettingsReader {
   return {
     get(key) {
       const definition = DEFINITIONS.get(key)!
+      if (!values.has(key) && initial[key] !== undefined) return initial[key]!
       const value = values.get(key)
       return typeof value === 'number' && Number.isInteger(value) && value >= definition.min && value <= definition.max
         ? value

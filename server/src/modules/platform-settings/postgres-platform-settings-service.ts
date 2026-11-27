@@ -64,11 +64,26 @@ type ResolvedChange = { definition: PlatformSettingDefinition; value: number; re
 export class PostgresPlatformSettingsService implements PlatformSettingsReader {
   private readonly database: DatabaseClient
   private readonly onDingTalkChanged?: () => void
+  /** 环境变量 `DSH_WORK_SESSION_TTL_SECONDS`（已收进 1～168 小时）；未设置时为 undefined。 */
+  private readonly sessionTtlFromEnvironment?: number
   private snapshot: PlatformSettingsReader = platformSettingsFromValues(new Map())
+  private sessionRow: { present: boolean; value: unknown } = { present: false, value: null }
 
-  constructor(database: DatabaseClient, options: { onDingTalkChanged?: () => void } = {}) {
+  constructor(database: DatabaseClient, options: { onDingTalkChanged?: () => void; sessionTtlSecondsFromEnvironment?: number } = {}) {
     this.database = database
     this.onDingTalkChanged = options.onDingTalkChanged
+    if (options.sessionTtlSecondsFromEnvironment !== undefined) {
+      const clamped = Math.min(168 * 3600, Math.max(3600, options.sessionTtlSecondsFromEnvironment))
+      if (clamped !== options.sessionTtlSecondsFromEnvironment) {
+        console.warn(`DSH_WORK_SESSION_TTL_SECONDS=${options.sessionTtlSecondsFromEnvironment} 超出范围 3600–604800，已按 ${clamped} 使用；可在管理端“平台配置”中调整`)
+      }
+      this.sessionTtlFromEnvironment = clamped
+    }
+  }
+
+  /** 页面从未保存过时的初始值（页面单位）：登录会话有效期来自环境变量。 */
+  private initialValues(): Partial<Record<PlatformSettingKey, number>> {
+    return this.sessionTtlFromEnvironment === undefined ? {} : { 'session.ttl_hours': Math.ceil(this.sessionTtlFromEnvironment / 3600) }
   }
 
   /** 启动时读取一次；之后由保存刷新。 */
@@ -76,11 +91,22 @@ export class PostgresPlatformSettingsService implements PlatformSettingsReader {
     const rows = await this.database<{ key: string; value: unknown }[]>`
       select key, value from platform_settings where tenant_id = ${tenantId}
     `
-    this.snapshot = platformSettingsFromValues(new Map(rows.map(row => [row.key, row.value])))
+    const values = new Map(rows.map(row => [row.key, row.value]))
+    this.snapshot = platformSettingsFromValues(values, this.initialValues())
+    this.sessionRow = { present: values.has('session.ttl_hours'), value: values.get('session.ttl_hours') ?? null }
   }
 
   get(key: PlatformSettingKey): number {
     return this.snapshot.get(key)
+  }
+
+  /**
+   * 签发会话时读取（运行参数配置方案 6.6.6）：页面保存过以页面为准（恢复默认为 8 小时）；从未保存时用环境变量的精确秒数，
+   * 都没有时 8 小时。只影响之后签发的会话。
+   */
+  sessionTtlSeconds(): number {
+    if (!this.sessionRow.present && this.sessionTtlFromEnvironment !== undefined) return this.sessionTtlFromEnvironment
+    return this.snapshot.get('session.ttl_hours') * 3600
   }
 
   async list(): Promise<PlatformSettingView[]> {
@@ -98,6 +124,14 @@ export class PostgresPlatformSettingsService implements PlatformSettingsReader {
     const saved = new Map(rows.map(row => [row.key, row]))
     const platform = PLATFORM_SETTING_DEFINITIONS.map(definition => {
       const row = saved.get(definition.key)
+      if (!row && definition.key === 'session.ttl_hours' && this.sessionTtlFromEnvironment !== undefined) {
+        // 从未在页面保存过：显示环境变量的值，来源“环境变量”；不是整小时时显示真实值。
+        return settingView(definition, {
+          value: toPageValue(definition, this.sessionTtlFromEnvironment),
+          ...storedValueState(definition, this.sessionTtlFromEnvironment),
+          source: 'env', revision: 0, versionKey: `platform:${definition.key}`,
+        })
+      }
       return platformSettingView(definition, row && { value: row.value, revision: row.revision, updatedAt: row.updatedAt.toISOString(), updatedBy: row.updatedBy })
     })
     const runtime = runtimes.flatMap(item => runtimeSettingDefinitions(item).map(definition => {
@@ -181,7 +215,12 @@ export class PostgresPlatformSettingsService implements PlatformSettingsReader {
        where tenant_id = ${tenantId} and key = ${definition.key} for update
     `
     if ((current?.revision ?? 0) !== revision) throw conflict()
-    const previous = typeof current?.value === 'number' ? current.value : definition.defaultValue
+    // 无变化按实际生效值比较（PR #179 评审 N1）：没有行时用初始值（如环境变量），初始值不是整单位时任何输入都算修改。
+    const initial = this.initialValues()[definition.key as PlatformSettingKey]
+    const initialExact = definition.key !== 'session.ttl_hours' || this.sessionTtlFromEnvironment === undefined || this.sessionTtlFromEnvironment % 3600 === 0
+    const previous = typeof current?.value === 'number' ? current.value
+      : current ? definition.defaultValue
+        : initial !== undefined ? (initialExact ? initial : Number.NaN) : definition.defaultValue
     if (value === previous) return
     const stored = value === definition.defaultValue ? sql`'null'::jsonb` : sql`${sql.json(value)}`
     if (current) {
@@ -202,17 +241,20 @@ export class PostgresPlatformSettingsService implements PlatformSettingsReader {
       insert into audit_events (id, tenant_id, actor_type, actor_id, action, object_type, object_id, result, trace_id, safe_context)
       values (${`audit-${randomUUID()}`}, ${tenantId}, 'user', ${actorId}, 'platform.setting.update',
         'platform_setting', ${definition.key}, 'success', ${traceId},
-        ${sql.json({ label: definition.label, from: String(previous), to: String(value), unit: definition.unit })})
+        ${sql.json({ label: definition.label, from: Number.isNaN(previous) ? `${this.sessionTtlFromEnvironment} 秒（环境变量）` : String(previous), to: String(value), unit: definition.unit })})
     `
   }
 
   /** 参数总览（RP8）：只读，按白名单汇总各模块参数与超时链路，不返回任何密钥。 */
   async overview(input: {
-    sessionTtl: { seconds: number; fromEnvironment: boolean }
     canEdit(owner: NonNullable<RuntimeParameterOwner>): boolean
   }): Promise<RuntimeParametersOverview> {
     const [settings, runtimes] = await Promise.all([this.list(), this.runtimes()])
-    return buildRuntimeParametersOverview({ settings, runtimes, sessionTtl: input.sessionTtl, canEdit: input.canEdit })
+    return buildRuntimeParametersOverview({ settings, runtimes, canEdit: input.canEdit })
+  }
+
+  async runtimeLimits(): Promise<Array<{ id: string; name: string; timeoutSeconds: number }>> {
+    return (await this.runtimes()).map(({ id, name, timeoutSeconds }) => ({ id, name, timeoutSeconds }))
   }
 
   private async runtimes(): Promise<RuntimeRow[]> {
@@ -235,7 +277,15 @@ export class PostgresPlatformSettingsService implements PlatformSettingsReader {
              (select count(*)::integer from agents a
                 join agent_versions av on av.tenant_id = a.tenant_id and av.id = a.active_version_id
                where a.tenant_id = ${tenantId} and a.status = 'published'
-                 and av.timeout_seconds > c."timeoutSeconds") as "agentsOverTimeout"
+                 and av.timeout_seconds > c."timeoutSeconds") as "agentsOverTimeout",
+             -- 已启用的自动任务与主动任务中，任务预算超时大于 Runtime 超时的数量（RP-S3）。
+             (select count(*)::integer from (
+                select input_template from agent_automations where tenant_id = ${tenantId} and status = 'enabled'
+                union all
+                select input_template from agent_routines where tenant_id = ${tenantId} and status = 'enabled'
+              ) t
+               where jsonb_typeof(t.input_template->'budget'->'timeoutSeconds') = 'number'
+                 and (t.input_template->'budget'->>'timeoutSeconds')::numeric > c."timeoutSeconds") as "automationsOverTimeout"
         from configured c
        order by (c.scheduling_status = 'accepting') desc, c.id
     `

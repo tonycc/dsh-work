@@ -1,21 +1,23 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 
-// RP-E2E-01、RP-E2E-02、RP-E2E-04（e2e/catalog/admin-platform.md）：平台配置——平台管理员修改参数、总览与超时链路；
-// 平台配置管理员不能保存安全类参数；只读管理员只能查看；Runtimes 页不再编辑容量与超时。
+// RP-E2E-01、02、04、05（e2e/catalog/admin-platform.md）：平台配置——平台管理员修改参数、总览与超时链路；
+// 平台配置管理员不能保存安全类参数；只读管理员只能查看；Runtimes 页不再编辑容量与超时；
+// 登录会话有效期、知识库与模型超时在平台配置中修改。
 // P0 冒烟数据为确定性内存数据（server/src/testing/p0-smoke/platform-config-service.ts），冒烟服务按测试 Cookie 切换身份。
 const adminUrl = `http://localhost:${process.env.DSH_WORK_ADMIN_PORT ?? 4180}`
 const runtimeId = 'runtime-prototype-01'
 /** 冒烟数据中该 Runtime 的初始容量与单次执行超时（分钟）。 */
 const runtimeOriginal: Record<string, number> = { [`runtime.${runtimeId}.capacity`]: 4, [`runtime.${runtimeId}.timeout_minutes`]: 30 }
 
-interface Setting { key: string; storage: string; value: number; defaultValue: number; revision: number }
+interface Setting { key: string; storage: string; source: string; value: number; defaultValue: number; revision: number }
 
 async function restore(request: APIRequestContext) {
   const response = await request.get(`${adminUrl}/api/admin/v1/platform-config`)
   const { data } = await response.json() as { data: { settings: Setting[] } }
   const changes = data.settings
     .map(item => ({ item, target: item.storage === 'runtime' ? runtimeOriginal[item.key] : item.defaultValue }))
-    .filter(({ item, target }) => target !== undefined && item.value !== target)
+    // 沿用环境变量的项（登录会话有效期）没有被页面保存过，保持原样，不改成默认值。
+    .filter(({ item, target }) => target !== undefined && item.source !== 'env' && item.value !== target)
     .map(({ item, target }) => ({ key: item.key, value: target, revision: item.revision }))
   if (changes.length) {
     const restored = await request.put(`${adminUrl}/api/admin/v1/platform-settings`, { data: { changes } })
@@ -55,10 +57,10 @@ test('RP-E2E-01 a platform administrator changes parameters across storages and 
   await page.goto(`${adminUrl}/overview`)
   await navigation(page).getByRole('button', { name: '平台配置', exact: true }).click()
   await expect(page).toHaveURL(`${adminUrl}/platform-config`)
-  for (const group of ['磁盘与工作区', '并发与运行', '数据保留', 'Runtime', '登录与钉钉']) {
+  for (const group of ['磁盘与工作区', '并发与运行', '数据保留', 'Runtime', '登录与钉钉', '外部服务']) {
     await expect(page.getByRole('heading', { name: group, exact: true })).toBeVisible()
   }
-  await expect(page.getByText('只有平台管理员能保存', { exact: true })).toHaveCount(3)
+  await expect(page.getByText('只有平台管理员能保存', { exact: true })).toHaveCount(4)
 
   await field(page, '每次运行最多读取网页次数').fill('99')
   await expect(page.getByRole('note').filter({ hasText: '请输入 1～50 之间的整数' })).toBeVisible()
@@ -140,4 +142,35 @@ test('RP-E2E-04 the Runtimes page keeps the load but no longer edits capacity or
     body: JSON.stringify({ runtimeId: 'runtime-prototype-01', maxConcurrentWorkers: 9, schedulingStatus: 'accepting' }),
   })).status)
   expect(status).toBe(422)
+})
+
+test('RP-E2E-05 session lifetime, knowledge and model timeouts are edited in platform config', async ({ page }) => {
+  await asAdmin(page, 'config-admin')
+  await page.goto(`${adminUrl}/platform-config`)
+  // 登录会话有效期沿用环境变量，是安全类参数：平台配置管理员不能修改。
+  await expect(field(page, '登录会话有效期')).toHaveValue('12')
+  await expect(field(page, '登录会话有效期')).toBeDisabled()
+  await expect(page.getByRole('heading', { name: '外部服务', exact: true })).toBeVisible()
+  await field(page, '知识库检索超时').fill('20')
+  await expect(page.getByRole('note').filter({ hasText: '请输入 3～12 之间的整数' })).toBeVisible()
+  await field(page, '知识库检索超时').fill('6')
+  await field(page, '模型首个响应超时').fill('60')
+  await page.getByRole('button', { name: '保存', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '确认保存 2 项修改' })
+  await expect(dialog.getByText('10 秒 → 6 秒')).toBeVisible()
+  // 调低检索与模型超时有失败风险，需要先勾选已了解。
+  await dialog.getByText('我已了解上面标出的影响').click()
+  await dialog.getByRole('button', { name: '确认保存' }).click()
+  await expect(page.getByText('已保存 2 项，已写入审计记录。')).toBeVisible()
+  expect(await saveStatus(page, [{ key: 'session.ttl_hours', value: 24 }])).toBe(403)
+
+  await page.getByRole('tab', { name: '总览' }).click()
+  const config = page.getByRole('region', { name: '平台配置（本页修改）' })
+  await expect(config.getByRole('row', { name: /登录会话有效期/ }).getByRole('cell', { name: '环境变量' })).toBeVisible()
+  await expect(config.getByRole('row', { name: /知识库检索超时/ }).getByRole('cell', { name: '页面配置' })).toBeVisible()
+  await expect(page.getByRole('listitem', { name: '知识库检索' }).getByText('12 秒', { exact: true })).toBeVisible()
+  await expect(page.getByRole('listitem', { name: '模型请求' }).getByText('1 分钟', { exact: true })).toBeVisible()
+  await expect(page.getByRole('listitem', { name: '发布试运行' })).toBeVisible()
+  await expect(page.getByRole('listitem', { name: '自动任务与主动任务' }).getByText(/1 个已启用任务的预算超时大于 30 分钟/)).toBeVisible()
+  await expect(page.getByText('暂不可修改')).toHaveCount(0)
 })

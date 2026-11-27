@@ -77,6 +77,12 @@ test('不可用按原因分类：5xx、认证失败、限流、超时、连接�
   assert.equal(await reason(() => new WeKnoraClient({ baseUrl, apiKey: 'wrong' }).search({ query: 'q', knowledgeBaseIds: [], matchCount: 1 })), 'auth')
   double.delayMs = 200
   assert.equal(await reason(() => search(client(50))), 'timeout')
+  // 平台配置的检索超时每次请求读取（RP-S3）：调大后同一客户端的下一次检索按新值。
+  let searchMs = 50
+  const configured = new WeKnoraClient({ baseUrl, apiKey: double.apiKey, timeouts: () => ({ searchMs, uploadMs: 120_000 }) })
+  assert.equal(await reason(() => search(configured)), 'timeout')
+  searchMs = 2000
+  await search(configured)
   double.delayMs = 0
   assert.equal(await reason(() => new WeKnoraClient({ baseUrl: 'http://127.0.0.1:1', apiKey: 'k' }).search({ query: 'q', knowledgeBaseIds: [], matchCount: 1 })), 'network')
 })

@@ -141,6 +141,12 @@ test('routes: an Agent writer reads candidate lists in selector view only', () =
   assert.ok(!allowed(agentWriter, 'identity/roles'))
   assert.ok(!allowed(agentWriter, 'skill-versions'))
   assert.ok(!allowed(['admin:agent:read'], 'skills'))
+  // Agent 能力页的实际生效超时提示（RP-S3）：Agent 查看或修改权限可读 Runtime 超时，不能读平台配置本身。
+  assert.deepEqual(decideAdminRouteAccess(['admin:agent:read'], api('platform-config/runtime-limits'), 'GET'), { allowed: true, view: 'selector' })
+  assert.deepEqual(decideAdminRouteAccess(agentWriter, api('platform-config/runtime-limits'), 'GET'), { allowed: true, view: 'selector' })
+  assert.deepEqual(decideAdminRouteAccess(['admin:config:read'], api('platform-config/runtime-limits'), 'GET'), { allowed: true, view: 'full' })
+  assert.ok(!allowed(['admin:agent:write'], 'platform-config'))
+  assert.ok(!allowed(['admin:knowledge:write'], 'platform-config/runtime-limits'))
 })
 
 test('every documented admin operation has a permission owner', () => {
