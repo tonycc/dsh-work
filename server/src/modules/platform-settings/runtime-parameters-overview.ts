@@ -17,11 +17,12 @@ import { ARTIFACT_LIMITS } from '../workbench/application/artifact-file-policy.t
 export type RuntimeParameterSource = 'page' | 'default' | 'env' | 'builtin' | 'deploy'
 
 /** 谁能修改：平台管理员，或某个模块的修改权限；`null` 为不可修改。 */
-export type RuntimeParameterOwner = { kind: 'platform-admin' } | { kind: 'module'; module: 'agent' | 'connector' } | null
+export type RuntimeParameterOwner = { kind: 'platform-admin' } | { kind: 'module'; module: 'agent' | 'config' | 'dingtalk' | 'knowledge' } | null
 
 export interface RuntimeParameterEntry {
   id: string
-  group: 'ops' | 'run' | 'identity' | 'fixed'
+  /** `config`：平台配置页修改；`other`：留在原页面（Agent 运行限制与凭据）；`run`、`identity`：暂不可修改；`fixed`：只读。 */
+  group: 'config' | 'run' | 'identity' | 'other' | 'fixed'
   name: string
   value: string
   source: RuntimeParameterSource
@@ -72,7 +73,6 @@ export interface RuntimeParametersOverviewInput {
   settings: PlatformSettingView[]
   runtimes: RuntimeSummary[]
   sessionTtl: { seconds: number; fromEnvironment: boolean }
-  dingtalk: DingTalkSummary | null
   canEdit(owner: NonNullable<RuntimeParameterOwner>): boolean
 }
 
@@ -111,26 +111,25 @@ export function buildRuntimeParametersOverview(input: RuntimeParametersOverviewI
   const platformAdmin = { kind: 'platform-admin' } as const
 
   for (const setting of input.settings) {
-    add({
-      id: setting.key, group: 'ops', name: setting.label, value: formatSettingValue(setting),
-      source: setting.source, timing: setting.timing, where: '运行参数 · 运维设置', link: '/runtime-parameters', owner: platformAdmin,
+    const owner: NonNullable<RuntimeParameterOwner> = setting.savePermission === 'platform-admin' ? platformAdmin : { kind: 'module', module: 'config' }
+    entries.push({
+      id: setting.key, group: 'config', name: setting.label, value: setting.exact ? formatSettingValue(setting) : setting.actual ?? formatSettingValue(setting),
+      source: setting.source, timing: setting.timing, where: '平台配置 · 配置', link: '/platform-config', owner,
+      canEdit: setting.available && input.canEdit(owner),
     })
   }
 
-  for (const runtime of input.runtimes) {
-    const label = input.runtimes.length > 1 ? `（${runtime.name}）` : ''
-    add({
-      id: `runtime.${runtime.id}.capacity`, group: 'run', name: `Runtime 容量${label}`, value: String(runtime.capacity),
-      source: runtime.configured ? 'page' : 'default', timing: '立即', where: 'Runtimes', link: '/runtimes', owner: { kind: 'module', module: 'connector' },
-    })
-    add({
-      id: `runtime.${runtime.id}.timeout`, group: 'run', name: `Runtime 单次执行超时${label}`, value: formatDuration(runtime.timeoutSeconds),
-      source: runtime.configured ? 'page' : 'default', timing: '之后新建的运行', where: 'Runtimes', link: '/runtimes', owner: { kind: 'module', module: 'connector' },
-    })
-  }
   add({
-    id: 'agent.limits', group: 'run', name: 'Agent 运行超时 / 工具调用 / 输出', value: '按 Agent 设置',
+    id: 'agent.limits', group: 'other', name: 'Agent 运行超时 / 工具调用 / 输出', value: '按 Agent 设置',
     source: 'page', timing: '发布后的下次运行', where: 'Agent 管理', link: '/agents', owner: { kind: 'module', module: 'agent' },
+  })
+  add({
+    id: 'dingtalk.application', group: 'other', name: '钉钉 CorpId / AppKey / AppSecret', value: '在钉钉集成页查看',
+    source: 'page', timing: '立即', where: '钉钉集成 · 应用配置', link: '/dingtalk', owner: platformAdmin,
+  })
+  add({
+    id: 'knowledge.connection', group: 'other', name: '知识库连接地址 / 密钥 / 嵌入模型', value: '在企业知识库页查看',
+    source: 'page', timing: '立即', where: '企业知识库 · 连接配置', link: '/knowledge', owner: { kind: 'module', module: 'knowledge' },
   })
   add({
     id: 'model.headers_timeout', group: 'run', name: '模型首个响应超时', value: formatDuration(DEFAULT_HEADERS_TIMEOUT_MS / 1000),
@@ -141,24 +140,10 @@ export function buildRuntimeParametersOverview(input: RuntimeParametersOverviewI
     value: `${formatDuration(weknoraSearchTimeoutMs / 1000)} / ${formatDuration(uploadTimeoutMs / 1000)}`,
     source: 'builtin', timing: '—', where: '暂不可修改', owner: null,
   })
-
   add({
     id: 'identity.session_ttl', group: 'identity', name: '登录会话有效期', value: formatDuration(input.sessionTtl.seconds),
     source: input.sessionTtl.fromEnvironment ? 'env' : 'default', timing: '重启后的新登录', where: '改环境变量后重启', owner: null,
   })
-  if (input.dingtalk) {
-    const source: RuntimeParameterSource = input.dingtalk.source === 'admin' ? 'page' : 'env'
-    add({
-      id: 'dingtalk.session', group: 'identity', name: '钉钉会话有效期 / 待绑定凭证有效期',
-      value: `${formatDuration(input.dingtalk.sessionTtlSeconds)} / ${formatDuration(input.dingtalk.bindingTicketTtlSeconds)}`,
-      source, timing: '之后的免登', where: '钉钉集成', link: '/dingtalk', owner: platformAdmin,
-    })
-    add({
-      id: 'dingtalk.limits', group: 'identity', name: '钉钉接口超时 / 每日代绑上限',
-      value: `${formatDuration(input.dingtalk.timeoutMs / 1000)} / ${input.dingtalk.adminDailyBindLimit}`,
-      source, timing: '立即', where: '钉钉集成', link: '/dingtalk', owner: platformAdmin,
-    })
-  }
 
   const toolTimeouts = Object.values(platformToolContracts).map(contract => contract.timeoutMs / 1000)
   const fixed: Array<[string, string, string, RuntimeParameterSource, string, string]> = [

@@ -42,9 +42,9 @@ function settingsService(options: { bootstrap?: DingTalkConfiguration | null; wi
   })
 }
 
+// 会话有效期、待绑定凭证有效期、每日代绑上限与接口超时改在“平台配置”中修改（运行参数配置方案 6.6.2），这里不再提交。
 const pageInput = {
   corpId: 'ding-corp-page', agentId: '3189002', appKey: 'page-app-key', appSecret: correctSecret,
-  sessionTtlSeconds: 7200, bindingTicketTtlSeconds: 600, adminDailyBindLimit: 20, timeoutMs: 5000,
 }
 
 async function code(promise: Promise<unknown>) {
@@ -81,11 +81,12 @@ test('部署配置只在页面从未保存过时作为初始配置；页面保�
   const [stored] = await database.client`select count(*)::integer as count from credential_secrets where credential_ref_id = ${dingtalkCredentialRefId}`
   assert.equal(stored!.count, 0, '部署配置的 AppSecret 不入库')
 
-  // 只改其他参数、不填 AppSecret：同一个应用沿用部署配置的 AppSecret。
+  // 只改其他参数、不填 AppSecret：同一个应用沿用部署配置的 AppSecret；四项参数沿用现值。
   const updated = await fromEnvironment.save({ ...pageInput, corpId: 'ding-corp-env', appKey: 'env-app-key', appSecret: '' }, adminId)
   assert.equal(updated.source, 'admin')
-  assert.equal(updated.sessionTtlSeconds, 7200)
-  assert.equal((await fromEnvironment.current())!.sessionTtlSeconds, 7200, '保存后立即生效，无需重启')
+  assert.equal(updated.sessionTtlSeconds, initial!.sessionTtlSeconds, '保存凭据沿用现值')
+  assert.equal(await code(fromEnvironment.save({ ...pageInput, corpId: 'ding-corp-env', appKey: 'env-app-key', appSecret: '', sessionTtlSeconds: 7200 }, adminId)),
+    'invalid_request', '四项改在平台配置中修改，带上即拒绝')
 
   // 页面保存过之后，部署配置变化不再覆盖。
   const changedEnvironment = settingsService({ bootstrap: { ...bootstrap, corpId: 'ding-corp-other' } })
@@ -121,10 +122,10 @@ test('保存前向钉钉验证凭据，不通过不保存；AppSecret 加密入�
 
   const current = await service.current()
   assert.equal(current!.appSecret, correctSecret)
-  assert.equal(current!.adminDailyBindLimit, 20)
-  assert.equal(current!.bindingTicketTtlSeconds, 600)
+  assert.equal(current!.adminDailyBindLimit, 50, '首次配置用默认值')
+  assert.equal(current!.bindingTicketTtlSeconds, 300)
 
-  assert.equal(await code(service.save({ ...pageInput, sessionTtlSeconds: 10 }, adminId)), 'invalid_request', '参数越界被拒')
+  assert.equal(await code(service.save({ ...pageInput, timeoutMs: 5000 }, adminId)), 'invalid_request', '四项改在平台配置中修改')
 })
 
 test('主密钥未配置时不能在页面保存 AppSecret；主密钥更换后提示重新填写', async () => {
@@ -194,7 +195,7 @@ test('换到另一个钉钉企业（页面保存）时，所有绑定失效、�
   const service = settingsService()
   await service.save(pageInput, adminId)
   const bindingId = await seedBinding(employeeId, 'ding-user-a')
-  await service.save({ ...pageInput, appSecret: '', adminDailyBindLimit: 21 }, adminId)
+  await service.save({ ...pageInput, appSecret: '', agentId: '3189009' }, adminId)
   assert.equal((await bindingState(bindingId)).status, 'valid', '同一企业只改参数不失效')
 
   await service.save({ ...pageInput, corpId: 'ding-corp-b' }, adminId)
@@ -259,7 +260,7 @@ test('验证期间配置被其他管理员清除时不保存，不写回指向�
       return double
     },
   })
-  assert.equal(await code(racing.save({ ...pageInput, appSecret: '', adminDailyBindLimit: 22 }, adminId)), 'dingtalk_settings_changed')
+  assert.equal(await code(racing.save({ ...pageInput, appSecret: '', agentId: '3189010' }, adminId)), 'dingtalk_settings_changed')
   const view = await service.view()
   assert.equal(view.configured, false, '清除结果保留')
 })

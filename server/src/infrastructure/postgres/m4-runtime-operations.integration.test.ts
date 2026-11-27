@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { after, before, test } from 'node:test'
 
-import { PostgresOperationsService } from '../../modules/admin/application/postgres-operations-service.ts'
+import { PostgresOperationsService, writeRuntimeCapacityAndTimeout } from '../../modules/admin/application/postgres-operations-service.ts'
 import { PostgresAgentService } from '../../modules/agent/postgres-agent-service.ts'
 import { PostgresAuthorizationService } from '../../modules/authorization/postgres-authorization-service.ts'
 import { ModelGovernanceService } from '../../modules/model/model-governance-service.ts'
@@ -83,22 +83,33 @@ after(async () => {
   }
 })
 
+
+/** Runtime 容量与单次执行超时改在“平台配置”中修改（运行参数配置方案 6.6.2），测试经同一写入函数设置。 */
+async function setRuntime(capacity: number, timeoutMinutes: number) {
+  await database.begin(async transaction => {
+    const [current] = await transaction<{ revision: number }[]>`
+      select coalesce(max(revision), 0)::integer as revision from runtime_configurations
+       where tenant_id = 'tenant-dsh-work' and runtime_id = 'runtime-local-01'
+    `
+    await writeRuntimeCapacityAndTimeout(transaction, {
+      runtimeId: 'runtime-local-01', capacity, timeoutSeconds: timeoutMinutes * 60, expectedRevision: current!.revision, actorId: 'U00008',
+    })
+  })
+}
+
 test('Runtime configuration controls timeout, capacity and scheduling with versioned audit history', async () => {
   await assert.rejects(
     operations.updateRuntimeConfiguration({
       runtimeId: 'runtime-local-01',
-      maxConcurrentWorkers: 2,
-      attemptTimeoutMinutes: 2,
       schedulingStatus: 'accepting',
       actor: '林岚',
     }),
     /没有.*的修改权限/,
   )
 
+  await setRuntime(2, 2)
   const accepting = await operations.updateRuntimeConfiguration({
     runtimeId: 'runtime-local-01',
-    maxConcurrentWorkers: 2,
-    attemptTimeoutMinutes: 2,
     schedulingStatus: 'accepting',
     actor: 'U00008',
   })
@@ -131,23 +142,13 @@ test('Runtime configuration controls timeout, capacity and scheduling with versi
   const second = await createQueuedAttempt(captured)
   assert.equal(await runs.claimAttempt('tenant-dsh-work', first.attemptId, 'runtime-local-01'), true)
   assert.equal(await runs.claimAttempt('tenant-dsh-work', second.attemptId, 'runtime-local-01'), true)
-  await assert.rejects(
-    operations.updateRuntimeConfiguration({
-      runtimeId: 'runtime-local-01',
-      maxConcurrentWorkers: 1,
-      attemptTimeoutMinutes: 2,
-      schedulingStatus: 'accepting',
-      actor: 'U00008',
-    }),
-    /不能小于当前活动 Worker 数/,
-  )
+  await assert.rejects(setRuntime(1, 2), /不能小于当前活动 Worker 数/)
   await completeAttempt(first)
   await completeAttempt(second)
 
+  await setRuntime(2, 3)
   const draining = await operations.updateRuntimeConfiguration({
     runtimeId: 'runtime-local-01',
-    maxConcurrentWorkers: 2,
-    attemptTimeoutMinutes: 3,
     schedulingStatus: 'draining',
     actor: 'U00008',
   })
@@ -158,8 +159,6 @@ test('Runtime configuration controls timeout, capacity and scheduling with versi
 
   await operations.updateRuntimeConfiguration({
     runtimeId: 'runtime-local-01',
-    maxConcurrentWorkers: 2,
-    attemptTimeoutMinutes: 3,
     schedulingStatus: 'accepting',
     actor: 'U00008',
   })
@@ -169,8 +168,6 @@ test('Runtime configuration controls timeout, capacity and scheduling with versi
 
   const disabled = await operations.updateRuntimeConfiguration({
     runtimeId: 'runtime-local-01',
-    maxConcurrentWorkers: 2,
-    attemptTimeoutMinutes: 3,
     schedulingStatus: 'disabled',
     actor: 'U00008',
   })
@@ -191,10 +188,9 @@ test('Runtime configuration controls timeout, capacity and scheduling with versi
 })
 
 test('Background lanes together leave one Worker for interactive runs', async () => {
+  await setRuntime(3, 3)
   await operations.updateRuntimeConfiguration({
     runtimeId: 'runtime-local-01',
-    maxConcurrentWorkers: 3,
-    attemptTimeoutMinutes: 3,
     schedulingStatus: 'accepting',
     actor: 'U00008',
   })

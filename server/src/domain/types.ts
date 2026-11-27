@@ -209,8 +209,10 @@ export interface RuntimeDefinition {
 
 export interface UpdateRuntimeConfigurationInput {
   runtimeId: string
-  maxConcurrentWorkers: number
-  attemptTimeoutMinutes: number
+  /** 已改在“平台配置”中修改（运行参数配置方案 RP11、6.6.5）：带上时拒绝。 */
+  maxConcurrentWorkers?: number
+  /** 同上。 */
+  attemptTimeoutMinutes?: number
   schedulingStatus: RuntimeDefinition['schedulingStatus']
   /** 省略时保留当前停用清单。 */
   disabledTools?: string[]

@@ -14,6 +14,7 @@ import type { ApiAuthenticator } from '../modules/identity/types.ts'
 const TEST_ADMIN_VARIANTS: Record<string, { name: string; avatarText: string; title: string; role: 'business_admin' | 'auditor'; permissions: string[] }> = {
   'knowledge-admin': { name: '周宁', avatarText: '周', title: '知识库管理员', role: 'business_admin', permissions: ['admin:knowledge:write', 'workbench:use', 'knowledge:bases'] },
   reader: { name: '王悦', avatarText: '王', title: '安全审计员', role: 'auditor', permissions: ['admin:read', 'audit:read'] },
+  'config-admin': { name: '郑凯', avatarText: '郑', title: '运维管理员', role: 'business_admin', permissions: ['admin:config:write'] },
 }
 
 function adminVariant(request: Parameters<ApiAuthenticator>[0]) {

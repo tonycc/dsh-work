@@ -325,7 +325,7 @@ lines.on('line', (line) => {
                 : await callPlatformTool('inspect_admin_state', { domain: 'overview' })
           } else if (allowedTools.includes('prepare_admin_action')) {
             if (/(runtime|运行时|排空|调度)/i.test(currentText)) {
-              const inspected = JSON.parse(await callPlatformTool('inspect_admin_state', { domain: 'operations' })) as { runtimes?: Array<{ id: string; schedulingStatus: string; attemptTimeoutMinutes: number }> }
+              const inspected = JSON.parse(await callPlatformTool('inspect_admin_state', { domain: 'operations' })) as { runtimes?: Array<{ id: string; schedulingStatus: string; disabledTools: string[] }> }
               const runtime = inspected.runtimes?.[0]
               if (!runtime) throw new Error('No Runtime fixture')
               pending.answer = await callPlatformTool('prepare_admin_action', {
@@ -334,7 +334,8 @@ lines.on('line', (line) => {
                 summary: 'Mock Runtime scheduling change',
                 changes: /排空/.test(currentText)
                   ? { schedulingStatus: runtime.schedulingStatus === 'draining' ? 'accepting' : 'draining' }
-                  : { attemptTimeoutMinutes: runtime.attemptTimeoutMinutes === 60 ? 59 : runtime.attemptTimeoutMinutes + 1 },
+                  // 容量与超时改在平台配置中修改（运行参数配置方案 6.6.4），测试计划改为切换停用工具。
+                  : { disabledTools: runtime.disabledTools.includes('web_search') ? [] : ['web_search'] },
               })
             } else {
               const inspected = JSON.parse(await callPlatformTool('inspect_admin_state', { domain: 'agents' })) as { items?: Array<{ id: string; description: string }> }

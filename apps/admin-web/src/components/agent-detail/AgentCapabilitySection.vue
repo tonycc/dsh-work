@@ -64,7 +64,7 @@ function showMcpTools(connector: ConnectorDefinition) {
 
       <el-form-item label="读取网页">
         <el-switch v-model="form.webFetchEnabled" :disabled="readonly" active-text="允许读取网页" aria-label="允许读取网页" data-testid="agent-web-fetch-switch" />
-        <p class="field-help">开启后 Agent 可打开公网网页读取正文，但只能打开员工在对话中给出的网址，以及联网搜索结果中的网址；网址含密钥、个人信息或保密词时不会打开，每次运行的读取次数有上限，由平台管理员在“运行参数”中设定（默认 10 次）。内网页面与需要登录的页面打不开，请改用附件或知识库。</p>
+        <p class="field-help">开启后 Agent 可打开公网网页读取正文，但只能打开员工在对话中给出的网址，以及联网搜索结果中的网址；网址含密钥、个人信息或保密词时不会打开，每次运行的读取次数有上限，在管理端“平台配置”中设定（默认 10 次）。内网页面与需要登录的页面打不开，请改用附件或知识库。</p>
       </el-form-item>
 
       <el-form-item label="项目任务管理">

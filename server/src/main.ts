@@ -144,7 +144,7 @@ import { installProcessFailureHandlers, serverFailureRecord } from './modules/ob
 import { createSourceMapStackResolver } from './modules/observability/source-map-resolver.ts'
 import { registerClientErrorRoutes } from './http/client-error-routes.ts'
 import { registerErrorRecordsRoutes } from './http/admin/error-records-routes.ts'
-import { registerRuntimeParametersRoutes } from './http/admin/runtime-parameters-routes.ts'
+import { registerPlatformConfigRoutes } from './http/admin/platform-config-routes.ts'
 import { PostgresPlatformSettingsService } from './modules/platform-settings/postgres-platform-settings-service.ts'
 import { diskThresholds } from './domain/platform-settings.ts'
 import { registerUsageAnalyticsRoutes } from './http/admin/usage-analytics-routes.ts'
@@ -167,7 +167,8 @@ async function start() {
   const database = createDatabase({ url: databaseUrl })
   await runMigrations(database)
   // 运行参数（运行参数配置方案 RP-S1）：启动时读入页面保存过的值，之后由保存刷新进程内快照。
-  const platformSettings = new PostgresPlatformSettingsService(database)
+  // 钉钉四项在平台配置中保存后清除钉钉配置缓存（dingtalkSettings 在下方创建，回调只在保存时调用）。
+  const platformSettings = new PostgresPlatformSettingsService(database, { onDingTalkChanged: () => dingtalkSettings.invalidate() })
   await platformSettings.load()
   if (identityConfiguration.ignoredLegacySettings?.length) {
     console.warn(`AI Hub 登录已删除，以下旧配置不再读取，可从运行配置中删除：${identityConfiguration.ignoredLegacySettings.join('、')}`)
@@ -213,7 +214,7 @@ async function start() {
   })
   registerErrorRecordsRoutes(router, errorRecords)
   registerUsageAnalyticsRoutes(router, usageAnalytics)
-  registerRuntimeParametersRoutes(router, platformSettings, {
+  registerPlatformConfigRoutes(router, platformSettings, {
     sessionTtl: { seconds: identityConfiguration.sessionTtlSeconds, fromEnvironment: process.env.DSH_WORK_SESSION_TTL_SECONDS !== undefined },
     // 请求时才读取（启动完成后 dataRoot 已确定）。
     diskStatus: async () => {

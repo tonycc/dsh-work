@@ -33,7 +33,7 @@ test('module codes: write includes read, admin:read/write cover every module, ad
   assert.ok(hasAdminModuleAccess(['admin:write'], 'org', 'write'))
   assert.ok(hasAdminModuleAccess(['admin:*'], 'connector', 'write'))
   assert.deepEqual(adminModuleSummary(['admin:knowledge:write', 'admin:ops:read']), {
-    agent: 'none', skill: 'none', connector: 'none', model: 'none', dlp: 'none', knowledge: 'write', org: 'none', identity: 'none', dingtalk: 'none', ops: 'read',
+    agent: 'none', skill: 'none', connector: 'none', model: 'none', dlp: 'none', knowledge: 'write', org: 'none', identity: 'none', dingtalk: 'none', ops: 'read', config: 'none',
   })
 })
 
@@ -82,14 +82,18 @@ test('routes: DingTalk is a module; its application settings stay platform-admin
   assert.ok(!allowed(['admin:identity:write'], 'identity/users/u1/dingtalk-binding/confirm', 'POST'))
 })
 
-test('routes: runtime parameters are read with ops view; saving is platform-admin only (RP10)', () => {
-  assert.equal(allowed(['admin:ops:read'], 'runtime-parameters'), true)
-  assert.equal(allowed(['admin:read'], 'runtime-parameters'), true)
-  assert.equal(allowed(['admin:knowledge:write'], 'runtime-parameters'), false)
-  assert.equal(allowed(['admin:ops:read'], 'platform-settings', 'PUT'), false)
-  assert.equal(allowed(['admin:write'], 'platform-settings', 'PUT'), false)
+test('routes: platform config is read and saved with the config module (RP12); ops viewers no longer see it', () => {
+  assert.equal(allowed(['admin:config:read'], 'platform-config'), true)
+  assert.equal(allowed(['admin:read'], 'platform-config'), true)
+  assert.equal(allowed(['admin:ops:read'], 'platform-config'), false)
+  assert.equal(allowed(['admin:knowledge:write'], 'platform-config'), false)
+  assert.equal(allowed(['admin:config:read'], 'platform-settings', 'PUT'), false)
+  assert.equal(allowed(['admin:config:write'], 'platform-settings', 'PUT'), true)
+  assert.equal(allowed(['admin:write'], 'platform-settings', 'PUT'), true)
   assert.equal(allowed(['admin:*'], 'platform-settings', 'PUT'), true)
-  assert.deepEqual(decideAdminRouteAccess(['admin:write'], api('platform-settings'), 'PUT'), { allowed: false, message: '运行参数只有平台管理员可以修改' })
+  assert.equal(adminRouteRule(api('runtime-parameters')), null, 'the old path is no longer registered')
+  assert.equal(hasAdminModuleAccess(['admin:read'], 'config', 'read'), true)
+  assert.equal(hasAdminModuleAccess(['admin:write'], 'config', 'write'), true)
   // 其他只读运维接口仍然只读，平台管理员也不能写。
   assert.equal(allowed(['admin:*'], 'error-records/groups', 'POST'), false)
   assert.equal(canEditAdminSetting(['admin:*'], { kind: 'platform-admin' }), true)
@@ -97,6 +101,8 @@ test('routes: runtime parameters are read with ops view; saving is platform-admi
   assert.equal(canEditAdminSetting(['admin:connector:write'], { kind: 'module', module: 'connector' }), true)
   assert.equal(canEditAdminSetting(['admin:connector:read'], { kind: 'module', module: 'connector' }), false)
   assert.equal(canEditAdminSetting(['admin:write'], { kind: 'module', module: 'ops' }), false)
+  assert.equal(canEditAdminSetting(['admin:config:write'], { kind: 'module', module: 'config' }), true)
+  assert.equal(canEditAdminSetting(['admin:config:write'], { kind: 'platform-admin' }), false)
 })
 
 test('routes: audit needs audit:read; terms need the data-protection module (the route adds terms itself)', () => {

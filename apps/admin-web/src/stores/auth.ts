@@ -51,7 +51,8 @@ export const useAuthStore = defineStore('admin-auth', () => {
     'audit:read',
   ))
   /** @deprecated 只表示“持有全部模块修改权限”；页面改用 canWrite(模块)。 */
-  const canManage = computed(() => ADMIN_MODULES.every(module => module === 'ops' || moduleLevels.value[module] === 'write'))
+  // 不含只读的运营与后来新增的平台配置：按模块逐项授权保存的“全部修改”角色不含 config（PR 180 评审 I8）。
+  const canManage = computed(() => ADMIN_MODULES.every(module => module === 'ops' || module === 'config' || moduleLevels.value[module] === 'write'))
   const canManageIdentity = computed(() => canWrite('identity'))
   const canAccessDataProtectionTerms = computed(() => hasPermission(permissions.value, 'data-protection:terms'))
   const identityAdministrationAvailable = computed(() => identityProvider.value === 'local-password')
@@ -68,6 +69,7 @@ export const useAuthStore = defineStore('admin-auth', () => {
     const order: Array<[AdminModule, string]> = [
       ['agent', '/agents'], ['skill', '/skills'], ['connector', '/connectors'], ['model', '/model-governance'],
       ['knowledge', '/knowledge'], ['identity', '/identity'], ['org', '/organization'], ['dingtalk', '/dingtalk'], ['dlp', '/data-protection'],
+      ['config', '/platform-config'],
     ]
     // 员工与权限、钉钉集成只在受管身份下可用，否则路由守卫会把它们转回概览（requiresManagedIdentity）。
     const first = order.find(([module, path]) => canRead(module)

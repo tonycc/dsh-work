@@ -14,7 +14,7 @@ import type { RunOrchestrationService } from '../../run/run-orchestration-servic
 import type { AdminSkillInstallationService } from '../../skill/admin-skill-installation-service.ts'
 import type { PostgresSkillService } from '../../skill/postgres-skill-service.ts'
 import { continueSkillSource, parseSkillSource, type SkillSource } from '../../skill/skill-source.ts'
-import { RUNTIME_CONFIGURATION_BOUNDS, type PostgresOperationsService } from './postgres-operations-service.ts'
+import type { PostgresOperationsService } from './postgres-operations-service.ts'
 import { RequestError, accessDenied, invalidRequest, notFound, stateConflict } from '../../../domain/request-errors.ts'
 
 const tenantId = 'tenant-dsh-work'
@@ -488,13 +488,15 @@ export class AdminAssistantService {
 
   private async buildActionPlan(actionType: AdminActionType, target: string, summary: string, changes: Record<string, unknown>): Promise<StoredActionPlan> {
     if (actionType === 'runtime-update-configuration') {
-      assertOnlyKeys(changes, ['maxConcurrentWorkers', 'attemptTimeoutMinutes', 'schedulingStatus', 'disabledTools'])
+      // 容量与单次执行超时改在“平台配置”中修改（运行参数配置方案 6.6.4），平台运维计划只改调度状态与停用工具。
+      if (changes['maxConcurrentWorkers'] !== undefined || changes['attemptTimeoutMinutes'] !== undefined) {
+        throw requestInvalid('Runtime 容量与单次执行超时需在管理端“平台配置”页修改，管理助手不能修改')
+      }
+      assertOnlyKeys(changes, ['schedulingStatus', 'disabledTools'])
       const runtime = findUnique(await this.operations.getRuntimes(), target, 'Runtime')
       const before: RuntimeSnapshot = await this.operations.getRuntimeMutationSnapshot(runtime.id)
       const after = {
         ...before,
-        ...(changes['maxConcurrentWorkers'] === undefined ? {} : { maxConcurrentWorkers: readInteger(changes, 'maxConcurrentWorkers', RUNTIME_CONFIGURATION_BOUNDS.maxConcurrentWorkers.min, RUNTIME_CONFIGURATION_BOUNDS.maxConcurrentWorkers.max) }),
-        ...(changes['attemptTimeoutMinutes'] === undefined ? {} : { attemptTimeoutMinutes: readInteger(changes, 'attemptTimeoutMinutes', RUNTIME_CONFIGURATION_BOUNDS.attemptTimeoutMinutes.min, RUNTIME_CONFIGURATION_BOUNDS.attemptTimeoutMinutes.max) }),
         ...(changes['schedulingStatus'] === undefined ? {} : { schedulingStatus: readEnum(changes, 'schedulingStatus', ['accepting', 'draining', 'disabled'] as const) }),
         ...(changes['disabledTools'] === undefined ? {} : { disabledTools: readDisabledTools(changes['disabledTools']) }),
         revision: before.revision + 1,
@@ -552,6 +554,10 @@ export class AdminAssistantService {
 
   private async assertActionPrecondition(plan: StoredActionPlan) {
     if (plan.actionType === 'runtime-update-configuration') {
+      // 升级前生成、仍待确认的计划可能包含容量或超时变更：这两项已改在“平台配置”中修改，计划不再执行（PR #180 评审 I7）。
+      if (plan.after.maxConcurrentWorkers !== plan.before.maxConcurrentWorkers || plan.after.attemptTimeoutMinutes !== plan.before.attemptTimeoutMinutes) {
+        throw stateConflict('Runtime 容量与单次执行超时已改在管理端“平台配置”页修改，本计划不再执行')
+      }
       const snapshot = await this.operations.getRuntimeMutationSnapshot(plan.before.runtimeId)
       if (canonicalJson(snapshot) !== canonicalJson(plan.before)) throw stateConflict('Runtime 状态已变化，请重新生成操作计划')
       return
@@ -567,8 +573,6 @@ export class AdminAssistantService {
     if (plan.actionType === 'runtime-update-configuration') {
       await this.operations.updateRuntimeConfiguration({
         runtimeId: plan.after.runtimeId,
-        maxConcurrentWorkers: plan.after.maxConcurrentWorkers,
-        attemptTimeoutMinutes: plan.after.attemptTimeoutMinutes,
         schedulingStatus: plan.after.schedulingStatus,
         disabledTools: plan.after.disabledTools,
         actor: userId,
@@ -891,7 +895,7 @@ function agentDraftMatchesPlan(agent: AgentDefinition, after: Extract<StoredActi
 
 function actionResultSummary(plan: StoredActionPlan) {
   if (plan.actionType === 'runtime-update-configuration') {
-    return `Runtime“${plan.after.runtimeId}”配置已更新为 ${plan.after.schedulingStatus}，最大并发 ${plan.after.maxConcurrentWorkers}，Attempt 超时 ${plan.after.attemptTimeoutMinutes} 分钟，停用工具：${plan.after.disabledTools?.join('、') || '无'}。`
+    return `Runtime“${plan.after.runtimeId}”配置已更新为 ${plan.after.schedulingStatus}，停用工具：${plan.after.disabledTools?.join('、') || '无'}。`
   }
   if (plan.actionType === 'agent-set-status') return `Agent“${plan.after.agentId}”状态已更新为 ${plan.after.status}。`
   return `Agent“${plan.after.agentId}”的待发布草稿已按确认计划更新。`

@@ -3136,7 +3136,7 @@
       },
       "put": {
         "operationId": "saveDingTalkSettings",
-        "summary": "保存钉钉应用配置：先用这组凭据向钉钉换取 access_token，失败返回 422 dingtalk_credentials_rejected 或 503 dingtalk_unavailable 且不保存；AppSecret 留空沿用已保存的值，更换 CorpId 或 AppKey 时必须填写（422 dingtalk_secret_required）；服务未配置凭据主密钥时不能保存 AppSecret（409 credential_master_key_missing）。AppSecret 加密保存，立即生效，写审计（不含密钥）。只限平台管理员（功能规则第 13 节：换成他人控制的应用可以冒充已绑定员工登录）",
+        "summary": "保存钉钉应用配置：先用这组凭据向钉钉换取 access_token，失败返回 422 dingtalk_credentials_rejected 或 503 dingtalk_unavailable 且不保存；AppSecret 留空沿用已保存的值，更换 CorpId 或 AppKey 时必须填写（422 dingtalk_secret_required）；服务未配置凭据主密钥时不能保存 AppSecret（409 credential_master_key_missing）。AppSecret 加密保存，立即生效，写审计（不含密钥）。只限平台管理员（功能规则第 13 节：换成他人控制的应用可以冒充已绑定员工登录）。会话有效期、待绑定凭证有效期、每日代绑上限与接口超时改在平台配置（PUT /platform-settings）中修改，请求带上这四项返回 422；保存凭据时这四项沿用现值",
         "requestBody": {
           "required": true,
           "content": {
@@ -3166,26 +3166,6 @@
                     "type": "string",
                     "maxLength": 512,
                     "writeOnly": true
-                  },
-                  "sessionTtlSeconds": {
-                    "type": "integer",
-                    "minimum": 300,
-                    "maximum": 2592000
-                  },
-                  "bindingTicketTtlSeconds": {
-                    "type": "integer",
-                    "minimum": 60,
-                    "maximum": 3600
-                  },
-                  "adminDailyBindLimit": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 10000
-                  },
-                  "timeoutMs": {
-                    "type": "integer",
-                    "minimum": 1000,
-                    "maximum": 60000
                   }
                 }
               }
@@ -5983,10 +5963,10 @@
         }
       }
     },
-    "/runtime-parameters": {
+    "/platform-config": {
       "get": {
-        "operationId": "getRuntimeParameters",
-        "summary": "安全与运维 › 运行参数（运行参数配置方案 RP-S1）：运维参数（磁盘最低剩余空间与比例、失败工作区保留天数、每次运行最多读取网页次数、自动任务并发、站内通知/错误记录/页面访问保留天数）的当前值、默认值、范围、生效时机、来源（page / default）、版本号与影响说明（lowerRisk / belowDefaultRisk / raiseRisk）；数据卷当前剩余空间（disk：freeBytes、totalBytes，读取失败为 null）；当前管理员能否保存（canSave，只有平台管理员）；参数总览（各模块参数的当前值、来源 page / default / env / builtin / deploy、生效时机、修改位置与能否修改）与超时链路（每条链路实际生效的超时与起限制作用的一项）。不返回任何密钥。需要运维的查看权限（admin:ops:read）",
+        "operationId": "getPlatformConfig",
+        "summary": "安全与运维 › 平台配置（运行参数配置方案 6.6）：全部集中参数（运维参数、每个 Runtime 的容量与单次执行超时、钉钉会话有效期 / 待绑定凭证有效期 / 每日代绑上限 / 接口超时）的当前值、默认值、范围、生效时机、来源（page / default）、存储（platform / runtime / dingtalk）、保存权限（platform-admin / config）、版本分组（versionKey）与版本号、影响说明、是否可用（钉钉应用未配置时只读）、当前管理员能否修改（canEdit）；数据卷当前剩余空间（disk）；参数总览与超时链路。不返回任何密钥。需要平台配置的查看权限（admin:config:read）",
         "responses": {
           "200": {
             "$ref": "#/components/responses/Ok"
@@ -5997,7 +5977,7 @@
     "/platform-settings": {
       "put": {
         "operationId": "savePlatformSettings",
-        "summary": "一次保存多项运维参数（同一事务）：每项带读取时的 revision（从未保存为 0，恢复默认后继续递增），任何一项已被他人修改时整体返回 409 state_conflict 且不保存；第一次并发保存时后到者同样返回 409；值与当前生效值相同的项不写入、不记审计；值等于默认值时恢复默认（保留记录、来源回到 default）；值必须是登记范围内的整数（422 invalid_request）；未登记的键被拒绝。保存后立即刷新服务进程内的参数快照，逐项写审计 platform.setting.update（旧值 → 新值）。只限平台管理员（运行参数配置方案 RP10）",
+        "summary": "一次保存多项（同一事务）：每项带读取时所属版本分组的 revision（同一 Runtime 的容量与超时、钉钉四项各为一组，组内版本号须一致）；任一组冲突整体返回 409；值必须是登记范围内的整数（422）；未登记的键被拒绝；值与当前生效值相同的项不写入、不记审计；platform_settings 中的项恢复默认时保留记录、来源回到 default。需要平台配置的修改权限（admin:config:write）；登录会话与钉钉的安全类参数（钉钉会话有效期、待绑定凭证有效期、每日代绑上限）只限平台管理员，服务层在事务内逐项复核。Runtime 容量不能小于当前活动 Worker 数；钉钉应用未配置时钉钉参数不能保存",
         "requestBody": {
           "required": true,
           "content": {
@@ -6012,7 +5992,7 @@
                   "changes": {
                     "type": "array",
                     "minItems": 1,
-                    "maxItems": 8,
+                    "maxItems": 64,
                     "items": {
                       "type": "object",
                       "additionalProperties": false,
@@ -6024,16 +6004,8 @@
                       "properties": {
                         "key": {
                           "type": "string",
-                          "enum": [
-                            "disk.min_free_gb",
-                            "disk.min_free_percent",
-                            "workspace.failed_retention_days",
-                            "web_fetch.max_per_attempt",
-                            "automation.max_concurrent",
-                            "notifications.retention_days",
-                            "error_records.retention_days",
-                            "page_views.retention_days"
-                          ]
+                          "description": "登记表中的键：platform_settings 的运维参数、dingtalk.*（四项）、runtime.<Runtime ID>.capacity / runtime.<Runtime ID>.timeout_minutes",
+                          "pattern": "^[a-z0-9_.-]{1,160}$"
                         },
                         "value": {
                           "type": "integer"

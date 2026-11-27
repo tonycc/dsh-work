@@ -9,9 +9,8 @@ import { useAuthStore } from '@/stores/auth'
 import { useContentStore } from '@/stores/content'
 import type { BuiltinTool, RuntimeDefinition } from '@/types/domain'
 
+/** 容量与单次执行超时改在“平台配置”中修改（运行参数配置方案 RP14、RP17），这里只配置运行操作。 */
 interface RuntimeConfigurationForm {
-  maxConcurrentWorkers: number
-  attemptTimeoutMinutes: number
   schedulingStatus: RuntimeDefinition['schedulingStatus']
   disabledTools: string[]
   disabledBuiltinSkills: string[]
@@ -31,21 +30,11 @@ const configurationFormRef = ref<FormInstance>()
 const checkingId = ref('')
 const savingConfiguration = ref(false)
 const configurationForm = reactive<RuntimeConfigurationForm>({
-  maxConcurrentWorkers: 1,
-  attemptTimeoutMinutes: 30,
   schedulingStatus: 'accepting',
   disabledTools: [],
   disabledBuiltinSkills: [],
 })
 const configurationRules: FormRules<RuntimeConfigurationForm> = {
-  maxConcurrentWorkers: [
-    { required: true, message: '请输入最大并发 Worker 数', trigger: 'change' },
-    { type: 'number', min: 1, max: 128, message: '请输入 1～128 之间的整数', trigger: 'change' },
-  ],
-  attemptTimeoutMinutes: [
-    { required: true, message: '请输入单次执行超时时间', trigger: 'change' },
-    { type: 'number', min: 1, max: 60, message: '请输入 1～60 分钟', trigger: 'change' },
-  ],
   schedulingStatus: [{ required: true, message: '请选择调度状态', trigger: 'change' }],
 }
 
@@ -86,7 +75,7 @@ const catalogAlert = computed(() => {
 const executionContainerAlert = computed(() => {
   const status = contentStore.builtinTools?.executionContainer?.status
   if (status === 'available' && contentStore.builtinTools?.executionContainer?.diskLow) {
-    return { type: 'warning' as const, title: '服务器磁盘剩余空间不足（低于“运行参数”中设定的磁盘最低剩余空间或比例）：执行容器暂不运行命令，已在运行的命令会被终止；请清理磁盘' }
+    return { type: 'warning' as const, title: '服务器磁盘剩余空间不足（低于“平台配置”中设定的磁盘最低剩余空间或比例）：执行容器暂不运行命令，已在运行的命令会被终止；请清理磁盘' }
   }
   if (status === 'available') return { type: 'success' as const, title: '执行容器已启用：员工侧 Agent 运行装配 bash，命令在每次运行专用的断网容器中执行' }
   if (status === 'unavailable') return { type: 'error' as const, title: '执行容器启动检查未通过：所有 Agent 运行暂不能执行，原因见服务日志；检查执行镜像与 Docker 后重启服务' }
@@ -136,8 +125,6 @@ function inspect(runtime: RuntimeDefinition) {
 
 function openConfiguration(runtime: RuntimeDefinition) {
   configuringRuntime.value = runtime
-  configurationForm.maxConcurrentWorkers = runtime.maxConcurrentWorkers
-  configurationForm.attemptTimeoutMinutes = runtime.attemptTimeoutMinutes
   configurationForm.schedulingStatus = runtime.schedulingStatus
   configurationForm.disabledTools = [...runtime.disabledTools]
   configurationForm.disabledBuiltinSkills = [...(runtime.disabledBuiltinSkills ?? [])]
@@ -163,10 +150,6 @@ async function saveConfiguration() {
   if (!configuringRuntime.value || !configurationFormRef.value) return
   const valid = await configurationFormRef.value.validate().catch(() => false)
   if (!valid) return
-  if (configurationForm.maxConcurrentWorkers < configuringRuntime.value.activeWorkers) {
-    ElMessage.warning(`最大并发 Worker 数不能小于当前活动 Worker 数 ${configuringRuntime.value.activeWorkers}`)
-    return
-  }
   if (
     configuringRuntime.value.schedulingStatus !== 'disabled'
     && configurationForm.schedulingStatus === 'disabled'
@@ -211,8 +194,6 @@ async function saveConfiguration() {
   try {
     const result = await contentStore.updateRuntimeConfiguration({
       runtimeId: configuringRuntime.value.id,
-      maxConcurrentWorkers: configurationForm.maxConcurrentWorkers,
-      attemptTimeoutMinutes: configurationForm.attemptTimeoutMinutes,
       schedulingStatus: configurationForm.schedulingStatus,
       disabledTools: [...configurationForm.disabledTools],
       disabledBuiltinSkills: [...configurationForm.disabledBuiltinSkills],
@@ -306,7 +287,6 @@ onMounted(() => contentStore.load())
           <div><dt>Runtime 版本</dt><dd>{{ selectedRuntime.version }}</dd></div>
           <div><dt>服务地址</dt><dd class="mono">{{ selectedRuntime.endpoint }}</dd></div>
           <div><dt>Worker 容量</dt><dd>{{ selectedRuntime.activeWorkers }} / {{ selectedRuntime.maxConcurrentWorkers }}</dd></div>
-          <div><dt>单次执行超时</dt><dd>{{ selectedRuntime.attemptTimeoutMinutes }} 分钟</dd></div>
           <div><dt>排队运行</dt><dd>{{ selectedRuntime.queuedRuns }}</dd></div>
           <div><dt>最后心跳</dt><dd>{{ selectedRuntime.lastHeartbeat }}</dd></div>
           <div><dt>检查时间</dt><dd>{{ selectedRuntime.checkedAt }}</dd></div>
@@ -342,16 +322,8 @@ onMounted(() => contentStore.load())
     </el-drawer>
 
     <el-dialog v-model="configurationDialogOpen" :title="`配置 Runtime：${configuringRuntime?.name ?? ''}`" width="620px" destroy-on-close>
-      <el-alert type="info" :closable="false" show-icon title="这里配置 Runtime 的执行资源、调度行为，以及内置工具与内置 Skill 的紧急停用；Agent、Skill 与数据权限仍在各自模块中管理。" />
+      <el-alert type="info" :closable="false" show-icon title="这里配置 Runtime 的调度行为，以及内置工具与内置 Skill 的紧急停用；Agent、Skill 与数据权限仍在各自模块中管理。" />
       <el-form ref="configurationFormRef" class="runtime-configuration-form" :model="configurationForm" :rules="configurationRules" label-position="top">
-        <el-form-item label="最大并发 Worker 数" prop="maxConcurrentWorkers">
-          <el-input-number v-model="configurationForm.maxConcurrentWorkers" class="configuration-number" :min="1" :max="128" :step="1" controls-position="right" aria-label="最大并发 Worker 数" />
-          <p class="field-help">控制该 Runtime 同时运行的 DSH Worker 子进程数量，不能低于当前活动 Worker 数。</p>
-        </el-form-item>
-        <el-form-item label="单次执行超时时间" prop="attemptTimeoutMinutes">
-          <el-input-number v-model="configurationForm.attemptTimeoutMinutes" class="configuration-number" :min="1" :max="60" :step="5" controls-position="right" aria-label="单次执行超时时间（分钟）" />
-          <p class="field-help">这是 Runtime 硬上限；若 Agent 超时更短则取较短值，超过后系统将终止当前 Attempt。</p>
-        </el-form-item>
         <el-form-item label="调度状态" prop="schedulingStatus">
           <el-radio-group v-model="configurationForm.schedulingStatus" aria-label="Runtime 调度状态">
             <el-radio-button value="accepting">接收任务</el-radio-button>
@@ -414,7 +386,6 @@ onMounted(() => contentStore.load())
 .runtime-configuration-form .el-select { width: 100%; }
 .runtime-detail__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 24px; }
 .runtime-configuration-form { margin-top: 20px; }
-.configuration-number { width: 100%; }
 .field-help { width: 100%; margin: 6px 0 0; color: var(--color-text-muted); font-size: var(--font-size-badge); line-height: 1.5; }
 .scheduling-help { display: flex; width: 100%; gap: 6px; margin-top: 10px; padding: 10px 12px; border-radius: var(--radius-button); color: var(--color-text-secondary); background: var(--color-bg-subtle); font-size: var(--font-size-badge); }
 .scheduling-help strong { color: var(--color-text-heading); }
