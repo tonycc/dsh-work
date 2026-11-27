@@ -5977,7 +5977,7 @@
     "/platform-config/runtime-limits": {
       "get": {
         "operationId": "listRuntimeLimits",
-        "summary": "Agent 管理 › 能力 › 运行限制（运行参数配置方案 RP-S3）：各 Runtime 的 ID、名称与单次执行超时（秒），主 Runtime 在前，用于提示 Agent 运行超时的实际生效值。平台配置查看权限返回同样内容；Agent 查看或修改权限（admin:agent:read / admin:agent:write）按只读选择器访问，只返回这三个字段",
+        "summary": "Agent 管理 › 能力 › 运行限制（运行参数配置方案 RP-S3）：接受调度的各 Runtime 的 ID、名称与单次执行超时（秒），页面按最短的提示 Agent 运行超时的实际生效值。平台配置查看权限返回同样内容；Agent 查看或修改权限（admin:agent:read / admin:agent:write）按只读选择器访问，只返回这三个字段",
         "responses": {
           "200": {
             "$ref": "#/components/responses/Ok"

@@ -22,7 +22,7 @@ import type { SmokeRepository } from './smoke-repository.ts'
 
 /** 冒烟数据中已发布 Agent 的运行超时（秒），用于超时链路的截断统计。 */
 const PUBLISHED_AGENT_TIMEOUTS = [300, 600]
-/** 冒烟数据中已启用自动任务的预算超时（秒）：用于总览“自动任务与主动任务”的截断数。 */
+/** 冒烟数据中已启用自动任务的实际运行超时（Agent 超时与任务预算取小，秒）：用于总览“自动任务与主动任务”的截断数。 */
 const ENABLED_AUTOMATION_BUDGETS = [3600]
 /** 冒烟中环境变量 `DSH_WORK_SESSION_TTL_SECONDS` 对应的登录会话有效期（小时）。 */
 const SESSION_TTL_HOURS_FROM_ENVIRONMENT = 12

@@ -23,11 +23,12 @@ const restrictedSelectedSkills = computed(() => publishedSkills.value.filter(ski
 const mcpConnectors = computed(() => contentStore.connectors.filter(connector => connector.protocol === 'mcp'))
 const selectedMcpConnectors = computed(() => form.mcpScope.connectorIds.map(id =>
   mcpConnectors.value.find(connector => connector.id === id)))
-/** 主 Runtime 的单次执行超时（只读选择器）；读取失败时不提示。 */
+/** 接受调度的 Runtime 中最短的单次执行超时（只读选择器）：运行可能落到任一 Runtime；读取失败时不提示。 */
 const runtimeLimit = ref<RuntimeLimit | null>(null)
 onMounted(async () => {
   try {
-    runtimeLimit.value = (await adminApi.getRuntimeLimits())[0] ?? null
+    const limits = await adminApi.getRuntimeLimits()
+    runtimeLimit.value = limits.reduce<RuntimeLimit | null>((shortest, item) => !shortest || item.timeoutSeconds < shortest.timeoutSeconds ? item : shortest, null)
   } catch {
     runtimeLimit.value = null
   }

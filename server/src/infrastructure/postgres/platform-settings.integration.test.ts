@@ -459,10 +459,22 @@ test('knowledge and model timeouts are read from the snapshot after each save (R
   ], actorId)
 })
 
-test('the overview counts enabled automations whose budget timeout exceeds the Runtime timeout (RP-S3)', async () => {
+test('the overview counts enabled automations whose effective timeout exceeds the Runtime timeout (RP-S3, PR #181 N1)', async () => {
   const settings = new PostgresPlatformSettingsService(database)
-  const [version] = await database<{ id: string }[]>`select id from agent_versions where tenant_id = ${tenantId} order by id limit 1`
+  const [version] = await database<{ id: string; timeoutSeconds: number }[]>`
+    select id, timeout_seconds as "timeoutSeconds" from agent_versions where tenant_id = ${tenantId} order by timeout_seconds desc, id limit 1
+  `
   assert.ok(version, 'seed has an Agent version')
+  const [runtime] = await settings.runtimeLimits()
+  assert.ok(runtime, 'seed has an accepting Runtime')
+  // 发布版本不可修改：把主 Runtime 超时临时调到 1 分钟（短于任何 Agent 超时），用例结束后恢复。
+  const key = `runtime.${runtime.id}.timeout_minutes`
+  const admin = await adminWith('admin:*')
+  const timeoutView = (await settings.list()).find(item => item.key === key)!
+  const saved = (await settings.save([{ key, value: 1, revision: timeoutView.revision }], admin)).find(item => item.key === key)!
+  const runtimeSeconds = 60
+  assert.ok(version.timeoutSeconds > runtimeSeconds)
+  const below = runtimeSeconds - 1
   const insert = async (status: string, template: unknown) => {
     const id = `automation-rp-${randomUUID().slice(0, 8)}`
     await database`
@@ -473,16 +485,19 @@ test('the overview counts enabled automations whose budget timeout exceeds the R
     return id
   }
   const ids = [
+    // 预算很大：实际按 Agent 超时；没有预算：同样按 Agent 超时；预算很小：不会被 Runtime 截断；草稿不计。
     await insert('enabled', { prompt: 'a', budget: { timeoutSeconds: 100_000 } }),
-    await insert('draft', { prompt: 'b', budget: { timeoutSeconds: 100_000 } }),
-    await insert('enabled', { prompt: 'c' }),
-    await insert('enabled', { prompt: 'd', budget: { timeoutSeconds: 10 } }),
+    await insert('enabled', { prompt: 'b' }),
+    await insert('enabled', { prompt: 'c', budget: { timeoutSeconds: below } }),
+    await insert('draft', { prompt: 'd', budget: { timeoutSeconds: 100_000 } }),
   ]
   try {
-    const automation = (await settings.overview({ canEdit: () => true })).timeoutChains.find(chain => chain.id === 'automation')!
-    assert.match(automation.warning ?? '', /^1 个已启用任务的预算超时大于/)
-    assert.ok((await settings.overview({ canEdit: () => true })).timeoutChains.some(chain => chain.id === 'release-trial'))
+    const chains = (await settings.overview({ canEdit: () => true })).timeoutChains
+    const automation = chains.find(chain => chain.id === 'automation')!
+    assert.match(automation.warning ?? '', /^2 个已启用任务的运行超时大于/)
+    assert.ok(chains.some(chain => chain.id === 'release-trial'))
   } finally {
     await database`delete from agent_automations where tenant_id = ${tenantId} and id = any(${ids})`
+    await settings.save([{ key, value: timeoutView.value, revision: saved.revision }], admin)
   }
 })

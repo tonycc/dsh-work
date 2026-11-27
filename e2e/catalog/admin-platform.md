@@ -550,7 +550,7 @@
 **spec：** `e2e/platform-config.spec.ts`、`server/src/infrastructure/postgres/platform-settings.integration.test.ts`
 
 1. “登录与钉钉”组出现“登录会话有效期”，来源为“环境变量”，标注“只有平台管理员能保存”；平台配置管理员不可编辑。
-2. 新组“外部服务”列出知识库检索超时（3～12 秒）、知识库上传与下载超时（30～300 秒）、模型首个响应超时（30～300 秒），平台配置管理员可以修改并保存。
+2. 新组“外部服务”列出知识库检索超时（3～11 秒）、知识库上传与下载超时（30～300 秒）、模型首个响应超时（30～300 秒），平台配置管理员可以修改并保存。
 3. 保存后总览中这些参数来源为“页面配置”；“知识库检索”与“模型请求”超时链路按新值显示。
 4. 总览超时链路包含“发布试运行”；“自动任务与主动任务”列出预算超过 Runtime 超时的任务数。
 
@@ -562,7 +562,7 @@
 **前置数据：** 一个 Runtime 的单次执行超时短于 Agent 的运行超时<br>
 **spec：** `apps/admin-web/src/components/agent-detail/AgentCapabilitySection.test.ts`、`server/src/domain/admin-permissions.test.ts`
 
-1. Agent 详情 › 能力中运行超时大于 Runtime 单次执行超时时，旁边提示“实际生效 N 秒”与原因；不大于时不提示。
+1. Agent 详情 › 能力中运行超时大于接受调度的 Runtime 中最短的单次执行超时时，旁边提示“实际生效 N 秒”与原因；不大于时不提示。
 2. 只有 Agent 权限的管理员也能读到 Runtime 的单次执行超时（只读选择器，不含其他平台配置）。
 
 ### RP-E2E-03 修改后的参数在运行中生效

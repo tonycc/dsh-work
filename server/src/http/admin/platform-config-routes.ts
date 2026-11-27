@@ -16,7 +16,7 @@ export interface PlatformConfigPort {
   overview(input: {
     canEdit(owner: NonNullable<RuntimeParameterOwner>): boolean
   }): Promise<RuntimeParametersOverview>
-  /** 各 Runtime 的单次执行超时（主 Runtime 在前），供 Agent 能力页提示实际生效超时。 */
+  /** 接受调度的 Runtime 的单次执行超时，供 Agent 能力页提示实际生效超时。 */
   runtimeLimits(): Promise<RuntimeLimit[]>
 }
 

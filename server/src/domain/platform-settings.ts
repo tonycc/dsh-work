@@ -129,8 +129,8 @@ export const PLATFORM_SETTING_DEFINITIONS: readonly PlatformSettingDefinition[] 
   },
   {
     key: 'knowledge.search_timeout_seconds', storage: 'platform', savePermission: 'config', group: 'external',
-    label: '知识库检索超时', description: '一次检索串行发两个请求（检索、取文档），各受此超时；Agent 的知识检索工具最多等 25 秒，所以上限 12 秒。',
-    unit: '秒', defaultValue: 10, min: 3, max: 12, timing: '下一次检索',
+    label: '知识库检索超时', description: '一次检索串行发两个请求（检索、取文档），各受此超时；Agent 的知识检索工具最多等 25 秒，两个请求之外还要留出查询与审计的时间，所以上限 11 秒。',
+    unit: '秒', defaultValue: 10, min: 3, max: 11, timing: '下一次检索',
     lowerRisk: '调低后较慢的检索会更早判超时，Agent 得不到知识库结果。',
   },
   {

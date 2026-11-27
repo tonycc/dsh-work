@@ -44,6 +44,7 @@ interface SettingRow {
 
 interface RuntimeRow extends RuntimeSummary {
   revision: number
+  accepting: boolean
   updatedAt: Date | null
   updatedBy: string | null
 }
@@ -253,8 +254,9 @@ export class PostgresPlatformSettingsService implements PlatformSettingsReader {
     return buildRuntimeParametersOverview({ settings, runtimes, canEdit: input.canEdit })
   }
 
+  /** 接受调度的 Runtime 的单次执行超时（PR #181 评审 N2：不调度的 Runtime 不参与提示）。 */
   async runtimeLimits(): Promise<Array<{ id: string; name: string; timeoutSeconds: number }>> {
-    return (await this.runtimes()).map(({ id, name, timeoutSeconds }) => ({ id, name, timeoutSeconds }))
+    return (await this.runtimes()).filter(runtime => runtime.accepting).map(({ id, name, timeoutSeconds }) => ({ id, name, timeoutSeconds }))
   }
 
   private async runtimes(): Promise<RuntimeRow[]> {
@@ -273,19 +275,23 @@ export class PostgresPlatformSettingsService implements PlatformSettingsReader {
           ) latest on true
          where r.tenant_id = ${tenantId}
       )
-      select c.id, c.name, c.capacity, c."timeoutSeconds", c.configured, c.revision, c."updatedAt", c."updatedBy",
+      select c.id, c.name, c.capacity, c.scheduling_status = 'accepting' as accepting, c."timeoutSeconds", c.configured, c.revision, c."updatedAt", c."updatedBy",
              (select count(*)::integer from agents a
                 join agent_versions av on av.tenant_id = a.tenant_id and av.id = a.active_version_id
                where a.tenant_id = ${tenantId} and a.status = 'published'
                  and av.timeout_seconds > c."timeoutSeconds") as "agentsOverTimeout",
-             -- 已启用的自动任务与主动任务中，任务预算超时大于 Runtime 超时的数量（RP-S3）。
+             -- 已启用的自动任务与主动任务中，实际运行超时（钉住版本的 Agent 超时与任务预算取小）大于 Runtime 超时的数量
+             -- （RP-S3；PR #181 评审 N1：没有预算时按 Agent 超时）。
              (select count(*)::integer from (
-                select input_template from agent_automations where tenant_id = ${tenantId} and status = 'enabled'
+                select input_template, agent_version_id from agent_automations where tenant_id = ${tenantId} and status = 'enabled'
                 union all
-                select input_template from agent_routines where tenant_id = ${tenantId} and status = 'enabled'
+                select input_template, agent_version_id from agent_routines where tenant_id = ${tenantId} and status = 'enabled'
               ) t
-               where jsonb_typeof(t.input_template->'budget'->'timeoutSeconds') = 'number'
-                 and (t.input_template->'budget'->>'timeoutSeconds')::numeric > c."timeoutSeconds") as "automationsOverTimeout"
+               join agent_versions av on av.tenant_id = ${tenantId} and av.id = t.agent_version_id
+               where least(av.timeout_seconds::numeric,
+                           case when jsonb_typeof(t.input_template->'budget'->'timeoutSeconds') = 'number'
+                                then (t.input_template->'budget'->>'timeoutSeconds')::numeric else av.timeout_seconds::numeric end)
+                     > c."timeoutSeconds") as "automationsOverTimeout"
         from configured c
        order by (c.scheduling_status = 'accepting') desc, c.id
     `

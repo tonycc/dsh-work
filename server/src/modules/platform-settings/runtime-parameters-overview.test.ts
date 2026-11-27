@@ -76,15 +76,15 @@ test('timeout chains show the effective value, the limiting layer and truncated 
   assert.deepEqual({ actual: chains.get('admin-assistant')!.actual, limiter: chains.get('admin-assistant')!.limiter }, { actual: '3 分钟', limiter: '内置上限 180 秒' })
   assert.equal(chains.get('background')!.actual, '2 分钟')
   assert.deepEqual({ actual: chains.get('knowledge')!.actual, limiter: chains.get('knowledge')!.limiter }, { actual: '20 秒', limiter: '检索超时 × 2 个请求' })
-  assert.match(chains.get('automation')!.warning!, /1 个已启用任务的预算超时大于 3 分钟/)
+  assert.match(chains.get('automation')!.warning!, /1 个已启用任务的运行超时大于 3 分钟/)
   assert.deepEqual({ actual: chains.get('release-trial')!.actual, limiter: chains.get('release-trial')!.limiter }, { actual: '≤ 3 分钟', limiter: 'Runtime 单次执行超时' })
   assert.equal(chains.get('model')!.actual, '2 分钟')
 
-  // 知识库与模型链路跟随平台配置的值：检索 12 秒 × 2 超过知识检索工具上限 25 秒时由工具上限截断。
+  // 知识库与模型链路跟随平台配置的值。
   const configured = new Map(buildRuntimeParametersOverview(input({
-    settings: settings({ 'knowledge.search_timeout_seconds': 12, 'model.headers_timeout_seconds': 45 }),
+    settings: settings({ 'knowledge.search_timeout_seconds': 11, 'model.headers_timeout_seconds': 45 }),
   })).timeoutChains.map(chain => [chain.id, chain]))
-  assert.deepEqual({ actual: configured.get('knowledge')!.actual, limiter: configured.get('knowledge')!.limiter }, { actual: '24 秒', limiter: '检索超时 × 2 个请求' })
+  assert.deepEqual({ actual: configured.get('knowledge')!.actual, limiter: configured.get('knowledge')!.limiter }, { actual: '22 秒', limiter: '检索超时 × 2 个请求' })
   assert.equal(configured.get('model')!.actual, '45 秒')
 
   const shortRuntime = new Map(buildRuntimeParametersOverview(input({

@@ -57,7 +57,7 @@ export interface RuntimeSummary {
   configured: boolean
   /** 运行超时大于本 Runtime 单次执行超时的已发布 Agent 数。 */
   agentsOverTimeout: number
-  /** 已启用的自动任务与主动任务中，任务预算超时大于本 Runtime 单次执行超时的数量。 */
+  /** 已启用的自动任务与主动任务中，实际运行超时（Agent 超时与任务预算取小）大于本 Runtime 单次执行超时的数量。 */
   automationsOverTimeout: number
 }
 
@@ -169,7 +169,7 @@ function timeoutChains(input: RuntimeParametersOverviewInput): TimeoutChain[] {
       id: 'automation', name: '自动任务与主动任务', actual: `≤ ${runtimeLimit}`, limiter: 'Runtime 单次执行超时',
       layers: ['取 Agent 超时、任务预算与 Runtime 超时的最小值', runtimeLayer],
       ...(runtime.automationsOverTimeout > 0
-        ? { warning: `${runtime.automationsOverTimeout} 个已启用任务的预算超时大于 ${runtimeLimit}，实际按 ${runtimeLimit} 执行` }
+        ? { warning: `${runtime.automationsOverTimeout} 个已启用任务的运行超时大于 ${runtimeLimit}，实际按 ${runtimeLimit} 执行` }
         : {}),
     })
     chains.push({
