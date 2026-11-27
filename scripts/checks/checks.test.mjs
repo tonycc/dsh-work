@@ -29,6 +29,17 @@ function fixture(t) {
     'apps/workbench-web/src/views/WorkspacesView.vue', 'apps/workbench-web/src/views/WorkspaceDetailView.vue',
     'apps/workbench-web/src/views/ConversationView.vue',
     'packages/workbench-components/src/WorkspaceInfoPanel.vue', 'packages/design-tokens/src/tokens.css',
+    // 架构与性能审核报告链接的前端、共享包与检查脚本。
+    'apps/workbench-web/src/main.ts', 'apps/workbench-web/vite.config.ts', 'apps/workbench-web/src/api/client.ts',
+    'apps/workbench-web/src/types/domain.ts', 'apps/workbench-web/src/components/ProjectTaskPanel.vue',
+    'apps/workbench-web/src/components/collab/CollabAgentChat.vue', 'apps/workbench-web/src/components/collab/CollabGroupTimeline.vue',
+    'apps/workbench-web/src/components/conversation/RunMessageList.vue',
+    'apps/admin-web/src/main.ts', 'apps/admin-web/vite.config.ts', 'apps/admin-web/src/api/client.ts',
+    'apps/admin-web/src/stores/content.ts', 'apps/admin-web/src/views/ApiDocsView.vue',
+    'apps/admin-web/src/views/CapabilityManagementView.vue', 'apps/admin-web/scripts/validate-ui-contract.mjs',
+    'packages/ui-core/src/components/AssistantMessageContent.vue', 'packages/ui-core/src/components/MetricCard.vue',
+    'scripts/check-architecture.mjs', 'scripts/checks/project.mjs', 'scripts/checks/server-dependencies.mjs',
+    'scripts/checks/team-workspace-1a.mjs',
   ]) {
     mkdirSync(dirname(join(root, path)), { recursive: true })
     cpSync(join(projectRoot, path), join(root, path), { recursive: true })
