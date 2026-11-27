@@ -69,6 +69,19 @@ export class SmokePlatformConfigService implements PlatformConfigPort {
       if (view.revision !== change.revision) throw stateConflict(`“${definition.label}”已被其他管理员修改，请刷新后重试`)
       return { definition, view, runtimeKey, value: validateSettingValue(definition, change.value) }
     })
+    // 与数据库实现一致：同组版本号须一致；全部校验通过后才写入（数据库实现在同一事务内）。
+    const groupRevision = new Map<string, number>()
+    for (const { view } of resolved) {
+      const known = groupRevision.get(view.versionKey)
+      if (known !== undefined && known !== view.revision) throw invalidRequest('同一组参数的版本号不一致，请刷新后重试')
+      groupRevision.set(view.versionKey, view.revision)
+    }
+    const runtimes = await this.repository.read('runtimes')
+    for (const { runtimeKey, value, view } of resolved) {
+      if (runtimeKey?.field !== 'capacity' || value === view.value) continue
+      const runtime = runtimes.find(item => item.id === runtimeKey.runtimeId)!
+      if (value < runtime.activeWorkers) throw stateConflict(`Runtime 容量不能小于当前活动 Worker 数 ${runtime.activeWorkers}`)
+    }
     const updatedAt = new Date().toISOString()
     const touchedRuntimes = new Set<string>()
     let dingtalkTouched = false
@@ -78,11 +91,8 @@ export class SmokePlatformConfigService implements PlatformConfigPort {
         const row = this.saved.get(definition.key)
         this.saved.set(definition.key, { value: value === definition.defaultValue ? null : value, revision: (row?.revision ?? 0) + 1, updatedAt })
       } else if (runtimeKey) {
-        const runtimes = await this.repository.read('runtimes')
-        const runtime = runtimes.find(item => item.id === runtimeKey.runtimeId)!
-        if (runtimeKey.field === 'capacity' && value < runtime.activeWorkers) throw stateConflict(`Runtime 容量不能小于当前活动 Worker 数 ${runtime.activeWorkers}`)
-        await this.repository.updateRuntime(runtime.id, runtimeKey.field === 'capacity' ? { maxConcurrentWorkers: value } : { attemptTimeoutMinutes: value })
-        touchedRuntimes.add(runtime.id)
+        await this.repository.updateRuntime(runtimeKey.runtimeId, runtimeKey.field === 'capacity' ? { maxConcurrentWorkers: value } : { attemptTimeoutMinutes: value })
+        touchedRuntimes.add(runtimeKey.runtimeId)
       } else {
         const column = DINGTALK_PARAMETER_DEFINITIONS.find(item => item.key === definition.key)!.column
         const field = ({ session_ttl_seconds: 'sessionTtlSeconds', binding_ticket_ttl_seconds: 'bindingTicketTtlSeconds', admin_daily_bind_limit: 'adminDailyBindLimit', timeout_ms: 'timeoutMs' } as const)[column]

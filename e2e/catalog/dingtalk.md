@@ -70,7 +70,7 @@
 **spec：** `server/src/modules/identity/dingtalk-settings.integration.test.ts`、`e2e/dingtalk.integration.spec.ts`
 
 1. 页面从未保存过时，“应用配置”显示部署配置提供的 CorpId、AgentId、AppKey 与“部署配置（尚未在页面保存过）”。
-2. 编辑配置：AppSecret 留空沿用已保存的值；修改每日代绑上限等参数，“验证并保存”后立即生效（无需重启），来源变为“管理端 · 姓名”。
+2. 编辑配置：AppSecret 留空沿用已保存的值；“验证并保存”后立即生效（无需重启），来源变为“管理端 · 姓名”。会话有效期、每日代绑上限等四项不在本页，改在“平台配置”中修改（运行参数配置方案 RP14）。
 3. 填写错误的 AppSecret：钉钉拒绝，提示“钉钉拒绝了这组凭据”，原配置不变、连接检查仍通过。
 4. 首次配置或更换 CorpId / AppKey 时必须填写 AppSecret；参数越界被拒。
 5. AppSecret 加密保存：配置表、接口返回与审计都不含明文；服务没有凭据主密钥时不能在页面保存；主密钥更换后显示“无法读取”并停用钉钉功能。

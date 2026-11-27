@@ -43,20 +43,31 @@ function parsed(setting: PlatformSetting) {
   return /^-?\d+$/.test(text) ? Number(text) : Number.NaN
 }
 
+/** 存储值不是整页面单位时页面不预填：留空表示不修改（PR 180 评审 I4）。 */
+function untouchedInexact(setting: PlatformSetting) {
+  return !setting.exact && (drafts[setting.key] ?? '').trim() === ''
+}
+
 function invalid(setting: PlatformSetting) {
+  if (untouchedInexact(setting)) return false
   const value = parsed(setting)
   return !Number.isInteger(value) || value < setting.min || value > setting.max
 }
 
-/** 数值相同（例如“05”与 5）不算修改；不合法的输入算修改，以便提示。 */
+/** 数值相同（例如“05”与 5）不算修改；不合法的输入算修改，以便提示；不是整单位的值填入任何数都算修改。 */
 function changed(setting: PlatformSetting) {
-  return invalid(setting) || parsed(setting) !== setting.value
+  if (untouchedInexact(setting)) return false
+  return invalid(setting) || !setting.exact || parsed(setting) !== setting.value
+}
+
+function currentText(setting: PlatformSetting) {
+  return setting.exact ? formatValue(setting, setting.value) : setting.actual ?? formatValue(setting, setting.value)
 }
 
 function draftValue(key: string) {
   const setting = data.value?.settings.find(item => item.key === key)
   if (!setting) return undefined
-  return invalid(setting) ? setting.value : parsed(setting)
+  return invalid(setting) || untouchedInexact(setting) ? setting.value : parsed(setting)
 }
 
 function gigabytes(bytes: number) {
@@ -135,7 +146,7 @@ function noEditText(entry: RuntimeParameterEntry) {
 }
 
 function resetDrafts() {
-  for (const setting of data.value?.settings ?? []) drafts[setting.key] = String(setting.value)
+  for (const setting of data.value?.settings ?? []) drafts[setting.key] = setting.exact ? String(setting.value) : ''
 }
 
 async function load() {
@@ -238,6 +249,7 @@ onMounted(load)
               v-model="drafts[setting.key]"
               :disabled="!setting.canEdit"
               inputmode="numeric"
+              :placeholder="setting.exact ? undefined : setting.actual"
               :aria-invalid="invalid(setting)"
               :aria-describedby="setting.canEdit && warnings(setting).length ? `parameter-warning-${setting.key}` : undefined"
               @input="savedNotice = ''"
@@ -249,7 +261,8 @@ onMounted(load)
             <span v-if="setting.storage === 'runtime'">范围 {{ setting.min }}～{{ setting.max }}</span>
             <span v-else>默认 {{ formatValue(setting, setting.defaultValue) }} · 范围 {{ setting.min }}～{{ setting.max }}</span>
             <span>生效：{{ setting.timing }}</span>
-            <span v-if="setting.source === 'page'">{{ setting.updatedBy }} 于 {{ time(setting.updatedAt) }} 修改</span>
+            <span v-if="!setting.exact">当前实际为 {{ setting.actual }}，不是整{{ setting.unit }}；需要修改时填写新值</span>
+            <span v-if="setting.source === 'page' && setting.updatedBy && setting.updatedAt">{{ setting.updatedBy }} 于 {{ time(setting.updatedAt) }} 修改</span>
           </div>
           <div class="parameter-row__actions">
             <!-- Runtime 的容量与超时没有统一的系统默认值，不提供“恢复默认”。 -->
@@ -322,7 +335,7 @@ onMounted(load)
         <li v-for="setting in changes" :key="setting.key">
           <div class="parameter-changes__line">
             <strong>{{ setting.label }}</strong>
-            <span>{{ formatValue(setting, setting.value) }} → <strong>{{ formatValue(setting, drafts[setting.key] ?? '') }}</strong></span>
+            <span>{{ currentText(setting) }} → <strong>{{ formatValue(setting, drafts[setting.key] ?? '') }}</strong></span>
           </div>
           <small>生效：{{ setting.timing }}</small>
           <small v-for="item in risks(setting)" :key="item" class="parameter-row__warning">{{ item }}</small>

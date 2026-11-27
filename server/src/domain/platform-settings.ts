@@ -242,8 +242,14 @@ export interface PlatformSettingView {
   lowerRisk?: string
   belowDefaultRisk?: string
   raiseRisk?: string
-  /** `page`：页面保存过；`default`：从未保存或已恢复默认，按默认值。 */
-  source: 'page' | 'default'
+  /** `page`：页面保存过；`default`：从未保存或已恢复默认，按默认值；`env`：部署配置给的初始值（钉钉四项）。 */
+  source: 'page' | 'default' | 'env'
+  /**
+   * 存储值不是整页面单位时为 false（例如 1800 秒的钉钉会话有效期，页面单位为小时），`actual` 给出真实值；
+   * 页面此时不预填数值，填入任何值都按修改处理（PR #180 评审 I4）。
+   */
+  exact: boolean
+  actual?: string
   /** 乐观锁：从未保存时为 0；恢复默认后继续递增，不回到 0。 */
   revision: number
   updatedAt?: string
@@ -253,7 +259,9 @@ export interface PlatformSettingView {
 /** 通用视图：值、来源与版本由各存储读取后传入。 */
 export function settingView(definition: PlatformSettingDefinition, state: {
   value: number
-  source: 'page' | 'default'
+  source: 'page' | 'default' | 'env'
+  exact?: boolean
+  actual?: string
   revision: number
   versionKey: string
   available?: boolean
@@ -272,6 +280,8 @@ export function settingView(definition: PlatformSettingDefinition, state: {
     ...(definition.belowDefaultRisk ? { belowDefaultRisk: definition.belowDefaultRisk } : {}),
     ...(definition.raiseRisk ? { raiseRisk: definition.raiseRisk } : {}),
     source: state.source,
+    exact: state.exact ?? true,
+    ...(state.actual ? { actual: state.actual } : {}),
     revision: state.revision,
     ...(state.updatedAt ? { updatedAt: state.updatedAt } : {}),
     ...(state.updatedBy ? { updatedBy: state.updatedBy } : {}),
@@ -298,6 +308,17 @@ export function platformSettingView(
 /** 存储值换成页面值（向上取整，例如 90 秒的超时显示为 2 分钟）。 */
 export function toPageValue(definition: PlatformSettingDefinition, stored: number) {
   return Math.ceil(stored / (definition.scale ?? 1))
+}
+
+/** 存储值是否为整页面单位；不是时给出真实值的文字（秒按时分秒，毫秒按毫秒）。 */
+export function storedValueState(definition: PlatformSettingDefinition, stored: number): { exact: boolean; actual?: string } {
+  const scale = definition.scale ?? 1
+  if (stored % scale === 0) return { exact: true }
+  if (scale === 1000) return { exact: false, actual: `${stored} 毫秒` }
+  const hours = Math.floor(stored / 3600)
+  const minutes = Math.floor((stored % 3600) / 60)
+  const seconds = stored % 60
+  return { exact: false, actual: [hours ? `${hours} 小时` : '', minutes ? `${minutes} 分钟` : '', seconds ? `${seconds} 秒` : ''].filter(Boolean).join(' ') }
 }
 
 export interface PlatformSettingChange {

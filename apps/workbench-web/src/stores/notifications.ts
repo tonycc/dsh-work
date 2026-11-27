@@ -14,7 +14,7 @@ export const useNotificationStore = defineStore('workbench-notifications', () =>
   const unread = ref(0)
   const items = ref<UserNotification[]>([])
   const nextCursor = ref<string | null>(null)
-  /** 管理员在“运行参数”中设定的保留天数，随列表返回。 */
+  /** 管理员在“平台配置”中设定的保留天数，随列表返回。 */
   const retentionDays = ref(90)
   const tab = ref<NotificationTab>('all')
   const loading = ref(false)

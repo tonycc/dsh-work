@@ -554,6 +554,10 @@ export class AdminAssistantService {
 
   private async assertActionPrecondition(plan: StoredActionPlan) {
     if (plan.actionType === 'runtime-update-configuration') {
+      // 升级前生成、仍待确认的计划可能包含容量或超时变更：这两项已改在“平台配置”中修改，计划不再执行（PR #180 评审 I7）。
+      if (plan.after.maxConcurrentWorkers !== plan.before.maxConcurrentWorkers || plan.after.attemptTimeoutMinutes !== plan.before.attemptTimeoutMinutes) {
+        throw stateConflict('Runtime 容量与单次执行超时已改在管理端“平台配置”页修改，本计划不再执行')
+      }
       const snapshot = await this.operations.getRuntimeMutationSnapshot(plan.before.runtimeId)
       if (canonicalJson(snapshot) !== canonicalJson(plan.before)) throw stateConflict('Runtime 状态已变化，请重新生成操作计划')
       return

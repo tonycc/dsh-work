@@ -221,19 +221,6 @@ export class DingTalkSettingsService implements DingTalkSettingsProvider, DingTa
     return value
   }
 
-  /** 平台配置读取钉钉四项（运行参数配置方案 6.6.2）：只返回数值与修订号，不含凭据。 */
-  async parameters(): Promise<DingTalkParameters | null> {
-    const row = await this.row()
-    if (!row) return null
-    return {
-      configured: row.status === 'configured',
-      sessionTtlSeconds: row.sessionTtlSeconds, bindingTicketTtlSeconds: row.bindingTicketTtlSeconds,
-      adminDailyBindLimit: row.adminDailyBindLimit, timeoutMs: row.timeoutMs, revision: row.parametersRevision,
-      source: row.source as 'deployment-config' | 'admin',
-      updatedAt: row.updatedAt.toISOString(), updatedByName: row.updatedByName ?? null,
-    }
-  }
-
   /** 平台配置写入后清除缓存，下一次读取即用新值。 */
   invalidate() {
     this.cached = null
@@ -319,8 +306,13 @@ export class DingTalkSettingsService implements DingTalkSettingsProvider, DingTa
     }
     await this.database.begin(async transaction => {
       // 锁定后复核：验证期间配置被清除或改动时不保存，避免写回指向已删除密钥的配置。
-      const [locked] = await transaction<{ status: string; corpId: string | null; appKey: string | null; credentialRef: string | null }[]>`
-        select status, corp_id as "corpId", app_key as "appKey", credential_ref as "credentialRef"
+      const [locked] = await transaction<{
+        status: string; corpId: string | null; appKey: string | null; credentialRef: string | null
+        sessionTtlSeconds: number; bindingTicketTtlSeconds: number; adminDailyBindLimit: number; timeoutMs: number
+      }[]>`
+        select status, corp_id as "corpId", app_key as "appKey", credential_ref as "credentialRef",
+               session_ttl_seconds as "sessionTtlSeconds", binding_ticket_ttl_seconds as "bindingTicketTtlSeconds",
+               admin_daily_bind_limit as "adminDailyBindLimit", timeout_ms as "timeoutMs"
           from dingtalk_app_configurations where tenant_id = ${tenantId} for update
       `
       if ((locked?.status ?? null) !== (existing?.status ?? null) || (locked?.corpId ?? null) !== (existing?.corpId ?? null)
@@ -356,15 +348,14 @@ export class DingTalkSettingsService implements DingTalkSettingsProvider, DingTa
         on conflict (tenant_id) do update
            set status = 'configured', source = 'admin', corp_id = excluded.corp_id, agent_id = excluded.agent_id,
                app_key = excluded.app_key, credential_ref = excluded.credential_ref, secret_hint = excluded.secret_hint,
-               session_ttl_seconds = excluded.session_ttl_seconds, binding_ticket_ttl_seconds = excluded.binding_ticket_ttl_seconds,
-               admin_daily_bind_limit = excluded.admin_daily_bind_limit, timeout_ms = excluded.timeout_ms,
                updated_by = excluded.updated_by, updated_at = now()
+        -- 四项参数在“平台配置”中修改（运行参数配置方案 6.6.2）：已有行时不覆盖，避免校验期间平台配置的修改被旧值改回。
       `
       await settingsAudit(transaction, actorId, 'identity.dingtalk.settings.update', {
         corpId, agentId, appKey, secretChanged: String(Boolean(appSecret)), secretStored: String(Boolean(secretToStore)),
         ...(corpChanged ? { previousCorpId: existing!.corpId!, invalidatedBindings: String(invalidatedBindings) } : {}),
-        sessionTtlSeconds: String(sessionTtlSeconds), bindingTicketTtlSeconds: String(bindingTicketTtlSeconds),
-        adminDailyBindLimit: String(adminDailyBindLimit), timeoutMs: String(timeoutMs),
+        sessionTtlSeconds: String(locked?.sessionTtlSeconds ?? sessionTtlSeconds), bindingTicketTtlSeconds: String(locked?.bindingTicketTtlSeconds ?? bindingTicketTtlSeconds),
+        adminDailyBindLimit: String(locked?.adminDailyBindLimit ?? adminDailyBindLimit), timeoutMs: String(locked?.timeoutMs ?? timeoutMs),
       })
     })
     this.cached = null
@@ -437,7 +428,7 @@ async function settingsAudit(database: DatabaseClient | DatabaseTransaction, act
 function clampToPageRanges(configuration: DingTalkConfiguration) {
   const clamp = (value: number, min: number, max: number, name: string) => {
     const clamped = Math.min(max, Math.max(min, value))
-    if (clamped !== value) console.warn(`${name}=${value} 超出范围 ${min}–${max}，已按 ${clamped} 使用；可在“钉钉集成 › 应用配置”中调整`)
+    if (clamped !== value) console.warn(`${name}=${value} 超出范围 ${min}–${max}，已按 ${clamped} 使用；可在管理端“平台配置”中调整`)
     return clamped
   }
   return {

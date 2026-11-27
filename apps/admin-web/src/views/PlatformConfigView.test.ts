@@ -19,7 +19,7 @@ function setting(key: string, label: string, overrides: Partial<PlatformSetting>
   return {
     key, storage: 'platform', savePermission: 'config', versionKey: `platform:${key}`, available: true, canEdit: true,
     group: 'disk', label, description: '', unit: 'GB', value: 10, defaultValue: 10, min: 2, max: 500,
-    timing: '立即（包括正在运行的命令）', source: 'default', revision: 0, ...overrides,
+    timing: '立即（包括正在运行的命令）', source: 'default', exact: true, revision: 0, ...overrides,
   }
 }
 
@@ -151,5 +151,30 @@ describe('PlatformConfigView', () => {
     const wrapper = await mountView()
     expect(wrapper.text()).toContain('你可以查看平台配置；修改需要“平台配置”修改权限。')
     expect(wrapper.text()).toContain('需要“平台配置”修改权限')
+  })
+
+  it('does not prefill a value that is not a whole unit and treats any entry as a change (PR #180 I4)', async () => {
+    const config = parameters()
+    config.settings.push(setting('dingtalk.session_ttl_hours', '钉钉会话有效期', {
+      group: 'login', storage: 'dingtalk', savePermission: 'config', versionKey: 'dingtalk',
+      unit: '小时', value: 1, defaultValue: 12, min: 1, max: 720, exact: false, actual: '30 分钟', revision: 2,
+    }))
+    config.groups.push({ id: 'login', title: '登录与钉钉', description: '' })
+    vi.spyOn(adminApi, 'getPlatformConfig').mockResolvedValue(config)
+    const save = vi.spyOn(adminApi, 'savePlatformSettings').mockResolvedValue({ settings: [] })
+    const wrapper = await mountView()
+    const input = wrapper.get('#parameter-dingtalk\\.session_ttl_hours')
+    expect((input.element as HTMLInputElement).value).toBe('')
+    expect(input.attributes('placeholder')).toBe('30 分钟')
+    expect(wrapper.text()).toContain('当前实际为 30 分钟，不是整小时')
+    expect(wrapper.text()).toContain('没有未保存的修改')
+    await type(wrapper, 'dingtalk.session_ttl_hours', '1')
+    expect(wrapper.text()).toContain('有 1 项未保存的修改')
+    await button(wrapper, '保存').trigger('click')
+    await flushPromises()
+    expect(document.body.textContent).toContain('30 分钟 → 1 小时')
+    await button(wrapper, '确认保存').trigger('click')
+    await flushPromises()
+    expect(save).toHaveBeenCalledWith([{ key: 'dingtalk.session_ttl_hours', value: 1, revision: 2 }])
   })
 })

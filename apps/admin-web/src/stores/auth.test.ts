@@ -87,4 +87,28 @@ describe('admin auth store', () => {
     expect(store.identityAdministrationAvailable).toBe(true)
     expect(store.canManageIdentity).toBe(true)
   })
+
+  it('lands a platform config administrator on the platform config page (PR #180 I3)', async () => {
+    api.getSession.mockResolvedValueOnce({
+      identityProvider: 'local-password', apiAudience: 'admin', permissions: ['admin:config:write'],
+      user: { id: 'user-config', name: '运维管理员', title: '运维', department: '信息部', avatarText: '运', role: 'business_admin', dataScopes: [] },
+    })
+    const { useAuthStore } = await import('./auth')
+    const store = useAuthStore()
+    await store.load()
+    expect(store.landingRoute()).toBe('/platform-config')
+  })
+
+  it('keeps assistant controls for roles saved module by module with every module writable except platform config (PR #180 I8)', async () => {
+    const modules = ['agent', 'skill', 'connector', 'model', 'dlp', 'knowledge', 'org', 'identity', 'dingtalk']
+    api.getSession.mockResolvedValueOnce({
+      identityProvider: 'local-password', apiAudience: 'admin',
+      permissions: [...modules.map(module => `admin:${module}:write`), 'admin:ops:read'],
+      user: { id: 'user-all-modules', name: '业务管理员', title: '管理员', department: '业务部', avatarText: '业', role: 'business_admin', dataScopes: [] },
+    })
+    const { useAuthStore } = await import('./auth')
+    const store = useAuthStore()
+    await store.load()
+    expect(store.canManage).toBe(true)
+  })
 })

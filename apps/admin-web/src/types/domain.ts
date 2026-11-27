@@ -92,7 +92,7 @@ export interface AdminSession {
   apiAudience: 'admin'
   permissions: string[]
   /** 各模块的可用级别（功能规则第 13 节）；旧服务端没有时由前端按权限码推算。 */
-  adminModules?: Partial<Record<'agent' | 'skill' | 'connector' | 'model' | 'dlp' | 'knowledge' | 'org' | 'identity' | 'dingtalk' | 'ops', 'none' | 'read' | 'write'>>
+  adminModules?: Partial<Record<'agent' | 'skill' | 'connector' | 'model' | 'dlp' | 'knowledge' | 'org' | 'identity' | 'dingtalk' | 'ops' | 'config', 'none' | 'read' | 'write'>>
   platformAdmin?: boolean
 }
 
@@ -1363,7 +1363,10 @@ export interface PlatformSetting {
   lowerRisk?: string
   belowDefaultRisk?: string
   raiseRisk?: string
-  source: 'page' | 'default'
+  source: 'page' | 'default' | 'env'
+  /** 存储值不是整页面单位时为 false，`actual` 为真实值；页面不预填，填入任何值都按修改处理。 */
+  exact: boolean
+  actual?: string
   revision: number
   updatedAt?: string
   updatedBy?: string

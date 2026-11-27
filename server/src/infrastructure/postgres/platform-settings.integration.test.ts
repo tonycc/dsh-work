@@ -302,3 +302,92 @@ test('DingTalk parameters: page saves survive restarts, credential saves keep th
   assert.equal((await row()).timeoutMs, 20_000)
   assert.equal((await row()).sessionTtlSeconds, 21_600)
 })
+
+test('concurrent Runtime saves: one wins, the other gets 409, never a server error (PR #180 I2)', async () => {
+  const runtimeId = 'runtime-local-01'
+  const settings = new PostgresPlatformSettingsService(database)
+  for (let round = 0; round < 8; round += 1) {
+    const revision = (await settings.list()).find(item => item.key === `runtime.${runtimeId}.capacity`)!.revision
+    const results = await Promise.allSettled([
+      // 每轮用新值：值不变的保存不写入、不推进版本，两个请求都会成功。
+      settings.save([{ key: `runtime.${runtimeId}.capacity`, value: 20 + round, revision }], actor),
+      settings.save([{ key: `runtime.${runtimeId}.timeout_minutes`, value: 10 + round, revision }], actor),
+    ])
+    assert.equal(results.filter(result => result.status === 'fulfilled').length, 1, `round ${round}`)
+    const rejected = results.find(result => result.status === 'rejected') as PromiseRejectedResult
+    assert.equal((rejected.reason as { status?: number }).status, 409, `round ${round}: ${String(rejected.reason)}`)
+  }
+})
+
+test('a Runtime that is offline and draining can still be resized; built-in Skill and tool lists are kept (6.6.2)', async () => {
+  const runtimeId = 'runtime-local-01'
+  await database`update runtimes set health_status = 'offline', scheduling_status = 'draining' where id = ${runtimeId}`
+  await database`
+    insert into runtime_configurations (tenant_id, runtime_id, revision, concurrency_limit, timeout_seconds, sandbox_policy, disabled_tools, disabled_builtin_skills, updated_by)
+    select ${tenantId}, ${runtimeId}, max(revision) + 1, 2, 300, '{"network":"deny"}'::jsonb, ${database.json(['bash'])}, ${database.json(['dsh-work-html-page'])}, ${actor}
+      from runtime_configurations where tenant_id = ${tenantId} and runtime_id = ${runtimeId}
+  `
+  const settings = new PostgresPlatformSettingsService(database)
+  const revision = (await settings.list()).find(item => item.key === `runtime.${runtimeId}.capacity`)!.revision
+  await settings.save([{ key: `runtime.${runtimeId}.capacity`, value: 7, revision }], actor)
+  const [runtime] = await database<{ capacity: number; status: string }[]>`select capacity, scheduling_status as status from runtimes where id = ${runtimeId}`
+  const [latest] = await database<{ tools: string[]; skills: string[]; timeout: number }[]>`
+    select disabled_tools as tools, disabled_builtin_skills as skills, timeout_seconds as timeout
+      from runtime_configurations where runtime_id = ${runtimeId} order by revision desc limit 1
+  `
+  assert.deepEqual({ capacity: runtime!.capacity, status: runtime!.status }, { capacity: 7, status: 'draining' })
+  assert.deepEqual({ tools: latest!.tools, skills: latest!.skills, timeout: latest!.timeout }, { tools: ['bash'], skills: ['dsh-work-html-page'], timeout: 300 })
+  const view = (await settings.list()).find(item => item.key === `runtime.${runtimeId}.capacity`)!
+  assert.ok(view.updatedBy && view.updatedAt, 'the modifier is shown for Runtime rows')
+  await database`update runtimes set health_status = 'healthy', scheduling_status = 'accepting' where id = ${runtimeId}`
+})
+
+test('a failure in one storage rolls back the whole batch (6.6.2)', async () => {
+  const runtimeId = 'runtime-local-01'
+  const settings = new PostgresPlatformSettingsService(database)
+  const views = await settings.list()
+  const webFetch = views.find(item => item.key === 'web_fetch.max_per_attempt')!
+  const capacity = views.find(item => item.key === `runtime.${runtimeId}.capacity`)!
+  await assert.rejects(settings.save([
+    { key: 'web_fetch.max_per_attempt', value: webFetch.value === 7 ? 8 : 7, revision: webFetch.revision },
+    { key: `runtime.${runtimeId}.capacity`, value: 9, revision: capacity.revision - 1 },
+  ], actor), (error: Error & { status?: number }) => error.status === 409)
+  const after = await settings.list()
+  assert.equal(after.find(item => item.key === 'web_fetch.max_per_attempt')!.revision, webFetch.revision, 'the platform setting was not written')
+  assert.equal(after.find(item => item.key === `runtime.${runtimeId}.capacity`)!.value, capacity.value)
+})
+
+test('DingTalk: a credential save racing a platform config save keeps the new parameters; values that are not whole units are shown exactly (PR #180 I1, I4)', async () => {
+  await database`delete from dingtalk_app_configurations`
+  const platformAdmin = await adminWith('admin:*')
+  const settings = new PostgresPlatformSettingsService(database)
+  // 应用未配置：四项只读，保存被拒。
+  const missing = (await settings.list()).filter(item => item.storage === 'dingtalk')
+  assert.ok(missing.every(item => item.available === false && item.unavailableReason))
+  await assert.rejects(settings.save([{ key: 'dingtalk.timeout_seconds', value: 20, revision: 0 }], platformAdmin),
+    (error: Error & { status?: number }) => error.status === 409)
+
+  const bootstrap: DingTalkConfiguration = {
+    corpId: 'ding-race', agentId: '1001', appKey: 'ding-race-key', appSecret: 'ding-secret-race', apiBaseUrl: 'https://oapi.dingtalk.com',
+    timeoutMs: 10_000, sessionTtlSeconds: 1_800, bindingTicketTtlSeconds: 300, adminDailyBindLimit: 50,
+  }
+  let releaseCheck: () => void = () => undefined
+  let checking: () => void = () => undefined
+  const checkStarted = new Promise<void>(resolve => { checking = resolve })
+  const directoryFactory = () => ({ checkCredentials: async () => { checking(); await new Promise<void>(resolve => { releaseCheck = resolve }) } }) as never
+  const dingtalk = new DingTalkSettingsService(database, { deployment: { apiBaseUrl: 'https://oapi.dingtalk.com', bootstrap }, directoryFactory })
+  await dingtalk.ensureBootstrap()
+
+  const session = (await settings.list()).find(item => item.key === 'dingtalk.session_ttl_hours')!
+  assert.deepEqual({ value: session.value, exact: session.exact, actual: session.actual, source: session.source }, { value: 1, exact: false, actual: '30 分钟', source: 'env' })
+
+  const credentialSave = dingtalk.save({ corpId: 'ding-race', agentId: '1002', appKey: 'ding-race-key' }, platformAdmin)
+  await checkStarted
+  await settings.save([{ key: 'dingtalk.admin_daily_bind_limit', value: 3, revision: session.revision }], platformAdmin)
+  releaseCheck()
+  await credentialSave
+  const [row] = await database<{ limit: number; revision: number; session: number }[]>`
+    select admin_daily_bind_limit as limit, parameters_revision as revision, session_ttl_seconds as session from dingtalk_app_configurations
+  `
+  assert.deepEqual({ limit: row!.limit, revision: row!.revision, session: row!.session }, { limit: 3, revision: session.revision + 1, session: 1_800 })
+})

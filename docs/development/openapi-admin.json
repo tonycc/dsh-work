@@ -3136,7 +3136,7 @@
       },
       "put": {
         "operationId": "saveDingTalkSettings",
-        "summary": "保存钉钉应用配置：先用这组凭据向钉钉换取 access_token，失败返回 422 dingtalk_credentials_rejected 或 503 dingtalk_unavailable 且不保存；AppSecret 留空沿用已保存的值，更换 CorpId 或 AppKey 时必须填写（422 dingtalk_secret_required）；服务未配置凭据主密钥时不能保存 AppSecret（409 credential_master_key_missing）。AppSecret 加密保存，立即生效，写审计（不含密钥）。只限平台管理员（功能规则第 13 节：换成他人控制的应用可以冒充已绑定员工登录）",
+        "summary": "保存钉钉应用配置：先用这组凭据向钉钉换取 access_token，失败返回 422 dingtalk_credentials_rejected 或 503 dingtalk_unavailable 且不保存；AppSecret 留空沿用已保存的值，更换 CorpId 或 AppKey 时必须填写（422 dingtalk_secret_required）；服务未配置凭据主密钥时不能保存 AppSecret（409 credential_master_key_missing）。AppSecret 加密保存，立即生效，写审计（不含密钥）。只限平台管理员（功能规则第 13 节：换成他人控制的应用可以冒充已绑定员工登录）。会话有效期、待绑定凭证有效期、每日代绑上限与接口超时改在平台配置（PUT /platform-settings）中修改，请求带上这四项返回 422；保存凭据时这四项沿用现值",
         "requestBody": {
           "required": true,
           "content": {
@@ -3166,26 +3166,6 @@
                     "type": "string",
                     "maxLength": 512,
                     "writeOnly": true
-                  },
-                  "sessionTtlSeconds": {
-                    "type": "integer",
-                    "minimum": 300,
-                    "maximum": 2592000
-                  },
-                  "bindingTicketTtlSeconds": {
-                    "type": "integer",
-                    "minimum": 60,
-                    "maximum": 3600
-                  },
-                  "adminDailyBindLimit": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 10000
-                  },
-                  "timeoutMs": {
-                    "type": "integer",
-                    "minimum": 1000,
-                    "maximum": 60000
                   }
                 }
               }

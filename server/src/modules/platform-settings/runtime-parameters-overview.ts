@@ -113,7 +113,7 @@ export function buildRuntimeParametersOverview(input: RuntimeParametersOverviewI
   for (const setting of input.settings) {
     const owner: NonNullable<RuntimeParameterOwner> = setting.savePermission === 'platform-admin' ? platformAdmin : { kind: 'module', module: 'config' }
     entries.push({
-      id: setting.key, group: 'config', name: setting.label, value: formatSettingValue(setting),
+      id: setting.key, group: 'config', name: setting.label, value: setting.exact ? formatSettingValue(setting) : setting.actual ?? formatSettingValue(setting),
       source: setting.source, timing: setting.timing, where: '平台配置 · 配置', link: '/platform-config', owner,
       canEdit: setting.available && input.canEdit(owner),
     })

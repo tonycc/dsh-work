@@ -93,7 +93,7 @@ export function hasAuditAccess(permissions: Iterable<string>) {
 }
 
 /**
- * 运行参数总览里“能否修改”的判定（运行参数配置方案 RP8、RP10）：平台管理员专属，或某模块的修改权限。
+ * 平台配置里“能否修改”的判定（运行参数配置方案 RP12、RP16）：平台管理员专属，或某模块的修改权限。
  * 只用于展示链接；真正的保存仍由路由对照表判定。
  */
 export function canEditAdminSetting(permissions: Iterable<string>, owner: { kind: 'platform-admin' } | { kind: 'module'; module: AdminModule }) {
@@ -329,7 +329,7 @@ export function decideAdminRouteAccess(permissions: Iterable<string>, path: stri
         ? ALLOW
         : { allowed: false, message: write ? '当前用户没有数据防护的修改权限' : '当前用户没有数据防护的查看权限' }
     case 'module': {
-      // 平台管理员专属的保存（钉钉应用配置、运行参数）先于只读模块判定：只读模块的这类保存仍只限平台管理员。
+      // 平台管理员专属的保存（钉钉应用配置）先于只读模块判定：只读模块的这类保存仍只限平台管理员。
       if (write && rule.writePlatformOnly) {
         return isPlatformAdmin(granted) ? ALLOW : { allowed: false, message: `${ADMIN_MODULE_LABELS[rule.module]}的应用配置只有平台管理员可以修改` }
       }

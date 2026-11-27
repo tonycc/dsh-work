@@ -10,6 +10,7 @@ import {
   platformSettingsFromValues,
   runtimeSettingDefinitions,
   settingView,
+  storedValueState,
   toPageValue,
   validateSettingValue,
   type PlatformSettingChange,
@@ -43,11 +44,15 @@ interface SettingRow {
 
 interface RuntimeRow extends RuntimeSummary {
   revision: number
+  updatedAt: Date | null
+  updatedBy: string | null
 }
 
 interface DingTalkRow extends DingTalkSummary {
   status: 'configured' | 'cleared'
   revision: number
+  updatedAt?: Date | null
+  updatedBy?: string | null
 }
 
 type ResolvedChange = { definition: PlatformSettingDefinition; value: number; revision: number; runtimeId?: string; field?: 'capacity' | 'timeout_minutes' }
@@ -95,12 +100,17 @@ export class PostgresPlatformSettingsService implements PlatformSettingsReader {
       const row = saved.get(definition.key)
       return platformSettingView(definition, row && { value: row.value, revision: row.revision, updatedAt: row.updatedAt.toISOString(), updatedBy: row.updatedBy })
     })
-    const runtime = runtimes.flatMap(item => runtimeSettingDefinitions(item).map(definition => settingView(definition, {
-      value: definition.key.endsWith('.capacity') ? item.capacity : toPageValue(definition, item.timeoutSeconds),
-      source: item.configured ? 'page' : 'default',
-      revision: item.revision,
-      versionKey: `runtime:${item.id}`,
-    })))
+    const runtime = runtimes.flatMap(item => runtimeSettingDefinitions(item).map(definition => {
+      const capacity = definition.key.endsWith('.capacity')
+      return settingView(definition, {
+        value: capacity ? item.capacity : toPageValue(definition, item.timeoutSeconds),
+        ...(capacity ? {} : storedValueState(definition, item.timeoutSeconds)),
+        source: item.configured ? 'page' : 'default',
+        revision: item.revision,
+        versionKey: `runtime:${item.id}`,
+        ...(item.updatedAt && item.updatedBy ? { updatedAt: item.updatedAt.toISOString(), updatedBy: item.updatedBy } : {}),
+      })
+    }))
     return [...platform, ...runtime, ...dingtalkViews(dingtalk)]
   }
 
@@ -112,10 +122,11 @@ export class PostgresPlatformSettingsService implements PlatformSettingsReader {
    */
   async save(changes: PlatformSettingChange[], actorId: string): Promise<PlatformSettingView[]> {
     const resolved = changes.map(resolveChange)
+    // 按版本分组的键排序后依次加锁，避免两个顺序相反的请求互相等待（PR #180 评审 N6）。
+    resolved.sort((left, right) => versionKeyOf(left).localeCompare(versionKeyOf(right)))
     const groups = new Map<string, ResolvedChange[]>()
     for (const change of resolved) {
-      const versionKey = change.definition.storage === 'platform' ? `platform:${change.definition.key}`
-        : change.definition.storage === 'runtime' ? `runtime:${change.runtimeId}` : 'dingtalk'
+      const versionKey = versionKeyOf(change)
       const group = groups.get(versionKey) ?? []
       if (group.length && group[0]!.revision !== change.revision) throw invalidRequest('同一组参数的版本号不一致，请刷新后重试')
       groups.set(versionKey, [...group, change])
@@ -210,15 +221,17 @@ export class PostgresPlatformSettingsService implements PlatformSettingsReader {
         select r.id, r.node_name as name, r.capacity, r.scheduling_status,
                latest.revision is not null as configured,
                coalesce(latest.revision, 0)::integer as revision,
-               coalesce(latest.timeout_seconds, 300)::integer as "timeoutSeconds"
+               coalesce(latest.timeout_seconds, 300)::integer as "timeoutSeconds",
+               latest.updated_at as "updatedAt",
+               (select display_name from users u where u.tenant_id = r.tenant_id and u.id = latest.updated_by) as "updatedBy"
           from runtimes r
           left join lateral (
-            select revision, timeout_seconds from runtime_configurations c
+            select revision, timeout_seconds, updated_at, updated_by from runtime_configurations c
              where c.tenant_id = r.tenant_id and c.runtime_id = r.id order by revision desc limit 1
           ) latest on true
          where r.tenant_id = ${tenantId}
       )
-      select c.id, c.name, c.capacity, c."timeoutSeconds", c.configured, c.revision,
+      select c.id, c.name, c.capacity, c."timeoutSeconds", c.configured, c.revision, c."updatedAt", c."updatedBy",
              (select count(*)::integer from agents a
                 join agent_versions av on av.tenant_id = a.tenant_id and av.id = a.active_version_id
                where a.tenant_id = ${tenantId} and a.status = 'published'
@@ -230,10 +243,12 @@ export class PostgresPlatformSettingsService implements PlatformSettingsReader {
 
   private async dingtalkRow(): Promise<DingTalkRow | null> {
     const [row] = await this.database<DingTalkRow[]>`
-      select status, source, session_ttl_seconds as "sessionTtlSeconds", binding_ticket_ttl_seconds as "bindingTicketTtlSeconds",
-             admin_daily_bind_limit as "adminDailyBindLimit", timeout_ms as "timeoutMs", parameters_revision as revision
-        from dingtalk_app_configurations
-       where tenant_id = ${tenantId}
+      select c.status, c.source, c.session_ttl_seconds as "sessionTtlSeconds", c.binding_ticket_ttl_seconds as "bindingTicketTtlSeconds",
+             c.admin_daily_bind_limit as "adminDailyBindLimit", c.timeout_ms as "timeoutMs", c.parameters_revision as revision,
+             c.updated_at as "updatedAt", u.display_name as "updatedBy"
+        from dingtalk_app_configurations c
+        left join users u on u.tenant_id = c.tenant_id and u.id = c.updated_by
+       where c.tenant_id = ${tenantId}
     `
     return row ?? null
   }
@@ -246,17 +261,32 @@ const columnField = {
   timeout_ms: 'timeoutMs',
 } as const
 
-/** 钉钉四项的视图：应用未配置或已清除时只读并说明原因。 */
-export function dingtalkViews(row: (DingTalkSummary & { status: 'configured' | 'cleared'; revision: number }) | null): PlatformSettingView[] {
+/**
+ * 钉钉四项的视图：应用未配置或已清除时只读并说明原因。来源：在平台配置中改过（修订号大于 1）为“页面配置”；
+ * 否则来自部署配置时为“环境变量”，其余为“默认值”。只有在平台配置中改过时才显示修改人（凭据保存也会推进 updated_at）。
+ */
+export function dingtalkViews(row: DingTalkRow | null): PlatformSettingView[] {
   const configured = row?.status === 'configured'
-  return DINGTALK_PARAMETER_DEFINITIONS.map(definition => settingView(definition, {
-    value: row ? toPageValue(definition, row[columnField[definition.column]]) : definition.defaultValue,
-    source: row?.source === 'admin' || row?.revision && row.revision > 1 ? 'page' : 'default',
-    revision: row?.revision ?? 0,
-    versionKey: 'dingtalk',
-    available: configured,
-    ...(configured ? {} : { unavailableReason: '钉钉应用尚未配置，配置后才能修改' }),
-  }))
+  const changedHere = (row?.revision ?? 1) > 1
+  const source = changedHere ? 'page' : row?.source === 'deployment-config' ? 'env' : 'default'
+  return DINGTALK_PARAMETER_DEFINITIONS.map(definition => {
+    const stored = row ? row[columnField[definition.column]] : undefined
+    return settingView(definition, {
+      value: stored === undefined ? definition.defaultValue : toPageValue(definition, stored),
+      ...(stored === undefined ? {} : storedValueState(definition, stored)),
+      source,
+      revision: row?.revision ?? 0,
+      versionKey: 'dingtalk',
+      available: configured,
+      ...(configured ? {} : { unavailableReason: '钉钉应用尚未配置，配置后才能修改' }),
+      ...(changedHere && row?.updatedAt && row.updatedBy ? { updatedAt: row.updatedAt.toISOString(), updatedBy: row.updatedBy } : {}),
+    })
+  })
+}
+
+function versionKeyOf(change: ResolvedChange) {
+  return change.definition.storage === 'platform' ? `platform:${change.definition.key}`
+    : change.definition.storage === 'runtime' ? `runtime:${change.runtimeId}` : 'dingtalk'
 }
 
 function resolveChange(change: PlatformSettingChange): ResolvedChange {

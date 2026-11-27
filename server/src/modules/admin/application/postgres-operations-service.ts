@@ -721,17 +721,19 @@ export async function writeRuntimeCapacityAndTimeout(transaction: DatabaseTransa
   expectedRevision: number
   actorId: string
 }): Promise<{ changed: boolean }> {
-  const [current] = await transaction<{ capacity: number; revision: number; timeoutSeconds: number }[]>`
-    select r.capacity, coalesce(c.revision, 0)::integer as revision, coalesce(c.timeout_seconds, 300)::integer as "timeoutSeconds"
-      from runtimes r
-      left join lateral (
-        select revision, timeout_seconds from runtime_configurations
-         where tenant_id = r.tenant_id and runtime_id = r.id order by revision desc limit 1
-      ) c on true
-     where r.tenant_id = ${tenantId} and r.id = ${input.runtimeId}
-     for update of r
+  // 先单独锁住 Runtime 行，再用新语句读最新修订：READ COMMITTED 下同一语句等锁后不会重读 lateral 子查询，
+  // 合在一起会让两个并发保存都通过版本比对、后者插入时撞主键（PR #180 评审 I2）。Runtimes 页的写入锁同一行。
+  const [locked] = await transaction<{ capacity: number }[]>`
+    select capacity from runtimes where tenant_id = ${tenantId} and id = ${input.runtimeId} for update
   `
-  if (!current) throw notFound(`Runtime 不存在：${input.runtimeId}`)
+  if (!locked) throw notFound(`Runtime 不存在：${input.runtimeId}`)
+  const [latest] = await transaction<{ revision: number; timeoutSeconds: number }[]>`
+    select coalesce(max(revision), 0)::integer as revision,
+           coalesce((select timeout_seconds from runtime_configurations
+                      where tenant_id = ${tenantId} and runtime_id = ${input.runtimeId} order by revision desc limit 1), 300)::integer as "timeoutSeconds"
+      from runtime_configurations where tenant_id = ${tenantId} and runtime_id = ${input.runtimeId}
+  `
+  const current = { capacity: locked.capacity, revision: latest?.revision ?? 0, timeoutSeconds: latest?.timeoutSeconds ?? 300 }
   if (current.revision !== input.expectedRevision) throw stateConflict('Runtime 配置已被其他管理员修改，请刷新后重试')
   const capacity = input.capacity ?? current.capacity
   const timeoutSeconds = input.timeoutSeconds ?? current.timeoutSeconds
