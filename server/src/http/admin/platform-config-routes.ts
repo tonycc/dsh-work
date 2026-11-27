@@ -2,13 +2,15 @@ import { canEditAdminSetting } from '../../domain/admin-permissions.ts'
 import {
   PLATFORM_SETTING_GROUPS,
   parsePlatformSettingChanges,
+  settingSavePermission,
   type PlatformSettingChange,
   type PlatformSettingView,
 } from '../../domain/platform-settings.ts'
 import type { RuntimeParameterOwner, RuntimeParametersOverview } from '../../modules/platform-settings/runtime-parameters-overview.ts'
+import { accessDenied } from '../../domain/request-errors.ts'
 import { envelope, readJsonBody, requireRequestIdentity, type Router } from '../router.ts'
 
-export interface RuntimeParametersPort {
+export interface PlatformConfigPort {
   list(): Promise<PlatformSettingView[]>
   save(changes: PlatformSettingChange[], actorId: string): Promise<PlatformSettingView[]>
   overview(input: {
@@ -18,11 +20,12 @@ export interface RuntimeParametersPort {
 }
 
 /**
- * 管理端“运行参数”（运行参数配置方案 6.3）：总览按 `ops` 查看；保存只限平台管理员（路由对照表 `platform-settings`，RP10）。
+ * 管理端“平台配置”（运行参数配置方案 6.6）：查看与保存按“平台配置”模块（路由对照表 `platform-config`、`platform-settings`）；
+ * 安全类参数由服务层逐项复核平台管理员（RP16）。每项返回当前管理员能否修改（只用于展示）。
  */
-export function registerRuntimeParametersRoutes(
+export function registerPlatformConfigRoutes(
   router: Router,
-  parameters: RuntimeParametersPort,
+  parameters: PlatformConfigPort,
   options: {
     sessionTtl: { seconds: number; fromEnvironment: boolean }
     /** 数据卷当前剩余空间，供页面在调高磁盘阈值前提示“保存后将立即判定为磁盘不足”；读取失败时为 null。 */
@@ -31,7 +34,7 @@ export function registerRuntimeParametersRoutes(
   },
 ) {
   const adapter = options.adapter ?? 'postgres'
-  router.get('/api/admin/v1/runtime-parameters', async (_request, context) => {
+  router.get('/api/admin/v1/platform-config', async (_request, context) => {
     const identity = requireRequestIdentity(context, 'admin')
     const canEdit = (owner: NonNullable<RuntimeParameterOwner>) => canEditAdminSetting(identity.permissions, owner)
     const [settings, overview, disk] = await Promise.all([
@@ -39,11 +42,24 @@ export function registerRuntimeParametersRoutes(
       parameters.overview({ sessionTtl: options.sessionTtl, canEdit }),
       options.diskStatus ? options.diskStatus().catch(() => null) : Promise.resolve(null),
     ])
-    return envelope('admin', { groups: PLATFORM_SETTING_GROUPS, settings, canSave: canEdit({ kind: 'platform-admin' }), disk, overview }, adapter)
+    const withPermission = settings.map(setting => ({
+      ...setting,
+      canEdit: setting.available && canEdit(setting.savePermission === 'platform-admin' ? { kind: 'platform-admin' } : { kind: 'module', module: 'config' }),
+    }))
+    return envelope('admin', {
+      groups: PLATFORM_SETTING_GROUPS, settings: withPermission, canSave: withPermission.some(setting => setting.canEdit), disk, overview,
+    }, adapter)
   })
   router.put('/api/admin/v1/platform-settings', async (request, context) => {
     const identity = requireRequestIdentity(context, 'admin')
     const changes = parsePlatformSettingChanges(await readJsonBody(request))
+    // 逐项保存权限（RP16）：路由层先按判定模块拒绝安全类参数，服务层在事务内再复核一次。
+    for (const change of changes) {
+      const permission = settingSavePermission(change.key)
+      if (permission && !canEditAdminSetting(identity.permissions, permission === 'platform-admin' ? { kind: 'platform-admin' } : { kind: 'module', module: 'config' })) {
+        throw accessDenied(permission === 'platform-admin' ? '登录会话与钉钉的安全类参数只有平台管理员可以修改' : '当前用户没有平台配置的修改权限')
+      }
+    }
     return envelope('admin', { settings: await parameters.save(changes, identity.userId) }, adapter)
   })
 }

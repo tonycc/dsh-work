@@ -139,25 +139,27 @@ test('general admin chat proposes delegation and executes a specialist plan only
   assert.equal(proposal.kind, 'platform-operations')
   assert.equal(proposal.status, 'pending')
   assert.equal(proposal.delegatedRunId, null)
-  const runtimeBefore = (await database.client<{ timeoutMinutes: number }[]>`
-    select ceil(timeout_seconds / 60.0)::integer as "timeoutMinutes" from runtime_configurations
+  // 平台运维计划切换停用工具（容量与超时改在平台配置中修改，运行参数配置方案 6.6.4）。
+  const disabledTools = async () => JSON.stringify((await database.client<{ tools: string[] }[]>`
+    select coalesce(disabled_tools, '[]'::jsonb) as tools from runtime_configurations
      where runtime_id = 'runtime-local-01' order by revision desc limit 1
-  `)[0]!.timeoutMinutes
+  `)[0]?.tools ?? [])
+  const runtimeBefore = await disabledTools()
   await assert.rejects(assistant.confirmProposal(actor, proposal.id, 'wrong-digest'), /变化/)
   const delegated = await assistant.confirmProposal(actor, proposal.id, proposal.proposalSha256)
   assert.equal(delegated.proposals.at(-1)?.status, 'confirmed')
   assert.ok(delegated.proposals.at(-1)?.delegatedRunId)
-  assert.equal((await database.client<{ timeoutMinutes: number }[]>`select ceil(timeout_seconds / 60.0)::integer as "timeoutMinutes" from runtime_configurations where runtime_id = 'runtime-local-01' order by revision desc limit 1`)[0]!.timeoutMinutes, runtimeBefore)
+  assert.equal(await disabledTools(), runtimeBefore)
 
   const planned = await waitForAssistant(sessionId)
   const action = planned.actions.at(-1)!
   assert.equal(action.actionType, 'runtime-update-configuration')
   assert.equal(action.status, 'pending')
-  assert.equal(action.before.attemptTimeoutMinutes, runtimeBefore)
+  assert.equal(JSON.stringify(action.before.disabledTools), runtimeBefore)
   await assert.rejects(assistant.confirmAction(actor, action.id, 'wrong-digest'), /变化/)
   const executed = await assistant.confirmAction(actor, action.id, action.planSha256)
   assert.equal(executed.actions.at(-1)?.status, 'executed')
-  assert.notEqual((await database.client<{ timeoutMinutes: number }[]>`select ceil(timeout_seconds / 60.0)::integer as "timeoutMinutes" from runtime_configurations where runtime_id = 'runtime-local-01' order by revision desc limit 1`)[0]!.timeoutMinutes, runtimeBefore)
+  assert.notEqual(await disabledTools(), runtimeBefore)
   assert.match(executed.messages.at(-1)?.text ?? '', /管理员确认的计划执行/)
 
   await assistant.send(actor, { sessionId, requestId: randomUUID(), message: '调整 Agent 的说明，保存为待发布草稿' })
@@ -226,9 +228,8 @@ test('general admin chat proposes delegation and executes a specialist plan only
   await database.client`update admin_assistant_action_plans set status = 'executing' where tenant_id = ${tenant} and id = ${alreadyApplied.id}`
   await operations.updateRuntimeConfiguration({
     runtimeId: stored.plan.after.runtimeId,
-    maxConcurrentWorkers: stored.plan.after.maxConcurrentWorkers,
-    attemptTimeoutMinutes: stored.plan.after.attemptTimeoutMinutes,
     schedulingStatus: stored.plan.after.schedulingStatus,
+    disabledTools: stored.plan.after.disabledTools,
     actor,
   }, stored.plan.before)
   const appliedRecovery = await assistant.recoverInterruptedActions()
@@ -242,9 +243,8 @@ test('guarded Runtime and Agent mutations reject a stale plan revision inside th
   const runtimeBefore = await operations.getRuntimeMutationSnapshot('runtime-local-01')
   await operations.updateRuntimeConfiguration({
     runtimeId: runtimeBefore.runtimeId,
-    maxConcurrentWorkers: runtimeBefore.maxConcurrentWorkers,
-    attemptTimeoutMinutes: runtimeBefore.attemptTimeoutMinutes === 60 ? 59 : runtimeBefore.attemptTimeoutMinutes + 1,
     schedulingStatus: runtimeBefore.schedulingStatus,
+    disabledTools: runtimeBefore.disabledTools.includes('web_search') ? [] : ['web_search'],
     actor,
   })
   await assert.rejects(operations.updateRuntimeConfiguration({

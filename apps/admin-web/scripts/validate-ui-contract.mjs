@@ -238,10 +238,11 @@ requireFragments('src/views/RuntimeManagementView.vue', [
   'data-action="save-runtime-configuration"',
   '内置工具',
   '紧急停用内置工具',
-  '最大并发 Worker 数',
-  '单次执行超时时间',
   '调度状态',
 ])
+// 容量与单次执行超时改在“平台配置”中修改（运行参数配置方案 RP14），Runtimes 页不再出现编辑项。
+forbidFragments('src/views/RuntimeManagementView.vue', ['最大并发 Worker 数" prop', '单次执行超时时间'])
+requireFragments('src/views/PlatformConfigView.vue', ['role="tablist"', 'role="tabpanel"', '只有平台管理员能保存'])
 requireFragments('src/views/SessionManagementView.vue', ['data-action="view-session"', 'data-action="view-session-audit"'])
 requireFragments('src/views/WorkspaceManagementView.vue', ['data-action="view-workspace"'])
 

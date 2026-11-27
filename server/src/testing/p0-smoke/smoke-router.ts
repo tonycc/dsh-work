@@ -38,8 +38,8 @@ import { SmokeErrorRecordsService } from './error-records-service.ts'
 import { registerErrorRecordsRoutes } from '../../http/admin/error-records-routes.ts'
 import { registerClientErrorRoutes } from '../../http/client-error-routes.ts'
 import { registerUsageAnalyticsRoutes } from '../../http/admin/usage-analytics-routes.ts'
-import { registerRuntimeParametersRoutes } from '../../http/admin/runtime-parameters-routes.ts'
-import { SmokeRuntimeParametersService } from './runtime-parameters-service.ts'
+import { registerPlatformConfigRoutes } from '../../http/admin/platform-config-routes.ts'
+import { SmokePlatformConfigService } from './platform-config-service.ts'
 import { SmokeUsageAnalyticsService } from './usage-analytics-service.ts'
 import { registerUnavailableWorkbenchCommandRoutes } from './unavailable-routes.ts'
 import { WorkbenchQueryService } from './workbench-query-service.ts'
@@ -82,8 +82,8 @@ export function createSmokeRouter() {
   // 冒烟只校验上报能发出并通过结构校验（OBS-E2E-03）；不入库，来源校验由服务端单测覆盖。
   registerClientErrorRoutes(router, { record: async () => undefined, recordPageViews: async (...args) => args[2].length, authenticate: testApiAuthenticator, validateOrigin: () => undefined })
   registerUsageAnalyticsRoutes(router, new SmokeUsageAnalyticsService(), 'prototype-memory')
-  const runtimeParameters = new SmokeRuntimeParametersService()
-  registerRuntimeParametersRoutes(router, runtimeParameters, {
+  const runtimeParameters = new SmokePlatformConfigService(repository)
+  registerPlatformConfigRoutes(router, runtimeParameters, {
     sessionTtl: { seconds: 8 * 60 * 60, fromEnvironment: false },
     diskStatus: () => runtimeParameters.diskStatus(),
     adapter: 'prototype-memory',

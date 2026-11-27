@@ -102,9 +102,6 @@ async function clearSettings() {
   }
 }
 
-function hours(seconds: number) {
-  return seconds % 3600 === 0 ? `${seconds / 3600} 小时` : `${Math.round(seconds / 60)} 分钟`
-}
 
 async function loadUnbound() {
   const page = await adminApi.getDingTalkUnbound(unboundPage.value)
@@ -244,14 +241,6 @@ onMounted(load)
                 <template v-else>未配置</template>
               </dd>
               <template v-if="settings?.configured">
-                <dt>钉钉会话有效期</dt>
-                <dd>{{ hours(settings.sessionTtlSeconds) }}</dd>
-                <dt>待绑定凭证有效期</dt>
-                <dd>{{ hours(settings.bindingTicketTtlSeconds) }}</dd>
-                <dt>每日代绑上限</dt>
-                <dd>每位管理员 {{ settings.adminDailyBindLimit }} 次</dd>
-                <dt>钉钉接口超时</dt>
-                <dd>{{ settings.timeoutMs / 1000 }} 秒</dd>
                 <dt>配置来源</dt>
                 <dd>{{ settings.source === 'deployment-config' ? '部署配置（尚未在页面保存过）' : `管理端${settings.updatedByName ? ` · ${settings.updatedByName}` : ''} · ${formatDate(settings.updatedAt)}` }}</dd>
               </template>

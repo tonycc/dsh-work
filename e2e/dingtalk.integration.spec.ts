@@ -147,21 +147,21 @@ test.describe('DT-ADM-03 管理员代绑、解绑与钉钉集成页', () => {
 })
 
 test.describe('DT-ADM-04 在钉钉集成页配置钉钉应用', () => {
-  test('部署配置作为初始配置；页面修改参数后立即生效；凭据被钉钉拒绝时不保存', async ({ page }) => {
+  // 会话有效期等四项改在“平台配置”中修改（运行参数配置方案 RP14），钉钉集成页只保存凭据。
+  test('部署配置作为初始配置；页面保存凭据后立即生效；凭据被钉钉拒绝时不保存', async ({ page }) => {
     await adminLogin(page)
     await page.goto(`${adminOrigin}/dingtalk`)
     const config = page.getByRole('region', { name: '应用配置' })
     await expect(config).toContainText('ding-corp-e2e')
     await expect(config).toContainText('部署配置（尚未在页面保存过）')
-    await expect(config).toContainText('每位管理员 50 次')
+    await expect(config).not.toContainText('每日代绑上限')
 
     await config.getByRole('button', { name: '编辑配置' }).click()
     const dialog = page.getByRole('dialog', { name: '编辑钉钉应用配置' })
     await expect(dialog.getByLabel('AppSecret（Client Secret）')).toHaveAttribute('placeholder', /留空不修改/)
-    await dialog.getByLabel('每位管理员每日代绑上限').fill('30')
+    await expect(dialog.getByLabel('每位管理员每日代绑上限')).toHaveCount(0)
     await dialog.getByRole('button', { name: '验证并保存' }).click()
     await expect(dialog).toBeHidden()
-    await expect(config).toContainText('每位管理员 30 次')
     await expect(config).toContainText('管理端 · 陈默')
     await expect(config.getByRole('status')).toContainText('已保存，立即生效')
 
@@ -171,7 +171,7 @@ test.describe('DT-ADM-04 在钉钉集成页配置钉钉应用', () => {
     await expect(dialog.getByRole('alert')).toContainText('钉钉拒绝了这组凭据')
     await dialog.getByRole('button', { name: '取消' }).click()
     await page.reload()
-    await expect(page.getByRole('region', { name: '应用配置' })).toContainText('每位管理员 30 次')
+    await expect(page.getByRole('region', { name: '应用配置' })).toContainText('管理端 · 陈默')
     // 原配置仍然有效：连接检查通过。
     await page.getByRole('region', { name: '应用配置' }).getByRole('button', { name: '重新检查连接' }).click()
     await expect(page.getByRole('region', { name: '应用配置' }).getByRole('status')).toContainText('连接正常')

@@ -3,16 +3,16 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { Search } from '@element-plus/icons-vue'
 
 import { adminApi } from '@/api/client'
-import type { PlatformSetting, RuntimeParameterEntry, RuntimeParameterSource, RuntimeParameters } from '@/types/domain'
+import type { PlatformConfig, PlatformSetting, RuntimeParameterEntry, RuntimeParameterSource } from '@/types/domain'
 
 /**
- * 运行参数（运行参数配置方案 6.4，RP-S1）：“运维设置”修改运维参数（只有平台管理员能保存，RP10）；
- * “参数总览”只读汇总各模块参数的当前值、来源、生效时机与修改位置，以及超时链路。
+ * 平台配置（运行参数配置方案 6.6）：“配置”修改全平台集中的参数，按“平台配置”修改权限保存，
+ * 安全类参数只有平台管理员能保存（RP12、RP16）；“总览”只读汇总全部参数与超时链路。
  */
 type Tab = 'settings' | 'overview'
 
 const tab = ref<Tab>('settings')
-const data = ref<RuntimeParameters>()
+const data = ref<PlatformConfig>()
 const loading = ref(false)
 const error = ref('')
 const savedNotice = ref('')
@@ -27,11 +27,12 @@ const sourceLabels: Record<RuntimeParameterSource, string> = {
   page: '页面配置', default: '默认值', env: '环境变量', builtin: '系统内置', deploy: '部署脚本',
 }
 const groupTitles: Record<RuntimeParameterEntry['group'], string> = {
-  ops: '运维（本页修改）', run: '运行与模型', identity: '身份与钉钉', fixed: '只读：系统内置与启动参数',
+  config: '平台配置（本页修改）', other: '留在原页面', run: '运行与模型（暂不可修改）', identity: '登录（暂不可修改）', fixed: '只读：系统内置与启动参数',
 }
-const moduleLabels: Record<string, string> = { agent: 'Agent', connector: '连接器' }
+const moduleLabels: Record<string, string> = { agent: 'Agent', config: '平台配置', dingtalk: '钉钉集成', knowledge: '企业知识库' }
 
 const canSave = computed(() => data.value?.canSave === true)
+const hasLockedItems = computed(() => (data.value?.settings ?? []).some(setting => setting.available && !setting.canEdit))
 
 function formatValue(setting: Pick<PlatformSetting, 'unit'>, value: number | string) {
   return setting.unit === '%' ? `${value}%` : `${value} ${setting.unit}`
@@ -99,11 +100,11 @@ const settingGroups = computed(() => (data.value?.groups ?? []).map(group => ({
   ...group,
   settings: (data.value?.settings ?? []).filter(setting => setting.group === group.id),
 })))
-const changes = computed(() => (data.value?.settings ?? []).filter(changed))
-const anyInvalid = computed(() => (data.value?.settings ?? []).some(invalid))
+const changes = computed(() => (data.value?.settings ?? []).filter(setting => setting.canEdit && changed(setting)))
+const anyInvalid = computed(() => (data.value?.settings ?? []).some(setting => setting.canEdit && invalid(setting)))
 const risky = computed(() => changes.value.some(setting => risks(setting).length > 0))
 const pendingText = computed(() => {
-  if (!canSave.value) return '只有平台管理员能保存'
+  if (!canSave.value) return '需要“平台配置”修改权限'
   if (anyInvalid.value) return '有数值超出范围，修正后才能保存'
   return changes.value.length ? `有 ${changes.value.length} 项未保存的修改` : '没有未保存的修改'
 })
@@ -130,7 +131,7 @@ const sourceOptions = computed(() => {
 
 function noEditText(entry: RuntimeParameterEntry) {
   if (!entry.owner) return entry.where
-  return entry.owner.kind === 'platform-admin' ? '需要平台管理员' : `需要“${moduleLabels[entry.owner.module]}”修改权限`
+  return entry.owner.kind === 'platform-admin' ? '需要平台管理员' : `需要“${moduleLabels[entry.owner.module] ?? entry.owner.module}”修改权限`
 }
 
 function resetDrafts() {
@@ -141,10 +142,10 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    data.value = await adminApi.getRuntimeParameters()
+    data.value = await adminApi.getPlatformConfig()
     resetDrafts()
   } catch (caught) {
-    error.value = caught instanceof Error ? caught.message : '运行参数加载失败'
+    error.value = caught instanceof Error ? caught.message : '平台配置加载失败'
   } finally {
     loading.value = false
   }
@@ -189,7 +190,7 @@ function moveTab(event: KeyboardEvent) {
   event.preventDefault()
   const next = tabs[(tabs.indexOf(tab.value) + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length]!
   tab.value = next
-  document.getElementById(`runtime-parameters-tab-${next}`)?.focus()
+  document.getElementById(`platform-config-tab-${next}`)?.focus()
 }
 
 function time(value?: string) {
@@ -200,22 +201,23 @@ onMounted(load)
 </script>
 
 <template>
-  <div v-loading="loading" class="ops-page runtime-parameters-page">
+  <div v-loading="loading" class="ops-page platform-config-page">
     <el-alert v-if="error" :title="error" type="error" show-icon @close="error = ''" />
 
-    <div class="status-tabs" role="tablist" aria-label="运行参数视图" @keydown="moveTab">
+    <div class="status-tabs" role="tablist" aria-label="平台配置视图" @keydown="moveTab">
       <button
-        id="runtime-parameters-tab-settings" class="status-tab" :class="{ active: tab === 'settings' }" type="button" role="tab"
-        :aria-selected="tab === 'settings'" aria-controls="runtime-parameters-panel-settings" :tabindex="tab === 'settings' ? 0 : -1" @click="tab = 'settings'"
-      >运维设置</button>
+        id="platform-config-tab-settings" class="status-tab" :class="{ active: tab === 'settings' }" type="button" role="tab"
+        :aria-selected="tab === 'settings'" aria-controls="platform-config-panel-settings" :tabindex="tab === 'settings' ? 0 : -1" @click="tab = 'settings'"
+      >配置</button>
       <button
-        id="runtime-parameters-tab-overview" class="status-tab" :class="{ active: tab === 'overview' }" type="button" role="tab"
-        :aria-selected="tab === 'overview'" aria-controls="runtime-parameters-panel-overview" :tabindex="tab === 'overview' ? 0 : -1" @click="tab = 'overview'"
-      >参数总览</button>
+        id="platform-config-tab-overview" class="status-tab" :class="{ active: tab === 'overview' }" type="button" role="tab"
+        :aria-selected="tab === 'overview'" aria-controls="platform-config-panel-overview" :tabindex="tab === 'overview' ? 0 : -1" @click="tab = 'overview'"
+      >总览</button>
     </div>
 
-    <div v-if="data && tab === 'settings'" id="runtime-parameters-panel-settings" class="runtime-parameters-panel" role="tabpanel" aria-labelledby="runtime-parameters-tab-settings">
-      <el-alert v-if="!canSave" type="info" :closable="false" show-icon title="你可以查看这些参数；只有平台管理员能修改和保存。" />
+    <div v-if="data && tab === 'settings'" id="platform-config-panel-settings" class="platform-config-panel" role="tabpanel" aria-labelledby="platform-config-tab-settings">
+      <el-alert v-if="!canSave" type="info" :closable="false" show-icon title="你可以查看平台配置；修改需要“平台配置”修改权限。" />
+      <el-alert v-else-if="hasLockedItems" type="info" :closable="false" show-icon title="标注“只有平台管理员能保存”的安全类参数不能修改。" />
       <el-alert v-if="savedNotice" type="success" show-icon :title="savedNotice" @close="savedNotice = ''" />
 
       <section v-for="group in settingGroups" :key="group.id" class="content-panel parameter-group" :aria-labelledby="`parameter-group-${group.id}`">
@@ -226,30 +228,34 @@ onMounted(load)
         <div v-for="setting in group.settings" :key="setting.key" class="parameter-row" :class="{ 'is-changed': changed(setting) }">
           <div class="parameter-row__text">
             <label :for="`parameter-${setting.key}`">{{ setting.label }}</label>
+            <span v-if="setting.savePermission === 'platform-admin'" class="parameter-badge">只有平台管理员能保存</span>
             <span>{{ setting.description }}</span>
+            <span v-if="!setting.available && setting.unavailableReason" class="parameter-unavailable">{{ setting.unavailableReason }}</span>
           </div>
           <div class="parameter-row__input">
             <el-input
               :id="`parameter-${setting.key}`"
               v-model="drafts[setting.key]"
-              :disabled="!canSave"
+              :disabled="!setting.canEdit"
               inputmode="numeric"
               :aria-invalid="invalid(setting)"
-              :aria-describedby="warnings(setting).length ? `parameter-warning-${setting.key}` : undefined"
+              :aria-describedby="setting.canEdit && warnings(setting).length ? `parameter-warning-${setting.key}` : undefined"
               @input="savedNotice = ''"
             >
               <template #suffix>{{ setting.unit }}</template>
             </el-input>
           </div>
           <div class="parameter-row__meta">
-            <span>默认 {{ formatValue(setting, setting.defaultValue) }} · 范围 {{ setting.min }}～{{ setting.max }}</span>
+            <span v-if="setting.storage === 'runtime'">范围 {{ setting.min }}～{{ setting.max }}</span>
+            <span v-else>默认 {{ formatValue(setting, setting.defaultValue) }} · 范围 {{ setting.min }}～{{ setting.max }}</span>
             <span>生效：{{ setting.timing }}</span>
             <span v-if="setting.source === 'page'">{{ setting.updatedBy }} 于 {{ time(setting.updatedAt) }} 修改</span>
           </div>
           <div class="parameter-row__actions">
-            <el-button v-if="canSave && (invalid(setting) || parsed(setting) !== setting.defaultValue)" size="small" @click="restoreDefault(setting)">恢复默认</el-button>
+            <!-- Runtime 的容量与超时没有统一的系统默认值，不提供“恢复默认”。 -->
+            <el-button v-if="setting.canEdit && setting.storage !== 'runtime' && (invalid(setting) || parsed(setting) !== setting.defaultValue)" size="small" @click="restoreDefault(setting)">恢复默认</el-button>
           </div>
-          <p v-if="warnings(setting).length" :id="`parameter-warning-${setting.key}`" class="parameter-row__warning" role="note">{{ warnings(setting).join(' ') }}</p>
+          <p v-if="setting.canEdit && warnings(setting).length" :id="`parameter-warning-${setting.key}`" class="parameter-row__warning" role="note">{{ warnings(setting).join(' ') }}</p>
         </div>
       </section>
 
@@ -260,7 +266,7 @@ onMounted(load)
       </div>
     </div>
 
-    <div v-if="data && tab === 'overview'" id="runtime-parameters-panel-overview" class="runtime-parameters-panel" role="tabpanel" aria-labelledby="runtime-parameters-tab-overview">
+    <div v-if="data && tab === 'overview'" id="platform-config-panel-overview" class="platform-config-panel" role="tabpanel" aria-labelledby="platform-config-tab-overview">
       <section class="content-panel" aria-labelledby="timeout-chains-title">
         <header class="parameter-group__header">
           <h2 id="timeout-chains-title">超时链路 · 实际生效</h2>
@@ -300,7 +306,7 @@ onMounted(load)
           <el-table-column prop="timing" label="生效时机" min-width="200" />
           <el-table-column label="修改位置" min-width="200">
             <template #default="{ row }">
-              <a v-if="row.canEdit && row.link === '/runtime-parameters'" href="#" @click.prevent="tab = 'settings'">{{ row.where }} ›</a>
+              <a v-if="row.canEdit && row.link === '/platform-config'" href="#" @click.prevent="tab = 'settings'">{{ row.where }} ›</a>
               <router-link v-else-if="row.canEdit && row.link" :to="row.link">{{ row.where }} ›</router-link>
               <span v-else class="parameter-muted">{{ noEditText(row) }}</span>
             </template>
@@ -311,7 +317,7 @@ onMounted(load)
     </div>
 
     <el-dialog v-model="confirmOpen" :title="`确认保存 ${changes.length} 项修改`" width="560px">
-      <p class="parameter-muted">修改只有平台管理员能保存，并逐项写入审计记录。</p>
+      <p class="parameter-muted">修改按“平台配置”修改权限保存（安全类参数只限平台管理员），并逐项写入审计记录。</p>
       <ul class="parameter-changes" aria-label="待保存的修改">
         <li v-for="setting in changes" :key="setting.key">
           <div class="parameter-changes__line">
@@ -332,7 +338,7 @@ onMounted(load)
 </template>
 
 <style scoped>
-.runtime-parameters-page, .runtime-parameters-panel { display: flex; flex-direction: column; gap: 14px; }
+.platform-config-page, .platform-config-panel { display: flex; flex-direction: column; gap: 14px; }
 .parameter-group { padding: 0; }
 .parameter-group__header { display: flex; flex-direction: column; gap: 2px; padding: 14px 20px; border-bottom: 1px solid var(--color-border); }
 .parameter-group__header h2 { margin: 0; color: var(--color-text-heading); font-size: var(--font-size-title); }
@@ -343,6 +349,8 @@ onMounted(load)
 .parameter-row.is-changed { background: var(--color-primary-light); }
 .parameter-row__text { display: flex; flex: 1 1 320px; flex-direction: column; gap: 3px; min-width: 0; }
 .parameter-row__text label { color: var(--color-text-heading); font-weight: var(--font-weight-title); }
+.parameter-badge { align-self: flex-start; padding: 1px 8px; border-radius: 6px; background: var(--color-bg-subtle); color: var(--color-text-secondary); font-size: var(--font-size-badge); }
+.parameter-row__text .parameter-unavailable { color: var(--color-warning-strong); }
 .parameter-row__text span, .parameter-row__meta { color: var(--color-text-secondary); font-size: var(--font-size-caption); }
 .parameter-row__input { flex: 0 0 132px; }
 .parameter-row__meta { display: flex; flex: 0 0 220px; flex-direction: column; gap: 2px; }

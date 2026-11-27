@@ -239,11 +239,12 @@ const router = createRouter({
       component: () => import('@/views/ErrorRecordsView.vue'),
       meta: { title: '错误记录', subtitle: '员工端、管理端与服务端的错误按问题归并，可按链路编号查到关联运行', requiresAdmin: true, module: 'ops' },
     },
+    { path: '/runtime-parameters', redirect: '/platform-config' },
     {
-      path: '/runtime-parameters',
-      name: 'runtime-parameters',
-      component: () => import('@/views/RuntimeParametersView.vue'),
-      meta: { title: '运行参数', subtitle: '运维参数在这里修改（只有平台管理员能保存）；参数总览汇总各模块参数的当前值、来源与修改位置', requiresAdmin: true, module: 'ops' },
+      path: '/platform-config',
+      name: 'platform-config',
+      component: () => import('@/views/PlatformConfigView.vue'),
+      meta: { title: '平台配置', subtitle: '全平台的运行参数集中在这里修改；安全类参数只有平台管理员能保存', requiresAdmin: true, module: 'config' },
     },
     {
       path: '/health',

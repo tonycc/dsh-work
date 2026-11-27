@@ -87,12 +87,6 @@ export class AdminQueryService {
 
   async updateRuntimeConfiguration(input: UpdateRuntimeConfigurationInput) {
     if (!input.actor.trim()) throw stateConflict('操作人不能为空')
-    if (!Number.isInteger(input.maxConcurrentWorkers) || input.maxConcurrentWorkers < 1 || input.maxConcurrentWorkers > 128) {
-      throw invalidRequest('最大并发 Worker 数必须是 1～128 之间的整数')
-    }
-    if (!Number.isInteger(input.attemptTimeoutMinutes) || input.attemptTimeoutMinutes < 1 || input.attemptTimeoutMinutes > 60) {
-      throw invalidRequest('单次执行超时时间必须是 1～60 分钟之间的整数')
-    }
     if (!['accepting', 'draining', 'disabled'].includes(input.schedulingStatus)) {
       throw invalidRequest('Runtime 调度状态无效')
     }
@@ -106,13 +100,13 @@ export class AdminQueryService {
     const runtimes = await this.repository.read('runtimes')
     const runtime = runtimes.find((item) => item.id === input.runtimeId)
     if (!runtime) throw notFound(`Runtime 不存在：${input.runtimeId}`)
-    if (input.maxConcurrentWorkers < runtime.activeWorkers) {
-      throw stateConflict(`最大并发 Worker 数不能小于当前活动 Worker 数 ${runtime.activeWorkers}`)
+    // 与数据库实现一致：容量与单次执行超时改在“平台配置”中修改，带上不同的值即拒绝。
+    if ((input.maxConcurrentWorkers !== undefined && input.maxConcurrentWorkers !== runtime.maxConcurrentWorkers)
+      || (input.attemptTimeoutMinutes !== undefined && input.attemptTimeoutMinutes !== runtime.attemptTimeoutMinutes)) {
+      throw invalidRequest('Runtime 容量与单次执行超时已改在“平台配置”中修改')
     }
 
     return this.repository.updateRuntime(input.runtimeId, {
-      maxConcurrentWorkers: input.maxConcurrentWorkers,
-      attemptTimeoutMinutes: input.attemptTimeoutMinutes,
       schedulingStatus: input.schedulingStatus,
       ...(disabledTools ? { disabledTools } : {}),
       ...(disabledBuiltinSkills ? { disabledBuiltinSkills } : {}),

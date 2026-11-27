@@ -5,7 +5,7 @@
  * 不再各自写 `admin:*` / `admin:write` 的组合。纯函数，不访问数据库。
  */
 
-export const ADMIN_MODULES = ['agent', 'skill', 'connector', 'model', 'dlp', 'knowledge', 'org', 'identity', 'dingtalk', 'ops'] as const
+export const ADMIN_MODULES = ['agent', 'skill', 'connector', 'model', 'dlp', 'knowledge', 'org', 'identity', 'dingtalk', 'ops', 'config'] as const
 export type AdminModule = typeof ADMIN_MODULES[number]
 export type AdminLevel = 'read' | 'write'
 
@@ -29,6 +29,7 @@ export const ADMIN_MODULE_LABELS: Record<AdminModule, string> = {
   identity: '员工与权限',
   dingtalk: '钉钉集成',
   ops: '运营',
+  config: '平台配置',
 }
 
 export function adminModulePermission(module: AdminModule, level: AdminLevel) {
@@ -234,9 +235,9 @@ const ROUTE_SEGMENT_RULES: Record<string, AdminRouteRule> = {
   // 系统健康（含知识库检索、执行容器等组件状态）供各模块页面提示可用性，任一模块管理员可读。
   health: { kind: 'any-admin-read' },
   'platform-status': { kind: 'module', module: 'ops' },
-  // 运行参数（运行参数配置方案 RP8、RP10）：总览按运维查看；保存只限平台管理员（登记表中的键全部为平台管理员保存）。
-  'runtime-parameters': { kind: 'module', module: 'ops' },
-  'platform-settings': { kind: 'module', module: 'ops', writePlatformOnly: true },
+  // 平台配置（运行参数配置方案 RP12）：查看与保存按“平台配置”模块；安全类参数由服务层在事务内逐项复核平台管理员（RP16）。
+  'platform-config': { kind: 'module', module: 'config' },
+  'platform-settings': { kind: 'module', module: 'config' },
   'audit-events': { kind: 'audit' },
   operations: { kind: 'audit' },
   identity: { kind: 'module', module: 'identity' },
@@ -330,7 +331,7 @@ export function decideAdminRouteAccess(permissions: Iterable<string>, path: stri
     case 'module': {
       // 平台管理员专属的保存（钉钉应用配置、运行参数）先于只读模块判定：只读模块的这类保存仍只限平台管理员。
       if (write && rule.writePlatformOnly) {
-        return isPlatformAdmin(granted) ? ALLOW : { allowed: false, message: rule.module === 'ops' ? '运行参数只有平台管理员可以修改' : `${ADMIN_MODULE_LABELS[rule.module]}的应用配置只有平台管理员可以修改` }
+        return isPlatformAdmin(granted) ? ALLOW : { allowed: false, message: `${ADMIN_MODULE_LABELS[rule.module]}的应用配置只有平台管理员可以修改` }
       }
       if (write && READ_ONLY_MODULES.has(rule.module)) return { allowed: false, message: `${ADMIN_MODULE_LABELS[rule.module]}只提供查看` }
       const level: AdminLevel = write ? 'write' : 'read'

@@ -156,11 +156,13 @@ test('delegated high-risk Agent and Runtime actions still require both confirmat
   await finish(manifest); await service.confirmAction(actor, plan.id, plan.planSha256)
   assert.notEqual((await agents.getMutationSnapshot(agent.id)).agent.systemPrompt, agent.systemPrompt)
   const runtimeManifest = await delegated('admin-platform-operations')
-  await assert.rejects(prepare(runtimeManifest, 'runtime-local-01', { maxConcurrentWorkers: 200 }, 'runtime-update-configuration'), /maxConcurrentWorkers 必须是 1～128/)
-  const runtimePlan = await prepare(runtimeManifest, 'runtime-local-01', { maxConcurrentWorkers: 3, schedulingStatus: 'draining' }, 'runtime-update-configuration')
+  // 运行参数配置方案 6.6.4：容量与单次执行超时改在“平台配置”中修改，平台运维计划只改调度状态与停用工具。
+  await assert.rejects(prepare(runtimeManifest, 'runtime-local-01', { maxConcurrentWorkers: 3 }, 'runtime-update-configuration'), /平台配置/)
+  const [capacityBefore] = await db.client<{ capacity: number }[]>`select capacity from runtimes where id = 'runtime-local-01'`
+  const runtimePlan = await prepare(runtimeManifest, 'runtime-local-01', { schedulingStatus: 'draining' }, 'runtime-update-configuration')
   await finish(runtimeManifest); await service.confirmAction(actor, runtimePlan.id, runtimePlan.planSha256)
-  const [runtime] = await db.client<{ n: number }[]>`select concurrency_limit as n from runtime_configurations order by revision desc limit 1`
-  assert.equal(runtime?.n, 3)
+  const [runtime] = await db.client<{ status: string; capacity: number }[]>`select scheduling_status as status, capacity from runtimes where id = 'runtime-local-01'`
+  assert.deepEqual({ status: runtime?.status, capacity: runtime?.capacity }, { status: 'draining', capacity: capacityBefore?.capacity })
 })
 
 test('cancelled plans, stale state, digest tampering, new attempts and other users never write', async () => {

@@ -355,10 +355,9 @@ export interface BuiltinToolStatus {
   }
 }
 
+/** Runtime 运行操作；容量与单次执行超时改在“平台配置”中修改（运行参数配置方案 RP14）。 */
 export interface UpdateRuntimeConfigurationInput {
   runtimeId: string
-  maxConcurrentWorkers: number
-  attemptTimeoutMinutes: number
   schedulingStatus: RuntimeDefinition['schedulingStatus']
   /** 省略时保留当前停用清单。 */
   disabledTools?: string[]
@@ -1209,15 +1208,12 @@ export interface DingTalkSettings {
   updatedByName: string | null
 }
 
+/** 钉钉应用凭据；会话有效期等四项改在“平台配置”中修改（运行参数配置方案 RP14），保存时不再提交。 */
 export interface DingTalkSettingsInput {
   corpId: string
   agentId: string
   appKey: string
   appSecret?: string
-  sessionTtlSeconds: number
-  bindingTicketTtlSeconds: number
-  adminDailyBindLimit: number
-  timeoutMs: number
 }
 
 /** 错误记录（错误记录方案 6.5，OBS-S1），与 Admin OpenAPI 的 error-records 接口对应。 */
@@ -1341,11 +1337,20 @@ export interface UsagePersonDetail extends UsagePerson {
   entries: Array<{ entry: UsageEntry; runs: number }>
 }
 
-/** 运行参数（运行参数配置方案 RP-S1）：登记表中的运维参数，键与范围以服务端为准。 */
-export type PlatformSettingGroup = 'disk' | 'run' | 'retention'
+/** 平台配置（运行参数配置方案 6.6）：登记表中的参数，键、范围与保存权限以服务端为准。 */
+export type PlatformSettingGroup = 'disk' | 'run' | 'retention' | 'runtime' | 'login'
 
 export interface PlatformSetting {
   key: string
+  storage: 'platform' | 'runtime' | 'dingtalk'
+  /** `platform-admin`：只有平台管理员能保存（安全类）；`config`：平台配置修改权限。 */
+  savePermission: 'platform-admin' | 'config'
+  /** 乐观锁分组：同一组的多项一起提交同一个版本号。 */
+  versionKey: string
+  available: boolean
+  unavailableReason?: string
+  /** 当前管理员能否修改（服务端按权限计算，只用于展示）。 */
+  canEdit: boolean
   group: PlatformSettingGroup
   label: string
   description: string
@@ -1368,14 +1373,14 @@ export type RuntimeParameterSource = 'page' | 'default' | 'env' | 'builtin' | 'd
 
 export interface RuntimeParameterEntry {
   id: string
-  group: 'ops' | 'run' | 'identity' | 'fixed'
+  group: 'config' | 'run' | 'identity' | 'other' | 'fixed'
   name: string
   value: string
   source: RuntimeParameterSource
   timing: string
   where: string
   link?: string
-  owner: { kind: 'platform-admin' } | { kind: 'module'; module: 'agent' | 'connector' } | null
+  owner: { kind: 'platform-admin' } | { kind: 'module'; module: 'agent' | 'config' | 'dingtalk' | 'knowledge' } | null
   canEdit: boolean
 }
 
@@ -1388,7 +1393,7 @@ export interface TimeoutChain {
   warning?: string
 }
 
-export interface RuntimeParameters {
+export interface PlatformConfig {
   groups: Array<{ id: PlatformSettingGroup; title: string; description: string }>
   settings: PlatformSetting[]
   canSave: boolean

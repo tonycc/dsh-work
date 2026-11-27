@@ -3,9 +3,9 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter } from 'vue-router'
 
-import RuntimeParametersView from './RuntimeParametersView.vue'
+import PlatformConfigView from './PlatformConfigView.vue'
 import { adminApi } from '../api/client'
-import type { PlatformSetting, RuntimeParameters } from '../types/domain'
+import type { PlatformConfig, PlatformSetting } from '../types/domain'
 
 const wrappers: VueWrapper[] = []
 
@@ -17,12 +17,13 @@ afterEach(() => {
 
 function setting(key: string, label: string, overrides: Partial<PlatformSetting> = {}): PlatformSetting {
   return {
-    key, group: 'disk', label, description: '', unit: 'GB', value: 10, defaultValue: 10, min: 2, max: 500,
+    key, storage: 'platform', savePermission: 'config', versionKey: `platform:${key}`, available: true, canEdit: true,
+    group: 'disk', label, description: '', unit: 'GB', value: 10, defaultValue: 10, min: 2, max: 500,
     timing: '立即（包括正在运行的命令）', source: 'default', revision: 0, ...overrides,
   }
 }
 
-function parameters(overrides: Partial<RuntimeParameters> = {}): RuntimeParameters {
+function parameters(overrides: Partial<PlatformConfig> = {}): PlatformConfig {
   return {
     groups: [{ id: 'disk', title: '磁盘与工作区', description: '' }, { id: 'retention', title: '数据保留', description: '' }],
     settings: [
@@ -44,7 +45,7 @@ function parameters(overrides: Partial<RuntimeParameters> = {}): RuntimeParamete
 
 async function mountView() {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { template: '<div />' } }] })
-  const wrapper = mount(RuntimeParametersView, { attachTo: document.body, global: { plugins: [ElementPlus, router], stubs: { teleport: true } } })
+  const wrapper = mount(PlatformConfigView, { attachTo: document.body, global: { plugins: [ElementPlus, router], stubs: { teleport: true } } })
   wrappers.push(wrapper)
   await flushPromises()
   return wrapper
@@ -60,9 +61,9 @@ function button(wrapper: VueWrapper, label: string) {
   return found
 }
 
-describe('RuntimeParametersView', () => {
+describe('PlatformConfigView', () => {
   it('keeps the failure message after a rejected save and reloads the latest values (PR #178 I1)', async () => {
-    const load = vi.spyOn(adminApi, 'getRuntimeParameters').mockResolvedValue(parameters())
+    const load = vi.spyOn(adminApi, 'getPlatformConfig').mockResolvedValue(parameters())
     vi.spyOn(adminApi, 'savePlatformSettings').mockRejectedValue(new Error('“站内通知保留天数”已被其他管理员修改，请刷新后重试'))
     const wrapper = await mountView()
 
@@ -80,7 +81,7 @@ describe('RuntimeParametersView', () => {
   })
 
   it('asks for confirmation when raising the disk threshold and warns when it exceeds the current free space (I4)', async () => {
-    vi.spyOn(adminApi, 'getRuntimeParameters').mockResolvedValue(parameters())
+    vi.spyOn(adminApi, 'getPlatformConfig').mockResolvedValue(parameters())
     const save = vi.spyOn(adminApi, 'savePlatformSettings').mockResolvedValue({ settings: [] })
     const wrapper = await mountView()
     expect(wrapper.text()).toContain('当前数据盘剩余 120 GB，共 500 GB（24%）')
@@ -100,7 +101,7 @@ describe('RuntimeParametersView', () => {
   })
 
   it('treats the same number written differently as unchanged and warns about raising notification retention', async () => {
-    vi.spyOn(adminApi, 'getRuntimeParameters').mockResolvedValue(parameters())
+    vi.spyOn(adminApi, 'getPlatformConfig').mockResolvedValue(parameters())
     const wrapper = await mountView()
     await type(wrapper, 'disk.min_free_gb', '010')
     expect(wrapper.text()).toContain('没有未保存的修改')
@@ -112,13 +113,43 @@ describe('RuntimeParametersView', () => {
   })
 
   it('switches tabs with the arrow keys and links each tab to its panel', async () => {
-    vi.spyOn(adminApi, 'getRuntimeParameters').mockResolvedValue(parameters())
+    vi.spyOn(adminApi, 'getPlatformConfig').mockResolvedValue(parameters())
     const wrapper = await mountView()
-    const settingsTab = wrapper.get('#runtime-parameters-tab-settings')
-    expect(settingsTab.attributes('aria-controls')).toBe('runtime-parameters-panel-settings')
-    expect(wrapper.get('[role="tabpanel"]').attributes('aria-labelledby')).toBe('runtime-parameters-tab-settings')
+    const settingsTab = wrapper.get('#platform-config-tab-settings')
+    expect(settingsTab.attributes('aria-controls')).toBe('platform-config-panel-settings')
+    expect(wrapper.get('[role="tabpanel"]').attributes('aria-labelledby')).toBe('platform-config-tab-settings')
     await settingsTab.trigger('keydown', { key: 'ArrowRight' })
-    expect(wrapper.get('#runtime-parameters-tab-overview').attributes('aria-selected')).toBe('true')
-    expect(wrapper.get('[role="tabpanel"]').attributes('id')).toBe('runtime-parameters-panel-overview')
+    expect(wrapper.get('#platform-config-tab-overview').attributes('aria-selected')).toBe('true')
+    expect(wrapper.get('[role="tabpanel"]').attributes('id')).toBe('platform-config-panel-overview')
+  })
+
+  it('locks safety items for a platform config administrator and still saves the rest (RP12, RP16)', async () => {
+    const config = parameters()
+    config.settings.push(setting('dingtalk.session_ttl_hours', '钉钉会话有效期', {
+      group: 'login', storage: 'dingtalk', savePermission: 'platform-admin', versionKey: 'dingtalk', canEdit: false,
+      unit: '小时', value: 12, defaultValue: 12, min: 1, max: 720, revision: 3,
+    }))
+    config.groups.push({ id: 'login', title: '登录与钉钉', description: '' })
+    vi.spyOn(adminApi, 'getPlatformConfig').mockResolvedValue(config)
+    const save = vi.spyOn(adminApi, 'savePlatformSettings').mockResolvedValue({ settings: [] })
+    const wrapper = await mountView()
+    expect(wrapper.text()).toContain('标注“只有平台管理员能保存”的安全类参数不能修改。')
+    expect(wrapper.text()).toContain('只有平台管理员能保存')
+    expect(wrapper.get('#parameter-dingtalk\\.session_ttl_hours').attributes('disabled')).toBeDefined()
+    await type(wrapper, 'disk.min_free_percent', '12')
+    await button(wrapper, '保存').trigger('click')
+    await flushPromises()
+    await button(wrapper, '确认保存').trigger('click')
+    await flushPromises()
+    expect(save).toHaveBeenCalledWith([{ key: 'disk.min_free_percent', value: 12, revision: 0 }])
+  })
+
+  it('tells a viewer that changes need the platform config permission', async () => {
+    const config = parameters({ canSave: false })
+    config.settings = config.settings.map(item => ({ ...item, canEdit: false }))
+    vi.spyOn(adminApi, 'getPlatformConfig').mockResolvedValue(config)
+    const wrapper = await mountView()
+    expect(wrapper.text()).toContain('你可以查看平台配置；修改需要“平台配置”修改权限。')
+    expect(wrapper.text()).toContain('需要“平台配置”修改权限')
   })
 })

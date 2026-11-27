@@ -147,6 +147,10 @@ export class PostgresOperationsService {
     return snapshot
   }
 
+  /**
+   * Runtimes 页与管理助手的运行操作：调度状态、停用工具与停用内置 Skill。容量与单次执行超时已改在“平台配置”中修改
+   * （运行参数配置方案 RP11、6.6.5）：带上与当前不同的值即拒绝（与当前相同时忽略，兼容旧客户端），写新修订时原样保留当前值。
+   */
   async updateRuntimeConfiguration(input: UpdateRuntimeConfigurationInput, expected?: RuntimeMutationSnapshot) {
     const actor = await this.requireConnectorAdmin(input.actor)
     assertRuntimeConfiguration(input)
@@ -167,6 +171,10 @@ export class PostgresOperationsService {
         if (expected && !sameRuntimeMutationSnapshot(runtime, expected)) {
           throw stateConflict('Runtime 状态已变化，请重新生成操作计划')
         }
+        if ((input.maxConcurrentWorkers !== undefined && input.maxConcurrentWorkers !== runtime.maxConcurrentWorkers)
+          || (input.attemptTimeoutMinutes !== undefined && input.attemptTimeoutMinutes !== runtime.attemptTimeoutMinutes)) {
+          throw invalidRequest('Runtime 容量与单次执行超时已改在“平台配置”中修改')
+        }
 
         if (input.schedulingStatus === 'accepting') {
           const health = await this.runtime?.health()
@@ -175,20 +183,13 @@ export class PostgresOperationsService {
           }
         }
 
-        const [active] = await transaction<{ count: number }[]>`
-          select count(*)::integer as count from run_attempts
-           where tenant_id = ${tenantId} and runtime_id = ${input.runtimeId} and status = 'running'
-        `
-        if (input.maxConcurrentWorkers < (active?.count ?? 0)) {
-          throw stateConflict('最大并发数不能小于当前活动 Worker 数')
-        }
-
+        const timeoutSeconds = await currentRuntimeTimeoutSeconds(transaction, input.runtimeId)
         await transaction`
           insert into runtime_configurations (
             tenant_id, runtime_id, revision, concurrency_limit, timeout_seconds, sandbox_policy, disabled_tools,
             disabled_builtin_skills, updated_by
           ) select ${tenantId}, ${input.runtimeId}, coalesce(max(revision), 0) + 1,
-                   ${input.maxConcurrentWorkers}, ${input.attemptTimeoutMinutes * 60},
+                   ${runtime.maxConcurrentWorkers}, ${timeoutSeconds},
                    '{"network":"deny","write":"workspace_only","approval":"risk_based"}',
                    ${transaction.json(disabledTools ?? runtime.disabledTools)},
                    ${transaction.json(disabledBuiltinSkills ?? runtime.disabledBuiltinSkills ?? [])}, ${actor.id}
@@ -196,8 +197,7 @@ export class PostgresOperationsService {
            where tenant_id = ${tenantId} and runtime_id = ${input.runtimeId}
         `
         const updated = await transaction`
-          update runtimes set capacity = ${input.maxConcurrentWorkers},
-                              scheduling_status = ${input.schedulingStatus}
+          update runtimes set scheduling_status = ${input.schedulingStatus}
            where tenant_id = ${tenantId} and id = ${input.runtimeId}
            returning id
         `
@@ -215,7 +215,7 @@ export class PostgresOperationsService {
       }
       throw error
     }
-    await this.appendAudit(actor.id, 'runtime.configuration.update', input.runtimeId, 'success', `trace-runtime-${input.runtimeId}`, `${input.schedulingStatus} · 并发 ${input.maxConcurrentWorkers} · 超时 ${input.attemptTimeoutMinutes} 分钟 · 停用工具 ${(disabledTools ?? []).join('、') || '无'}${disabledBuiltinSkills ? ` · 停用内置 Skill ${disabledBuiltinSkills.join('、') || '无'}` : ''}`)
+    await this.appendAudit(actor.id, 'runtime.configuration.update', input.runtimeId, 'success', `trace-runtime-${input.runtimeId}`, `${input.schedulingStatus} · 停用工具 ${(disabledTools ?? []).join('、') || '无'}${disabledBuiltinSkills ? ` · 停用内置 Skill ${disabledBuiltinSkills.join('、') || '无'}` : ''}`)
     return (await this.getRuntimes()).find((runtime) => runtime.id === input.runtimeId)
   }
 
@@ -700,20 +700,71 @@ function sameRuntimeMutationSnapshot(left: RuntimeMutationSnapshot, right: Runti
     && left.revision === right.revision
 }
 
-/** Runtime 配置的正式边界；管理助手预校验与本服务共用（运行参数配置方案 4.4）。 */
-export const RUNTIME_CONFIGURATION_BOUNDS = {
-  maxConcurrentWorkers: { min: 1, max: 128 },
-  attemptTimeoutMinutes: { min: 1, max: 60 },
-} as const
+async function currentRuntimeTimeoutSeconds(transaction: DatabaseTransaction, runtimeId: string) {
+  const [row] = await transaction<{ timeoutSeconds: number }[]>`
+    select coalesce((select timeout_seconds from runtime_configurations
+                      where tenant_id = ${tenantId} and runtime_id = ${runtimeId}
+                      order by revision desc limit 1), 300)::integer as "timeoutSeconds"
+  `
+  return row?.timeoutSeconds ?? 300
+}
+
+/**
+ * 平台配置写入 Runtime 容量与单次执行超时（运行参数配置方案 6.6.2）：调用方已在同一事务内判定“平台配置”修改权限。
+ * 锁住 `runtimes` 行，比对配置修订号（容量与超时作为一组），容量不小于当前活动 Worker 数；同时更新 `runtimes.capacity`
+ * （调度读取的值）并以最新修订为基础新建一条修订，调度状态、停用工具与停用内置 Skill 原样复制；不切换调度，离线也能修改。
+ */
+export async function writeRuntimeCapacityAndTimeout(transaction: DatabaseTransaction, input: {
+  runtimeId: string
+  capacity?: number
+  timeoutSeconds?: number
+  expectedRevision: number
+  actorId: string
+}): Promise<{ changed: boolean }> {
+  const [current] = await transaction<{ capacity: number; revision: number; timeoutSeconds: number }[]>`
+    select r.capacity, coalesce(c.revision, 0)::integer as revision, coalesce(c.timeout_seconds, 300)::integer as "timeoutSeconds"
+      from runtimes r
+      left join lateral (
+        select revision, timeout_seconds from runtime_configurations
+         where tenant_id = r.tenant_id and runtime_id = r.id order by revision desc limit 1
+      ) c on true
+     where r.tenant_id = ${tenantId} and r.id = ${input.runtimeId}
+     for update of r
+  `
+  if (!current) throw notFound(`Runtime 不存在：${input.runtimeId}`)
+  if (current.revision !== input.expectedRevision) throw stateConflict('Runtime 配置已被其他管理员修改，请刷新后重试')
+  const capacity = input.capacity ?? current.capacity
+  const timeoutSeconds = input.timeoutSeconds ?? current.timeoutSeconds
+  if (capacity === current.capacity && timeoutSeconds === current.timeoutSeconds) return { changed: false }
+  const [active] = await transaction<{ count: number }[]>`
+    select count(*)::integer as count from run_attempts
+     where tenant_id = ${tenantId} and runtime_id = ${input.runtimeId} and status = 'running'
+  `
+  if (capacity < (active?.count ?? 0)) throw stateConflict(`Runtime 容量不能小于当前活动 Worker 数 ${active?.count ?? 0}`)
+  await transaction`
+    insert into runtime_configurations (
+      tenant_id, runtime_id, revision, concurrency_limit, timeout_seconds, sandbox_policy, disabled_tools,
+      disabled_builtin_skills, updated_by
+    ) select ${tenantId}, ${input.runtimeId}, ${current.revision + 1}, ${capacity}, ${timeoutSeconds},
+             coalesce(latest.sandbox_policy, '{"network":"deny","write":"workspace_only","approval":"risk_based"}'::jsonb),
+             coalesce(latest.disabled_tools, '[]'::jsonb), coalesce(latest.disabled_builtin_skills, '[]'::jsonb), ${input.actorId}
+        from (select 1) one
+        left join lateral (
+          select sandbox_policy, disabled_tools, disabled_builtin_skills from runtime_configurations
+           where tenant_id = ${tenantId} and runtime_id = ${input.runtimeId} order by revision desc limit 1
+        ) latest on true
+  `
+  await transaction`update runtimes set capacity = ${capacity} where tenant_id = ${tenantId} and id = ${input.runtimeId}`
+  await transaction`
+    insert into audit_events (id, tenant_id, actor_type, actor_id, action, object_type, object_id, result, trace_id, safe_context)
+    values (${`audit-${randomUUID()}`}, ${tenantId}, 'user', ${input.actorId}, 'runtime.capacity.update', 'runtime', ${input.runtimeId},
+      'success', ${`trace-runtime-${input.runtimeId}`},
+      ${transaction.json({ capacity: `${current.capacity} → ${capacity}`, timeoutSeconds: `${current.timeoutSeconds} → ${timeoutSeconds}`, via: 'platform-config' })})
+  `
+  return { changed: true }
+}
 
 function assertRuntimeConfiguration(input: UpdateRuntimeConfigurationInput) {
-  const { maxConcurrentWorkers: workers, attemptTimeoutMinutes: timeout } = RUNTIME_CONFIGURATION_BOUNDS
-  if (!Number.isInteger(input.maxConcurrentWorkers) || input.maxConcurrentWorkers < workers.min || input.maxConcurrentWorkers > workers.max) {
-    throw invalidRequest(`最大并发 Worker 数必须是 ${workers.min}～${workers.max} 之间的整数`)
-  }
-  if (!Number.isInteger(input.attemptTimeoutMinutes) || input.attemptTimeoutMinutes < timeout.min || input.attemptTimeoutMinutes > timeout.max) {
-    throw invalidRequest(`单次执行超时时间必须是 ${timeout.min}～${timeout.max} 分钟之间的整数`)
-  }
   if (!['accepting', 'draining', 'disabled'].includes(input.schedulingStatus)) {
     throw invalidRequest('Runtime 调度状态无效')
   }

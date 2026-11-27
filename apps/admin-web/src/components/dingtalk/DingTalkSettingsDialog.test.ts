@@ -19,17 +19,16 @@ function mountDialog(settings: DingTalkSettings) {
 afterEach(() => vi.restoreAllMocks())
 
 describe('钉钉应用配置对话框', () => {
-  it('keeps the saved AppSecret when left blank and converts units', async () => {
+  it('keeps the saved AppSecret when left blank and sends only the credentials (RP14)', async () => {
     const save = vi.spyOn(adminApi, 'saveDingTalkSettings').mockResolvedValue(configured)
     const wrapper = mountDialog(configured)
     await flushPromises()
     expect((wrapper.get('#dingtalk-app-secret').element as HTMLInputElement).placeholder).toBe('已保存（尾号 0001），留空不修改')
     await wrapper.findAll('button').find(button => button.text() === '验证并保存')!.trigger('click')
     await flushPromises()
-    expect(save).toHaveBeenCalledWith({
-      corpId: 'ding-corp', agentId: '3189', appKey: 'app-key',
-      sessionTtlSeconds: 43200, bindingTicketTtlSeconds: 300, adminDailyBindLimit: 50, timeoutMs: 10000,
-    })
+    expect(save).toHaveBeenCalledWith({ corpId: 'ding-corp', agentId: '3189', appKey: 'app-key' })
+    expect(wrapper.text()).not.toContain('钉钉会话有效期')
+    expect(wrapper.text()).not.toContain('代绑上限')
     expect(wrapper.emitted('saved')).toHaveLength(1)
   })
 
@@ -55,14 +54,6 @@ describe('钉钉应用配置对话框', () => {
     expect((wrapper.get('#dingtalk-app-secret').element as HTMLInputElement).disabled).toBe(true)
   })
 
-  it('keeps exact seconds for fields that were not changed', async () => {
-    const save = vi.spyOn(adminApi, 'saveDingTalkSettings').mockResolvedValue(configured)
-    const wrapper = mountDialog({ ...configured, sessionTtlSeconds: 1800, bindingTicketTtlSeconds: 90 })
-    await flushPromises()
-    await wrapper.findAll('button').find(button => button.text() === '验证并保存')!.trigger('click')
-    await flushPromises()
-    expect(save).toHaveBeenCalledWith(expect.objectContaining({ sessionTtlSeconds: 1800, bindingTicketTtlSeconds: 90 }))
-  })
 
   it('asks before switching to another DingTalk corp and does not save when cancelled', async () => {
     const save = vi.spyOn(adminApi, 'saveDingTalkSettings').mockResolvedValue(configured)

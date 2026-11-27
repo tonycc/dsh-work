@@ -620,7 +620,7 @@ test('项目任务管理开关随草稿保存与省略保留；不进入默认 r
 test('Runtime 停用的内置工具不进入新 Attempt，执行中的 Attempt 不因停用而失败', async () => {
   const runtime = (await operations.getRuntimes()).find(item => item.id === 'runtime-local-01')!
   const configure = (disabledTools: string[]) => operations.updateRuntimeConfiguration({
-    runtimeId: runtime.id, maxConcurrentWorkers: 4, attemptTimeoutMinutes: runtime.attemptTimeoutMinutes,
+    runtimeId: runtime.id,
     schedulingStatus: 'accepting', disabledTools, actor: ADMIN,
   })
   await assert.rejects(configure(['activate_skill']), /只能停用 DSH 内置工具/)

@@ -3,20 +3,44 @@ import test from 'node:test'
 
 import {
   PLATFORM_SETTING_DEFINITIONS,
+  DINGTALK_PARAMETER_DEFINITIONS,
   defaultPlatformSettings,
   diskThresholds,
+  parseRuntimeSettingKey,
+  runtimeSettingDefinitions,
+  toPageValue,
   parsePlatformSettingChanges,
   platformSettingsFromValues,
   validatePlatformSettingValue,
 } from './platform-settings.ts'
 
-test('registry: every runtime parameter is an ops setting saved only by platform admins, default within range (RP10)', () => {
+test('registry: ops parameters are stored in platform_settings and saved with the platform config permission (RP12)', () => {
   assert.equal(new Set(PLATFORM_SETTING_DEFINITIONS.map(item => item.key)).size, PLATFORM_SETTING_DEFINITIONS.length)
-  for (const definition of PLATFORM_SETTING_DEFINITIONS) {
-    assert.equal(definition.module, 'ops')
-    assert.equal(definition.savePermission, 'platform-admin')
+  for (const definition of [...PLATFORM_SETTING_DEFINITIONS, ...DINGTALK_PARAMETER_DEFINITIONS]) {
     assert.ok(definition.min <= definition.defaultValue && definition.defaultValue <= definition.max, definition.key)
   }
+  assert.ok(PLATFORM_SETTING_DEFINITIONS.every(item => item.storage === 'platform' && item.savePermission === 'config'))
+})
+
+test('registry: DingTalk lifetimes and the daily bind limit are platform-admin only; the API timeout is config (RP16)', () => {
+  const permission = Object.fromEntries(DINGTALK_PARAMETER_DEFINITIONS.map(item => [item.key, item.savePermission]))
+  assert.deepEqual(permission, {
+    'dingtalk.session_ttl_hours': 'platform-admin',
+    'dingtalk.binding_ticket_ttl_minutes': 'platform-admin',
+    'dingtalk.admin_daily_bind_limit': 'platform-admin',
+    'dingtalk.timeout_seconds': 'config',
+  })
+})
+
+test('runtime keys carry the Runtime ID; timeouts convert between minutes and stored seconds', () => {
+  assert.deepEqual(parseRuntimeSettingKey('runtime.runtime-local-01.capacity'), { runtimeId: 'runtime-local-01', field: 'capacity' })
+  assert.deepEqual(parseRuntimeSettingKey('runtime.r1.timeout_minutes'), { runtimeId: 'r1', field: 'timeout_minutes' })
+  assert.equal(parseRuntimeSettingKey('runtime.r1.other'), null)
+  assert.equal(parseRuntimeSettingKey('runtime..capacity'), null)
+  const [capacity, timeout] = runtimeSettingDefinitions({ id: 'r1', name: '本机' })
+  assert.deepEqual([capacity!.min, capacity!.max, timeout!.min, timeout!.max], [1, 128, 1, 60])
+  assert.equal(toPageValue(timeout!, 300), 5)
+  assert.equal(toPageValue(timeout!, 90), 2, 'seconds that are not whole minutes round up')
 })
 
 test('registry: retention lower bounds keep the 90-day views complete (RP6)', () => {

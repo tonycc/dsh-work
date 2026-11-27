@@ -2,7 +2,7 @@
  * 管理端模块（功能规则第 13 节）的前端展示用清单。
  * 服务端逐请求校验权限；这里只决定菜单、路由入口、按钮是否可用和提示文案。
  */
-export const ADMIN_MODULES = ['agent', 'skill', 'connector', 'model', 'dlp', 'knowledge', 'org', 'identity', 'dingtalk', 'ops'] as const
+export const ADMIN_MODULES = ['agent', 'skill', 'connector', 'model', 'dlp', 'knowledge', 'org', 'identity', 'dingtalk', 'ops', 'config'] as const
 export type AdminModule = typeof ADMIN_MODULES[number]
 export type AdminModuleLevel = 'none' | 'read' | 'write'
 export type AdminModuleLevels = Record<AdminModule, AdminModuleLevel>
@@ -21,6 +21,7 @@ export const ADMIN_MODULE_LABELS: Record<AdminModule, string> = {
   identity: '员工与权限',
   dingtalk: '钉钉集成',
   ops: '运营',
+  config: '平台配置',
 }
 
 export const ADMIN_MODULE_DESCRIPTIONS: Record<AdminModule, string> = {
@@ -34,6 +35,7 @@ export const ADMIN_MODULE_DESCRIPTIONS: Record<AdminModule, string> = {
   identity: '员工、角色、数据范围、独立账号',
   dingtalk: '绑定、提醒、离职检查；应用配置仅平台管理员',
   ops: '运营概览、Session、工作空间',
+  config: '平台配置：运行参数、Runtime 容量与超时、钉钉参数；安全类参数仅平台管理员',
 }
 
 /** 只有查看级别的模块。 */

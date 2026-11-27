@@ -13,9 +13,9 @@ const props = defineProps<{ settings: DingTalkSettings }>()
 const open = defineModel<boolean>({ required: true })
 const emit = defineEmits<{ saved: [DingTalkSettings] }>()
 
+// 会话有效期、待绑定凭证有效期、每日代绑上限与接口超时改在“平台配置”中修改（运行参数配置方案 RP14），这里只编辑凭据。
 const form = reactive({
   corpId: '', agentId: '', appKey: '', appSecret: '',
-  sessionHours: 12, ticketMinutes: 5, dailyLimit: 50, timeoutSeconds: 10,
 })
 const saving = ref(false)
 const error = ref('')
@@ -25,16 +25,9 @@ watch(open, value => {
   const settings = props.settings
   Object.assign(form, {
     corpId: settings.corpId ?? '', agentId: settings.agentId ?? '', appKey: settings.appKey ?? '', appSecret: '',
-    sessionHours: Math.round(settings.sessionTtlSeconds / 3600), ticketMinutes: Math.round(settings.bindingTicketTtlSeconds / 60),
-    dailyLimit: settings.adminDailyBindLimit, timeoutSeconds: Math.round(settings.timeoutMs / 1000),
   })
   error.value = ''
 }, { immediate: true })
-
-/** 没改的字段原样提交原值，避免按小时、分钟取整后悄悄改变（例如 30 分钟的会话被存成 1 小时）。 */
-function keepOrConvert(value: number, unit: number, original: number) {
-  return value === Math.round(original / unit) ? original : value * unit
-}
 
 function secretPlaceholder() {
   if (!props.settings.configured) return '首次配置须填写'
@@ -59,9 +52,6 @@ async function save() {
     const saved = await adminApi.saveDingTalkSettings({
       corpId: form.corpId.trim(), agentId: form.agentId.trim(), appKey: form.appKey.trim(),
       ...(form.appSecret.trim() ? { appSecret: form.appSecret.trim() } : {}),
-      sessionTtlSeconds: keepOrConvert(form.sessionHours, 3600, props.settings.sessionTtlSeconds),
-      bindingTicketTtlSeconds: keepOrConvert(form.ticketMinutes, 60, props.settings.bindingTicketTtlSeconds),
-      adminDailyBindLimit: form.dailyLimit, timeoutMs: keepOrConvert(form.timeoutSeconds, 1000, props.settings.timeoutMs),
     })
     form.appSecret = ''
     open.value = false
@@ -93,21 +83,6 @@ async function save() {
         <el-input id="dingtalk-app-secret" v-model="form.appSecret" type="password" show-password autocomplete="new-password" :maxlength="512" :placeholder="secretPlaceholder()" :disabled="saving || !settings.canStoreSecret" />
         <p class="dingtalk-settings-form__hint">加密保存，保存后不再显示。更换 CorpId 或 AppKey 时须重新填写。</p>
       </el-form-item>
-      <div class="dingtalk-settings-form__grid">
-        <el-form-item label="钉钉会话有效期（小时）" for="dingtalk-session-hours">
-          <el-input-number id="dingtalk-session-hours" v-model="form.sessionHours" :min="1" :max="720" :disabled="saving" />
-        </el-form-item>
-        <el-form-item label="待绑定凭证有效期（分钟）" for="dingtalk-ticket-minutes">
-          <el-input-number id="dingtalk-ticket-minutes" v-model="form.ticketMinutes" :min="1" :max="60" :disabled="saving" />
-        </el-form-item>
-        <el-form-item label="每位管理员每日代绑上限" for="dingtalk-daily-limit">
-          <el-input-number id="dingtalk-daily-limit" v-model="form.dailyLimit" :min="1" :max="10000" :disabled="saving" />
-        </el-form-item>
-        <el-form-item label="钉钉接口超时（秒）" for="dingtalk-timeout">
-          <el-input-number id="dingtalk-timeout" v-model="form.timeoutSeconds" :min="1" :max="60" :disabled="saving" />
-        </el-form-item>
-      </div>
-      <p class="dingtalk-settings-form__hint">钉钉会话过期后在钉钉内自动重新免登；有效期越短，离职与收权生效越快。</p>
     </el-form>
     <template #footer>
       <el-button :disabled="saving" @click="open = false">取消</el-button>
@@ -119,6 +94,4 @@ async function save() {
 <style scoped>
 .dingtalk-settings-form { display: grid; gap: 4px; }
 .dingtalk-settings-form__hint { margin: 4px 0 8px; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.6; }
-.dingtalk-settings-form__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }
-@media (max-width: 560px) { .dingtalk-settings-form__grid { grid-template-columns: minmax(0, 1fr); } }
 </style>

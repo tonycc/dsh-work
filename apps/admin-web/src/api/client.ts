@@ -82,9 +82,9 @@ import type {
   ErrorGroupSummary,
   ErrorLookupResult,
   ErrorRange,
+  PlatformConfig,
   PlatformSetting,
   RunProblemSummary,
-  RuntimeParameters,
   UsageIdlePerson,
   UsageOverview,
   UsagePerson,
@@ -453,7 +453,7 @@ export const adminApi = {
     request<ModelUsageBreakdownRow[]>(`/model-usage/breakdown${listQuery({ ...filter, dimension })}`),
   getModelUsageExecutions: (filter: ModelUsageFilter, page: number, pageSize: number) =>
     request<ListPage<ModelUsageExecution>>(`/model-usage/executions${listQuery({ ...filter, page, pageSize })}`),
-  getRuntimeParameters: () => request<RuntimeParameters>('/runtime-parameters'),
+  getPlatformConfig: () => request<PlatformConfig>('/platform-config'),
   savePlatformSettings: (changes: Array<{ key: string; value: number; revision: number }>) =>
     request<{ settings: PlatformSetting[] }>('/platform-settings', { method: 'PUT', body: JSON.stringify({ changes }) }),
   getUsageOverview: (range: UsageRange, department?: string) =>

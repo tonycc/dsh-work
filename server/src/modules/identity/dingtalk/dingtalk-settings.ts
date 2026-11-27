@@ -78,8 +78,63 @@ interface SettingsRow {
   bindingTicketTtlSeconds: number
   adminDailyBindLimit: number
   timeoutMs: number
+  parametersRevision: number
   updatedAt: Date
   updatedByName: string | null
+}
+
+/** 平台配置中的钉钉四项（存储单位：秒、毫秒）与其修订号。 */
+export interface DingTalkParameters {
+  configured: boolean
+  sessionTtlSeconds: number
+  bindingTicketTtlSeconds: number
+  adminDailyBindLimit: number
+  timeoutMs: number
+  revision: number
+  source: 'deployment-config' | 'admin'
+  updatedAt: string
+  updatedByName: string | null
+}
+
+/**
+ * 平台配置写入钉钉四项（运行参数配置方案 6.6.2）：调用方已在同一事务内判定保存权限（三项安全类只限平台管理员）。
+ * 只更新这四列与修订号，不重新校验凭据；应用未配置或已清除时拒绝。写入后调用方须清除配置缓存（`invalidate`）。
+ */
+export async function writeDingTalkParameters(transaction: DatabaseTransaction, input: {
+  values: Partial<Pick<DingTalkParameters, 'sessionTtlSeconds' | 'bindingTicketTtlSeconds' | 'adminDailyBindLimit' | 'timeoutMs'>>
+  expectedRevision: number
+  actorId: string
+}): Promise<{ changed: boolean }> {
+  const [row] = await transaction<{ status: string; revision: number; sessionTtlSeconds: number; bindingTicketTtlSeconds: number; adminDailyBindLimit: number; timeoutMs: number }[]>`
+    select status, parameters_revision as revision, session_ttl_seconds as "sessionTtlSeconds",
+           binding_ticket_ttl_seconds as "bindingTicketTtlSeconds", admin_daily_bind_limit as "adminDailyBindLimit", timeout_ms as "timeoutMs"
+      from dingtalk_app_configurations where tenant_id = ${tenantId} for update
+  `
+  if (!row || row.status !== 'configured') throw new IdentityAccessError(409, 'dingtalk_not_configured', '钉钉应用尚未配置，不能修改这些参数')
+  if (row.revision !== input.expectedRevision) throw new IdentityAccessError(409, 'state_conflict', '钉钉参数已被其他管理员修改，请刷新后重试')
+  const next = {
+    sessionTtlSeconds: input.values.sessionTtlSeconds ?? row.sessionTtlSeconds,
+    bindingTicketTtlSeconds: input.values.bindingTicketTtlSeconds ?? row.bindingTicketTtlSeconds,
+    adminDailyBindLimit: input.values.adminDailyBindLimit ?? row.adminDailyBindLimit,
+    timeoutMs: input.values.timeoutMs ?? row.timeoutMs,
+  }
+  if (next.sessionTtlSeconds === row.sessionTtlSeconds && next.bindingTicketTtlSeconds === row.bindingTicketTtlSeconds
+    && next.adminDailyBindLimit === row.adminDailyBindLimit && next.timeoutMs === row.timeoutMs) return { changed: false }
+  await transaction`
+    update dingtalk_app_configurations
+       set session_ttl_seconds = ${next.sessionTtlSeconds}, binding_ticket_ttl_seconds = ${next.bindingTicketTtlSeconds},
+           admin_daily_bind_limit = ${next.adminDailyBindLimit}, timeout_ms = ${next.timeoutMs},
+           parameters_revision = parameters_revision + 1, updated_by = ${input.actorId}, updated_at = now()
+     where tenant_id = ${tenantId}
+  `
+  await settingsAudit(transaction, input.actorId, 'identity.dingtalk.parameters.update', {
+    sessionTtlSeconds: `${row.sessionTtlSeconds} → ${next.sessionTtlSeconds}`,
+    bindingTicketTtlSeconds: `${row.bindingTicketTtlSeconds} → ${next.bindingTicketTtlSeconds}`,
+    adminDailyBindLimit: `${row.adminDailyBindLimit} → ${next.adminDailyBindLimit}`,
+    timeoutMs: `${row.timeoutMs} → ${next.timeoutMs}`,
+    via: 'platform-config',
+  })
+  return { changed: true }
 }
 
 /**
@@ -106,7 +161,11 @@ export class DingTalkSettingsService implements DingTalkSettingsProvider, DingTa
     this.directoryFactory = options.directoryFactory ?? (configuration => new DingTalkOpenApiDirectory(configuration))
   }
 
-  /** 启动时：页面从未保存过（没有记录）时，用部署配置建立初始配置；部署配置变化时同步更新这份初始配置。 */
+  /**
+   * 启动时：页面从未保存过（没有记录）时，用部署配置建立初始配置；部署配置的凭据变化时同步更新这份初始配置。
+   * 会话有效期、待绑定凭证有效期、每日代绑上限与接口超时只在首次建立时取部署配置，之后在“平台配置”中修改，
+   * 启动时不再覆盖（运行参数配置方案 6.6.2：环境变量只作初始值）。
+   */
   async ensureBootstrap() {
     const raw = this.deployment.bootstrap
     if (!raw) return
@@ -127,17 +186,12 @@ export class DingTalkSettingsService implements DingTalkSettingsProvider, DingTa
         )
         on conflict (tenant_id) do update
            set corp_id = excluded.corp_id, agent_id = excluded.agent_id, app_key = excluded.app_key,
-               secret_hint = excluded.secret_hint, session_ttl_seconds = excluded.session_ttl_seconds,
-               binding_ticket_ttl_seconds = excluded.binding_ticket_ttl_seconds,
-               admin_daily_bind_limit = excluded.admin_daily_bind_limit, timeout_ms = excluded.timeout_ms, updated_at = now()
+               secret_hint = excluded.secret_hint, updated_at = now()
          where dingtalk_app_configurations.source = 'deployment-config' and dingtalk_app_configurations.status = 'configured'
            and (dingtalk_app_configurations.corp_id, dingtalk_app_configurations.agent_id, dingtalk_app_configurations.app_key,
-                dingtalk_app_configurations.secret_hint, dingtalk_app_configurations.session_ttl_seconds,
-                dingtalk_app_configurations.binding_ticket_ttl_seconds, dingtalk_app_configurations.admin_daily_bind_limit,
-                dingtalk_app_configurations.timeout_ms)
+                dingtalk_app_configurations.secret_hint)
                is distinct from
-               (excluded.corp_id, excluded.agent_id, excluded.app_key, excluded.secret_hint, excluded.session_ttl_seconds,
-                excluded.binding_ticket_ttl_seconds, excluded.admin_daily_bind_limit, excluded.timeout_ms)
+               (excluded.corp_id, excluded.agent_id, excluded.app_key, excluded.secret_hint)
       `
       // 部署配置换了企业：钉钉 userid 只在企业内唯一，旧企业的绑定必须失效。
       if (previous?.source === 'deployment-config' && previous.status === 'configured' && previous.corpId && previous.corpId !== bootstrap.corpId) {
@@ -165,6 +219,24 @@ export class DingTalkSettingsService implements DingTalkSettingsProvider, DingTa
     }
     this.cached = { value, loadedAt: Date.now() }
     return value
+  }
+
+  /** 平台配置读取钉钉四项（运行参数配置方案 6.6.2）：只返回数值与修订号，不含凭据。 */
+  async parameters(): Promise<DingTalkParameters | null> {
+    const row = await this.row()
+    if (!row) return null
+    return {
+      configured: row.status === 'configured',
+      sessionTtlSeconds: row.sessionTtlSeconds, bindingTicketTtlSeconds: row.bindingTicketTtlSeconds,
+      adminDailyBindLimit: row.adminDailyBindLimit, timeoutMs: row.timeoutMs, revision: row.parametersRevision,
+      source: row.source as 'deployment-config' | 'admin',
+      updatedAt: row.updatedAt.toISOString(), updatedByName: row.updatedByName ?? null,
+    }
+  }
+
+  /** 平台配置写入后清除缓存，下一次读取即用新值。 */
+  invalidate() {
+    this.cached = null
   }
 
   /** 同一份配置复用同一个客户端（保留 access_token 缓存）；配置变化后换新客户端。 */
@@ -207,11 +279,16 @@ export class DingTalkSettingsService implements DingTalkSettingsProvider, DingTa
     const agentId = requiredText(input.agentId, 'AgentId', 64)
     const appKey = requiredText(input.appKey, 'AppKey', 128)
     const appSecret = optionalSecret(input.appSecret)
-    const sessionTtlSeconds = integerIn(input.sessionTtlSeconds, '钉钉会话有效期', 300, 2_592_000, DINGTALK_DEFAULTS.sessionTtlSeconds)
-    const bindingTicketTtlSeconds = integerIn(input.bindingTicketTtlSeconds, '待绑定凭证有效期', 60, 3600, DINGTALK_DEFAULTS.bindingTicketTtlSeconds)
-    const adminDailyBindLimit = integerIn(input.adminDailyBindLimit, '每日代绑上限', 1, 10_000, DINGTALK_DEFAULTS.adminDailyBindLimit)
-    const timeoutMs = integerIn(input.timeoutMs, '接口超时', 1000, 60_000, DINGTALK_DEFAULTS.timeoutMs)
+    // 运行参数配置方案 6.6.2：四项改在“平台配置”中修改，这里带上即拒绝；保存凭据时沿用现值（首次配置用默认值）。
+    if (input.sessionTtlSeconds !== undefined || input.bindingTicketTtlSeconds !== undefined
+      || input.adminDailyBindLimit !== undefined || input.timeoutMs !== undefined) {
+      throw new IdentityAccessError(422, 'invalid_request', '钉钉会话有效期、待绑定凭证有效期、每日代绑上限与接口超时已改在“平台配置”中修改')
+    }
     const existing = await this.row()
+    const sessionTtlSeconds = existing?.sessionTtlSeconds ?? DINGTALK_DEFAULTS.sessionTtlSeconds
+    const bindingTicketTtlSeconds = existing?.bindingTicketTtlSeconds ?? DINGTALK_DEFAULTS.bindingTicketTtlSeconds
+    const adminDailyBindLimit = existing?.adminDailyBindLimit ?? DINGTALK_DEFAULTS.adminDailyBindLimit
+    const timeoutMs = existing?.timeoutMs ?? DINGTALK_DEFAULTS.timeoutMs
     const sameApplication = existing?.status === 'configured' && existing.corpId === corpId && existing.appKey === appKey
     if (!appSecret && !sameApplication) {
       throw new IdentityAccessError(422, 'dingtalk_secret_required', existing?.status === 'configured' ? '更换 CorpId 或 AppKey 时须重新填写 AppSecret' : '首次配置须填写 AppSecret')
@@ -322,6 +399,7 @@ export class DingTalkSettingsService implements DingTalkSettingsProvider, DingTa
              c.credential_ref as "credentialRef", c.secret_hint as "secretHint",
              c.session_ttl_seconds as "sessionTtlSeconds", c.binding_ticket_ttl_seconds as "bindingTicketTtlSeconds",
              c.admin_daily_bind_limit as "adminDailyBindLimit", c.timeout_ms as "timeoutMs",
+             c.parameters_revision as "parametersRevision",
              c.updated_at as "updatedAt", u.display_name as "updatedByName"
         from dingtalk_app_configurations c
         left join users u on u.tenant_id = c.tenant_id and u.id = c.updated_by
@@ -389,11 +467,3 @@ function optionalSecret(value: unknown) {
   return value.trim()
 }
 
-function integerIn(value: unknown, label: string, min: number, max: number, fallback: number) {
-  if (value === undefined || value === null || value === '') return fallback
-  const number = typeof value === 'number' ? value : Number(value)
-  if (!Number.isInteger(number) || number < min || number > max) {
-    throw new IdentityAccessError(422, 'invalid_request', `${label}须为 ${min}–${max} 之间的整数`)
-  }
-  return number
-}

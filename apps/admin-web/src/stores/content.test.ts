@@ -147,13 +147,13 @@ describe('admin content store Skill version state', () => {
     api.getBuiltinTools.mockResolvedValue(status)
 
     await store.updateRuntimeConfiguration({
-      runtimeId: runtime.id, maxConcurrentWorkers: 2, attemptTimeoutMinutes: 30, schedulingStatus: 'accepting', disabledTools: ['web_search'],
+      runtimeId: runtime.id, schedulingStatus: 'accepting', disabledTools: ['web_search'],
     })
     expect(store.runtimes[0]?.disabledTools).toEqual(['web_search'])
     expect(store.builtinTools).toEqual(status)
 
     api.getBuiltinTools.mockClear()
-    await store.updateRuntimeConfiguration({ runtimeId: runtime.id, maxConcurrentWorkers: 3, attemptTimeoutMinutes: 30, schedulingStatus: 'accepting' })
+    await store.updateRuntimeConfiguration({ runtimeId: runtime.id, schedulingStatus: 'draining' })
     expect(api.getBuiltinTools).not.toHaveBeenCalled()
   })
 })

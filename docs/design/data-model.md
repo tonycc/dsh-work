@@ -45,7 +45,7 @@ flowchart LR
 | `external_binding_tickets` | 服务端短时单次凭证：钉钉内待绑定凭证与管理员代绑确认凭证（迁移 0117） | 只存凭证哈希；原子消费，重复使用、过期、来源或目标员工 / 管理员不符一律无效；代绑凭证只存脱敏手机号与 HMAC |
 | `external_channel_status` | 外部渠道连接检查结果（迁移 0118，钉钉集成页） | 每租户每渠道一行；只存检查时间、结论与各接口权限探测结果，不存凭据 |
 | `dingtalk_departure_checks` | 每日钉钉离职检查记录（迁移 0118） | 同一租户至多一条 `running`（部分唯一索引），超过 6 小时未结束的视为中断并标为 `failed` 后再开始新检查；只有明确“用户不存在”才判为离职；判为离职超过有效绑定 10% 时 `paused` 并保存待确认的绑定 ID，管理员确认或忽略后结束 |
-| `dingtalk_app_configurations` | 钉钉企业内部应用配置（迁移 0119，DT30） | 每租户一行；`configured` 时 CorpId、AgentId、AppKey 必填；AppSecret 不存本表，页面保存的以 `credential_ref` 指向 `credential_secrets` 中的加密值，来自部署配置时 `credential_ref` 为空、只在内存使用；`cleared` 后部署配置不再自动生效 |
+| `dingtalk_app_configurations` | 钉钉企业内部应用配置（迁移 0119，DT30） | 每租户一行；`configured` 时 CorpId、AgentId、AppKey 必填；AppSecret 不存本表，页面保存的以 `credential_ref` 指向 `credential_secrets` 中的加密值，来自部署配置时 `credential_ref` 为空、只在内存使用；`cleared` 后部署配置不再自动生效；`parameters_revision`（迁移 0137）为会话有效期、待绑定凭证有效期、每日代绑上限与接口超时四项的修订号，这四项在“平台配置”中修改，部署配置只在首次建立时作初始值 |
 | `org_departments` | 部门树（迁移 0113，ORG-S1，[功能规则第 10 节](../development/feature-rules.md#10-组织架构org-s1org-s2)） | 每租户一个根部门（迁移创建）；`path` 为根到本部门的 ID 路径，不能移到自己下级之下；同一上级下有效部门不重名；删除置为 `removed`；写操作按租户串行 |
 | `org_department_members` | 员工所属部门（迁移 0113） | 员工可属于多个部门、至多一个主部门；`users.department_id` 只作显示，等于主部门名称，没有主部门时为空；迁移 0113 清空了历史部门文本 |
 | `org_department_grants` | 部门授予的角色（迁移 0114，ORG-S2） | 同一部门同一角色至多一条有效授权；展开为 `user_roles`（`source_key = 'department:<grant_id>'`），随成员与部门变化重算；管理类角色（`admin:`、`audit:`、`data-protection:` 前缀）不能授予，非平台管理员授出的角色不能超过本人；部门删除后置为 `invalid` |
@@ -209,7 +209,7 @@ flowchart LR
 | `error_groups` | 错误记录：按指纹归并的问题（OBS-S1，迁移 0133） | 来源为员工端、管理端、服务端或服务进程；按 `(tenant, fingerprint)` 唯一；消息在服务端脱敏后保存（失败提示只存错误码与动作名）；浏览器上报每个租户每个来源每小时新增超过 200 个时并入该来源的汇总组（按租户与来源加锁计数），服务端与进程异常不受此限 |
 | `error_occurrences` | 错误记录样本 | 同一员工同一问题 1 分钟内的重复只累加 `repeat_count`；不存请求体、对话正文、查询参数与完整 User-Agent，堆栈只留帧位置；`run_id` 只来自路由参数或浏览器上报，接口链路编号经它关联运行；保留 90 天，专用任务每天分批清理 |
 | `product_events` | 页面访问（OBS-S2，迁移 0134） | 只记已登录员工的页面路由名、端（员工端/管理端）与是否在钉钉内，不记网址与页面内容；同一员工同一端同一页面 30 分钟内只记一次；保留天数按运行参数（默认 180 天），与错误记录同一清理任务分批删除 |
-| `platform_settings` | 运行参数（RP-S1，迁移 0136） | 只存页面保存过的运维参数（键、值、版本号、最后修改人）；键、默认值、范围与保存权限只在代码登记表 `domain/platform-settings.ts` 中定义，没有记录或值为 null 的键按默认值；恢复默认时保留该行、值存 null、版本号继续递增；每次保存写审计 `platform.setting.update` |
+| `platform_settings` | 运行参数（RP-S1，迁移 0136） | 只存页面保存过的运维参数（键、值、版本号、最后修改人）；键、默认值、范围与保存权限只在代码登记表 `domain/platform-settings.ts` 中定义，没有记录或值为 null 的键按默认值；恢复默认时保留该行、值存 null、版本号继续递增；Runtime 容量与超时、钉钉四项不在本表（分别在 `runtimes` / `runtime_configurations` 与 `dingtalk_app_configurations`），经平台配置接口读写；每次保存写审计 `platform.setting.update` |
 | `operational_events`（视图） | 运营事件投影 | 只读投影，不含业务正文 |
 
 ## 数据库触发器
