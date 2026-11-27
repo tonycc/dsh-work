@@ -3,7 +3,7 @@ import { platformToolContracts } from './platform-tool-contracts.ts'
 import { test } from 'node:test'
 import {
   knowledgeSearchToolNames,
-  agentBuiltinToolNames, agentRecommendationToolNames, builtinTool, executionToolNames, invalidSkillToolReferences, isDshBuiltinTool,
+  agentBuiltinToolNames, agentRecommendationToolNames, builtinTool, builtinToolsWithParameters, executionToolNames, invalidSkillToolReferences, isDshBuiltinTool,
   normalizeDisabledTools, skillCreationToolNames, skillToolName, unavailableSkillTools,
 } from './builtin-tools.ts'
 
@@ -83,4 +83,12 @@ test('knowledge search tool assembles only for personal conversations whose pre-
   assert.deepEqual(invalidSkillToolReferences(['knowledge_search@1.0.0']), ['knowledge_search@1.0.0'], 'Skills cannot declare it')
   // 读工具：平台工具桥只为写工具登记 task_operations，检索词与结果不会写入（KS6）。
   assert.equal(platformToolContracts.knowledge_search.effect, 'read')
+})
+
+// 运行参数 RP-S1（方案 4.6）：内置工具目录的读取网页约束按当前上限填写，其他工具不变。
+test('the builtin tool catalog states the current web_fetch limit', () => {
+  const tools = builtinToolsWithParameters(3)
+  assert.ok(tools.find(tool => tool.name === 'web_fetch')!.constraints.includes('每次运行最多 3 次'))
+  assert.ok(builtinTool('web_fetch')!.constraints.includes('每次运行最多 10 次'))
+  assert.deepEqual(tools.find(tool => tool.name === 'bash'), builtinTool('bash'))
 })

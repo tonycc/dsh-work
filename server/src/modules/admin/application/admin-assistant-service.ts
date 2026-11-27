@@ -4,6 +4,7 @@ import type { DatabaseClient, DatabaseTransaction } from '../../../infrastructur
 import { redactSensitiveText } from '../../../security/safe-observability.ts'
 import { assertDraftCopyFields, assertDraftCopyPlan, DRAFT_COPY_POLICY } from '../../agent/agent-draft-copy-policy.ts'
 import { authorizationDenied, requestInvalid } from '../../../domain/authorization-errors.ts'
+import { AGENT_SPEC_BOUNDS } from '../../agent/agent-spec.ts'
 import type { PostgresAgentService } from '../../agent/postgres-agent-service.ts'
 import type { PostgresAuthorizationService } from '../../authorization/postgres-authorization-service.ts'
 import type { RuntimeManifest } from '../../runtime/runtime-types.ts'
@@ -13,7 +14,7 @@ import type { RunOrchestrationService } from '../../run/run-orchestration-servic
 import type { AdminSkillInstallationService } from '../../skill/admin-skill-installation-service.ts'
 import type { PostgresSkillService } from '../../skill/postgres-skill-service.ts'
 import { continueSkillSource, parseSkillSource, type SkillSource } from '../../skill/skill-source.ts'
-import type { PostgresOperationsService } from './postgres-operations-service.ts'
+import { RUNTIME_CONFIGURATION_BOUNDS, type PostgresOperationsService } from './postgres-operations-service.ts'
 import { RequestError, accessDenied, invalidRequest, notFound, stateConflict } from '../../../domain/request-errors.ts'
 
 const tenantId = 'tenant-dsh-work'
@@ -492,8 +493,8 @@ export class AdminAssistantService {
       const before: RuntimeSnapshot = await this.operations.getRuntimeMutationSnapshot(runtime.id)
       const after = {
         ...before,
-        ...(changes['maxConcurrentWorkers'] === undefined ? {} : { maxConcurrentWorkers: readInteger(changes, 'maxConcurrentWorkers', 1, 1000) }),
-        ...(changes['attemptTimeoutMinutes'] === undefined ? {} : { attemptTimeoutMinutes: readInteger(changes, 'attemptTimeoutMinutes', 1, 60) }),
+        ...(changes['maxConcurrentWorkers'] === undefined ? {} : { maxConcurrentWorkers: readInteger(changes, 'maxConcurrentWorkers', RUNTIME_CONFIGURATION_BOUNDS.maxConcurrentWorkers.min, RUNTIME_CONFIGURATION_BOUNDS.maxConcurrentWorkers.max) }),
+        ...(changes['attemptTimeoutMinutes'] === undefined ? {} : { attemptTimeoutMinutes: readInteger(changes, 'attemptTimeoutMinutes', RUNTIME_CONFIGURATION_BOUNDS.attemptTimeoutMinutes.min, RUNTIME_CONFIGURATION_BOUNDS.attemptTimeoutMinutes.max) }),
         ...(changes['schedulingStatus'] === undefined ? {} : { schedulingStatus: readEnum(changes, 'schedulingStatus', ['accepting', 'draining', 'disabled'] as const) }),
         ...(changes['disabledTools'] === undefined ? {} : { disabledTools: readDisabledTools(changes['disabledTools']) }),
         revision: before.revision + 1,
@@ -531,9 +532,9 @@ export class AdminAssistantService {
       systemPrompt: readChangedString(changes, 'systemPrompt', agent.systemPrompt, 20, 20000),
       workInstructions: agent.workInstructions ?? '',
       mcpScope: agent.mcpScope ?? { mode: 'none', connectorIds: [] },
-      maxOutputBytes: changes['maxOutputBytes'] === undefined ? agent.maxOutputBytes : readInteger(changes, 'maxOutputBytes', 1, 10_000_000),
-      maxToolCalls: changes['maxToolCalls'] === undefined ? agent.maxToolCalls : readInteger(changes, 'maxToolCalls', 1, 10_000),
-      timeoutSeconds: changes['timeoutSeconds'] === undefined ? agent.timeoutSeconds : readInteger(changes, 'timeoutSeconds', 1, 3600),
+      maxOutputBytes: changes['maxOutputBytes'] === undefined ? agent.maxOutputBytes : readInteger(changes, 'maxOutputBytes', AGENT_SPEC_BOUNDS.maxOutputBytes.min, AGENT_SPEC_BOUNDS.maxOutputBytes.max),
+      maxToolCalls: changes['maxToolCalls'] === undefined ? agent.maxToolCalls : readInteger(changes, 'maxToolCalls', AGENT_SPEC_BOUNDS.maxToolCalls.min, AGENT_SPEC_BOUNDS.maxToolCalls.max),
+      timeoutSeconds: changes['timeoutSeconds'] === undefined ? agent.timeoutSeconds : readInteger(changes, 'timeoutSeconds', AGENT_SPEC_BOUNDS.timeoutSeconds.min, AGENT_SPEC_BOUNDS.timeoutSeconds.max),
       skills: readChangedStringArray(changes, 'skills', agent.skills, 100),
       webSearchEnabled: readChangedBoolean(changes, 'webSearchEnabled', agent.webSearchEnabled),
       projectTasksEnabled: readChangedBoolean(changes, 'projectTasksEnabled', agent.projectTasksEnabled),

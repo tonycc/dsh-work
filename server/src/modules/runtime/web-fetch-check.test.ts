@@ -86,6 +86,14 @@ describe('web_fetch server check (web fetch plan 6.2)', () => {
     assert.equal(decision.allowed ? '' : decision.code, 'limit_reached')
   })
 
+  it('uses the per-Attempt limit fixed from the runtime parameters (RP-S1)', async () => {
+    const message = 'https://example.com/'
+    assert.equal((await checkWebFetch({ ...input({ url: message, message, allowedSoFar: 0 }), limit: 1 })).allowed, true)
+    const decision = await checkWebFetch({ ...input({ url: message, message, allowedSoFar: 1 }), limit: 1 })
+    assert.equal(decision.allowed ? '' : decision.code, 'limit_reached')
+    assert.equal(decision.allowed ? '' : decision.reason, '本次运行读取网页已达 1 次上限，请基于已读取的内容作答')
+  })
+
   it('denies non-public IP literals even when the employee wrote them', async () => {
     for (const url of ['http://127.0.0.1/admin', 'http://10.1.2.3/', 'http://169.254.169.254/latest/meta-data', 'http://198.18.0.105/',
       'http://[::1]/', 'http://[fd00::1]/', 'http://[::ffff:10.0.0.1]/']) {

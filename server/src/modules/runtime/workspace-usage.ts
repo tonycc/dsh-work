@@ -14,7 +14,11 @@ export const WORKSPACE_LIMITS = {
   failBytes: 4 * 1024 ** 3,
   /** Measurement interval while a command runs. */
   pollMs: 2_000,
-  /** Commands are refused while the data volume has less than max(this, minFreeRatio) free. */
+  /**
+   * Default free-space floor: commands are refused while the data volume has less than
+   * max(minFreeBytes, minFreeRatio × total) free. The live values come from the runtime parameters
+   * (`disk.min_free_gb`, `disk.min_free_percent`); these defaults match their registered defaults.
+   */
   minFreeBytes: 10 * 1024 ** 3,
   minFreeRatio: 0.1,
 } as const
@@ -67,12 +71,17 @@ export interface FreeSpace {
   low: boolean
 }
 
+export interface DiskThresholds {
+  minFreeBytes: number
+  minFreeRatio: number
+}
+
 /** Free space available to the service on the volume holding `path`. */
-export async function freeSpace(path: string): Promise<FreeSpace> {
+export async function freeSpace(path: string, thresholds: DiskThresholds = WORKSPACE_LIMITS): Promise<FreeSpace> {
   const stats = await statfs(path)
   const freeBytes = stats.bavail * stats.bsize
   const totalBytes = stats.blocks * stats.bsize
-  const threshold = Math.max(WORKSPACE_LIMITS.minFreeBytes, WORKSPACE_LIMITS.minFreeRatio * totalBytes)
+  const threshold = Math.max(thresholds.minFreeBytes, thresholds.minFreeRatio * totalBytes)
   return { freeBytes, totalBytes, low: freeBytes < threshold }
 }
 

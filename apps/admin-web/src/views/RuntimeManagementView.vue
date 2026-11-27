@@ -86,7 +86,7 @@ const catalogAlert = computed(() => {
 const executionContainerAlert = computed(() => {
   const status = contentStore.builtinTools?.executionContainer?.status
   if (status === 'available' && contentStore.builtinTools?.executionContainer?.diskLow) {
-    return { type: 'warning' as const, title: '服务器磁盘剩余空间不足（低于 10 GB 或 10%）：执行容器暂不运行命令，已在运行的命令会被终止；请清理磁盘' }
+    return { type: 'warning' as const, title: '服务器磁盘剩余空间不足（低于“运行参数”中设定的磁盘最低剩余空间或比例）：执行容器暂不运行命令，已在运行的命令会被终止；请清理磁盘' }
   }
   if (status === 'available') return { type: 'success' as const, title: '执行容器已启用：员工侧 Agent 运行装配 bash，命令在每次运行专用的断网容器中执行' }
   if (status === 'unavailable') return { type: 'error' as const, title: '执行容器启动检查未通过：所有 Agent 运行暂不能执行，原因见服务日志；检查执行镜像与 Docker 后重启服务' }

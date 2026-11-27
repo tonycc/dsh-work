@@ -41,7 +41,7 @@ export interface ModelGatewayOptions {
 }
 
 const DEFAULT_MAX_REQUEST_BYTES = 64 * 1024 * 1024
-const DEFAULT_HEADERS_TIMEOUT_MS = 120_000
+export const DEFAULT_HEADERS_TIMEOUT_MS = 120_000
 const MAX_ERROR_BODY_BYTES = 64 * 1024
 /** 需要还原的非流式回复要整体缓冲，超过此上限按失败处理。 */
 const MAX_RESTORED_JSON_BYTES = 32 * 1024 * 1024

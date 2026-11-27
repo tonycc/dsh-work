@@ -8,7 +8,7 @@ import { PlatformToolError } from './platform-tool-contract.ts'
 import type { RuntimeToolDescriptor } from './runtime-types.ts'
 import {
   formatBytes, freeSpace, measureWorkspace, overWorkspaceLimit, WORKSPACE_LIMITS,
-  type FreeSpace, type WorkspaceUsage,
+  type DiskThresholds, type FreeSpace, type WorkspaceUsage,
 } from './workspace-usage.ts'
 
 /** docker 对不存在的镜像的答复（`No such image` / `No such object`）。 */
@@ -35,6 +35,8 @@ export interface AttemptExecutionContainersOptions {
     freeSpace(workspace: string): Promise<FreeSpace>
     pollMs?: number
   }
+  /** Current free-space floor (runtime parameters `disk.*`); read before every command. */
+  diskThresholds?: () => DiskThresholds
 }
 
 /**
@@ -128,7 +130,7 @@ export class AttemptExecutionContainers {
     this.imageRecheckMs = options.imageRecheckMs ?? IMAGE_RECHECK_INTERVAL_MS
     this.usage = {
       measure: options.usage?.measure ?? (workspace => measureWorkspace(workspace)),
-      freeSpace: options.usage?.freeSpace ?? freeSpace,
+      freeSpace: options.usage?.freeSpace ?? (workspace => freeSpace(workspace, options.diskThresholds?.() ?? WORKSPACE_LIMITS)),
       pollMs: options.usage?.pollMs ?? WORKSPACE_LIMITS.pollMs,
     }
   }

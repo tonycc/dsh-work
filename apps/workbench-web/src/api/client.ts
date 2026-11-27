@@ -216,7 +216,7 @@ export const workbenchApi = {
   listNotifications: (query: { status?: 'all' | 'unread'; cursor?: string; limit?: number } = {}) => {
     const params = new URLSearchParams()
     for (const [key, value] of Object.entries(query)) if (value !== undefined && value !== '') params.set(key, String(value))
-    return request<{ items: UserNotification[]; nextCursor: string | null }>(`/me/notifications?${params}`)
+    return request<{ items: UserNotification[]; nextCursor: string | null; retentionDays: number }>(`/me/notifications?${params}`)
   },
   getNotificationUnreadCount: () => request<{ unread: number }>('/me/notifications/unread-count'),
   markNotificationRead: (notificationId: string) =>

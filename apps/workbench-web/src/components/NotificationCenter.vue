@@ -223,7 +223,7 @@ onBeforeUnmount(() => {
           <div v-if="notifications.nextCursor" class="notification-panel__more">
             <el-button link :loading="notifications.loadingMore" @click="notifications.loadMore()">加载更早的通知</el-button>
           </div>
-          <p v-else-if="notifications.items.length && notifications.tab === 'all'" class="notification-panel__footnote">只保留最近 90 天的通知</p>
+          <p v-else-if="notifications.items.length && notifications.tab === 'all'" class="notification-panel__footnote">只保留最近 {{ notifications.retentionDays }} 天的通知</p>
         </div>
       </section>
     </div>

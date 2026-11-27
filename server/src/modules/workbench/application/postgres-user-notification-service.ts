@@ -1,13 +1,16 @@
 import type { DatabaseClient } from '../../../infrastructure/postgres/database.ts'
 import { requestInvalid } from '../../../domain/authorization-errors.ts'
+import { defaultPlatformSettings, type PlatformSettingsReader } from '../../../domain/platform-settings.ts'
 import { notFound } from '../../../domain/request-errors.ts'
 import { readableWorkspacePredicate } from './postgres-workspace-service.ts'
 import type { UserNotificationKind, UserNotificationObjectType } from '../../notification/user-notification-writer.ts'
 
 const tenantId = 'tenant-dsh-work'
 
-/** 功能规则 3.7：只保留最近 90 天的通知；更早的不再列出、不计未读，并由每日清扫删除（NC-S4）。 */
-const retentionDays = 90
+/**
+ * 功能规则 3.7：只保留最近 N 天的通知（运行参数 `notifications.retention_days`，默认 90）；
+ * 更早的不再列出、不计未读，并由每日清扫删除（NC-S4）。
+ */
 /** 每批删除条数：分批提交，避免一次长事务锁住大量行。 */
 const purgeBatchSize = 1000
 
@@ -40,6 +43,8 @@ const detailKeys = ['state', 'reason', 'outcome', 'result'] as const
 export interface UserNotificationPage {
   items: UserNotificationItem[]
   nextCursor: string | null
+  /** 当前保留天数（运行参数 `notifications.retention_days`），通知中心据此说明只保留多少天。 */
+  retentionDays: number
 }
 
 interface NotificationRow {
@@ -66,9 +71,15 @@ interface NotificationRow {
  */
 export class PostgresUserNotificationService {
   private readonly database: DatabaseClient
+  private readonly settings: PlatformSettingsReader
 
-  constructor(database: DatabaseClient) {
+  constructor(database: DatabaseClient, options: { settings?: PlatformSettingsReader } = {}) {
     this.database = database
+    this.settings = options.settings ?? defaultPlatformSettings
+  }
+
+  private get retentionDays() {
+    return this.settings.get('notifications.retention_days')
   }
 
   async list(input: { userId: string; status?: string | null; cursor?: string | null; limit?: number }): Promise<UserNotificationPage> {
@@ -89,7 +100,7 @@ export class PostgresUserNotificationService {
         from user_notifications n
         ${visibilityJoins(sql, input.userId)}
        where n.tenant_id = ${tenantId} and n.recipient_user_id = ${input.userId}
-         and n.created_at > now() - make_interval(days => ${retentionDays})
+         and n.created_at > now() - make_interval(days => ${this.retentionDays})
          and ${status === 'unread' ? countsAsUnread(sql) : sql`true`}
          and ${cursor === null ? sql`true` : sql`(n.created_at, n.id) < ((${cursor.at}::text)::timestamptz, ${cursor.id})`}
        order by n.created_at desc, n.id desc
@@ -100,6 +111,7 @@ export class PostgresUserNotificationService {
     return {
       items: page.map(toItem),
       nextCursor: rows.length > limit && last ? encodeCursor(last.createdAtToken, last.id) : null,
+      retentionDays: this.retentionDays,
     }
   }
 
@@ -111,7 +123,7 @@ export class PostgresUserNotificationService {
         from user_notifications n
         ${visibilityJoins(sql, userId)}
        where n.tenant_id = ${tenantId} and n.recipient_user_id = ${userId}
-         and n.created_at > now() - make_interval(days => ${retentionDays})
+         and n.created_at > now() - make_interval(days => ${this.retentionDays})
          and ${countsAsUnread(sql)}
     `
     return { unread: Number(row?.unread ?? 0) }
@@ -139,8 +151,8 @@ export class PostgresUserNotificationService {
   async purgeExpired(now?: Date): Promise<{ removed: number }> {
     const sql = this.database
     const cutoff = now
-      ? sql`${now}::timestamptz - make_interval(days => ${retentionDays})`
-      : sql`now() - make_interval(days => ${retentionDays})`
+      ? sql`${now}::timestamptz - make_interval(days => ${this.retentionDays})`
+      : sql`now() - make_interval(days => ${this.retentionDays})`
     let removed = 0
     for (;;) {
       const rows = await sql<Array<{ id: string }>>`
@@ -166,7 +178,7 @@ export class PostgresUserNotificationService {
       with marked as (
         update user_notifications set read_at = now()
          where tenant_id = ${tenantId} and recipient_user_id = ${userId} and read_at is null
-           and created_at > now() - make_interval(days => ${retentionDays})
+           and created_at > now() - make_interval(days => ${this.retentionDays})
         returning id, kind, object_id
       ), ${mentionsReadWith(sql, userId)}
       select id from marked

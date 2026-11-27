@@ -1340,3 +1340,59 @@ export interface UsagePersonDetail extends UsagePerson {
   pages: Array<{ page: string; views: number }>
   entries: Array<{ entry: UsageEntry; runs: number }>
 }
+
+/** 运行参数（运行参数配置方案 RP-S1）：登记表中的运维参数，键与范围以服务端为准。 */
+export type PlatformSettingGroup = 'disk' | 'run' | 'retention'
+
+export interface PlatformSetting {
+  key: string
+  group: PlatformSettingGroup
+  label: string
+  description: string
+  unit: string
+  value: number
+  defaultValue: number
+  min: number
+  max: number
+  timing: string
+  lowerRisk?: string
+  belowDefaultRisk?: string
+  raiseRisk?: string
+  source: 'page' | 'default'
+  revision: number
+  updatedAt?: string
+  updatedBy?: string
+}
+
+export type RuntimeParameterSource = 'page' | 'default' | 'env' | 'builtin' | 'deploy'
+
+export interface RuntimeParameterEntry {
+  id: string
+  group: 'ops' | 'run' | 'identity' | 'fixed'
+  name: string
+  value: string
+  source: RuntimeParameterSource
+  timing: string
+  where: string
+  link?: string
+  owner: { kind: 'platform-admin' } | { kind: 'module'; module: 'agent' | 'connector' } | null
+  canEdit: boolean
+}
+
+export interface TimeoutChain {
+  id: string
+  name: string
+  actual: string
+  limiter: string
+  layers: string[]
+  warning?: string
+}
+
+export interface RuntimeParameters {
+  groups: Array<{ id: PlatformSettingGroup; title: string; description: string }>
+  settings: PlatformSetting[]
+  canSave: boolean
+  /** 数据卷当前剩余空间；读取失败时为 null。 */
+  disk: { freeBytes: number; totalBytes: number } | null
+  overview: { entries: RuntimeParameterEntry[]; timeoutChains: TimeoutChain[] }
+}

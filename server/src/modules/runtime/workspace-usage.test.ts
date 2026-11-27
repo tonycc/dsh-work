@@ -96,3 +96,11 @@ test('the sweep removes what the rules no longer keep and skips running Attempts
   }, { completed: false, failedRecently: true, failedLongAgo: false, historicOld: false, historicRecent: true, running: true })
   assert.deepEqual(result, { inspected: 5, removed: 3 })
 })
+
+// 运行参数 RP-S1：磁盘阈值由调用方传入（运行参数 disk.*），未传时用默认值。
+test('free space is low against the thresholds passed in', async t => {
+  const root = await scratch(t)
+  assert.equal((await freeSpace(root, { minFreeBytes: Number.MAX_SAFE_INTEGER, minFreeRatio: 0 })).low, true)
+  assert.equal((await freeSpace(root, { minFreeBytes: 0, minFreeRatio: 0 })).low, false)
+  assert.equal((await freeSpace(root, { minFreeBytes: 0, minFreeRatio: 1 })).low, true)
+})

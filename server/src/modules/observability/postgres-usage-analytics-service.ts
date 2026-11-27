@@ -1,11 +1,11 @@
 import type { PendingQuery, Row } from 'postgres'
 
 import type { DatabaseClient } from '../../infrastructure/postgres/database.ts'
+import { defaultPlatformSettings, type PlatformSettingsReader } from '../../domain/platform-settings.ts'
 import { RELEASE_TRIAL_PURPOSE, UNASSIGNED_DEPARTMENT } from '../../domain/model-usage.ts'
 import { invalidRequest } from '../../domain/request-errors.ts'
 import {
   PAGE_VIEW_DEDUPE_MINUTES,
-  PRODUCT_EVENT_RETENTION_DAYS,
   USAGE_PEOPLE_LIMIT,
   USAGE_RANGE_DAYS,
   type IdlePerson,
@@ -48,10 +48,12 @@ function toPerson(row: PersonRow): UsagePerson {
 export class PostgresUsageAnalyticsService implements UsageAnalyticsQueryPort {
   private readonly database: DatabaseClient
   private readonly timezone: string
+  private readonly settings: PlatformSettingsReader
 
-  constructor(database: DatabaseClient, timezone: string) {
+  constructor(database: DatabaseClient, timezone: string, options: { settings?: PlatformSettingsReader } = {}) {
     this.database = database
     this.timezone = timezone
+    this.settings = options.settings ?? defaultPlatformSettings
   }
 
   /** 记录页面访问；同一员工同一端同一页面 30 分钟内只记一次。 */
@@ -76,13 +78,15 @@ export class PostgresUsageAnalyticsService implements UsageAnalyticsQueryPort {
     return recorded
   }
 
+  /** 删除保留期（运行参数 `page_views.retention_days`，默认 180 天）之前的页面访问。 */
   async purgeExpired(): Promise<{ removed: number }> {
+    const retentionDays = this.settings.get('page_views.retention_days')
     let removed = 0
     for (;;) {
       const result = await this.database`
         delete from product_events where id in (
           select id from product_events
-           where tenant_id = ${tenantId} and occurred_at < now() - make_interval(days => ${PRODUCT_EVENT_RETENTION_DAYS})
+           where tenant_id = ${tenantId} and occurred_at < now() - make_interval(days => ${retentionDays})
            limit ${PURGE_BATCH}
         )
       `

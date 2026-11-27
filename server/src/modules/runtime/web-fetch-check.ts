@@ -11,8 +11,12 @@ import type { RuntimeManifest } from './runtime-types.ts'
  * 调用本函数之前复核。函数本身不发请求、不读数据库，便于单测。
  */
 
-/** 每个 Attempt 最多放行的读取次数。 */
+/** 每个 Attempt 最多放行的读取次数的默认值；实际值来自运行参数 `web_fetch.max_per_attempt`，在 Attempt 开始时固定。 */
 export const WEB_FETCH_MAX_PER_ATTEMPT = 10
+
+export function webFetchLimitReason(limit: number) {
+  return `本次运行读取网页已达 ${limit} 次上限，请基于已读取的内容作答`
+}
 
 /** 与 DSH `dsh-web-fetch-http` 的 URL 安全上限一致。 */
 const MAX_URL_LENGTH = 2048
@@ -26,6 +30,8 @@ export interface WebFetchCheckInput {
   searchResultUrls: ReadonlySet<string>
   /** 本 Attempt 已放行的读取次数。 */
   allowedSoFar: number
+  /** 本 Attempt 的读取上限（Attempt 开始时固定）；省略时按默认值。 */
+  limit?: number
   /** 对网址文本做数据防护检测，返回命中的类别；不可用时抛错（调用方按拒绝处理）。 */
   detectCategories: (texts: string[]) => Promise<readonly DataProtectionCategoryName[]>
 }
@@ -63,8 +69,9 @@ export async function checkWebFetch(input: WebFetchCheckInput): Promise<WebFetch
     return deny('source_not_allowed', '只能打开用户在对话中给出的网址或本次联网搜索结果中的网址，请原样使用这些网址，不要猜测、拼接或改写；需要打开其他网页时请用户把链接发在对话中')
   }
 
-  if (input.allowedSoFar >= WEB_FETCH_MAX_PER_ATTEMPT) {
-    return deny('limit_reached', `本次运行读取网页已达 ${WEB_FETCH_MAX_PER_ATTEMPT} 次上限，请基于已读取的内容作答`)
+  const limit = input.limit ?? WEB_FETCH_MAX_PER_ATTEMPT
+  if (input.allowedSoFar >= limit) {
+    return deny('limit_reached', webFetchLimitReason(limit))
   }
 
   const host = parsed.hostname.replace(/^\[|\]$/g, '')

@@ -83,6 +83,16 @@ export const builtinTools: readonly BuiltinTool[] = [
 
 const byName = new Map(builtinTools.map(tool => [tool.name, tool]))
 
+/**
+ * 内置工具目录按当前运行参数填写约束中的数值（运行参数配置方案 4.6）：读取网页次数上限。
+ * 目录本身的默认文案与登记表默认值一致。
+ */
+export function builtinToolsWithParameters(webFetchLimit: number): readonly BuiltinTool[] {
+  return builtinTools.map(tool => tool.name === 'web_fetch'
+    ? { ...tool, constraints: tool.constraints.map(item => item.startsWith('每次运行最多') ? `每次运行最多 ${webFetchLimit} 次` : item) }
+    : tool)
+}
+
 export function builtinTool(name: string): BuiltinTool | undefined {
   return byName.get(name)
 }

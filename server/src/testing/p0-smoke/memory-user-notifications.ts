@@ -37,7 +37,7 @@ export class MemoryUserNotificationStore {
 
   async list(input: { userId: string; status?: string | null; cursor?: string | null; limit?: number }): Promise<UserNotificationPage> {
     const matched = input.status === 'unread' ? this.items.filter(item => !item.read && item.visible) : this.items
-    return { items: matched.map(item => ({ ...item })), nextCursor: null }
+    return { items: matched.map(item => ({ ...item })), nextCursor: null, retentionDays: 90 }
   }
 
   async unreadCount(): Promise<{ unread: number }> {

@@ -148,11 +148,15 @@ test('C6 RED: an unconfirmed specialist cannot bypass the first confirmation eve
 
 test('delegated high-risk Agent and Runtime actions still require both confirmations', async () => {
   const agent = await draft(), manifest = await delegated()
+  // 运行参数配置方案 4.4：预校验与 Agent 定义、Runtime 配置的正式边界一致，越界值在准备阶段就被拒绝。
+  await assert.rejects(prepare(manifest, agent.id, { timeoutSeconds: 1200 }), /timeoutSeconds 必须是 30～600/)
+  await assert.rejects(prepare(manifest, agent.id, { maxToolCalls: 500 }), /maxToolCalls 必须是 1～100/)
   const plan = await prepare(manifest, agent.id, { systemPrompt: '这是一份经两次明确确认后才允许保存的草稿执行指令。' })
   assert.equal((await agents.getMutationSnapshot(agent.id)).agent.systemPrompt, agent.systemPrompt)
   await finish(manifest); await service.confirmAction(actor, plan.id, plan.planSha256)
   assert.notEqual((await agents.getMutationSnapshot(agent.id)).agent.systemPrompt, agent.systemPrompt)
   const runtimeManifest = await delegated('admin-platform-operations')
+  await assert.rejects(prepare(runtimeManifest, 'runtime-local-01', { maxConcurrentWorkers: 200 }, 'runtime-update-configuration'), /maxConcurrentWorkers 必须是 1～128/)
   const runtimePlan = await prepare(runtimeManifest, 'runtime-local-01', { maxConcurrentWorkers: 3, schedulingStatus: 'draining' }, 'runtime-update-configuration')
   await finish(runtimeManifest); await service.confirmAction(actor, runtimePlan.id, runtimePlan.planSha256)
   const [runtime] = await db.client<{ n: number }[]>`select concurrency_limit as n from runtime_configurations order by revision desc limit 1`

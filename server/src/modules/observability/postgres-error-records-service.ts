@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto'
 
 import type { DatabaseClient } from '../../infrastructure/postgres/database.ts'
+import { defaultPlatformSettings, type PlatformSettingsReader } from '../../domain/platform-settings.ts'
 import {
   DEDUPE_WINDOW_SECONDS,
   DETAIL_SAMPLE_LIMIT,
   ERROR_RANGE_DAYS,
-  ERROR_RETENTION_DAYS,
   NEW_GROUPS_PER_HOUR,
   RUN_ERROR_LABELS,
   type ErrorGroupDetail,
@@ -66,10 +66,12 @@ function toSummary(row: GroupRow): ErrorGroupSummary {
 export class PostgresErrorRecordsService implements ErrorRecordsQueryPort {
   private readonly database: DatabaseClient
   private readonly resolveStack?: StackResolver
+  private readonly settings: PlatformSettingsReader
 
-  constructor(database: DatabaseClient, options: { resolveStack?: StackResolver } = {}) {
+  constructor(database: DatabaseClient, options: { resolveStack?: StackResolver; settings?: PlatformSettingsReader } = {}) {
     this.database = database
     this.resolveStack = options.resolveStack
+    this.settings = options.settings ?? defaultPlatformSettings
   }
 
   async record(input: ErrorRecordInput): Promise<void> {
@@ -330,14 +332,15 @@ export class PostgresErrorRecordsService implements ErrorRecordsQueryPort {
     }
   }
 
-  /** 删除 90 天前的样本（每批最多 5,000 行），再删除没有样本的问题组。 */
+  /** 删除保留期（运行参数 `error_records.retention_days`，默认 90 天）之前的样本（每批最多 5,000 行），再删除没有样本的问题组。 */
   async purgeExpired(): Promise<{ removed: number }> {
+    const retentionDays = this.settings.get('error_records.retention_days')
     let removed = 0
     for (;;) {
       const result = await this.database`
         delete from error_occurrences where id in (
           select id from error_occurrences
-           where tenant_id = ${tenantId} and occurred_at < now() - make_interval(days => ${ERROR_RETENTION_DAYS})
+           where tenant_id = ${tenantId} and occurred_at < now() - make_interval(days => ${retentionDays})
            limit ${PURGE_BATCH}
         )
       `
@@ -349,7 +352,7 @@ export class PostgresErrorRecordsService implements ErrorRecordsQueryPort {
       delete from error_groups g
        where g.tenant_id = ${tenantId}
          and not exists (select 1 from error_occurrences o where o.tenant_id = g.tenant_id and o.group_id = g.id)
-         and g.last_seen_at < now() - make_interval(days => ${ERROR_RETENTION_DAYS})
+         and g.last_seen_at < now() - make_interval(days => ${retentionDays})
     `
     return { removed }
   }
