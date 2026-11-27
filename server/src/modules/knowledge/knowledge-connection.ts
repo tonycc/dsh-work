@@ -34,9 +34,11 @@ export class PostgresKnowledgeConnection {
   private readonly credentials: PostgresEncryptedCredentialStore | undefined
   private readonly bootstrap: KnowledgeConnectionBootstrap | undefined
   private cached: { key: string; client: WeKnoraClient } | null = null
+  private readonly timeouts: (() => { searchMs: number; uploadMs: number }) | undefined
 
-  constructor(database: DatabaseClient, options: { credentials?: PostgresEncryptedCredentialStore; bootstrap?: KnowledgeConnectionBootstrap } = {}) {
+  constructor(database: DatabaseClient, options: { credentials?: PostgresEncryptedCredentialStore; bootstrap?: KnowledgeConnectionBootstrap; timeouts?: () => { searchMs: number; uploadMs: number } } = {}) {
     this.database = database
+    this.timeouts = options.timeouts
     this.credentials = options.credentials
     this.bootstrap = options.bootstrap
   }
@@ -92,7 +94,7 @@ export class PostgresKnowledgeConnection {
     if (!apiKey) return null
     this.cached = {
       key,
-      client: new WeKnoraClient({ baseUrl: row.baseUrl, apiKey, timeoutMs: this.bootstrap?.timeoutMs, fetch: this.bootstrap?.fetch }),
+      client: new WeKnoraClient({ baseUrl: row.baseUrl, apiKey, timeoutMs: this.bootstrap?.timeoutMs, timeouts: this.timeouts, fetch: this.bootstrap?.fetch }),
     }
     return this.cached.client
   }
@@ -112,7 +114,7 @@ export class PostgresKnowledgeConnection {
     if (!input.apiKey && row && !sameBaseUrl(baseUrl, row.baseUrl)) return { reason: 'api_key_required' }
     const apiKey = input.apiKey ?? (row ? await this.apiKey(row) : undefined)
     if (!apiKey) return { reason: 'not_configured' }
-    return { client: new WeKnoraClient({ baseUrl, apiKey, timeoutMs: this.bootstrap?.timeoutMs, fetch: this.bootstrap?.fetch }) }
+    return { client: new WeKnoraClient({ baseUrl, apiKey, timeoutMs: this.bootstrap?.timeoutMs, timeouts: this.timeouts, fetch: this.bootstrap?.fetch }) }
   }
 
   /** 已保存的地址（规范化后，规则调整前保存的旧格式与现行格式可直接比较）；用于判断测试的是否是已保存的连接。 */

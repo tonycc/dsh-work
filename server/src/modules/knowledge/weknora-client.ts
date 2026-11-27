@@ -90,6 +90,8 @@ export interface WeKnoraClientConfig {
   apiKey: string
   /** 检索超时（4.3）：10 秒，不重试（2026-11-12 由 5 秒放宽，在线嵌入模型时约 3% 的检索超过 5 秒）。 */
   timeoutMs?: number
+  /** 平台配置“知识库检索超时 / 知识库上传下载超时”（毫秒），每次请求时读取；`timeoutMs` 显式给出时检索以它为准（测试用）。 */
+  timeouts?: () => { searchMs: number; uploadMs: number }
   fetch?: typeof fetch
 }
 
@@ -116,13 +118,15 @@ export function weknoraServiceRoot(value: string): string {
 export class WeKnoraClient {
   private readonly baseUrl: string
   private readonly apiKey: string
-  private readonly timeoutMs: number
+  private readonly fixedSearchTimeoutMs: number | undefined
+  private readonly timeouts: (() => { searchMs: number; uploadMs: number }) | undefined
   private readonly fetchImpl: typeof fetch
 
   constructor(config: WeKnoraClientConfig) {
     this.baseUrl = weknoraServiceRoot(config.baseUrl)
     this.apiKey = config.apiKey
-    this.timeoutMs = config.timeoutMs ?? weknoraSearchTimeoutMs
+    this.fixedSearchTimeoutMs = config.timeoutMs
+    this.timeouts = config.timeouts
     this.fetchImpl = config.fetch ?? fetch
   }
 
@@ -230,7 +234,7 @@ export class WeKnoraClient {
   async uploadDocument(knowledgeBaseId: string, input: { fileName: string; mimeType: string; bytes: Buffer }): Promise<WeKnoraDocument> {
     const form = new FormData()
     form.append('file', new Blob([new Uint8Array(input.bytes)], { type: input.mimeType }), input.fileName)
-    const body = await this.request('POST', `/api/v1/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/knowledge/file`, form, uploadTimeoutMs)
+    const body = await this.request('POST', `/api/v1/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/knowledge/file`, form, this.uploadTimeoutMs)
     return toDocument((body as { data?: unknown }).data)
   }
 
@@ -255,10 +259,18 @@ export class WeKnoraClient {
   }
 
   private async binary(path: string): Promise<{ bytes: Buffer; mimeType: string }> {
-    return this.send('GET', path, undefined, uploadTimeoutMs, async response => ({
+    return this.send('GET', path, undefined, this.uploadTimeoutMs, async response => ({
       bytes: Buffer.from(await response.arrayBuffer()),
       mimeType: response.headers.get('content-type') ?? 'application/octet-stream',
     }))
+  }
+
+  private get timeoutMs(): number {
+    return this.fixedSearchTimeoutMs ?? this.timeouts?.().searchMs ?? weknoraSearchTimeoutMs
+  }
+
+  private get uploadTimeoutMs(): number {
+    return this.timeouts?.().uploadMs ?? uploadTimeoutMs
   }
 
   private async request(method: string, path: string, payload?: unknown, timeoutMs = this.timeoutMs): Promise<unknown> {

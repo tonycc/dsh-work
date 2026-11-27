@@ -19,6 +19,8 @@ let administration: IdentityAdministrationService
 let server: Server
 let address: string
 let adminId: string
+/** 平台配置“登录会话有效期”（秒）；未设置时用启动配置。 */
+let sessionTtlSeconds: number | undefined
 
 before(async () => {
   // One connection also catches accidental pool queries inside the login transaction.
@@ -32,7 +34,7 @@ before(async () => {
   address = origin
   const config = loadIdentityConfiguration({ DSH_WORK_AUTH_MODE: 'local', DSH_WORK_SESSION_SECRET: 'local-integration-secret-with-32-characters', DSH_WORK_WORKBENCH_ORIGINS: origin, DSH_WORK_ADMIN_ORIGINS: origin })
   assert.equal(config.mode, 'local')
-  auth = new LocalAuthService(config, database.client)
+  auth = new LocalAuthService(config, database.client, null, { sessionTtlSeconds: () => sessionTtlSeconds ?? config.sessionTtlSeconds })
   administration = new IdentityAdministrationService(database.client)
   adminId = (await auth.bootstrap({ username: 'local.admin@example.invalid', name: '独立管理员', password })).userId
   registerLocalAuthRoutes(router, auth)
@@ -361,4 +363,27 @@ test('rate limiting is persisted and failed requests never store password materi
   assert.ok(audit.length > 0)
   assert.equal(JSON.stringify(audit).includes(password), false)
   assert.equal(JSON.stringify(audit).includes('scrypt$'), false)
+})
+
+test('the session lifetime from platform config applies to sessions issued after it changes (RP-S3)', async () => {
+  // 最近签发的未撤销密码会话的有效期（秒）。
+  const lifetime = async () => {
+    const [row] = await database.client<{ seconds: number }[]>`
+      select extract(epoch from (expires_at - created_at))::float8 as seconds from authentication_sessions
+       where user_id = ${adminId} and audience = 'admin' and revoked_at is null order by created_at desc limit 1
+    `
+    return Math.round(row!.seconds)
+  }
+  const before = await login()
+  assert.equal(before.response.status, 200)
+  assert.ok(Math.abs(await lifetime() - 8 * 3600) <= 2)
+  sessionTtlSeconds = 2 * 3600
+  try {
+    const after = await login()
+    assert.equal(after.response.status, 200)
+    assert.ok(Math.abs(await lifetime() - 2 * 3600) <= 2)
+    assert.match(after.response.headers.get('set-cookie')!, /Max-Age=7200/)
+  } finally {
+    sessionTtlSeconds = undefined
+  }
 })

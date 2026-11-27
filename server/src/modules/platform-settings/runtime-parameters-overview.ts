@@ -3,8 +3,6 @@ import type { PlatformSettingView } from '../../domain/platform-settings.ts'
 import { MAX_SKILL_UPLOAD_BYTES } from '../../domain/skill-package-limits.ts'
 import { defaultAutomationConfig } from '../automation/automation-types.ts'
 import { maxKnowledgeUploadBytes } from '../knowledge/knowledge-base-service.ts'
-import { uploadTimeoutMs, weknoraSearchTimeoutMs } from '../knowledge/weknora-client.ts'
-import { DEFAULT_HEADERS_TIMEOUT_MS } from '../model-gateway/model-gateway.ts'
 import { MODEL_ROUTE_RETRY_POLICY } from '../runtime/dsh-attempt-patch.ts'
 import { DEFAULT_SETUP_TIMEOUT_MS } from '../runtime/dsh-acp-runtime-adapter.ts'
 import { EXECUTION_CONTAINER_LIMITS, PYTHON_SANDBOX_LIMITS } from '../runtime/execution-backend.ts'
@@ -21,8 +19,8 @@ export type RuntimeParameterOwner = { kind: 'platform-admin' } | { kind: 'module
 
 export interface RuntimeParameterEntry {
   id: string
-  /** `config`：平台配置页修改；`other`：留在原页面（Agent 运行限制与凭据）；`run`、`identity`：暂不可修改；`fixed`：只读。 */
-  group: 'config' | 'run' | 'identity' | 'other' | 'fixed'
+  /** `config`：平台配置页修改；`other`：留在原页面（Agent 运行限制与凭据）；`fixed`：只读。 */
+  group: 'config' | 'other' | 'fixed'
   name: string
   value: string
   source: RuntimeParameterSource
@@ -59,6 +57,8 @@ export interface RuntimeSummary {
   configured: boolean
   /** 运行超时大于本 Runtime 单次执行超时的已发布 Agent 数。 */
   agentsOverTimeout: number
+  /** 已启用的自动任务与主动任务中，实际运行超时（Agent 超时与任务预算取小）大于本 Runtime 单次执行超时的数量。 */
+  automationsOverTimeout: number
 }
 
 export interface DingTalkSummary {
@@ -72,7 +72,6 @@ export interface DingTalkSummary {
 export interface RuntimeParametersOverviewInput {
   settings: PlatformSettingView[]
   runtimes: RuntimeSummary[]
-  sessionTtl: { seconds: number; fromEnvironment: boolean }
   canEdit(owner: NonNullable<RuntimeParameterOwner>): boolean
 }
 
@@ -131,19 +130,6 @@ export function buildRuntimeParametersOverview(input: RuntimeParametersOverviewI
     id: 'knowledge.connection', group: 'other', name: '知识库连接地址 / 密钥 / 嵌入模型', value: '在企业知识库页查看',
     source: 'page', timing: '立即', where: '企业知识库 · 连接配置', link: '/knowledge', owner: { kind: 'module', module: 'knowledge' },
   })
-  add({
-    id: 'model.headers_timeout', group: 'run', name: '模型首个响应超时', value: formatDuration(DEFAULT_HEADERS_TIMEOUT_MS / 1000),
-    source: 'builtin', timing: '—', where: '暂不可修改', owner: null,
-  })
-  add({
-    id: 'knowledge.timeouts', group: 'run', name: '知识库检索超时 / 上传与下载超时',
-    value: `${formatDuration(weknoraSearchTimeoutMs / 1000)} / ${formatDuration(uploadTimeoutMs / 1000)}`,
-    source: 'builtin', timing: '—', where: '暂不可修改', owner: null,
-  })
-  add({
-    id: 'identity.session_ttl', group: 'identity', name: '登录会话有效期', value: formatDuration(input.sessionTtl.seconds),
-    source: input.sessionTtl.fromEnvironment ? 'env' : 'default', timing: '重启后的新登录', where: '改环境变量后重启', owner: null,
-  })
 
   const toolTimeouts = Object.values(platformToolContracts).map(contract => contract.timeoutMs / 1000)
   const fixed: Array<[string, string, string, RuntimeParameterSource, string, string]> = [
@@ -182,6 +168,13 @@ function timeoutChains(input: RuntimeParametersOverviewInput): TimeoutChain[] {
     chains.push({
       id: 'automation', name: '自动任务与主动任务', actual: `≤ ${runtimeLimit}`, limiter: 'Runtime 单次执行超时',
       layers: ['取 Agent 超时、任务预算与 Runtime 超时的最小值', runtimeLayer],
+      ...(runtime.automationsOverTimeout > 0
+        ? { warning: `${runtime.automationsOverTimeout} 个已启用任务的运行超时大于 ${runtimeLimit}，实际按 ${runtimeLimit} 执行` }
+        : {}),
+    })
+    chains.push({
+      id: 'release-trial', name: '发布试运行', actual: `≤ ${runtimeLimit}`, limiter: 'Runtime 单次执行超时',
+      layers: ['草稿 Agent 的运行超时（30～600 秒）', runtimeLayer],
     })
     const assistant = Math.min(ADMIN_ASSISTANT_TIMEOUT_SECONDS, runtime.timeoutSeconds)
     chains.push({
@@ -196,12 +189,13 @@ function timeoutChains(input: RuntimeParametersOverviewInput): TimeoutChain[] {
       layers: [`内置 ${BACKGROUND_SUMMARY_TIMEOUT_SECONDS} 秒`, runtimeLayer],
     })
   }
-  const headers = DEFAULT_HEADERS_TIMEOUT_MS / 1000
+  const setting = (key: string, fallback: number) => input.settings.find(item => item.key === key)?.value ?? fallback
+  const headers = setting('model.headers_timeout_seconds', 120)
   chains.push({
     id: 'model', name: '模型请求', actual: formatDuration(headers), limiter: '首个响应超时',
     layers: [`每次最多等 ${formatDuration(headers)}`, `最多重试 ${MODEL_ROUTE_RETRY_POLICY.maxRetries} 次，仍受运行超时截断`],
   })
-  const search = weknoraSearchTimeoutMs / 1000
+  const search = setting('knowledge.search_timeout_seconds', 10)
   const tool = platformToolContracts.knowledge_search.timeoutMs / 1000
   const total = Math.min(search * 2, tool)
   chains.push({

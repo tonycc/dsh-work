@@ -1338,7 +1338,7 @@ export interface UsagePersonDetail extends UsagePerson {
 }
 
 /** 平台配置（运行参数配置方案 6.6）：登记表中的参数，键、范围与保存权限以服务端为准。 */
-export type PlatformSettingGroup = 'disk' | 'run' | 'retention' | 'runtime' | 'login'
+export type PlatformSettingGroup = 'disk' | 'run' | 'retention' | 'runtime' | 'login' | 'external'
 
 export interface PlatformSetting {
   key: string
@@ -1376,7 +1376,7 @@ export type RuntimeParameterSource = 'page' | 'default' | 'env' | 'builtin' | 'd
 
 export interface RuntimeParameterEntry {
   id: string
-  group: 'config' | 'run' | 'identity' | 'other' | 'fixed'
+  group: 'config' | 'other' | 'fixed'
   name: string
   value: string
   source: RuntimeParameterSource
@@ -1394,6 +1394,13 @@ export interface TimeoutChain {
   limiter: string
   layers: string[]
   warning?: string
+}
+
+/** Runtime 的单次执行超时（Agent 能力页提示实际生效超时，RP-S3）。 */
+export interface RuntimeLimit {
+  id: string
+  name: string
+  timeoutSeconds: number
 }
 
 export interface PlatformConfig {

@@ -27,7 +27,7 @@ const sourceLabels: Record<RuntimeParameterSource, string> = {
   page: '页面配置', default: '默认值', env: '环境变量', builtin: '系统内置', deploy: '部署脚本',
 }
 const groupTitles: Record<RuntimeParameterEntry['group'], string> = {
-  config: '平台配置（本页修改）', other: '留在原页面', run: '运行与模型（暂不可修改）', identity: '登录（暂不可修改）', fixed: '只读：系统内置与启动参数',
+  config: '平台配置（本页修改）', other: '留在原页面', fixed: '只读：系统内置与启动参数',
 }
 const moduleLabels: Record<string, string> = { agent: 'Agent', config: '平台配置', dingtalk: '钉钉集成', knowledge: '企业知识库' }
 

@@ -14,10 +14,13 @@ export interface PlatformConfigPort {
   list(): Promise<PlatformSettingView[]>
   save(changes: PlatformSettingChange[], actorId: string): Promise<PlatformSettingView[]>
   overview(input: {
-    sessionTtl: { seconds: number; fromEnvironment: boolean }
     canEdit(owner: NonNullable<RuntimeParameterOwner>): boolean
   }): Promise<RuntimeParametersOverview>
+  /** 接受调度的 Runtime 的单次执行超时，供 Agent 能力页提示实际生效超时。 */
+  runtimeLimits(): Promise<RuntimeLimit[]>
 }
+
+export interface RuntimeLimit { id: string; name: string; timeoutSeconds: number }
 
 /**
  * 管理端“平台配置”（运行参数配置方案 6.6）：查看与保存按“平台配置”模块（路由对照表 `platform-config`、`platform-settings`）；
@@ -27,7 +30,6 @@ export function registerPlatformConfigRoutes(
   router: Router,
   parameters: PlatformConfigPort,
   options: {
-    sessionTtl: { seconds: number; fromEnvironment: boolean }
     /** 数据卷当前剩余空间，供页面在调高磁盘阈值前提示“保存后将立即判定为磁盘不足”；读取失败时为 null。 */
     diskStatus?: () => Promise<{ freeBytes: number; totalBytes: number } | null>
     adapter?: 'postgres' | 'prototype-memory'
@@ -39,7 +41,7 @@ export function registerPlatformConfigRoutes(
     const canEdit = (owner: NonNullable<RuntimeParameterOwner>) => canEditAdminSetting(identity.permissions, owner)
     const [settings, overview, disk] = await Promise.all([
       parameters.list(),
-      parameters.overview({ sessionTtl: options.sessionTtl, canEdit }),
+      parameters.overview({ canEdit }),
       options.diskStatus ? options.diskStatus().catch(() => null) : Promise.resolve(null),
     ])
     const withPermission = settings.map(setting => ({
@@ -49,6 +51,12 @@ export function registerPlatformConfigRoutes(
     return envelope('admin', {
       groups: PLATFORM_SETTING_GROUPS, settings: withPermission, canSave: withPermission.some(setting => setting.canEdit), disk, overview,
     }, adapter)
+  })
+  // Agent 能力页的只读选择器（路由对照表 SELECTOR_PATHS）：只返回 Runtime 的 ID、名称与单次执行超时。
+  router.get('/api/admin/v1/platform-config/runtime-limits', async (_request, context) => {
+    requireRequestIdentity(context, 'admin')
+    const limits = await parameters.runtimeLimits()
+    return envelope('admin', limits.map(({ id, name, timeoutSeconds }) => ({ id, name, timeoutSeconds })), adapter)
   })
   router.put('/api/admin/v1/platform-settings', async (request, context) => {
     const identity = requireRequestIdentity(context, 'admin')

@@ -5966,7 +5966,18 @@
     "/platform-config": {
       "get": {
         "operationId": "getPlatformConfig",
-        "summary": "安全与运维 › 平台配置（运行参数配置方案 6.6）：全部集中参数（运维参数、每个 Runtime 的容量与单次执行超时、钉钉会话有效期 / 待绑定凭证有效期 / 每日代绑上限 / 接口超时）的当前值、默认值、范围、生效时机、来源（page / default）、存储（platform / runtime / dingtalk）、保存权限（platform-admin / config）、版本分组（versionKey）与版本号、影响说明、是否可用（钉钉应用未配置时只读）、当前管理员能否修改（canEdit）；数据卷当前剩余空间（disk）；参数总览与超时链路。不返回任何密钥。需要平台配置的查看权限（admin:config:read）",
+        "summary": "安全与运维 › 平台配置（运行参数配置方案 6.6）：全部集中参数（运维参数、登录会话有效期、知识库检索与上传下载超时、模型首个响应超时、每个 Runtime 的容量与单次执行超时、钉钉会话有效期 / 待绑定凭证有效期 / 每日代绑上限 / 接口超时）的当前值、默认值、范围、生效时机、来源（page / default / env；登录会话有效期从未在页面保存时为环境变量，值不是整小时时 exact=false 并在 actual 给出真实值）、存储（platform / runtime / dingtalk）、保存权限（platform-admin / config）、版本分组（versionKey）与版本号、影响说明、是否可用（钉钉应用未配置时只读）、当前管理员能否修改（canEdit）；数据卷当前剩余空间（disk）；参数总览与超时链路。不返回任何密钥。需要平台配置的查看权限（admin:config:read）",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          }
+        }
+      }
+    },
+    "/platform-config/runtime-limits": {
+      "get": {
+        "operationId": "listRuntimeLimits",
+        "summary": "Agent 管理 › 能力 › 运行限制（运行参数配置方案 RP-S3）：接受调度的各 Runtime 的 ID、名称与单次执行超时（秒），页面按最短的提示 Agent 运行超时的实际生效值。平台配置查看权限返回同样内容；Agent 查看或修改权限（admin:agent:read / admin:agent:write）按只读选择器访问，只返回这三个字段",
         "responses": {
           "200": {
             "$ref": "#/components/responses/Ok"

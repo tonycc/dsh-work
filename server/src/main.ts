@@ -168,7 +168,11 @@ async function start() {
   await runMigrations(database)
   // 运行参数（运行参数配置方案 RP-S1）：启动时读入页面保存过的值，之后由保存刷新进程内快照。
   // 钉钉四项在平台配置中保存后清除钉钉配置缓存（dingtalkSettings 在下方创建，回调只在保存时调用）。
-  const platformSettings = new PostgresPlatformSettingsService(database, { onDingTalkChanged: () => dingtalkSettings.invalidate() })
+  const platformSettings = new PostgresPlatformSettingsService(database, {
+    onDingTalkChanged: () => dingtalkSettings.invalidate(),
+    // 登录会话有效期（RP-S3）：环境变量只是页面从未保存时的初始值，页面保存后以页面为准。
+    ...(process.env.DSH_WORK_SESSION_TTL_SECONDS !== undefined ? { sessionTtlSecondsFromEnvironment: identityConfiguration.sessionTtlSeconds } : {}),
+  })
   await platformSettings.load()
   if (identityConfiguration.ignoredLegacySettings?.length) {
     console.warn(`AI Hub 登录已删除，以下旧配置不再读取，可从运行配置中删除：${identityConfiguration.ignoredLegacySettings.join('、')}`)
@@ -190,7 +194,7 @@ async function start() {
     ...(credentialSecrets ? { credentials: credentialSecrets } : {}),
   })
   await dingtalkSettings.ensureBootstrap()
-  const localAuthentication = new LocalAuthService(identityConfiguration, database, dingtalkSettings)
+  const localAuthentication = new LocalAuthService(identityConfiguration, database, dingtalkSettings, { sessionTtlSeconds: () => platformSettings.sessionTtlSeconds() })
   const dingtalkAuthentication = new DingTalkAuthService(identityConfiguration, database, dingtalkSettings)
   // 错误记录（错误记录方案 OBS-S1）：服务端 5xx、进程异常与浏览器上报写入同一组表。
   const errorRecords = new PostgresErrorRecordsService(database, {
@@ -215,7 +219,6 @@ async function start() {
   registerErrorRecordsRoutes(router, errorRecords)
   registerUsageAnalyticsRoutes(router, usageAnalytics)
   registerPlatformConfigRoutes(router, platformSettings, {
-    sessionTtl: { seconds: identityConfiguration.sessionTtlSeconds, fromEnvironment: process.env.DSH_WORK_SESSION_TTL_SECONDS !== undefined },
     // 请求时才读取（启动完成后 dataRoot 已确定）。
     diskStatus: async () => {
       const space = await freeSpace(dataRoot)
@@ -380,6 +383,7 @@ async function start() {
     host: process.env.DSH_WORK_MODEL_GATEWAY_HOST ?? '127.0.0.1',
     port: Number(process.env.DSH_WORK_MODEL_GATEWAY_PORT ?? 0),
     onError: message => { console.warn(message) },
+    headersTimeoutMs: () => platformSettings.get('model.headers_timeout_seconds') * 1000,
   }) : undefined
   if (modelGateway) {
     console.log(`dsh-work model gateway listening on ${await modelGateway.start()}`)
@@ -571,6 +575,7 @@ async function start() {
   // 企业知识库（功能规则第 11 节）：连接由管理端配置（WK-S3），API Key 加密保存；部署配置 WEKNORA_*
   // 只在管理员保存 API Key 之前提供初始连接。执行前检索、员工端与管理端共用同一连接，保存后立即生效。
   const knowledgeConnection = new PostgresKnowledgeConnection(database, {
+    timeouts: () => ({ searchMs: platformSettings.get('knowledge.search_timeout_seconds') * 1000, uploadMs: platformSettings.get('knowledge.upload_timeout_seconds') * 1000 }),
     credentials: credentialSecrets,
     bootstrap: process.env.WEKNORA_BASE_URL && process.env.WEKNORA_API_KEY
       ? {

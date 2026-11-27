@@ -37,6 +37,8 @@ export interface ModelGatewayOptions {
   maxRequestBytes?: number
   /** 等待厂商响应头的时限，默认 120 秒；之后的流式正文不设总时限，由 DSH 的空闲超时约束。 */
   upstreamHeadersTimeoutMs?: number
+  /** 平台配置“模型首个响应超时”（毫秒），每次请求时读取；`upstreamHeadersTimeoutMs` 显式给出时以它为准（测试用）。 */
+  headersTimeoutMs?: () => number
   onError?: (message: string) => void
 }
 
@@ -332,7 +334,8 @@ export class ModelGateway {
       await save(record({ modelKey, origin: 'transport', outcome: 'aborted', httpStatus: null, errorCode: null }))
       return
     }
-    const headersTimer = setTimeout(() => controller.abort(), this.options.upstreamHeadersTimeoutMs ?? DEFAULT_HEADERS_TIMEOUT_MS)
+    const headersTimeout = this.options.upstreamHeadersTimeoutMs ?? this.options.headersTimeoutMs?.() ?? DEFAULT_HEADERS_TIMEOUT_MS
+    const headersTimer = setTimeout(() => controller.abort(), headersTimeout)
     let upstream: Response
     try {
       upstream = await this.fetchImpl(target, { method: 'POST', headers, body: new Uint8Array(outbound), signal: controller.signal, redirect: 'error' })
@@ -351,7 +354,7 @@ export class ModelGateway {
 
     if (upstream.status >= 400) {
       // 错误正文同样受时限约束：厂商发完响应头后卡住时不让网关一直挂起。
-      const bodyTimer = setTimeout(() => controller.abort(), this.options.upstreamHeadersTimeoutMs ?? DEFAULT_HEADERS_TIMEOUT_MS)
+      const bodyTimer = setTimeout(() => controller.abort(), headersTimeout)
       const errorBody = await readLimited(upstream, MAX_ERROR_BODY_BYTES).finally(() => clearTimeout(bodyTimer))
       response.off('close', onClose)
       await save(record({

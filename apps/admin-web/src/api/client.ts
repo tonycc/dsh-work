@@ -83,6 +83,7 @@ import type {
   ErrorLookupResult,
   ErrorRange,
   PlatformConfig,
+  RuntimeLimit,
   PlatformSetting,
   RunProblemSummary,
   UsageIdlePerson,
@@ -454,6 +455,8 @@ export const adminApi = {
   getModelUsageExecutions: (filter: ModelUsageFilter, page: number, pageSize: number) =>
     request<ListPage<ModelUsageExecution>>(`/model-usage/executions${listQuery({ ...filter, page, pageSize })}`),
   getPlatformConfig: () => request<PlatformConfig>('/platform-config'),
+  /** 接受调度的 Runtime 的单次执行超时；Agent 权限按只读选择器访问。 */
+  getRuntimeLimits: () => request<RuntimeLimit[]>('/platform-config/runtime-limits'),
   savePlatformSettings: (changes: Array<{ key: string; value: number; revision: number }>) =>
     request<{ settings: PlatformSetting[] }>('/platform-settings', { method: 'PUT', body: JSON.stringify({ changes }) }),
   getUsageOverview: (range: UsageRange, department?: string) =>

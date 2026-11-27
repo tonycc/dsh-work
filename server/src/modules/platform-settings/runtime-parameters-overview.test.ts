@@ -15,8 +15,7 @@ function settings(overrides: Record<string, number> = {}): PlatformSettingView[]
 function input(overrides: Partial<RuntimeParametersOverviewInput> = {}): RuntimeParametersOverviewInput {
   return {
     settings: settings({ 'web_fetch.max_per_attempt': 3 }),
-    runtimes: [{ id: 'runtime-local-01', name: 'runtime-local-01', capacity: 4, timeoutSeconds: 180, configured: true, agentsOverTimeout: 2 }],
-    sessionTtl: { seconds: 28_800, fromEnvironment: false },
+    runtimes: [{ id: 'runtime-local-01', name: 'runtime-local-01', capacity: 4, timeoutSeconds: 180, configured: true, agentsOverTimeout: 2, automationsOverTimeout: 1 }],
     canEdit: owner => owner.kind === 'module' && owner.module === 'config',
     ...overrides,
   }
@@ -57,10 +56,17 @@ test('DingTalk parameters are read-only when the application is not configured',
   assert.equal(overview.entries.find(entry => entry.id === 'dingtalk.timeout_seconds')!.canEdit, false)
 })
 
-test('the session lifetime reports where its value comes from', () => {
-  const session = buildRuntimeParametersOverview(input({ sessionTtl: { seconds: 3600, fromEnvironment: true } }))
-    .entries.find(entry => entry.id === 'identity.session_ttl')!
-  assert.deepEqual({ value: session.value, source: session.source }, { value: '1 小时', source: 'env' })
+test('session, knowledge and model timeouts are platform config items; no item is left "not yet editable" (RP-S3)', () => {
+  const overview = buildRuntimeParametersOverview(input())
+  const session = overview.entries.find(entry => entry.id === 'session.ttl_hours')!
+  assert.deepEqual({ group: session.group, value: session.value, owner: session.owner, canEdit: session.canEdit },
+    { group: 'config', value: '8 小时', owner: { kind: 'platform-admin' }, canEdit: false })
+  for (const key of ['knowledge.search_timeout_seconds', 'knowledge.upload_timeout_seconds', 'model.headers_timeout_seconds']) {
+    const entry = overview.entries.find(item => item.id === key)!
+    assert.deepEqual({ group: entry.group, canEdit: entry.canEdit }, { group: 'config', canEdit: true }, key)
+  }
+  assert.ok(!overview.entries.some(entry => ['identity.session_ttl', 'knowledge.timeouts', 'model.headers_timeout'].includes(entry.id)))
+  assert.ok(overview.entries.every(entry => ['config', 'other', 'fixed'].includes(entry.group)))
 })
 
 test('timeout chains show the effective value, the limiting layer and truncated Agents', () => {
@@ -70,11 +76,22 @@ test('timeout chains show the effective value, the limiting layer and truncated 
   assert.deepEqual({ actual: chains.get('admin-assistant')!.actual, limiter: chains.get('admin-assistant')!.limiter }, { actual: '3 分钟', limiter: '内置上限 180 秒' })
   assert.equal(chains.get('background')!.actual, '2 分钟')
   assert.deepEqual({ actual: chains.get('knowledge')!.actual, limiter: chains.get('knowledge')!.limiter }, { actual: '20 秒', limiter: '检索超时 × 2 个请求' })
+  assert.match(chains.get('automation')!.warning!, /1 个已启用任务的运行超时大于 3 分钟/)
+  assert.deepEqual({ actual: chains.get('release-trial')!.actual, limiter: chains.get('release-trial')!.limiter }, { actual: '≤ 3 分钟', limiter: 'Runtime 单次执行超时' })
+  assert.equal(chains.get('model')!.actual, '2 分钟')
+
+  // 知识库与模型链路跟随平台配置的值。
+  const configured = new Map(buildRuntimeParametersOverview(input({
+    settings: settings({ 'knowledge.search_timeout_seconds': 11, 'model.headers_timeout_seconds': 45 }),
+  })).timeoutChains.map(chain => [chain.id, chain]))
+  assert.deepEqual({ actual: configured.get('knowledge')!.actual, limiter: configured.get('knowledge')!.limiter }, { actual: '22 秒', limiter: '检索超时 × 2 个请求' })
+  assert.equal(configured.get('model')!.actual, '45 秒')
 
   const shortRuntime = new Map(buildRuntimeParametersOverview(input({
-    runtimes: [{ id: 'r', name: 'r', capacity: 2, timeoutSeconds: 60, configured: false, agentsOverTimeout: 0 }],
+    runtimes: [{ id: 'r', name: 'r', capacity: 2, timeoutSeconds: 60, configured: false, agentsOverTimeout: 0, automationsOverTimeout: 0 }],
   })).timeoutChains.map(chain => [chain.id, chain]))
   assert.equal(shortRuntime.get('conversation')!.warning, undefined)
+  assert.equal(shortRuntime.get('automation')!.warning, undefined)
   assert.deepEqual({ actual: shortRuntime.get('admin-assistant')!.actual, limiter: shortRuntime.get('admin-assistant')!.limiter }, { actual: '1 分钟', limiter: 'Runtime 单次执行超时' })
 
   const noRuntime = buildRuntimeParametersOverview(input({ runtimes: [] })).timeoutChains.map(chain => chain.id)
