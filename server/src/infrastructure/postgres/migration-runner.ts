@@ -26,6 +26,7 @@ export async function runMigrations(
   migrationsDirectory = resolve(import.meta.dirname, '../../../migrations'),
 ): Promise<AppliedMigration[]> {
   await database.begin(async (transaction) => {
+    await transaction.unsafe('set local statement_timeout = 0; set local lock_timeout = 0')
     await transaction`select pg_advisory_xact_lock(${migrationLockKey})`
     await transaction.unsafe(`
       create table if not exists schema_migrations (
@@ -57,6 +58,8 @@ export async function runMigrations(
     const preflight = upgradePreflightChecks[version]
     if (preflight) await preflight(database)
     const applied = await database.begin(async (transaction) => {
+      // 迁移可能长时间建索引或等待另一进程释放迁移锁：本事务不受连接池的语句/等锁超时限制。
+      await transaction.unsafe('set local statement_timeout = 0; set local lock_timeout = 0')
       // Another process may have applied this version while we waited for the lock.
       await transaction`select pg_advisory_xact_lock(${migrationLockKey})`
       const [concurrent] = await transaction`select 1 from schema_migrations where version = ${version}`

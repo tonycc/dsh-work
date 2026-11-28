@@ -45,7 +45,7 @@ import { LocalAuthService } from './modules/identity/local-auth-service.ts'
 import { DingTalkAuthService } from './modules/identity/dingtalk/dingtalk-auth-service.ts'
 import { loadDingTalkDeploymentSettings } from './modules/identity/dingtalk/dingtalk-config.ts'
 import { DingTalkSettingsService } from './modules/identity/dingtalk/dingtalk-settings.ts'
-import { checkDatabase, createDatabase } from './infrastructure/postgres/database.ts'
+import { checkDatabase, createDatabase, serverDatabaseConfiguration } from './infrastructure/postgres/database.ts'
 import { runMigrations } from './infrastructure/postgres/migration-runner.ts'
 import { PostgresOperationsService } from './modules/admin/application/postgres-operations-service.ts'
 import { PostgresGrantReconciliationService } from './modules/admin/application/postgres-grant-reconciliation-service.ts'
@@ -164,7 +164,7 @@ async function start() {
   if (!databaseUrl) throw invalidRequest('必须配置 DSH_WORK_DATABASE_URL：服务端会话与业务数据都保存在 PostgreSQL 中')
   // Validate authentication configuration before any database mutation.
   const identityConfiguration = loadStartupIdentityConfiguration()
-  const database = createDatabase({ url: databaseUrl })
+  const database = createDatabase(serverDatabaseConfiguration(databaseUrl))
   await runMigrations(database)
   // 运行参数（运行参数配置方案 RP-S1）：启动时读入页面保存过的值，之后由保存刷新进程内快照。
   // 钉钉四项在平台配置中保存后清除钉钉配置缓存（dingtalkSettings 在下方创建，回调只在保存时调用）。
