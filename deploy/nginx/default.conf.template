@@ -22,6 +22,7 @@ upstream dsh_work_server {
 server {
   listen 8443 ssl default_server;
   listen 8444 ssl default_server;
+  http2 on;
   server_name _;
 
   ssl_certificate /etc/dsh-work/tls/server.crt;
@@ -32,6 +33,9 @@ server {
 
 server {
   listen 8443 ssl;
+  # HTTP/2: every live-update stream (one per running task, one per open team space) shares a
+  # single connection instead of taking one of the browser's six HTTP/1.1 connections per host.
+  http2 on;
   server_name ${DSH_WORK_WORKBENCH_SERVER_NAMES};
 
   ssl_certificate /etc/dsh-work/tls/server.crt;
@@ -91,6 +95,9 @@ server {
 
 server {
   listen 8444 ssl;
+  # HTTP/2: every live-update stream (one per running task, one per open team space) shares a
+  # single connection instead of taking one of the browser's six HTTP/1.1 connections per host.
+  http2 on;
   server_name ${DSH_WORK_ADMIN_SERVER_NAMES};
 
   ssl_certificate /etc/dsh-work/tls/server.crt;
