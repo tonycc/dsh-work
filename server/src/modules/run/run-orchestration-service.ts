@@ -179,7 +179,13 @@ export class RunOrchestrationService {
   assertCurrentRunAuthorization(manifest: RuntimeManifest) { return this.gate.assertCurrentRunAuthorization(manifest) }
   assertWaitingRunAuthorization(manifest: RuntimeManifest) { return this.gate.assertWaitingRunAuthorization(manifest) }
 
-  close() { return this.scheduler.close() }
+  async close() {
+    await this.dispatcher.settleBackgroundDispatches()
+    return this.scheduler.close()
+  }
+
+  /** Waits until Runs accepted so far have their first Attempt (or have failed); used by tests. */
+  settleBackgroundDispatches() { return this.dispatcher.settleBackgroundDispatches() }
 
   async createSession(input: {
     userId: string
@@ -428,7 +434,8 @@ export class RunOrchestrationService {
       taskBudget: input.cumulativeBudget,
       ...(taskThread ? { requireIdleSession: { conflictMessage: TASK_THREAD_BUSY } } : {}),
     })
-    if (run.currentAttemptId || run.status !== 'queued') return run
+    // 重放同一请求时，原请求可能仍在后台检索知识、尚未创建 Attempt（审核报告 2.4.4）：直接返回，不再派发第二次。
+    if (run.currentAttemptId || run.status !== 'queued' || this.dispatcher.isDispatchingInBackground(run.id)) return run
     // 项目空间 S4：任务对话的第一次执行让待办的 Agent 任务进入进行中。
     if (taskThread) await this.deps.projectTasks?.noteTaskRunStarted?.(session.id)
     await this.deps.conversations.appendMessage({
@@ -458,10 +465,13 @@ export class RunOrchestrationService {
           ? (input.scheduled ? 'read' : 'read-write')
           : 'none',
         personalConversation: session.workspaceType === 'personal' && !input.scheduled,
+        knowledgeInBackground: true,
       })
     })
     await this.deps.operations?.appendAudit(input.userId, 'run.create', run.id, 'success', `trace-${run.id}`, '员工创建真实 Run')
-    return this.deps.runs.getRun(tenantId, run.id)
+    const accepted = await this.deps.runs.getRun(tenantId, run.id)
+    // 本次请求新受理的 Run（不是幂等重放）：调用方据此知道它还没有任何结果证据。
+    return accepted ? { ...accepted, justAccepted: true as const } : accepted
   }
 
   /** PF-01 entry for API/event work that has no product-conversation semantics. */
@@ -747,6 +757,16 @@ export class RunOrchestrationService {
         `Attempt ${item.attemptId} 因服务重启终止`,
       )
     }
+    for (const runId of recovery.undispatched ?? []) {
+      await this.deps.operations?.appendAudit(
+        'system',
+        'run.recovered-after-restart',
+        runId,
+        'failed',
+        `trace-recovery-${runId}`,
+        '服务重启时 Run 尚未创建 Attempt，已终止',
+      )
+    }
     for (const item of recovery.queued) {
       const persisted = item.attempt.manifest as unknown as RuntimeManifest
       const manifest = normalizePersistedRuntimeManifest(persisted)
@@ -761,7 +781,7 @@ export class RunOrchestrationService {
       }
       this.scheduler.enqueue(item.run, manifest)
     }
-    return { failed: recovery.failed.length, resumedQueued: recovery.queued.length }
+    return { failed: recovery.failed.length + (recovery.undispatched?.length ?? 0), resumedQueued: recovery.queued.length }
   }
 
   /**

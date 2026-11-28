@@ -323,7 +323,11 @@ export function registerConversationRoutes(
       mentionedUserIds: body.mentionedUserIds,
     })
     if (!run) throw new Error('Run 创建失败')
-    const task = await attachCurrentUserRole(authorization, await conversations.getTask(run.id, userId), userId)
+    const task = await attachCurrentUserRole(
+      authorization,
+      await conversations.getTask(run.id, userId, { justAccepted: 'justAccepted' in run && run.justAccepted === true }),
+      userId,
+    )
     return httpResult(202, envelope('workbench', task, 'postgres'))
   })
 
@@ -636,6 +640,25 @@ export async function streamRunEvents(
       })}\n\n`)
     }
     const run = await runs.getRun(tenantId, runId)
+    // 没有 Attempt 就结束的 Run（发消息后在后台准备执行时失败或被停止，审核报告 2.4.4）没有任何运行事件
+    // （run_events 以 Attempt 为外键）。补发一条不落库的终态事件，页面才会结束等待，而不是反复重连。
+    if (run && !run.currentAttemptId && !cursor && events.length === 0 && (run.status === 'failed' || run.status === 'cancelled')) {
+      if (!(await canDeliver())) break
+      const failed = run.status === 'failed'
+      response.write(`event: run.${run.status}\n`)
+      response.write(`data: ${JSON.stringify({
+        event_id: `event-undispatched-${run.id}`,
+        run_id: run.id,
+        attempt_id: null,
+        sequence: 0,
+        event_type: `run.${run.status}`,
+        occurred_at: run.updatedAt,
+        display_message: failed ? '执行没有开始：准备执行时出错，请重试' : '执行已停止',
+        safe_metadata: { reason: 'undispatched' },
+        trace_id: `trace-${run.id}`,
+      })}\n\n`)
+      break
+    }
     if (run && ['succeeded', 'failed', 'cancelled'].includes(run.status) && events.length === 0) {
       emptyTerminalPolls += 1
       if (emptyTerminalPolls >= 2) break

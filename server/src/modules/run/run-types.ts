@@ -93,4 +93,9 @@ export interface CreateAttemptInput {
     extractionId: string | null
     mountPath: string
   }>
+  /**
+   * 只在 Run 仍是“无 Attempt 的 queued”时创建：后台派发（审核报告 2.4.4）期间 Run 可能已被取消或
+   * 已有 Attempt，此时拒绝而不是把已取消的 Run 重新拉起。
+   */
+  requireUndispatched?: boolean
 }

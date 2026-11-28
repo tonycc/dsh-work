@@ -1022,9 +1022,13 @@ export class PostgresConversationRepository {
     return row ?? null
   }
 
-  async getTask(runId: string, userId: string): Promise<TaskRun | null> {
+  /**
+   * `justAccepted`：发消息接口刚受理的 Run（审核报告 2.4.4）。它的当前 Attempt 还没有任何结果证据，
+   * 跳过按 Attempt 查询的证据表；进度与结果随后由事件流从头补上。
+   */
+  async getTask(runId: string, userId: string, options: { justAccepted?: boolean } = {}): Promise<TaskRun | null> {
     const row = await this.findTaskRow(runId, userId)
-    return row ? (await this.mapTasks([row], userId))[0] ?? null : null
+    return row ? (await this.mapTasks([row], userId, { skipResultEvidence: options.justAccepted === true }))[0] ?? null : null
   }
 
   /** A retry must not repeat an external action that is unreconciled or reconciled as already applied. */
@@ -1473,8 +1477,9 @@ export class PostgresConversationRepository {
   private async loadTaskResultEvidenceBatch(
     rows: TaskRow[],
     committedByRun: ReadonlyMap<string, ReadonlySet<string>>,
+    options: { skipResultEvidence?: boolean } = {},
   ): Promise<Map<string, TaskResultEvidence>> {
-    const withAttempt = rows.filter((row): row is TaskRow & { currentAttemptId: string } => row.currentAttemptId !== null)
+    const withAttempt = options.skipResultEvidence ? [] : rows.filter((row): row is TaskRow & { currentAttemptId: string } => row.currentAttemptId !== null)
     const runIds = withAttempt.map(row => row.id)
     const attemptIds = withAttempt.map(row => row.currentAttemptId)
     const events = attemptIds.length
@@ -1664,7 +1669,7 @@ export class PostgresConversationRepository {
    * 任务装配（列表与详情共用）：消息、证据、成果、附件、历史轮次状态全部按
    * 整批 Run 一次装载后在内存分组，SQL 条数不随 Run 数增长（GET /tasks N+1 治理）。
    */
-  private async mapTasks(rows: TaskRow[], viewerUserId?: string): Promise<TaskRun[]> {
+  private async mapTasks(rows: TaskRow[], viewerUserId?: string, options: { skipResultEvidence?: boolean } = {}): Promise<TaskRun[]> {
     if (!rows.length) return []
     // 团队 Run 详情只取该 Run 的消息（评审 M8）：共享会话里全会话加载会把
     // 几百条无关讨论一并载入。个人 Run 详情保持 AC-23 原契约——返回会话的
@@ -1682,7 +1687,7 @@ export class PostgresConversationRepository {
     const evidenceByRun = await this.loadTaskResultEvidenceBatch(rows, new Map(contexts.map(context => [
       context.row.id,
       new Set(context.runMessages.filter(message => message.role === 'assistant').map(message => message.id)),
-    ])))
+    ])), options)
     // 个人会话详情含整段多轮消息：装载各 Run 当前 Attempt 的成果，供前端按 runId 挂卡。
     // 本轮核验仍只用 evidence → result.artifacts。团队详情消息已按 Run 收窄，与本轮一致。
     const threadArtifactRows = await this.loadThreadArtifactsForRuns([...new Set(

@@ -13,6 +13,8 @@ import type {
 
 export interface RestartRecoveryResult {
   failed: Array<{ runId: string; attemptId: string }>
+  /** 会话 Run 停在“无 Attempt 的 queued”（上一进程准备 Attempt 时中断），已收敛为 failed。 */
+  undispatched?: string[]
   queued: Array<{ run: RunRecord; attempt: RunAttemptRecord }>
 }
 

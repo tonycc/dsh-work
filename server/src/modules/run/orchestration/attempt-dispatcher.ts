@@ -14,6 +14,7 @@ import type { AttemptScheduler } from './attempt-scheduler.ts'
 import { removeProxiedWebFetch, removeUnsupportedWebSearch, toCapabilityReference, toRuntimeManifestSkill, toRuntimeModelRoute } from './manifest-helpers.ts'
 import { dshHomeProxyConfigured } from '../../runtime/dsh-home-proxy.ts'
 import type { ModelRouteSnapshot } from '../../model/model-types.ts'
+import type { KnowledgeResolution } from '../../knowledge/knowledge-provider.ts'
 import { tenantId, runtimeId, type OrchestrationDependencies } from './orchestration-dependencies.ts'
 
 /** Turns an accepted request into a persisted, queued Attempt with an immutable Manifest. */
@@ -21,6 +22,7 @@ export class AttemptDispatcher {
   private readonly deps: OrchestrationDependencies
   private readonly budget: AttemptBudget
   private readonly scheduler: AttemptScheduler
+  private readonly backgroundDispatches = new Map<string, Promise<void>>()
 
   constructor(deps: OrchestrationDependencies, budget: AttemptBudget, scheduler: AttemptScheduler) {
     this.deps = deps
@@ -78,6 +80,11 @@ export class AttemptDispatcher {
      * 有 purpose 的运行（发布试运行、定时与主动任务、系统与管理运行）不装配。
      */
     personalConversation?: boolean
+    /**
+     * 审核报告 2.4.4：员工发消息（POST /runs）时为 true，知识检索与 Attempt 创建在返回 202 之后进行。
+     * 不需要知识检索的运行不受影响，仍同步创建 Attempt。
+     */
+    knowledgeInBackground?: boolean
   }) {
     const runtimePolicy = await this.deps.operations?.getRuntimePolicy(runtimeId)
     const disabledTools = new Set(runtimePolicy?.disabledTools ?? [])
@@ -118,23 +125,17 @@ export class AttemptDispatcher {
     const effectiveDataScopes = authorization?.dataScopes ?? (trial ? [] : ['enterprise:authorized'])
     // 企业知识（功能规则第 11 节）：一期只在个人空间的员工对话中检索，且只检索会话所选、
     // 员工当前可见的知识库。团队空间、定时任务、主动任务、验证运行与系统运行都不调用（2.1）。
-    const knowledge = this.deps.knowledge && !input.purpose && input.personalConversation === true && run.sessionId
-      ? await this.deps.knowledge.resolveContext({
+    const knowledgeProvider = this.deps.knowledge
+    const knowledgeRequest = knowledgeProvider && !input.purpose && input.personalConversation === true && run.sessionId
+      ? {
           sessionId: run.sessionId,
           userId: input.userId,
           agentVersionId: input.agentVersionId,
           // 功能规则第 11 节：先只用本次提问检索，没有结果时再带上一条提问。
           query: input.prompt.trim(),
           fallbackQuery: knowledgeQuery(input.prompt, input.history),
-        })
+        }
       : null
-    // 连接被停用或 API Key 读不出（not_configured）是管理员的配置状态，不是检索故障：只提示，不写失败审计（功能规则第 11 节）。
-    if (knowledge?.status === 'unavailable' && knowledge.failureReason !== 'not_configured') {
-      await this.deps.operations?.appendAudit(
-        input.userId, 'knowledge.retrieve.unavailable', run.id, 'failed', `trace-${run.id}`,
-        `企业知识库不可用，本次执行未注入知识（${knowledge.failureReason ?? 'unknown'}）`,
-      )
-    }
     // Experience is retrieved per person, workspace or organization. Runs without a
     // workspace (release trials) get none by design: validation checks SOUL.md, skills,
     // tools and access, not experience that differs per employee.
@@ -199,13 +200,6 @@ export class AttemptDispatcher {
             bashAvailable: !disabledTools.has('bash'),
           })
         : []),
-      // 功能规则第 11 节（KO9）：个人对话中执行前检索为 ok 时装配，范围与执行前检索相同。
-      ...(!input.purpose
-        ? knowledgeSearchToolNames({
-            personalConversation: input.personalConversation === true,
-            knowledgeStatus: knowledge?.status,
-          })
-        : []),
     ].filter(name => !disabledTools.has(name))
     const unavailableTools = [
       ...removeUnsupportedWebSearch(toolNames, route),
@@ -220,7 +214,16 @@ export class AttemptDispatcher {
       }
     }
     const originalMounts = withBash ? preparedFiles.flatMap(file => file.original ? [file.original] : []) : []
-    const manifest: RuntimeManifest = {
+    const principalContext = (authorization?.executorPrincipalId ?? agent.principalId)
+      ? await this.principalContextForRun(
+          run,
+          (authorization?.executorPrincipalId ?? agent.principalId)!,
+          authorization?.executorAuthorizationVersion ?? agent.principalAuthorizationVersion ?? 1,
+        )
+      : null
+    const budget = await this.budget.manifest(run, limits)
+    // 知识检索结果只影响 Manifest 的知识字段、知识检索工具与引用快照；其余部分在检索前就已确定。
+    const buildManifest = (knowledge: KnowledgeResolution | null): RuntimeManifest => ({
       manifest_version: '1.0',
       ...(input.purpose ? { purpose: input.purpose } : {}),
       model_requirements: agent.modelRequirements,
@@ -239,13 +242,7 @@ export class AttemptDispatcher {
         tenant_id: tenantId,
         role_ids: authorization?.roleIds ?? (trial ? [] : agent.roleIds),
       },
-      ...((authorization?.executorPrincipalId ?? agent.principalId) ? {
-        principal_context: await this.principalContextForRun(
-          run,
-          (authorization?.executorPrincipalId ?? agent.principalId)!,
-          authorization?.executorAuthorizationVersion ?? agent.principalAuthorizationVersion ?? 1,
-        ),
-      } : {}),
+      ...(principalContext ? { principal_context: principalContext } : {}),
       permission_policy: {
         approval_mode: agent.approvalMode,
         network_policy: agent.mcpConnections?.length ? 'allowlist' : 'deny',
@@ -262,7 +259,16 @@ export class AttemptDispatcher {
           ...(item.coveredBy ? { covered_by: item.coveredBy } : {}),
         })),
       } : {}),
-      tools: toolNames.map(name => toCapabilityReference(builtinToolReference(name))),
+      tools: [
+        ...toolNames,
+        // 功能规则第 11 节（KO9）：个人对话中执行前检索为 ok 时装配，范围与执行前检索相同。
+        ...(!input.purpose
+          ? knowledgeSearchToolNames({
+              personalConversation: input.personalConversation === true,
+              knowledgeStatus: knowledge?.status,
+            }).filter(name => !disabledTools.has(name))
+          : []),
+      ].map(name => toCapabilityReference(builtinToolReference(name))),
       ...(unavailableTools.length ? { unavailable_tools: unavailableTools } : {}),
       ...(agent.mcpConnections?.length ? { mcp_connections: agent.mcpConnections } : {}),
       data_scopes: effectiveDataScopes,
@@ -288,13 +294,13 @@ export class AttemptDispatcher {
         ...(input.history?.length ? { conversation_history: input.history } : {}),
         ...(input.history?.length && input.conversationSummary ? { conversation_summary: input.conversationSummary } : {}),
       },
-      budget: await this.budget.manifest(run, limits),
+      budget,
       limits,
       created_at: new Date().toISOString(),
       timezone: input.timezone ?? this.deps.timezone,
       trace_id: `trace-${run.id}-${attemptId}`,
-    }
-    await this.submit(run, manifest, route, {
+    })
+    const sources = (knowledge: KnowledgeResolution | null) => ({
       knowledgeCitations: knowledge?.citations ?? [],
       memorySources: memoryContext.map(memory => ({
         memoryVersionId: memory.memoryVersionId,
@@ -307,6 +313,31 @@ export class AttemptDispatcher {
         mountPath: file.mount?.mount_path ?? file.original!.mount_path,
       })),
     })
+    const resolveKnowledge = async () => {
+      if (!knowledgeProvider || !knowledgeRequest) return null
+      const knowledge = await knowledgeProvider.resolveContext(knowledgeRequest)
+      // 连接被停用或 API Key 读不出（not_configured）是管理员的配置状态，不是检索故障：只提示，不写失败审计（功能规则第 11 节）。
+      if (knowledge.status === 'unavailable' && knowledge.failureReason !== 'not_configured') {
+        await this.deps.operations?.appendAudit(
+          input.userId, 'knowledge.retrieve.unavailable', run.id, 'failed', `trace-${run.id}`,
+          `企业知识库不可用，本次执行未注入知识（${knowledge.failureReason ?? 'unknown'}）`,
+        )
+      }
+      return knowledge
+    }
+    if (!knowledgeRequest || !input.knowledgeInBackground) {
+      const knowledge = await resolveKnowledge()
+      await this.submit(run, buildManifest(knowledge), route, sources(knowledge))
+      return
+    }
+    // 审核报告 2.4.4：员工对话的知识检索（最坏一次检索超时）不再卡在 202 之前。能在检索前发现的问题
+    // （执行身份、Runtime 可用性、Manifest 校验）仍在这里同步拒绝；检索与 Attempt 创建转入后台，
+    // 期间 Run 停在“无 Attempt 的 queued”，失败时收敛为 failed，被取消时不再创建 Attempt。
+    await this.preflight(buildManifest(null), route)
+    this.dispatchInBackground(run, async () => {
+      const knowledge = await resolveKnowledge()
+      await this.submit(run, buildManifest(knowledge), route, sources(knowledge), { requireUndispatched: true })
+    })
   }
 
   /**
@@ -318,12 +349,9 @@ export class AttemptDispatcher {
     input: RuntimeManifest,
     route: ModelRouteSnapshot,
     sources: Pick<Parameters<OrchestrationDependencies['runs']['createAttempt']>[0], 'knowledgeCitations' | 'memorySources' | 'inputFiles'> = {},
+    options: { requireUndispatched?: boolean } = {},
   ): Promise<void> {
-    // 模型路由方案 4.2：路由快照随 Manifest 固定（进入 SHA-256），Adapter 与网关只读这份快照。
-    const manifest: RuntimeManifest = { ...input, model_route_id: route.routeId, model_route: toRuntimeModelRoute(route) }
-    this.assertPrincipalContextForDispatch(manifest)
-    await this.deps.runtime.assertAvailable?.(manifest)
-    const compiled = compileRuntimeManifest(manifest)
+    const { manifest, compiled } = await this.preflight(input, route)
     await this.deps.runs.createAttempt({
       attemptId: manifest.attempt_id,
       tenantId,
@@ -332,9 +360,51 @@ export class AttemptDispatcher {
       manifest: JSON.parse(compiled.canonicalJson) as JsonObject,
       manifestSha256: compiled.sha256,
       modelRouteSnapshot: JSON.parse(JSON.stringify(route)) as JsonObject,
+      ...(options.requireUndispatched ? { requireUndispatched: true } : {}),
       ...sources,
     })
     this.scheduler.enqueue(run, manifest)
+  }
+
+  /** Fixes the route snapshot, then runs every check that does not need the Attempt row. */
+  private async preflight(input: RuntimeManifest, route: ModelRouteSnapshot) {
+    // 模型路由方案 4.2：路由快照随 Manifest 固定（进入 SHA-256），Adapter 与网关只读这份快照。
+    const manifest: RuntimeManifest = { ...input, model_route_id: route.routeId, model_route: toRuntimeModelRoute(route) }
+    this.assertPrincipalContextForDispatch(manifest)
+    await this.deps.runtime.assertAvailable?.(manifest)
+    return { manifest, compiled: compileRuntimeManifest(manifest) }
+  }
+
+  /** True while this process is still preparing the Run's first Attempt in the background. */
+  isDispatchingInBackground(runId: string): boolean {
+    return this.backgroundDispatches.has(runId)
+  }
+
+  /** Waits for every background dispatch started so far (tests and graceful shutdown). */
+  async settleBackgroundDispatches(): Promise<void> {
+    while (this.backgroundDispatches.size) await Promise.allSettled([...this.backgroundDispatches.values()])
+  }
+
+  /**
+   * Runs the tail of a dispatch after the HTTP request has been answered. A failure fails the
+   * still-undispatched Run (the same convergence as failUndispatchedRun); a Run that was cancelled
+   * or otherwise left "queued without an Attempt" meanwhile is left as it is.
+   */
+  private dispatchInBackground(run: RunRecord, work: () => Promise<void>) {
+    const task = (async () => {
+      try {
+        await work()
+      } catch (error) {
+        const converged = await this.deps.runs.convergeUndispatchedRun(tenantId, run.id, 'failed').catch(() => false)
+        if (!converged) return
+        console.error('background run dispatch failed', { runId: run.id, error })
+        await this.deps.operations?.appendAudit(
+          run.requestedBy, 'run.dispatch.failed', run.id, 'failed', `trace-${run.id}`,
+          `执行准备失败，本次 Run 未开始（${error instanceof Error ? error.message : 'unknown'}）`,
+        ).catch(() => undefined)
+      }
+    })().finally(() => this.backgroundDispatches.delete(run.id))
+    this.backgroundDispatches.set(run.id, task)
   }
 
   async principalContextForRun(

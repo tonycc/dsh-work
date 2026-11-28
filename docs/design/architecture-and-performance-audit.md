@@ -158,6 +158,7 @@ flowchart TD
 
 4. **同步阻塞操作错放在 HTTP 202 返回前与 `run.completed` 终态前**
    > **阶段零实测**：成果收集 p95 0.6 秒、最大 0.9 秒，成果解析阻塞降为低优；知识库检索耗时待补测。
+   > **已处理（2026-11-28）**：员工发消息时知识检索移到返回 202 之后，202 前不再查结果证据表，检索成功每分钟最多改写一次连接行；成果文本提取与 `session.jsonl` 重复解析仍未处理。
    - **代码位置**：[attempt-dispatcher.ts](../../server/src/modules/run/orchestration/attempt-dispatcher.ts#L121)、[weknora-knowledge-provider.ts](../../server/src/modules/knowledge/weknora-knowledge-provider.ts#L148-L157)、[conversation-routes.ts](../../server/src/http/workbench/conversation-routes.ts#L325)、[dsh-acp-runtime-adapter.ts](../../server/src/modules/runtime/dsh-acp-runtime-adapter.ts#L880-L902)
    - **机制分析**：
      - 个人对话添加知识库后，`startRun` 在 `POST /sessions/:id/runs` 返回 202 之前同步等待 `dispatch` 中的 WeKnora 检索，未命中时串行触发二次 fallback 检索（单次检索超时自 `RP-S3` 起可在平台配置调整，默认 10s，最坏阻塞前端 **2×超时 = 20 秒**拿不到 `runId`），且返回 202 前又调 `conversations.getTask` 空查 9 张刚建好必为空的结果证据表；每次检索成功还 `UPDATE external_knowledge_connections` 同一行记录；

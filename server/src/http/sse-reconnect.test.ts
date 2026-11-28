@@ -51,6 +51,48 @@ test('SSE reconnect forwards Last-Event-ID and emits only later persisted events
   assert.equal(response.ended, true)
 })
 
+test('a Run that ends without an Attempt gets one unpersisted terminal event instead of an endless reconnect', { timeout: 2000 }, async () => {
+  const response = new MemorySseResponse()
+  const runs = {
+    async readEventsAfterEvent() { return [] },
+    async getRun() {
+      return {
+        id: 'run-undispatched', tenantId: 'tenant-dsh-work', taskId: 'task-undispatched', sessionId: 'session-undispatched',
+        requestedBy: 'U00001', idempotencyKey: 'idempotency-undispatched', status: 'failed' as const,
+        currentAttemptId: null, createdAt: '2026-11-28T00:00:00.000Z', updatedAt: '2026-11-28T00:00:01.000Z',
+      }
+    },
+  }
+
+  await streamRunEvents(response, undefined, 'run-undispatched', runs, 1, 60_000)
+
+  assert.match(response.body, /event: run\.failed\n/)
+  assert.match(response.body, /"attempt_id":null/)
+  assert.match(response.body, /"reason":"undispatched"/)
+  // No id line: a reconnect must not resume from a synthetic cursor.
+  assert.doesNotMatch(response.body, /^id: /m)
+  assert.equal(response.ended, true)
+})
+
+test('a resumed stream of a Run without an Attempt does not repeat the synthetic terminal event', { timeout: 2000 }, async () => {
+  const response = new MemorySseResponse()
+  const runs = {
+    async readEventsAfterEvent() { return [] },
+    async getRun() {
+      return {
+        id: 'run-undispatched', tenantId: 'tenant-dsh-work', taskId: 'task-undispatched', sessionId: 'session-undispatched',
+        requestedBy: 'U00001', idempotencyKey: 'idempotency-undispatched', status: 'cancelled' as const,
+        currentAttemptId: null, createdAt: '2026-11-28T00:00:00.000Z', updatedAt: '2026-11-28T00:00:01.000Z',
+      }
+    },
+  }
+
+  await streamRunEvents(response, 'event-seen-before', 'run-undispatched', runs, 1, 60_000)
+
+  assert.doesNotMatch(response.body, /run\.cancelled/)
+  assert.equal(response.ended, true)
+})
+
 class MemorySseResponse extends EventEmitter {
   body = ''
   ended = false
