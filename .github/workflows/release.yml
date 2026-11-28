@@ -60,12 +60,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # CI 拆成并行 Job 后没有汇总检查（d968729），逐个要求 ci.yml 的 Job 成功。
+          # CI 拆成并行 Job 后没有汇总检查（d968729），逐个要求 ci.yml 的 Job 成功。集成与浏览器测试是矩阵 Job，
+          # 检查名带分片后缀（如 "Browser tests (p0 1/2)"），同一前缀下的每个分片都必须成功；同名检查取最新一次。
           runs=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100")
           for check in "Static checks and build" "Unit tests" "PostgreSQL integration tests" "Browser tests"; do
-            conclusion=$(jq -r --arg name "${check}" '[.check_runs[] | select(.name == $name)][0].conclusion // ""' <<<"${runs}")
-            test "${conclusion}" = "success" \
-              || { echo "CI check not successful for ${GITHUB_SHA}: ${check} (${conclusion:-missing})" >&2; exit 1; }
+            conclusions=$(jq -r --arg name "${check}" '
+              [.check_runs[] | select(.name == $name or (.name | startswith($name + " (")))]
+              | group_by(.name) | map(max_by(.started_at) | "\(.name)=\(.conclusion // "pending")") | .[]' <<<"${runs}")
+            test -n "${conclusions}" \
+              || { echo "CI check missing for ${GITHUB_SHA}: ${check}" >&2; exit 1; }
+            while IFS= read -r entry; do
+              test "${entry##*=}" = "success" \
+                || { echo "CI check not successful for ${GITHUB_SHA}: ${entry}" >&2; exit 1; }
+            done <<<"${conclusions}"
           done
 
       - name: Set up locked pnpm and Node.js

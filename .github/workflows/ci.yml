@@ -14,7 +14,7 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Four independent jobs run in parallel. Server tests are selected by file name:
+# Independent jobs run in parallel; integration and browser tests are split across several machines. Server tests are selected by file name:
 # *.integration.test.ts → test:integration (PostgreSQL), other *.test.ts → test:unit.
 jobs:
   static:
@@ -66,8 +66,13 @@ jobs:
       - name: Run server and frontend unit tests
         run: pnpm ci:unit
 
+  # 集成测试逐个文件串行（每个文件自建可丢弃数据库），按文件分到两台机器，见 run-server-tests.mjs --shard。
   integration:
-    name: PostgreSQL integration tests
+    name: PostgreSQL integration tests (${{ matrix.shard }})
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1/2, 2/2]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -103,15 +108,25 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Run all server integration suites
-        run: pnpm test:integration
+        run: pnpm test:integration --shard=${{ matrix.shard }}
 
-  # P0 冒烟（内存夹具，套件内串行）单独一台机器；11 个 P1 套件在另一台机器上并行（每套各自的服务与可丢弃数据库）。
+  # P0 冒烟（内存夹具，套件内串行）按测试文件用 Playwright --shard 分到两台机器，每台各起一份冒烟服务与 Vite；
+  # 11 个 P1 套件按耗时分成员工端（3 套）与身份/管理端（8 套）两组，各一台机器，组内套件并行
+  # （每套各自的服务与可丢弃数据库）。两组合起来等于 test:e2e:p1。
   browser:
-    name: Browser tests (${{ matrix.suite }})
+    name: Browser tests (${{ matrix.suite }} ${{ matrix.shard || matrix.group }})
     strategy:
       fail-fast: false
       matrix:
-        suite: [p0, p1]
+        include:
+          - suite: p0
+            shard: 1/2
+          - suite: p0
+            shard: 2/2
+          - suite: p1
+            group: workbench
+          - suite: p1
+            group: admin
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -152,11 +167,15 @@ jobs:
       # 全部套件写在一份 playwright.config.ts 里，每个套件一个 project。钉钉套件使用假钉钉开放平台，不是真实钉钉验收。
       - name: Run P0 browser smoke tests
         if: matrix.suite == 'p0'
-        run: pnpm test:e2e
+        run: pnpm test:e2e --shard=${{ matrix.shard }}
 
-      - name: Run P1 browser journeys
-        if: matrix.suite == 'p1'
-        run: pnpm test:e2e:p1
+      - name: Run P1 browser journeys (workbench)
+        if: matrix.suite == 'p1' && matrix.group == 'workbench'
+        run: pnpm test:e2e:p1:workbench
+
+      - name: Run P1 browser journeys (identity and admin)
+        if: matrix.suite == 'p1' && matrix.group == 'admin'
+        run: pnpm test:e2e:p1:admin
 
       # 任一浏览器套件失败时上传 Playwright 结果，便于事后定位偶发失败：只为失败的用例保留 trace 与截图，
       # HTML 报告包含这台机器上运行的全部套件。内容均为测试夹具的合成数据与 CI 专用身份。
@@ -164,7 +183,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: browser-test-results-${{ matrix.suite }}-${{ github.run_attempt }}
+          name: browser-test-results-${{ matrix.suite }}-${{ matrix.group || strategy.job-index }}-${{ github.run_attempt }}
           path: |
             test-results/
             playwright-report/

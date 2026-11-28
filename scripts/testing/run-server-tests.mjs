@@ -2,13 +2,14 @@
 // Runs server tests selected by file name and directory instead of hand-maintained file lists.
 //   node scripts/testing/run-server-tests.mjs unit [dir...]
 //   node scripts/testing/run-server-tests.mjs integration [dir...]
+//   node scripts/testing/run-server-tests.mjs integration --shard=1/2   (CI splits files across machines)
 // Directories are relative to server/ (e.g. src/modules/run). Integration suites need
 // DSH_WORK_TEST_DATABASE_URL and run one file at a time against throwaway databases.
 // A test file whose leaked child or handle keeps it alive never finishes, and node:test then
 // prints nothing for it or any later file. A run that outlives DSH_WORK_TEST_WATCHDOG_MINUTES
 // (unit 10, integration 25) lists the processes still running under the runner and is stopped.
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -55,16 +56,54 @@ export function listServerTests(serverRoot, kind, directories = serverTestRoots)
   return [...new Set(files)].sort()
 }
 
+/** Number of test(...) / it(...) calls in a test file's source. */
+export function countTests(source) {
+  return source.match(/^\s*(?:test|it)(?:\.(?:only|skip|todo))?\(/gm)?.length ?? 0
+}
+
+/** Parses `--shard=<index>/<total>` (1-based); undefined when absent. */
+export function parseShard(value) {
+  if (value === undefined) return undefined
+  const match = value.match(/^(\d+)\/(\d+)$/)
+  const index = Number(match?.[1])
+  const total = Number(match?.[2])
+  if (!match || total < 1 || index < 1 || index > total) throw new Error(`--shard 应为 <序号>/<总数>，例如 1/2：${value}`)
+  return { index, total }
+}
+
+/**
+ * Files for one shard. Files are spread greedily by weight (largest first, into the lightest shard),
+ * so every shard gets a similar share; each file lands in exactly one shard, and the order is stable.
+ */
+export function shardServerTests(files, { index, total }, weight = () => 1) {
+  const loads = Array.from({ length: total }, () => 0)
+  const owner = new Map()
+  const weighted = files.map(file => ({ file, weight: weight(file) }))
+    .sort((a, b) => b.weight - a.weight || a.file.localeCompare(b.file))
+  for (const { file, weight: value } of weighted) {
+    const lightest = loads.indexOf(Math.min(...loads))
+    loads[lightest] += value
+    owner.set(file, lightest)
+  }
+  return files.filter(file => owner.get(file) === index - 1)
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  const [kind, ...directories] = process.argv.slice(2)
+  const [kind, ...rest] = process.argv.slice(2)
+  const shardArgument = rest.find(argument => argument.startsWith('--shard='))
+  const directories = rest.filter(argument => argument !== shardArgument)
   if (kind !== 'unit' && kind !== 'integration') {
     console.error('用法：run-server-tests.mjs <unit|integration> [server 相对目录...]')
     process.exit(2)
   }
   const serverRoot = resolve(import.meta.dirname, '../../server')
   let files
+  let shard
   try {
+    shard = parseShard(shardArgument?.slice('--shard='.length))
     files = listServerTests(serverRoot, kind, directories.length ? directories : serverTestRoots)
+    // 用例数（加 1 计每个文件建库与启动的固定开销）近似耗时，让各分片的工作量接近。
+    if (shard) files = shardServerTests(files, shard, file => countTests(readFileSync(resolve(serverRoot, file), 'utf8')) + 1)
   } catch (error) {
     console.error(error.message)
     process.exit(2)
@@ -74,7 +113,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     console.error('集成测试需要 DSH_WORK_TEST_DATABASE_URL（可写在 .env）')
     process.exit(2)
   }
-  console.log(`运行 ${files.length} 个 ${kind} 测试文件`)
+  console.log(`运行 ${files.length} 个 ${kind} 测试文件${shard ? `（分片 ${shard.index}/${shard.total}）` : ''}`)
   const child = spawn(process.execPath, [
     '--env-file-if-exists=../.env', '--experimental-strip-types', '--test',
     `--test-concurrency=${kind === 'integration' ? 1 : 4}`, ...files,

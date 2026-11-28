@@ -41,7 +41,7 @@ pnpm test:e2e
 
 ## 自动化验证
 
-统一质量入口是 `pnpm ci:check`（= `pnpm ci:static` + `pnpm ci:unit`），具体脚本以 [package.json](../../package.json)、[服务端脚本](../../server/package.json) 和 [CI 工作流](../../.github/workflows/ci.yml) 为准。CI 拆成四个并行 Job：`static`（部署配置、静态检查、类型、lint、构建）、`unit`（服务端与双前端单测）、`integration`（全部 PostgreSQL 集成套件）、`browser`（P0 冒烟与各 P1 浏览器旅程）。
+统一质量入口是 `pnpm ci:check`（= `pnpm ci:static` + `pnpm ci:unit`），具体脚本以 [package.json](../../package.json)、[服务端脚本](../../server/package.json) 和 [CI 工作流](../../.github/workflows/ci.yml) 为准。CI 拆成四个并行 Job：`static`（部署配置、静态检查、类型、lint、构建）、`unit`（服务端与双前端单测）、`integration`（全部 PostgreSQL 集成套件，按文件分两台机器）、`browser`（P0 冒烟与 P1 浏览器旅程各分两台机器）。
 
 服务端测试按文件名自动归类，不再需要逐个登记：`*.integration.test.ts` 属于集成测试，其余 `*.test.ts`（含 `server/config` 下的 `*.test.js`）属于单元测试。新增测试文件放对位置、用对后缀即可进入 CI；使用测试数据库的文件必须以 `.integration.test.ts` 结尾，`pnpm verify` 会检查。
 
@@ -102,7 +102,7 @@ PostgreSQL 集成测试必须使用专用可丢弃测试库，禁止使用开发
 DSH_WORK_TEST_DATABASE_URL='postgres://<test-user>:<test-password>@127.0.0.1:5432/dsh_work_test' pnpm test:local-auth:integration
 ```
 
-`pnpm test:integration [目录...]` 与其他 `test:*:integration` 使用同一测试变量，按修改模块选择；集成测试逐个文件串行执行。`pnpm ci:check` 不包含 PostgreSQL 集成测试和浏览器 E2E；GitHub Actions 在 `integration` 与 `browser` 两个 Job 中各自启动 PostgreSQL Service 运行它们。全部浏览器套件写在一份 [playwright.config.ts](../../playwright.config.ts) 里，每个套件是一个 Playwright project（`p0` 与各 P1 套件），各有自己的后端、Vite 与可丢弃数据库、端口互不重叠；`browser` Job 分两台机器：`p0` 运行 `pnpm test:e2e`，`p1` 运行 `pnpm test:e2e:p1`，后者的套件之间在不同 worker 上并行（CI 最多 3 个），套件内部仍串行；本地一次跑完全部套件用 `pnpm test:e2e:all`。本地单跑一个套件用 `pnpm test:e2e:<套件>`，或 `pnpm exec playwright test --project=<套件> [spec]`；配置只启动 `--project` 选中套件的服务，不带 `--project` 时启动全部（P1 套件需要 `DSH_WORK_TEST_DATABASE_URL`）。新增套件时在 `suites` 中加一项并选未占用的端口，`scripts/testing/playwright-p0-config.test.mjs` 会检查端口不重叠。`browser` Job 中任一套件失败时，上传制品 `browser-test-results-<p0|p1>-<重跑序号>`（取 `github.run_attempt`，首次运行为 1），保留 14 天。失败用例的 trace 与截图在 `test-results/` 下，目录名带套件名后缀；`playwright-report/` 是该机器上全部套件的 HTML 报告，可按 project 筛选。失败摘要看 Job 日志。下载后先解压，再用 `pnpm exec playwright show-trace <trace.zip>` 查看点击前后的页面、网络请求与控制台。偶发失败先看 trace，再决定修复还是重跑。仓库是公开的，制品在保留期内任何登录 GitHub 的用户都能下载，trace 含完整的请求与响应；因此 `browser` Job 只能使用测试夹具数据，不得引入真实密钥。
+`pnpm test:integration [目录...]` 与其他 `test:*:integration` 使用同一测试变量，按修改模块选择；集成测试逐个文件串行执行。CI 用 `pnpm test:integration --shard=<序号>/<总数>` 把文件分到多台机器：按各文件的用例数（加 1 计建库开销）贪心分配，每个文件只在一个分片运行。`pnpm ci:check` 不包含 PostgreSQL 集成测试和浏览器 E2E；GitHub Actions 在 `integration` 与 `browser` 两个 Job 中各自启动 PostgreSQL Service 运行它们。全部浏览器套件写在一份 [playwright.config.ts](../../playwright.config.ts) 里，每个套件是一个 Playwright project（`p0` 与各 P1 套件），各有自己的后端、Vite 与可丢弃数据库、端口互不重叠；`browser` Job 分四台机器：`p0` 用 Playwright 分片在两台机器上运行 `pnpm test:e2e --shard=1/2` 与 `--shard=2/2`（按测试文件切分，每台各起一份冒烟服务与 Vite，套件内仍串行）；`p1` 按耗时分两组，`pnpm test:e2e:p1:workbench`（个人工作台、团队空间、自动化）与 `pnpm test:e2e:p1:admin`（本地账号、登录选项、钉钉、MCP 与 Agent 管理、Skill 审核）各一台，两组合起来等于本地的 `pnpm test:e2e:p1`；组内套件之间在不同 worker 上并行（CI 最多 3 个），套件内部仍串行；本地一次跑完全部套件用 `pnpm test:e2e:all`。本地单跑一个套件用 `pnpm test:e2e:<套件>`，或 `pnpm exec playwright test --project=<套件> [spec]`；配置只启动 `--project` 选中套件的服务，不带 `--project` 时启动全部（P1 套件需要 `DSH_WORK_TEST_DATABASE_URL`）。新增套件时在 `suites` 中加一项并选未占用的端口，`scripts/testing/playwright-p0-config.test.mjs` 会检查端口不重叠。`browser` Job 中任一套件失败时，上传制品 `browser-test-results-<p0-<矩阵序号>|p1-<workbench|admin>>-<重跑序号>`（取 `github.run_attempt`，首次运行为 1），保留 14 天。失败用例的 trace 与截图在 `test-results/` 下，目录名带套件名后缀；`playwright-report/` 是该机器上全部套件的 HTML 报告，可按 project 筛选。失败摘要看 Job 日志。下载后先解压，再用 `pnpm exec playwright show-trace <trace.zip>` 查看点击前后的页面、网络请求与控制台。偶发失败先看 trace，再决定修复还是重跑。仓库是公开的，制品在保留期内任何登录 GitHub 的用户都能下载，trace 含完整的请求与响应；因此 `browser` Job 只能使用测试夹具数据，不得引入真实密钥。
 
 PF-03 MCP Connector 治理使用 `pnpm test:mcp:integration`，在一次性数据库中验证平台生成标识、Bearer Token 加密存储/运行时解析/轮换、整体发现、按 Agent 选定解析、能力变更待确认与确认后摘要变化、取消租户容量上限、逐调用审计以及停用和删除门禁；该命令使用合成 Runtime，不替代真实 Streamable HTTP MCP 与目标 DSH 的 P2 验收。
 
@@ -142,7 +142,7 @@ PF-07 使用 `pnpm test:pf07:matrix` 校验版本化能力矩阵，`pnpm test:pf
 | 网络与运行故障 | 真实断网、代理/Provider 故障、Worker 与服务重启、宿主机恢复；故障注入单测不替代现场演练 |
 | 运维 | TLS、密钥、磁盘/证书告警、异机备份与恢复、应用回滚兼容性、RTO/RPO 和维护窗口 |
 
-主分支要求 CI 的四个 Job（Static checks and build、Unit tests、PostgreSQL integration tests、Browser tests）全部成功，人工发布按同一组检查放行。普通 push 只运行 CI；人工发布、Release watcher、首次安装及回滚统一按 [部署手册](../release/mac-mini-deployment-runbook.md) 执行。已发布 Release、主分支 CI 成功和远端部署完成是三个独立事实。
+主分支要求 CI 的四个 Job（Static checks and build、Unit tests、PostgreSQL integration tests、Browser tests；后两个是矩阵 Job，检查名带分片后缀，如 `Browser tests (p0 1/2)`、`Browser tests (p1 admin)`，每个分片都须成功）全部成功，人工发布按同一组检查放行。普通 push 只运行 CI；人工发布、Release watcher、首次安装及回滚统一按 [部署手册](../release/mac-mini-deployment-runbook.md) 执行。已发布 Release、主分支 CI 成功和远端部署完成是三个独立事实。
 
 ### 个人工作闭环增量
 
