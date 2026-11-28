@@ -22,6 +22,7 @@
 | 平台基线真实验收（PF-07） | [PF-07 验收手册](../development/pf07-platform-acceptance.md) |
 | 已实施（阶段 1～3，C 档 P2 已于 2026-10-28 在 Mac mini 通过）：执行容器、受控 Shell 与 Office 工具链的设计依据 | [执行隔离方案](../design/execution-isolation-plan.md) |
 | 进行中：执行观测、上下文延续与性能 | [Runtime 执行架构渐进优化方案](../design/runtime-execution-optimization-plan.md) |
+| 基线审查报告，待分阶段推进：连接池与 SQL、流式事件与网关性能、前后端架构与工程减负 | [架构合理性、过度设计与性能全面审核报告](../design/architecture-and-performance-audit.md) |
 | 项目空间产品决策与切片背景（S0～S6 已实现；现行规则以功能规则为准，P2 与部分 P1 旅程仍开放） | [项目空间方案](../design/project-space-plan.md) |
 | 独立账号登录 | [独立登录](../release/local-authentication.md) |
 | 安装、验证与升级执行内核 | [DSH Runtime](../release/dsh-runtime-delivery.md) |
