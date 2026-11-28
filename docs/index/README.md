@@ -13,7 +13,6 @@
 | 项目空间、个人内容、管理助手、Skill、定时任务、验证发布等产品与安全规则 | [功能规则](../development/feature-rules.md) |
 | 设计和评审 Agent，区分现行规则与扩展门槛 | [Agent 设计规范](../development/agent-design-standard.md) |
 | 按统一阶段定义、发布、运行和退役 Agent | [通用 Agent 全生命周期模板](../development/agent-lifecycle-template.md) |
-| 移动端 H5 接入 | [移动端接入规范](../development/mobile-integration-guide.md) |
 | 代码级已实施（MR-S1～S3），P1 受控 DSH 通过，本机与 Mac mini 人工验收通过，P2 已于 2026-11-23 决定删除：平台路由决定实际模型、模型网关与用量 | [模型路由方案](../design/model-routing-plan.md) |
 | 代码级已实施（DLP-S1～S3），P2 已于 2026-11-23 以本机真实厂商验收结项（未按 PF-07 留证）：发往模型的敏感值遮盖与还原、密钥拦截 | [发往模型的数据防护方案](../design/model-data-protection-plan.md) |
 | DT-S1 账号绑定与钉钉内免登已实施到代码级，真实钉钉验收（P2）未做；DT-S2 工作通知与群组提醒未实施 | [钉钉接入方案](../design/dingtalk-integration-plan.md) |
@@ -32,7 +31,6 @@
 
 机器可读契约与测试夹具放在 `development/`：
 
-- [员工端 OpenAPI](../development/openapi-workbench.json)、[管理端 OpenAPI](../development/openapi-admin.json)、[认证 OpenAPI](../development/openapi-auth.json)、[移动端 OpenAPI](../development/openapi-mobile-h5.json)
 - [Runtime Manifest Schema](../development/runtime-manifest.schema.json)、[Run Event Schema](../development/run-event.schema.json)
 - [平台能力矩阵](../development/agent-platform-capabilities.v2.json)
 - [通用参考 Agent 包](../development/fixtures/reference-text-agent/agent.yaml)、[合成测试数据](../development/fixtures/mvp-fixtures.json)

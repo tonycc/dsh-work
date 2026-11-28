@@ -23,7 +23,7 @@ test('AMP-P0-01 a module administrator only sees permitted menus and lands on it
   await expect(page).toHaveTitle(/^企业知识库 · dsh-work$/)
 
   const menu = navigation(page)
-  for (const name of ['管理助手', '企业知识库', '接入规范', '接口文档']) {
+  for (const name of ['管理助手', '企业知识库']) {
     await expect(menu.getByRole('button', { name, exact: true })).toBeVisible()
   }
   for (const name of ['运营概览', 'Agent 管理', '模型治理', '员工与权限', '钉钉集成', '系统健康', '审计记录']) {

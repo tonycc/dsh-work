@@ -47,7 +47,7 @@ pnpm test:e2e
 
 服务启动读取的 `server/config` 文件（DSH 配置、执行脚本、内置 Skill、Agent 预置等，测试文件除外）必须随发布包交付：`pnpm verify` 检查 `scripts/release/build-release.sh` 已复制每个文件，打包收尾再由 `scripts/release/verify-release-bundle.mjs` 核验发布包，缺失即失败。新增配置目录时同步打包脚本。
 
-接口文档 `docs/development/openapi-{admin,workbench,auth,mobile-h5}.json` 由单元测试 `server/src/http/openapi-coverage.test.ts` 与代码逐条比对：`main.ts` 经 `register*Routes` 注册的每个接口都必须写进对应文档，文档里的每个操作都必须有实际路由（参数名不同视为同一路径；`/health*` 探针除外）。新增或删除接口时同步修改文档，否则 `pnpm test:unit` 失败；`main.ts` 不得在路由函数之外直接注册接口。
+接口不另外维护手写 OpenAPI 文档（只有本仓库两个前端调用，2026-11-28 删除），以路由代码与前端类型为准。单元测试 `server/src/http/route-registration.test.ts` 检查：`main.ts` 只经 `register*Routes` 注册接口（`/health*` 探针除外），所有接口都在 `/api/{admin,workbench}/v1` 或 `/auth` 下，每个管理端接口都登记了权限归属（未登记默认拒绝）。
 
 | 改动范围 | 主要验证命令 |
 | --- | --- |

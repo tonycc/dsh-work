@@ -35,7 +35,7 @@ function fixture(t) {
     'apps/workbench-web/src/components/collab/CollabAgentChat.vue', 'apps/workbench-web/src/components/collab/CollabGroupTimeline.vue',
     'apps/workbench-web/src/components/conversation/RunMessageList.vue',
     'apps/admin-web/src/main.ts', 'apps/admin-web/vite.config.ts', 'apps/admin-web/src/api/client.ts',
-    'apps/admin-web/src/stores/content.ts', 'apps/admin-web/src/views/ApiDocsView.vue',
+    'apps/admin-web/src/stores/content.ts',
     'apps/admin-web/src/views/CapabilityManagementView.vue', 'apps/admin-web/scripts/validate-ui-contract.mjs',
     'packages/ui-core/src/components/AssistantMessageContent.vue', 'packages/ui-core/src/components/MetricCard.vue',
     'scripts/check-architecture.mjs', 'scripts/checks/project.mjs', 'scripts/checks/server-dependencies.mjs',
@@ -55,14 +55,6 @@ const failures = (root, group) => verify(root, [group])[0].failures.join('\n')
 
 test('current project passes every static group', () => {
   assert.deepEqual(verify(projectRoot).flatMap(result => result.failures), [])
-})
-
-test('contract checks reject missing API paths and required error fields', t => {
-  const root = fixture(t)
-  editJson(root, 'docs/development/openapi-admin.json', api => { delete api.paths['/agents/{agentId}/rollback'] })
-  editJson(root, 'docs/development/openapi-workbench.json', api => { api.components.schemas.ErrorEnvelope.properties.error.required = [] })
-  assert.match(failures(root, 'contracts'), /缺少路径 \/agents\/\{agentId\}\/rollback/)
-  assert.match(failures(root, 'contracts'), /错误契约缺少 traceId/)
 })
 
 test('missing or malformed contracts report failures instead of passing', t => {

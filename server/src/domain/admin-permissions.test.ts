@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
 import {
@@ -147,19 +146,6 @@ test('routes: an Agent writer reads candidate lists in selector view only', () =
   assert.deepEqual(decideAdminRouteAccess(['admin:config:read'], api('platform-config/runtime-limits'), 'GET'), { allowed: true, view: 'full' })
   assert.ok(!allowed(['admin:agent:write'], 'platform-config'))
   assert.ok(!allowed(['admin:knowledge:write'], 'platform-config/runtime-limits'))
-})
-
-test('every documented admin operation has a permission owner', () => {
-  const document = JSON.parse(readFileSync(new URL('../../../docs/development/openapi-admin.json', import.meta.url), 'utf8')) as { paths: Record<string, Record<string, unknown>> }
-  const missing: string[] = []
-  for (const [path, operations] of Object.entries(document.paths)) {
-    const full = path.startsWith('/api/') ? path : `/api/admin/v1${path}`
-    for (const method of Object.keys(operations).filter(key => ['get', 'post', 'put', 'patch', 'delete'].includes(key))) {
-      const concrete = full.replace(/\{[^}]+\}/g, 'x')
-      if (!decideAdminRouteAccess(['admin:*'], concrete, method.toUpperCase()).allowed) missing.push(`${method.toUpperCase()} ${path}`)
-    }
-  }
-  assert.deepEqual(missing, [])
 })
 
 test('grant ceiling: implied codes are expanded before comparing', () => {

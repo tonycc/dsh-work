@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
 import { createServer, type Server } from 'node:http'
 import { after, before, test } from 'node:test'
 
@@ -44,111 +43,6 @@ interface SkillTestProgressEnvelope {
 interface RecordListEnvelope {
   data: Array<Record<string, unknown>>
 }
-
-test('workbench OpenAPI keeps session thread and summary operations on their actual routes', async () => {
-  const document = JSON.parse(await readFile(
-    new URL('../../../docs/development/openapi-workbench.json', import.meta.url),
-    'utf8',
-  )) as { paths: Record<string, { get?: { operationId?: string } }> }
-
-  assert.equal(document.paths['/sessions/{sessionId}']?.get?.operationId, 'getSessionThread')
-  assert.equal(document.paths['/sessions/{sessionId}/summary']?.get?.operationId, 'getSessionForUser')
-})
-
-test('task result evidence kinds in the workbench OpenAPI match the result contract', async () => {
-  const workbench = JSON.parse(await readFile(
-    new URL('../../../docs/development/openapi-workbench.json', import.meta.url), 'utf8',
-  )) as { components: { schemas: {
-    TaskResultReceipt: { properties: { kind: { enum: string[] } } }
-    TaskResultPendingItem: { properties: { kind: { enum: string[] } } }
-  } } }
-  assert.deepEqual(workbench.components.schemas.TaskResultReceipt.properties.kind.enum, ['answer', 'artifact', 'tool'])
-  assert.ok(workbench.components.schemas.TaskResultPendingItem.properties.kind.enum.includes('external_effect_unknown'))
-})
-
-test('published admin and workbench OpenAPI references resolve', async () => {
-  for (const name of ['openapi-admin.json', 'openapi-workbench.json']) {
-    const document = JSON.parse(await readFile(
-      new URL(`../../../docs/development/${name}`, import.meta.url), 'utf8',
-    )) as Record<string, unknown>
-    const visit = (value: unknown): void => {
-      if (!value || typeof value !== 'object') return
-      const object = value as Record<string, unknown>
-      if (typeof object['$ref'] === 'string' && object['$ref'].startsWith('#/')) {
-        const target = object['$ref'].slice(2).split('/').reduce<unknown>((node, part) =>
-          typeof node === 'object' && node !== null
-            ? (node as Record<string, unknown>)[part.replaceAll('~1', '/').replaceAll('~0', '~')]
-            : undefined, document)
-        assert.notEqual(target, undefined, `${name}: ${object['$ref']}`)
-      }
-      for (const child of Object.values(object)) visit(child)
-    }
-    visit(document)
-  }
-})
-
-test('OpenAPI publishes governed platform capabilities and omits employee memory endpoints', async () => {
-  const workbench = JSON.parse(await readFile(
-    new URL('../../../docs/development/openapi-workbench.json', import.meta.url),
-    'utf8',
-  )) as {
-    paths: Record<string, { get?: { operationId?: string; summary?: string }; post?: { operationId?: string; description?: string } }>
-    components: { schemas: Record<string, { properties?: Record<string, unknown>; description?: string }> }
-  }
-  const admin = JSON.parse(await readFile(
-    new URL('../../../docs/development/openapi-admin.json', import.meta.url),
-    'utf8',
-  )) as { paths: Record<string, {
-    get?: { operationId?: string; summary?: string }
-    post?: { operationId?: string; summary?: string; responses?: Record<string, unknown> }
-    patch?: { operationId?: string; summary?: string; responses?: Record<string, unknown> }
-    delete?: { operationId?: string; summary?: string }
-  }> }
-
-  assert.equal(workbench.paths['/task-executions']?.post?.operationId, 'createTaskExecution')
-  assert.equal(workbench.paths['/task-executions/{taskId}']?.get?.operationId, 'getTaskExecution')
-  assert.equal(workbench.paths['/task-executions/{taskId}/operations']?.get?.operationId, 'listTaskOperations')
-  assert.equal(workbench.paths['/task-executions/{taskId}/cancel']?.post?.operationId, 'cancelTaskExecution')
-  assert.equal(workbench.paths['/task-executions/{taskId}/retry']?.post?.operationId, 'retryTaskExecution')
-  assert.match(workbench.paths['/task-executions']?.post?.description ?? '', /Token 与成本硬预算当前明确拒绝/)
-  assert.match(workbench.paths['/task-executions/{taskId}']?.get?.summary ?? '', /累计预算/)
-  assert.deepEqual(Object.keys(workbench.components.schemas['TaskCumulativeBudgetInput']?.properties ?? {}), [
-    'maxDurationMs', 'maxToolCalls', 'maxOutputBytes', 'maxTokens', 'maxCostAmount', 'costCurrency',
-  ])
-  assert.match(workbench.components.schemas['TaskCumulativeBudgetInput']?.description ?? '', /不支持的硬预算会明确失败/)
-  assert.equal(admin.paths['/task-executions/{taskId}/operations/{operationId}/resolve']?.post?.operationId, 'resolveTaskOperation')
-  assert.equal(admin.paths['/connectors']?.get?.operationId, 'listMcpConnectors')
-  assert.equal(admin.paths['/connectors/mcp']?.post?.operationId, 'registerMcpConnector')
-  assert.ok(admin.paths['/connectors/mcp']?.post?.responses?.['409'])
-  assert.equal(admin.paths['/connectors/mcp/test']?.post?.operationId, 'testMcpConnection')
-  assert.equal(admin.paths['/connectors/mcp/{connectorId}']?.delete?.operationId, 'deleteMcpConnector')
-  assert.equal(admin.paths['/connectors/mcp/credential']?.patch?.operationId, 'rotateMcpCredential')
-  assert.equal(admin.paths['/connectors/check']?.post?.operationId, 'checkConnector')
-  assert.ok(admin.paths['/connectors/check']?.post?.responses?.['409'])
-  assert.equal(admin.paths['/connectors/mcp/approve'], undefined)
-  assert.equal(admin.paths['/connectors/mcp/status']?.patch?.operationId, 'setMcpConnectorStatus')
-  assert.ok(admin.paths['/connectors/mcp/status']?.patch?.responses?.['409'])
-  assert.equal(admin.paths['/connectors/mcp/agent-access'], undefined)
-  assert.equal(admin.paths['/connectors/mcp/invocations']?.get?.operationId, 'listMcpInvocationAudits')
-  assert.equal(admin.paths['/runtimes/builtin-tools']?.get?.operationId, 'getBuiltinTools')
-  assert.equal(admin.paths['/skills/builtin']?.get?.operationId, 'getBuiltinSkills')
-  assert.equal(admin.paths['/skills/builtin-coverage']?.patch?.operationId, 'setSkillBuiltinCoverage')
-  assert.equal(admin.paths['/runtimes/dsh-tool-connector'], undefined)
-  assert.equal(admin.paths['/tools'], undefined)
-  assert.equal(admin.paths['/approvals']?.get?.operationId, 'listPersistentApprovals')
-  assert.equal(admin.paths['/approvals/{approvalId}']?.get?.operationId, 'getPersistentApproval')
-  assert.equal(admin.paths['/approvals/{approvalId}/resolve']?.post?.operationId, 'resolvePersistentApproval')
-  assert.equal(workbench.paths['/memory/proposals'], undefined)
-  assert.equal(workbench.paths['/memory/candidates'], undefined)
-  assert.equal(workbench.paths['/memory/consents'], undefined)
-  assert.equal(workbench.paths['/memory/consents/{consentId}/withdraw'], undefined)
-  assert.equal(admin.paths['/memory/candidates'], undefined)
-  assert.equal(admin.paths['/memory/candidates/{candidateId}/review'], undefined)
-  assert.equal(admin.paths['/experience-iterations/agents']?.get?.operationId, 'listExperienceIterationAgents')
-  assert.equal(admin.paths['/experience-iterations/agents/{agentId}/applications'], undefined)
-  assert.equal(admin.paths['/experience-iterations/applications']?.get?.operationId, 'listExperienceIterationApplications')
-  assert.equal(admin.paths['/experience-iterations/applications/{applicationId}/review']?.post?.operationId, 'reviewExperienceIterationApplication')
-})
 
 before(async () => {
   const router = createSmokeRouter()

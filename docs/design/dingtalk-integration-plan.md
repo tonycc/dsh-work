@@ -3,7 +3,7 @@
 **状态：** DT-S1 已实施到代码级（P0/P1 通过，钉钉开放平台为测试替身；见架构总览第 10 节），真实钉钉验收（第 9 节 P2）未做；DT-S2（工作通知与群组提醒）尚未实施。未通过第 9 节 P2 验收前，不能宣称钉钉移动端可用。<br>
 **关联方案：** 组织架构第一期（本地维护，已实施，[功能规则第 10 节](../development/feature-rules.md#10-组织架构org-s1org-s2)），不改本文。后续钉钉通讯录同步阶段（尚未设计）会修改本文第 3 节“钉钉侧的群、部门或角色不授予任何平台权限”与 4.3 中“不自动建账号”的规定，并可在同步时直接建立 4.2 的绑定；本文 PR 同步更新了其附录 A 的引用。<br>
 **更新日期：** 2026-11-05（DT27–DT29：身份绑定改为“钉钉内登录即绑定 + 管理员代绑”，取消手机号匹配与验证码，切片合并为两个）；2026-11-04（讨论确认 DT5–DT26：移动端定为“钉钉工作通知 + H5 微应用”，群组新消息可推送，不做钉钉机器人，公网入口进入本期；2026-10-31 已改以站内通知 `user_notifications` 为投递来源，见[功能规则 3.7](../development/feature-rules.md#37-动态通知与用量)）<br>
-**依据：** 现有站内通知（项目空间动态与未读迁移 0026、0096；与本人相关的通知 `user_notifications`，迁移 0110～0112，见[功能规则 3.7](../development/feature-rules.md#37-动态通知与用量)）、协作模式未读（功能规则 2.2b）、协作模式壳层 `CollabShell` 窄屏布局、[移动端接入规范](../development/mobile-integration-guide.md)、[功能规则 3.7 与定时任务章节](../development/feature-rules.md)、[Mac mini 部署手册](../release/mac-mini-deployment-runbook.md)；钉钉开放平台公开文档（接口名与配额以实施时官方文档为准，见第 8 节）。
+**依据：** 现有站内通知（项目空间动态与未读迁移 0026、0096；与本人相关的通知 `user_notifications`，迁移 0110～0112，见[功能规则 3.7](../development/feature-rules.md#37-动态通知与用量)）、协作模式未读（功能规则 2.2b）、协作模式壳层 `CollabShell` 窄屏布局、移动端接入规范（2026-11-28 已删除）、[功能规则 3.7 与定时任务章节](../development/feature-rules.md)、[Mac mini 部署手册](../release/mac-mini-deployment-runbook.md)；钉钉开放平台公开文档（接口名与配额以实施时官方文档为准，见第 8 节）。
 
 ## 1. 背景与目标
 
@@ -150,7 +150,7 @@
 
 ### 4.3 H5 微应用（钉钉内移动端）与免登
 
-- **公网入口：** 员工端使用独立域名（例如 `m.<企业域名>`）+ 受信证书，经反向代理只转发员工端页面、`/api/workbench/`、`/auth/workbench/`；按[移动端接入规范](../development/mobile-integration-guide.md) §2 把该 origin 加入 `DSH_WORK_WORKBENCH_ORIGINS`。端口：`server/src/modules/identity/config.ts` 只在 OIDC 配置下要求所有 origin 与 `DSH_WORK_WORKBENCH_PORT` 同端口，账号密码模式（`localAudienceConfiguration`）不校验端口。注意：只要环境中配置了任一 `AI_HUB_*` 接入变量，启动就会尝试 OIDC 配置；公网 443 origin 校验不过时**不会报错，而是静默回退为本地模式并关闭 AI Hub 登录**（`loadStartupIdentityConfiguration`）。因此公网入口上线时部署环境应已不再配置 AI Hub（OD1 计划删除），或公网入口改用 4174 端口；部署手册写明此检查。反向代理对 `/auth/workbench/` 按路径**显式白名单**转发（登录、钉钉免登、退出、会话查询），不整段转发。上线前须落实 8.3 的安全基线。
+- **公网入口：** 员工端使用独立域名（例如 `m.<企业域名>`）+ 受信证书，经反向代理只转发员工端页面、`/api/workbench/`、`/auth/workbench/`；把该 origin 加入 `DSH_WORK_WORKBENCH_ORIGINS`。端口：`server/src/modules/identity/config.ts` 只在 OIDC 配置下要求所有 origin 与 `DSH_WORK_WORKBENCH_PORT` 同端口，账号密码模式（`localAudienceConfiguration`）不校验端口。注意：只要环境中配置了任一 `AI_HUB_*` 接入变量，启动就会尝试 OIDC 配置；公网 443 origin 校验不过时**不会报错，而是静默回退为本地模式并关闭 AI Hub 登录**（`loadStartupIdentityConfiguration`）。因此公网入口上线时部署环境应已不再配置 AI Hub（OD1 计划删除），或公网入口改用 4174 端口；部署手册写明此检查。反向代理对 `/auth/workbench/` 按路径**显式白名单**转发（登录、钉钉免登、退出、会话查询），不整段转发。上线前须落实 8.3 的安全基线。
 - **钉钉应用：** 在钉钉开放平台创建企业内部应用，工作通知与 H5 微应用属于同一应用（通知显示在该应用名下）；H5 首页为公网入口的协作模式（B）首页。在钉钉容器内一律按协作模式（B）显示，不修改员工保存的模式偏好（DT25）；容器识别只用于界面，不作为安全依据；按 8.1 的“DT-S1 钉钉后台配置清单”申请最小权限并完成配置（权限清单只在 8.1 维护）。
 - **免登：** 页面在钉钉容器内用 JSAPI 获取一次性授权码 → 新增 `POST /auth/workbench/dingtalk/login`，服务端用授权码换取钉钉 `userid`（授权码一次性，服务端不缓存、不重放），并核对授权码属于本企业应用（`corpId` 与配置一致），不属于则拒绝 → 查有效绑定 → 与密码登录相同地调用 `resolveAuthorization` 与 `assertAudienceAccess`、校验请求来源（`validateRequestOrigin`）→ 签发员工端 Session Cookie → 跳回通知链接的目标页面。免登只签发 workbench audience 的会话；跳转目标 `return_to` 只接受同源相对路径；免登接口按 IP 与钉钉 `userid` 限流。没有有效绑定时显示账号密码登录页，登录即绑定（4.2 方式一）；不自动建账号。
 - **会话来源：** 免登签发的是同一平台账号的会话，不新增账号类型，但新增会话来源 `dingtalk`（后续钉钉通讯录同步共用）。需要改动：
@@ -194,7 +194,7 @@
 - [功能规则 2.2b](../development/feature-rules.md)：“不新增推送通道”改为群组未读可触发钉钉群组提醒（4.1.1），写明按群合并、已读不发、静音不推；
 - [功能规则](../development/feature-rules.md)定时任务章节：“结果”一行允许钉钉工作通知；
 - 站内通知（[功能规则 3.7](../development/feature-rules.md#37-动态通知与用量)）：新增站内通知类型“管理员为你绑定了钉钉”“你的钉钉绑定已被改绑或解除”，这两类不可在偏好中关闭；按类型关闭通知的开关随钉钉通知设置一起由 DT-S2 交付；
-- [移动端接入规范](../development/mobile-integration-guide.md)：增加钉钉容器内免登、容器能力适配层与公网入口要求；
+- 移动端接入规范（2026-11-28 已删除）：增加钉钉容器内免登、容器能力适配层与公网入口要求；
 - [架构总览第 10 节](../development/overview.md#10-当前边界与独立开发)：登记钉钉集成的已交付与未验收项；
 - [Mac mini 部署手册](../release/mac-mini-deployment-runbook.md)：公网域名、证书、反向代理、安全基线（8.3）与出站访问钉钉开放平台的配置；
 - [内部端口与契约](../development/internal-ports.md)：登记 `ExternalNotificationChannel`；

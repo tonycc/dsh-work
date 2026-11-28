@@ -57,9 +57,6 @@ requireFragments('../../packages/admin-components/src/AdminShell.vue', [
   'Session 列表',
   '工作空间',
   '安全与运维',
-  '开发接入',
-  '接入规范',
-  '接口文档',
   '返回员工工作台',
 ])
 forbidFragments('../../packages/admin-components/src/AdminShell.vue', [
@@ -93,8 +90,6 @@ requireFragments('src/router/index.ts', [
   "meta: { title: '工作空间'",
   "meta: { title: '审计记录'",
   "meta: { title: '系统健康'",
-  "meta: { title: '接入规范'",
-  "meta: { title: '接口文档'",
 ])
 
 const businessViews = [

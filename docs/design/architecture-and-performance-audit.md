@@ -199,7 +199,7 @@ flowchart TD
 
 4. **双端全量打包 Element Plus，首屏单 JS Chunk 均达 1.1 MB**
    - **代码位置**：员工端 [main.ts](../../apps/workbench-web/src/main.ts#L2-L3) 与 [vite.config.ts](../../apps/workbench-web/vite.config.ts#L11-L24)、管理端 [main.ts](../../apps/admin-web/src/main.ts#L2-L3) 与 [vite.config.ts](../../apps/admin-web/vite.config.ts#L34-L45)
-   - **实测数据**：双端均全量 `app.use(ElementPlus)` 且未配置按需加载或 `manualChunks`，构建产物中双端入口 JS 均为 **1.1 MB**、入口 CSS 约 **380～386 KB**；管理端 [ApiDocsView.vue](../../apps/admin-web/src/views/ApiDocsView.vue#L6) 还静态打包了 3,109 行 OpenAPI JSON 并单页渲染数十个重型 `el-table`。
+   - **实测数据**：双端均全量 `app.use(ElementPlus)` 且未配置按需加载或 `manualChunks`，构建产物中双端入口 JS 均为 **1.1 MB**、入口 CSS 约 **380～386 KB**；管理端 `ApiDocsView.vue`（2026-11-28 已删除）还静态打包了 3,109 行 OpenAPI JSON 并单页渲染数十个重型 `el-table`。
 
 ---
 
@@ -239,7 +239,7 @@ flowchart TD
    - 相反，真正同构的请求封装、信封解包与错误处理却在员工端 [client.ts](../../apps/workbench-web/src/api/client.ts)（737 行）与管理端 [client.ts](../../apps/admin-web/src/api/client.ts)（629 行）重复实现，并在两端 [domain.ts](../../apps/workbench-web/src/types/domain.ts) 与管理端 [domain.ts](../../apps/admin-web/src/types/domain.ts) 手写维护了 **2,589 行领域类型**。
 
 4. **18,691 行手写 OpenAPI JSON、201 条 npm scripts 与 12 套串行冷启动 E2E**
-   - **手写 OpenAPI 投入产出倒挂**：`docs/development/openapi-*.json` 合计 **18,691 行手写 JSON**（其中 `openapi-mobile-h5.json` 还是 `openapi-workbench.json` 的手工拷贝子集），但 [openapi-coverage.test.ts](../../server/src/http/openapi-coverage.test.ts#L67-L80) **只核对 HTTP Method 与擦除参数名后的路径，完全不校验实际请求/响应 Schema**，也未用于生成前端类型；
+   - **手写 OpenAPI 投入产出倒挂**：`docs/development/openapi-*.json` 合计 **18,691 行手写 JSON**（其中 `openapi-mobile-h5.json` 还是 `openapi-workbench.json` 的手工拷贝子集），但 `openapi-coverage.test.ts`（2026-11-28 已随手写文档删除） **只核对 HTTP Method 与擦除参数名后的路径，完全不校验实际请求/响应 Schema**，也未用于生成前端类型；
    - **CI 浏览器任务 12 次重复冷启动**：[ci.yml](../../.github/workflows/ci.yml#L147-L182) 在单个 Job 中串行运行 12 个 `playwright*.config.ts`（其中 `agent-capabilities`、`agent-principal`、`agent-routines` 3 个 7 行配置文件完全复用同一后端与 Vite，只改了 `testMatch`），单次 CI 串行启停销毁 **12 次后端 + 16 次 Vite Dev Server**；同时在 `server/src/testing/p0-smoke/` 平行维护了 4,718 行内存版业务后端；
    - **脚本堆砌与脆弱字面量门禁**：根 [package.json](../../package.json)（115 条）与服务端 `package.json`（86 条）残留大量历史里程碑与评审批次脚本（`test:review:batch02`、`test:review:8b` 等）；管理端 [validate-ui-contract.mjs](../../apps/admin-web/scripts/validate-ui-contract.mjs) 与 [team-workspace-1a.mjs](../../scripts/checks/team-workspace-1a.mjs) 通过 `String.includes` 锁死源码内部函数名与中文文案，阻碍正常的组件拆分与重构。
 
