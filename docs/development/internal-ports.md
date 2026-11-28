@@ -35,11 +35,10 @@ Agent 通用设计与评审要求见 [Agent 设计规范](agent-design-standard.
 
 ## API 与运行契约
 
-- [Workbench OpenAPI](openapi-workbench.json)：`/api/workbench/v1`。
-- [Admin OpenAPI](openapi-admin.json)：`/api/admin/v1`。
+- 员工端接口：`/api/workbench/v1`（`server/src/http/workbench/`）；管理端接口：`/api/admin/v1`（`server/src/http/admin/`）；认证接口：`/auth/{workbench|admin}/`。不维护手写 OpenAPI，以路由代码与前端类型为准。
 - 运行参数（RP-S1）：`PlatformSettingsReader`（`domain/platform-settings.ts`）同步读取运维参数的进程内快照，由 `modules/platform-settings/postgres-platform-settings-service.ts` 实现，启动时读取、保存后刷新（单进程部署）。读取网页上限在 Attempt 受理时固定到执行记录；磁盘阈值、失败工作区保留、通知/错误记录/页面访问保留与自动任务并发每次使用时读取，未接线时按登记表默认值。管理端读 `GET /api/admin/v1/platform-config`（模块 `config` 查看），保存 `PUT /api/admin/v1/platform-settings`（`config` 修改，安全类只限平台管理员）。RP-S2 起同一接口还读写 Runtime 容量与超时（`writeRuntimeCapacityAndTimeout`，更新 `runtimes.capacity` 并新建 `runtime_configurations` 修订）与钉钉四项（`writeDingTalkParameters`，按 `parameters_revision` 乐观锁，写后清除钉钉配置缓存），在同一事务内按存储行比对版本。RP-S3 起 `PostgresPlatformSettingsService.sessionTtlSeconds()` 供 `LocalAuthService` 每次签发会话时读取（页面没有保存时用环境变量的精确秒数）；`WeKnoraClient` 的 `timeouts`（经 `PostgresKnowledgeConnection` 传入）与 `ModelGateway` 的 `headersTimeoutMs` 每次请求读取快照；`GET /api/admin/v1/platform-config/runtime-limits` 为 Agent 能力页的只读选择器。
 - 页面访问（OBS-S2）：`POST /auth/{workbench|admin}/page-views`，只记已登录员工，结构与来源校验同错误上报；两端经上报器的 `trackRouter` 在路由切换后记录路由名。运营概览读 `GET /api/admin/v1/usage-analytics/*`（模块 `ops`），由 `modules/observability/postgres-usage-analytics-service.ts` 实现。
-- 浏览器错误上报（OBS-S1）：`POST /auth/{workbench|admin}/client-errors`，见[认证 OpenAPI](openapi-auth.json)。登录前的页面也要能上报，因此与登录同在 `/auth/{audience}/` 下、身份按需解析；校验 `Origin`、内容类型与固定结构，超出限额丢弃并返回 202。两端经 `@dsh-work/ui-core` 的 `setupErrorReporter` 接入（API 客户端报 5xx 与网络失败，员工端 `notifyActionFailure` 与管理端请求函数的 4xx 报“提示”类）；服务端 5xx 经 `Router` 的 `onServerFailure` 入库。脱敏共用 `security/safe-observability.ts` 的 `diagnosticMessage`，堆栈与个人信息遮盖见 `modules/observability/error-sanitize.ts`。
+- 浏览器错误上报（OBS-S1）：`POST /auth/{workbench|admin}/client-errors`。登录前的页面也要能上报，因此与登录同在 `/auth/{audience}/` 下、身份按需解析；校验 `Origin`、内容类型与固定结构，超出限额丢弃并返回 202。两端经 `@dsh-work/ui-core` 的 `setupErrorReporter` 接入（API 客户端报 5xx 与网络失败，员工端 `notifyActionFailure` 与管理端请求函数的 4xx 报“提示”类）；服务端 5xx 经 `Router` 的 `onServerFailure` 入库。脱敏共用 `security/safe-observability.ts` 的 `diagnosticMessage`，堆栈与个人信息遮盖见 `modules/observability/error-sanitize.ts`。
 - [Runtime Manifest](runtime-manifest.schema.json)：不可变输入、能力、文件、知识与权限快照；企业知识的检索结果见可选字段 `knowledge_status`（缺省表示本次执行不支持检索）、`knowledge_skipped_bases`、`knowledge_moved_bases`（因更换连接地址跳过的知识库名称，只用于页脚）与 `knowledge_skipped_reason`（`agent_not_permitted`：会话添加了知识库但 Agent 不具备查看级别，只用于页脚）。会话添加了知识库时，连接停用或 API Key 读不出记为 `unavailable`，`ok` 且没有片段时提示词与页脚说明“没有找到相关内容”（[功能规则第 11 节](feature-rules.md#11-企业知识库weknorawk-s1-起)）。
 - [Run Event](run-event.schema.json)：标准可展示事件，不包含隐藏推理和凭据。
 
@@ -105,7 +104,7 @@ Agent 的额外模型要求通过 `assertModelRequirements(requirements, target)
 
 ## 个人历史（B3）
 
-`PostgresConversationRepository.listSessionsForUser()` 为本人历史入口，Session 去重与授权过滤均在 SQL 中完成。默认只读个人范围，`scope=all` 包含本人仍可读团队会话。`getSessionForUser` 共用该查询；旧 Run、团队共享会话入口不被替代。`readableWorkspacePredicate` 是空间行别名 `w` 的公共 SQL 权限片段，不替代 HTTP 层身份与功能鉴权。完整字段以 Workbench OpenAPI 与类型定义为准。
+`PostgresConversationRepository.listSessionsForUser()` 为本人历史入口，Session 去重与授权过滤均在 SQL 中完成。默认只读个人范围，`scope=all` 包含本人仍可读团队会话。`getSessionForUser` 共用该查询；旧 Run、团队共享会话入口不被替代。`readableWorkspacePredicate` 是空间行别名 `w` 的公共 SQL 权限片段，不替代 HTTP 层身份与功能鉴权。完整字段以类型定义为准。
 
 ## 我的文件（B4）
 
@@ -129,7 +128,7 @@ Agent 的额外模型要求通过 `assertModelRequirements(requirements, target)
 
 新建独立账号统一使用手机号或邮箱；`POST /api/admin/v1/identity/login-account/check` 仅允许平台管理员检查格式和占用情况，创建事务仍会重新检查登录账号，重复返回 `local_account_exists`。手机号兼容 `+86` 并统一为大陆 11 位，邮箱忽略大小写；已有用户名继续兼容登录，不按资料邮箱绑定身份。
 
-认证接口见 [认证 OpenAPI](openapi-auth.json)，管理接口见 [Admin OpenAPI](openapi-admin.json)。`/auth/{audience}/configuration` 返回 `mode`（固定为 `local`）与 `localEnabled`，员工端另含钉钉 `corpId`；`mode` 不是管理端可选设置。每个门户只有一个 Session Cookie，密码登录与钉钉免登签发的会话按会话来源区分。
+认证接口见 `server/src/http/local-auth-routes.ts`、`session-routes.ts`、`dingtalk-auth-routes.ts`（`/auth/{audience}/`），管理接口见 `server/src/http/admin/`。`/auth/{audience}/configuration` 返回 `mode`（固定为 `local`）与 `localEnabled`，员工端另含钉钉 `corpId`；`mode` 不是管理端可选设置。每个门户只有一个 Session Cookie，密码登录与钉钉免登签发的会话按会话来源区分。
 
 管理端登录设置页面、`GET/PATCH /api/admin/v1/identity/login-settings` 和 `POST /api/admin/v1/identity/users/:userId/local-account` 已移除。旧 `system_settings.identity.login` 记录保留但不再读取，不触发启动切换或会话撤销。部署默认自动启用独立认证，旧 `DSH_WORK_AUTH_MODE=local/oidc` 被忽略并记警告；原 `prototype` 模式已移除，设置后服务拒绝启动。详见 [独立登录指南](../release/local-authentication.md)。
 

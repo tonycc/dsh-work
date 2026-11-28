@@ -4,27 +4,16 @@
 // 关键契约路径、迁移、接口与测试用例必须仍然存在，任一被删/改名即失败，防止
 // 协作、AC-26 共享授权、AC-09 收权这三项交付物在后续改动中静默退化。
 
-const workbenchRequired = [
-  '/workspaces/{workspaceId}/members',
-  '/workspaces/{workspaceId}/members/{userId}',
-  '/workspaces/{workspaceId}/agent-members',
-  '/workspaces/{workspaceId}/agent-members/{id}',
-]
-
 export function checkTeamWorkspace1a(check) {
   // 退出条件 1：两名员工和一个 Agent 可协作 —— 员工/Agent 成员管理与名册可读。
-  const workbench = check.json('docs/development/openapi-workbench.json')
-  for (const path of workbenchRequired) {
-    check.assert(Boolean(workbench?.paths?.[path]), `docs/development/openapi-workbench.json 缺少路径 ${path}`)
-  }
-  for (const method of ['get', 'post']) {
-    check.assert(
-      Boolean(workbench?.paths?.['/workspaces/{workspaceId}/members']?.[method]),
-      `员工成员名册契约缺少 ${method.toUpperCase()}`,
-    )
-  }
   check.includes('server/src/http/workbench/workspace-member-routes.ts', [
     "router.get(`${basePath}/workspaces/:workspaceId/members`",
+    "router.post(`${basePath}/workspaces/:workspaceId/members`",
+    "router.delete(`${basePath}/workspaces/:workspaceId/members/:userId`",
+  ])
+  check.includes('server/src/http/workbench/workspace-agent-member-routes.ts', [
+    "router.get(`${basePath}/workspaces/:workspaceId/agent-members`",
+    "router.delete(`${basePath}/workspaces/:workspaceId/agent-members/:id`",
   ])
   // 员工端双模式 S5b 起，项目空间页（A 的 WorkspaceDetailView 与 B 的群组页共用）经 useProjectSpace 读取成员名册。
   check.includes('apps/workbench-web/src/views/WorkspaceDetailView.vue', ['useProjectSpace'])

@@ -49,7 +49,7 @@ DSH_WORK_COOKIE_SECURE=false
 
 ## 接口和验证
 
-接口见 [认证 OpenAPI](../development/openapi-auth.json) 和 [Admin OpenAPI](../development/openapi-admin.json)。独立认证沿用 `0077_local_identity.sql` 的凭据、初始化账本、限流表和会话提供方字段，`0078_local_login_accounts.sql` 扩展账号字段约束以支持邮箱与手机号，保留已有用户名、身份和授权；`0117_dingtalk_account_bindings.sql` 新增钉钉绑定、待绑定/代绑确认凭证与会话 `binding_id`，并把会话来源扩展为 `dingtalk`；`0129_remove_ai_hub_login.sql` 删除 AI Hub 会话来源、令牌列和相关表，`users.identity_provider` 只允许 `local`。
+接口见 `server/src/http/local-auth-routes.ts`、`server/src/http/session-routes.ts` 与 `server/src/http/admin/`。独立认证沿用 `0077_local_identity.sql` 的凭据、初始化账本、限流表和会话提供方字段，`0078_local_login_accounts.sql` 扩展账号字段约束以支持邮箱与手机号，保留已有用户名、身份和授权；`0117_dingtalk_account_bindings.sql` 新增钉钉绑定、待绑定/代绑确认凭证与会话 `binding_id`，并把会话来源扩展为 `dingtalk`；`0129_remove_ai_hub_login.sql` 删除 AI Hub 会话来源、令牌列和相关表，`users.identity_provider` 只允许 `local`。
 
 ```bash
 pnpm test:local-auth

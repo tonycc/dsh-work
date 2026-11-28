@@ -8,7 +8,6 @@ import {
   Connection,
   Cpu,
   DataAnalysis,
-  Document,
   FolderOpened,
   Grid,
   InfoFilled,
@@ -127,13 +126,6 @@ const navigationGroups: Array<{ label: string; items: NavigationItem[] }> = [
       { label: '系统健康', path: '/health', icon: Monitor, permission: 'ops' },
       { label: '错误记录', path: '/error-records', icon: Warning, permission: 'ops' },
       { label: '平台配置', path: '/platform-config', icon: Odometer, permission: 'config' },
-    ],
-  },
-  {
-    label: '开发接入',
-    items: [
-      { label: '接入规范', path: '/docs/guide', icon: Notebook, permission: 'any' },
-      { label: '接口文档', path: '/docs/api', icon: Document, permission: 'any' },
     ],
   },
 ]
