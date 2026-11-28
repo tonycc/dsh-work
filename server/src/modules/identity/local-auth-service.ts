@@ -28,7 +28,14 @@ interface ValidatedSession {
   subject: string
   mustChangePassword: boolean
   provider: 'local-password' | 'dingtalk'
+  /** 会话行上记录的授权版本；与当前版本不同时立即回写。 */
+  sessionAuthorizationVersion: number
+  /** `last_seen_at` 已超过节流间隔，需要回写。 */
+  lastSeenStale: boolean
 }
+
+/** `last_seen_at` 回写节流间隔：只影响管理端“最近活跃”的精度（最多晚 1 分钟）。 */
+const lastSeenThrottleSeconds = 60
 
 interface CredentialRow {
   userId: string
@@ -220,7 +227,7 @@ export class LocalAuthService {
     const token = parseCookies(request.headers.cookie)[settings.sessionCookieName]
     if (!token) throw new IdentityAccessError(401, 'authentication_required', '请先登录')
     const sessionHash = hashOpaque(token)
-    const session = await this.findLocalSession(sessionHash, audience) ?? await this.findDingTalkSession(sessionHash, audience)
+    const session = await this.findSession(sessionHash, audience)
     if (!session) throw new IdentityAccessError(401, 'session_expired', '登录会话不存在或已过期')
     if (session.mustChangePassword && (!allowPasswordChange || session.provider === 'dingtalk')) {
       throw new IdentityAccessError(403, 'password_change_required', '请先修改初始密码')
@@ -231,7 +238,10 @@ export class LocalAuthService {
     }
     const authorization = await this.repository.resolveAuthorization(session.userId)
     assertAudienceAccess(audience, authorization.permissions, !allowPasswordChange && !['GET', 'HEAD', 'OPTIONS'].includes(request.method ?? 'GET'))
-    await this.repository.updateAuthorizationVersion(sessionHash, authorization.authorizationVersion)
+    // 只读请求不再每次写会话行：授权版本变化时立即回写，否则 last_seen_at 每分钟最多回写一次。
+    if (session.lastSeenStale || session.sessionAuthorizationVersion !== authorization.authorizationVersion) {
+      await this.repository.updateAuthorizationVersion(sessionHash, authorization.authorizationVersion)
+    }
     return {
       audience, applicationId: settings.applicationId, sessionHash,
       userId: session.userId, subject: session.subject, ...authorization,
@@ -239,40 +249,36 @@ export class LocalAuthService {
     }
   }
 
-  private async findLocalSession(sessionHash: string, audience: ApiAudience): Promise<ValidatedSession | null> {
-    const [session] = await this.database<Omit<ValidatedSession, 'provider'>[]>`
-      select s.user_id as "userId", u.external_subject as subject, c.must_change_password as "mustChangePassword"
-        from authentication_sessions s
-        join users u on u.tenant_id = s.tenant_id and u.id = s.user_id
-        join tenants t on t.id = u.tenant_id
-        join local_user_credentials c on c.tenant_id = u.tenant_id and c.user_id = u.id
-       where s.tenant_id = ${tenantId} and s.session_hash = ${sessionHash} and s.audience = ${audience}
-         and s.authentication_provider = 'local-password' and s.revoked_at is null and s.expires_at > now()
-         and u.status = 'active' and u.business_user and t.status = 'active' and u.identity_provider = 'local'
-    `
-    return session ? { ...session, provider: 'local-password' } : null
-  }
-
   /**
-   * dingtalk 会话另走一条查询（4.3）：账号为本地账号且有效、会话上的 binding_id 对应的绑定仍有效且属于该账号；
-   * 不要求密码凭据。must_change_password 为真时同样拒绝（绑定前已要求先改密，此处兜底）。
+   * 一条查询校验两类会话（钉钉接入方案 4.3）：
+   * - local-password：账号为本地账号且有效，并有密码凭据；
+   * - dingtalk（仅员工端）：会话上的 binding_id 对应的绑定仍有效且属于该账号，不要求密码凭据；
+   *   must_change_password 为真时同样拒绝（绑定前已要求先改密，此处兜底）。
+   * 按会话行上的 authentication_provider 分支，避免钉钉会话先白跑一遍本地会话查询。
    */
-  private async findDingTalkSession(sessionHash: string, audience: ApiAudience): Promise<ValidatedSession | null> {
-    if (audience !== 'workbench') return null
-    const [session] = await this.database<Omit<ValidatedSession, 'provider'>[]>`
+  private async findSession(sessionHash: string, audience: ApiAudience): Promise<ValidatedSession | null> {
+    const [session] = await this.database<ValidatedSession[]>`
       select s.user_id as "userId", u.external_subject as subject,
-             coalesce(c.must_change_password, false) as "mustChangePassword"
+             coalesce(c.must_change_password, false) as "mustChangePassword",
+             s.authentication_provider as provider,
+             s.authorization_version as "sessionAuthorizationVersion",
+             s.last_seen_at < now() - make_interval(secs => ${lastSeenThrottleSeconds}) as "lastSeenStale"
         from authentication_sessions s
-        join external_account_bindings b on b.id = s.binding_id and b.tenant_id = s.tenant_id
-         and b.user_id = s.user_id and b.channel = 'dingtalk' and b.status = 'valid'
         join users u on u.tenant_id = s.tenant_id and u.id = s.user_id
         join tenants t on t.id = u.tenant_id
         left join local_user_credentials c on c.tenant_id = u.tenant_id and c.user_id = u.id
-       where s.tenant_id = ${tenantId} and s.session_hash = ${sessionHash} and s.audience = 'workbench'
-         and s.authentication_provider = 'dingtalk' and s.revoked_at is null and s.expires_at > now()
+        left join external_account_bindings b on s.authentication_provider = 'dingtalk'
+         and b.id = s.binding_id and b.tenant_id = s.tenant_id
+         and b.user_id = s.user_id and b.channel = 'dingtalk' and b.status = 'valid'
+       where s.tenant_id = ${tenantId} and s.session_hash = ${sessionHash} and s.audience = ${audience}
+         and s.revoked_at is null and s.expires_at > now()
          and u.status = 'active' and u.business_user and t.status = 'active' and u.identity_provider = 'local'
+         and (
+           (s.authentication_provider = 'local-password' and c.user_id is not null)
+           or (s.authentication_provider = 'dingtalk' and s.audience = 'workbench' and b.id is not null)
+         )
     `
-    return session ? { ...session, provider: 'dingtalk' } : null
+    return session ?? null
   }
 
   /** 退出登录撤销该账号在此 audience 的全部来源会话（4.3：手机钉钉与桌面浏览器会话都结束）。 */

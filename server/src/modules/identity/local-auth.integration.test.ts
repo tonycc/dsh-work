@@ -387,3 +387,36 @@ test('the session lifetime from platform config applies to sessions issued after
     sessionTtlSeconds = undefined
   }
 })
+
+test('read requests touch the session row at most once a minute unless the authorization version changes', async () => {
+  const result = await login()
+  assert.equal(result.response.status, 200)
+  const sessionRow = async () => {
+    const [row] = await database.client<{ lastSeenAt: Date; version: number; xmin: string }[]>`
+      select last_seen_at as "lastSeenAt", authorization_version as version, xmin::text as xmin
+        from authentication_sessions where user_id = ${adminId} and audience = 'admin' and revoked_at is null
+       order by created_at desc limit 1
+    `
+    return row!
+  }
+  // 登录后连续读请求：会话行不被重写（xmin 不变）。
+  const initial = await sessionRow()
+  for (let index = 0; index < 3; index += 1) {
+    assert.equal((await call('/api/admin/v1/session', { cookie: result.cookie })).response.status, 200)
+  }
+  assert.equal((await sessionRow()).xmin, initial.xmin)
+
+  // last_seen_at 超过 1 分钟：下一次请求回写一次。
+  await database.client`update authentication_sessions set last_seen_at = now() - interval '2 minutes' where user_id = ${adminId} and audience = 'admin' and revoked_at is null`
+  const stale = await sessionRow()
+  assert.equal((await call('/api/admin/v1/session', { cookie: result.cookie })).response.status, 200)
+  const touched = await sessionRow()
+  assert.notEqual(touched.xmin, stale.xmin)
+  assert.ok(touched.lastSeenAt.getTime() > stale.lastSeenAt.getTime() + 60_000)
+
+  // 授权版本变化：立即回写，不受节流限制。
+  await database.client`update users set local_authorization_version = local_authorization_version + 1 where id = ${adminId}`
+  assert.equal((await call('/api/admin/v1/session', { cookie: result.cookie })).response.status, 200)
+  const [user] = await database.client<{ version: number }[]>`select local_authorization_version::integer as version from users where id = ${adminId}`
+  assert.equal((await sessionRow()).version, user!.version)
+})
