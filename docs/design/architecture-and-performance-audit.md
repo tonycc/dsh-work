@@ -1,6 +1,6 @@
 # dsh-work 架构合理性、过度设计与性能全面审核报告
 
-**状态：** 已逐项对照源码核实（待采集实测基线与 `EXPLAIN` 执行计划后按第 6 节分阶段推进）<br>
+**状态：** 已逐项对照源码核实；第 1 节靶点与 2.0 速览表已按阶段零第一批实测（2026-11-28）校准，执行计划与浏览器侧指标待补测<br>
 **审核日期：** 2026-11-27（对照 `main` 分支 `13382749`，含 `RP-S2` #180 / `RP-S3` #181）<br>
 **审查范围：** 全仓源码与迁移文件、138 个 PostgreSQL 迁移文件（0039 有两个）、约 12 万行非测试业务代码、双端构建产物（`dist/`）及 CI / 脚本工具链<br>
 **关联文档：** [架构总览](../development/overview.md)、[Runtime 执行架构渐进优化方案](runtime-execution-optimization-plan.md)、[数据模型](data-model.md)、[开发与测试](../development/development.md)
@@ -10,6 +10,7 @@
 > 1. 本文所列代码机制与构建产物数据已对照 `main`（`13382749`）源码逐项核实；涉及 PostgreSQL 优化器行为的查询（如 `UNION ALL` 分支下推）仍需以真实数据上的 `EXPLAIN` 为准。
 > 2. 文中涉及的调用次数与 SQL 条数（如“单请求 500+ SQL”、“每秒 ~20～24 SQL”）均为**按代码分支推算的静态上限，尚未经过真实负载压测**。
 > 3. 鉴于目标部署形态为**单企业内网、单台 Mac mini**，并发度远低于公网 SaaS，立项改造前应先通过 [database.ts](../../server/src/infrastructure/postgres/database.ts#L15) 的 `debug` 查询计数钩子与 `pnpm report:run-timings` 采集真实基线，按实测收益排定优先级，不做无数据支撑的重构。
+> 4. 阶段零第一批实测见[本机实测基线](architecture-audit-baseline-2026-11-28.md)：当前 DSH 每个 Run 只有 1～2 条 `assistant.delta`（按整段提交、非逐 Token），据此调整了第 1 节、2.0 速览表与各条目的“阶段零实测”注记；第 2 节正文保留原推算以便对照。
 
 ---
 
@@ -23,12 +24,13 @@
 2. **防御性检查层层叠加在请求与流式热路径上**：每修补一处边缘竞态，就在热路径上叠加一层父表排他锁（`workspaces FOR UPDATE`）、一层 12～16 条 SQL 的无缓存复权（甚至每 2 秒往审计表写一行 `success`），或一次全目录 `lstat` / 全包 SHA-256 重算。
 3. **工程护栏异化为高昂的“手工同步税”**：手写 18,691 行 OpenAPI JSON（却既不校验 Schema 也不生成客户端类型）、维护 4,000+ 行平行内存假后端、零跨端复用的前端强行拆包、CI 单任务串行冷启动 12 套 E2E 环境，显著拉高了日常需求改动的摩擦成本。
 
-在单机 Mac mini 场景下，**真正影响日常体感与稳定性的高价值靶点集中在 5 处**：
-1. 仅 **9 个可用 DB 连接** + `GET /tasks` 50 条并发 `mapTask` 超级 N+1；
-2. 流式 `assistant.delta` **逐片段串行 `INSERT` + `SELECT runs`** + SSE **250ms 轮询**；
-3. 每次只读 API 请求无节流 `UPDATE authentication_sessions` + 运行期每 2s 复权往 `audit_events` 写 `success`；
-4. 外部模型网关请求体双重 `JSON.parse`、流式每帧多余解析，以及 DLP 词表/密钥零缓存扫描大上下文；
-5. 双端首屏 **1.1 MB JS 包** + 长文本流式 Markdown `$O(N^2)$` 全量重渲染 + WeKnora 检索同步阻塞 `POST /runs` 202 返回。
+在单机 Mac mini 场景下，按阶段零实测，**真正影响日常体感与稳定性的高价值靶点集中在 4 处**：
+1. `GET /tasks` 50 个 Run 实测 **501 条 SQL**，单个请求即占满仅有的 **9 条可用连接**，同时刻的其他请求、SSE 轮询与事件落库只能排队；
+2. 运行期每 2s 复权并向 `audit_events` 写 `success`：实测占审计表 **76%**、约 **31 行/Run**，是审计表增长的主因；
+3. 每个打开的运行流 SSE 每 250ms 轮询（约 8 条 SQL/秒/流）+ 每次 API 请求无节流 `UPDATE authentication_sessions`（每请求 3 条 SQL）；
+4. 双端首屏 **1.1 MB JS 包** + 外部模型网关请求体双重解析与 DLP 零缓存 + WeKnora 检索同步阻塞 `POST /runs` 202 返回（这三项的实际耗时待浏览器与真实运行补测）。
+
+流式 `assistant.delta` 逐片段落库与前端逐 delta 重解析 Markdown 在当前 DSH 下不成立（每个 Run 只有 1～2 条整段 delta），降为**条件性风险**：DSH 改为逐 Token 流式时再处理。
 
 ```mermaid
 flowchart TD
@@ -36,7 +38,7 @@ flowchart TD
     A1["员工端冷启动进空间 18+ 请求<br/>GET /tasks 触发 50 条并发 mapTask N+1"]
     A2["管理端每次加载 / 局部保存<br/>Promise.all 重拉 15 个全量接口"]
     A3["流式对话 SSE 250ms 轮询 DB<br/>个人流式有新事件时整套复权"]
-    A4["模型流式吐字逐 chunk 写 run_events<br/>+ 写后复查逐 chunk 查 runs"]
+    A4["流式 delta 逐条写 run_events + 查 runs<br/>（条件性：当前每 Run 仅 1~2 条）"]
     A5["运行期每 2s 复权 + 工具前后双查<br/>每次 12~16 SQL + 写 audit_events"]
   end
 
@@ -61,20 +63,21 @@ flowchart TD
 
 ## 2. 核心性能瓶颈清单
 
-### 2.0 关键瓶颈速览表（静态推算上限，待实测基线校准）
+### 2.0 关键瓶颈速览表（按阶段零实测校准，2026-11-28）
 
-| 优先级 | 领域 | 问题简述 | 静态推算机制与量级 |
+| 优先级 | 领域 | 问题简述 | 量级（实测 / 推算） |
 | :--- | :--- | :--- | :--- |
-| **高优** | 数据库连接池与 N+1 | 连接池固定 `max: 10`（实际可用 9 个）且 `prepare: false`；`GET /tasks` 50 条并发 `mapTask` | 单次满额 `GET /tasks` 可触发 **400～500+ 条 SQL**；单页统计并发 9 条 SQL 占满可用池 |
-| **高优** | 流式事件持久化 | `assistant.delta` 逐个 chunk 串行 `INSERT run_events`，且写后复查对每 chunk 执行 `SELECT runs` | 1 轮 400 chunk 回答产生 **800 次串行 DB 操作** + 双份同列重复索引维护 |
-| **高优** | SSE 轮询与鉴权写放大 | 无内存 PubSub，SSE 每 250ms 轮询 PG；每次只读 API 请求均无节流 `UPDATE authentication_sessions` | 单条活跃个人流式 SSE 高达 **~20～24 SQL/s**；全站只读请求全部变成写事务 |
-| **高优** | 模型网关与 DLP | 请求体双倍 `JSON.parse`、SSE 每帧多余 `JSON.parse`；外部路由每步在主线程无缓存编译词表跑最多 16 个全局正则 | 几十万字上下文多步工具循环下阻塞单线程 Event Loop |
-| **高优** | 前端流式渲染与包体积 | 流式逐 delta 微任务触发 `$O(N^2)$` 全量 Markdown 重解析与历史消息重渲染；全量打包 Element Plus | 长文本流式掉帧；实测双端首屏单 JS chunk 均为 **1.1 MB**（另加 **380+ KB** CSS） |
-| **中优** | 运行期复权与审计膨胀 | 运行中每 2s 轮询 + 工具调用前后双查，每次跑 12～16 条 SQL 并向 `audit_events` 插入 `success` | 8 并发跑 60s 推算产生 **~4,000+ 条 SQL** 与 **~350+ 行无价值成功审计** |
-| **中优** | 首字延迟（TTFT）与容器扫盘 | 每轮 100% 冷启动 DSH 子进程；同一不可变 Skill 包读盘算哈希 3 次；每条容器命令前/中/后递归 `lstat` 工作区 | 每轮增加 Node/DSH 冷启动耗时；大工作区高频命令易挤占 4 线程 `libuv` 线程池 |
-| **中优** | 同步阻塞错放位置 | `POST /runs` 返回 202 前同步等待 WeKnora 检索（含 fallback）；`run.completed` 前同步等成果解析容器 | 个人对话带知识库慢响应最坏阻塞请求 **2 次检索超时（单次默认 10s，合计 20s）**；成果解析最多等 **60s** |
-| **中优** | 慢查询与大 JSONB 解压 | 多处多表笛卡尔乘积；`operational_events` 全量并入 `run_events` 做文本 `ilike`；统计逐行解压 `manifest` JSONB | 随历史运行记录积累，管理端查询耗时随表行数线性劣化 |
-
+| **高优** | 数据库连接池与 N+1 | 连接池固定 `max: 10`（实际可用 9 个）且 `prepare: false`；`GET /tasks` 50 条并发 `mapTask` | **实测** 50 个 Run = **501 条 SQL**，单个请求占满 9 条连接；连接池 9 条时并发 5 个约 0.5 秒 |
+| **高优** | 运行期复权与审计膨胀 | 运行中每 2s 轮询 + 工具调用前后双查，每次 12～16 条 SQL 并向 `audit_events` 插入 `success` | **实测** 成功审计占 `audit_events` **76%**、约 **31 行/Run**；**推算** 每天 1,000 个 Run 时审计表约 1 GB/月 |
+| **高优** | 前端包体积 | 双端全量打包 Element Plus，未配置按需加载与 `manualChunks` | **实测** 双端首屏单 JS chunk 均为 **1.1 MB**（另加 **380+ KB** CSS）；首屏加载耗时待浏览器补测 |
+| **中优** | SSE 轮询与鉴权写放大 | 无内存 PubSub，SSE 每 250ms 轮询 PG；每次只读 API 请求均无节流 `UPDATE authentication_sessions` | **实测** 单次轮询 2 条 SQL、`authenticateApi` 3 条 SQL；**推算** 约 8 条 SQL/秒/运行流（原推算 20～24）；团队空间会话流待补测 |
+| **中优** | 模型网关与 DLP | 请求体双倍 `JSON.parse`、SSE 每帧多余 `JSON.parse`；外部路由每步在主线程无缓存编译词表跑最多 16 个全局正则 | 主线程耗时待真实运行补测；本机输入 Token p50 / p95 为 9,160 / 22,505 |
+| **中优** | 同步阻塞：知识库检索 | `POST /runs` 返回 202 前同步等待 WeKnora 检索（含 fallback） | 个人对话带知识库时最坏 **2 次检索超时（单次默认 10s，合计 20s）**；实际耗时待补测 |
+| **中优** | 慢查询与大 JSONB 解压 | 多处多表笛卡尔乘积；`operational_events` 全量并入 `run_events` 做文本 `ilike`；统计逐行解压 `manifest` JSONB | **实测** `manifest` p50 5.2 KB、p95 13 KB；执行计划待一次性库造量后 `EXPLAIN` |
+| **低优** | 首字延迟（TTFT）与容器扫盘 | 每轮冷启动 DSH 子进程；同一 Skill 包读盘算哈希 3 次；每条容器命令前/中/后递归 `lstat` 工作区 | **实测** 冷启动 p50 约 1.2 秒，约占端到端 p50（23.7 秒）的 5% |
+| **低优** | 同步阻塞：成果解析 | `run.completed` 前同步等成果解析容器 | **实测** 成果收集 p95 0.6 秒、最大 0.9 秒（60 秒是超时上限） |
+| **条件性** | 流式事件持久化 | `assistant.delta` 逐条 `INSERT run_events`，写后复查每条执行 `SELECT runs`；`run_events` 重复索引 | **实测** 每个 Run 仅 1～2 条 delta（p95 2、最大 7）；DSH 改为逐 Token 流式时才会放大。重复索引仍建议删除 |
+| **条件性** | 前端流式渲染 | 每个 delta 触发全量 Markdown 重解析与历史消息重渲染 | 同上：每个回答 1～2 次重解析，当前无掉帧依据 |
 ---
 
 ### 2.1 数据库连接池、鉴权写放大与超级 N+1
@@ -97,6 +100,7 @@ flowchart TD
      - 团队 SSE 专用的 `authorizeTeamReadAccess`（L508-548）设有 10 秒内存缓存 `teamReadAccessCache`，命中时可跳过 4 条 SQL 的 `authorizeWorkbench`；但为捕获用户停用、角色权限修改以及**时间触发的角色到期（`user_roles.valid_until > now()`，评审 M5 修复）**，每次读取缓存前仍需先执行 1 条关联 5 张表并计算 `string_agg` + 双重 `md5()` 的探测 SQL。由于时间到期不会产生进程内写事件，不能简单改为“纯内存写时失效”，但可通过简化探测查询或在缓存项内记录最早 `valid_until` 时间戳（配合用户停用/改权主动失效）来降低高频探测成本；无论哪种做法，都须保留现有全部判定：用户与租户仍有效、角色权限指纹、角色到期以及空间状态轨。
 
 4. **`GET /api/workbench/v1/tasks` 50 条并发 `mapTask` 超级 N+1**
+   > **阶段零实测**：50 个 Run 共 501 条 SQL（1 + 50 × 10）；`mapTask` 并行执行，单个请求即占满 9 条连接。
    - **代码位置**：[postgres-conversation-repository.ts](../../server/src/modules/workbench/application/postgres-conversation-repository.ts#L948-L977)（及 L1424-1511、L1586-1648）、[conversation-routes.ts](../../server/src/http/workbench/conversation-routes.ts#L510-L515)
    - **机制分析**：`listTasks()` 取出最近 50 条 `runs` 后直接 `Promise.all(rows.map(row => this.mapTask(row)))`。每个 `mapTask` 内部串行跑 8～9 条 SQL（含无 `limit` 拉取整段会话全部历史消息、全量 `run_events`、成果、引用、工具与 MCP 审计——若同一多轮会话有 10 个 Run，整段会话消息被重复查询拷贝 10 遍）；回到路由层 `attachListRoles` 又未按 `workspaceId` 去重并发复核 50 次空间读权限。
 
@@ -105,6 +109,7 @@ flowchart TD
 ### 2.2 流式事件落库与 SSE 数据库轮询风暴
 
 1. **`assistant.delta` 逐个 chunk 串行写库 + 写后复查导致逐 chunk `SELECT runs`**
+   > **阶段零实测**：当前 DSH 每个 Run 只有 1～2 条 `assistant.delta`（中位 457 字符），下文“每个流式文本片段”的放大在当前版本不发生，降为条件性风险；重复索引仍建议删除。
    - **代码位置**：[dsh-acp-runtime-adapter.ts](../../server/src/modules/runtime/dsh-acp-runtime-adapter.ts#L1266-L1281)、[run-event-recorder.ts](../../server/src/modules/run/orchestration/run-event-recorder.ts#L58-L103)（及 L214-225）、[postgres-run-repository.ts](../../server/src/modules/run/postgres-run-repository.ts#L716-L730)、[0003_m3_conversation_runtime.sql](../../server/migrations/0003_m3_conversation_runtime.sql#L19-L23)
    - **机制分析**：
      - DSH 适配器对每个 ACP 文本片段无缓冲发出一行 `assistant.delta`，`RunEventRecorder` 在单条 Promise 链上对每个片段执行独立 `INSERT INTO run_events`（L95）；
@@ -112,6 +117,7 @@ flowchart TD
      - `0003_m3_conversation_runtime.sql` 在 `run_events` 上同时创建了完全同列同序的 `run_events_stream_position_unique (tenant_id, run_id, stream_position)` 与 `run_events_by_run_stream (tenant_id, run_id, stream_position)`，每次流式插入白白双写两棵相同的 B-Tree。
 
 2. **SSE 推送无进程内通知，高频轮询数据库**
+   > **阶段零实测**：单次轮询 2 条 SQL、`authorizeWorkbench` 3 条 SQL；个人流只在有新事件的批次和每 15 秒心跳时复权，按每个 Run 约 7 个事件推算约 8 条 SQL/秒/流，下文“~20～24 SQL/s”为高估。
    - **代码位置**：[conversation-routes.ts](../../server/src/http/workbench/conversation-routes.ts#L388-L407)（及 L578-647、L739-743、L851-853）
    - **机制分析**：
      - `streamRunEvents` 不用进程内订阅，每个活跃 SSE 连接在 `while (!closed)` 中每 **250ms** 查一次 `readEventsAfterEvent` + 查一次 `getRun`；个人对话还在 L400-404 传入无缓存的 `personalAccess`（内部调用完整 `authorizeWorkbench`），流式输出期间每 250ms 都有新事件，触发每 250ms 额外执行 3～4 条权限 SQL；
@@ -133,10 +139,12 @@ flowchart TD
 ### 2.4 首字延迟（TTFT）、运行期复权与容器配额扫盘
 
 1. **每轮对话 100% 冷启动 DSH 子进程 + 同一不可变 Skill 包重复读盘算哈希 3 次**
+   > **阶段零实测**：冷启动（进程启动 + ACP 初始化 + Session 就绪）p50 约 1.2 秒、约占端到端 5%，预热池收益有限。
    - **代码位置**：[dsh-acp-runtime-adapter.ts](../../server/src/modules/runtime/dsh-acp-runtime-adapter.ts#L331-L373)（及 L775-845）、[postgres-agent-service.ts](../../server/src/modules/agent/postgres-agent-service.ts#L834-L845)（及 L878）、[skill-artifact-store.ts](../../server/src/modules/skill/skill-artifact-store.ts#L50-L84)
    - **机制分析**：DSH ACP Worker 无预热进程池，每轮问答都重新 `spawn` Node 子进程加载框架并串行等待 `initialize` + `newSession`；内容寻址且永不改变的 `SkillArtifactStore` 无内存缓存，单次启动在 `assertCapabilityReferences`（第 1 次）、`resolveRuntimeSkills(pinnedOnly / selected)`（第 2 次）、`DshAcpRuntimeAdapter.execute` 物化工作区调用 `loadSkillArtifact`（第 3 次，且 L372 额外重算一次 `instructions` 哈希）中把同一个 Skill 包从磁盘全量读取并计算 SHA-256 **连续执行 3 次**；`compileRuntimeManifest` 也在 `AttemptDispatcher.submit` 与 `DshAcpRuntimeAdapter.execute` 对同一对象重复编译两次。
 
 2. **运行期每 2 秒复权并向 `audit_events` 狂写 `success` 日志**
+   > **阶段零实测**：`authorization.runtime` / `success` 占 `audit_events` 76%，约 31 行/Run，升为高优。
    - **代码位置**：[dsh-acp-runtime-adapter.ts](../../server/src/modules/runtime/dsh-acp-runtime-adapter.ts#L1248-L1256)、[platform-tool-bridge.ts](../../server/src/modules/runtime/platform-tool-bridge.ts#L176-L221)、[postgres-authorization-service.ts](../../server/src/modules/authorization/postgres-authorization-service.ts#L188)（及 L423、L1064-1078）
    - **机制分析**：每个运行中 Attempt 除了全局撤权扫描外，还自建 `2000ms` 定时器并在领取后、启动前、建会话后、每次平台工具调用**前和后各一次**调用 `assertCurrentRunAuthorization`（每次 12～16 条未缓存 SQL，其中 `resolveSkillVersions` 在 `for` 循环逐个查库），且直接复用了对外受理入口，导致每次正常探活通过都执行 `INSERT INTO audit_events (..., 'success')`。其中工具执行后的复核（[platform-tool-bridge.ts](../../server/src/modules/runtime/platform-tool-bridge.ts#L221-L225)）有实际作用：撤权后读到的结果不交给模型，写工具此时失败会把执行状态记为 `unknown`，防止被当作“未执行”重放——它可以降成本，不能删除。
 
@@ -145,6 +153,7 @@ flowchart TD
    - **机制分析**：虽然 `rg` 被标记了 `mayLeaveProcesses: false`（跳过了事后 `QUIESCE` 杀进程），但仍进入 `runAndSettle`，在每一条命令开始前、运行中每 2 秒、结束后都在宿主机 Node 主进程循环 `readdir + lstat` 递归扫描整个工作区（上限 50,000 条目）；大目录连续工具调用易挤占 Node 默认 4 线程的 `UV_THREADPOOL_SIZE`。
 
 4. **同步阻塞操作错放在 HTTP 202 返回前与 `run.completed` 终态前**
+   > **阶段零实测**：成果收集 p95 0.6 秒、最大 0.9 秒，成果解析阻塞降为低优；知识库检索耗时待补测。
    - **代码位置**：[attempt-dispatcher.ts](../../server/src/modules/run/orchestration/attempt-dispatcher.ts#L121)、[weknora-knowledge-provider.ts](../../server/src/modules/knowledge/weknora-knowledge-provider.ts#L148-L157)、[conversation-routes.ts](../../server/src/http/workbench/conversation-routes.ts#L325)、[dsh-acp-runtime-adapter.ts](../../server/src/modules/runtime/dsh-acp-runtime-adapter.ts#L880-L902)
    - **机制分析**：
      - 个人对话添加知识库后，`startRun` 在 `POST /sessions/:id/runs` 返回 202 之前同步等待 `dispatch` 中的 WeKnora 检索，未命中时串行触发二次 fallback 检索（单次检索超时自 `RP-S3` 起可在平台配置调整，默认 10s，最坏阻塞前端 **2×超时 = 20 秒**拿不到 `runId`），且返回 202 前又调 `conversations.getTask` 空查 9 张刚建好必为空的结果证据表；每次检索成功还 `UPDATE external_knowledge_connections` 同一行记录；
@@ -170,6 +179,7 @@ flowchart TD
 ### 2.6 前端流式渲染、请求风暴与首屏构建体积
 
 1. **流式 `assistant.delta` 无帧合并 + 手写 Markdown `$O(N^2)$` 重解析与全树抖动**
+   > **阶段零实测**：每个回答只有 1～2 条 delta，重解析次数很少，降为条件性风险；`:key="index"` 与贴底监听问题仍可顺手修。
    - **代码位置**：[tasks.ts](../../apps/workbench-web/src/stores/tasks.ts#L316-L325)（及 L417、L462-489）、[AssistantMessageContent.vue](../../packages/ui-core/src/components/AssistantMessageContent.vue#L24)（及 L130-179、L296）
    - **机制分析**：每个 SSE `assistant.delta` 都在微任务中同步标脏响应式状态（无 `requestAnimationFrame` 合并），每次线性 `find` 扫描全量 `tasks`、`messages` 并无条件遍历 `task.steps`（L485-487 扫完才在 L489 丢弃）；`AssistantMessageContent.vue` 每次对整篇累积长文本从第 0 行重新 `split('\n')` 解析全部块且 `:key="index"` 传入全新块引用，使前序已完成的代码块、列表、表格随每一个新 Token 全量重渲染。此外 [ConversationView.vue](../../apps/workbench-web/src/views/ConversationView.vue#L1019-L1028) 的自动贴底 `watch` 只监听了 `messages.length` 而漏监听流式 `content` 增长。
 
@@ -245,15 +255,17 @@ flowchart TD
 
 ### 阶段零：采集实测运行基线（立项前置条件）
 
-> 第一批结果见[本机实测基线（2026-11-28）](architecture-audit-baseline-2026-11-28.md)，其中对本文优先级的调整建议待确认后再写回本文。
+> 第一批结果见[本机实测基线（2026-11-28）](architecture-audit-baseline-2026-11-28.md)，其中的优先级调整已写回第 1 节、2.0 速览表、各条目“阶段零实测”注记与本节实施顺序。
 
 - 利用 [database.ts](../../server/src/infrastructure/postgres/database.ts#L15) 的 `debug` 钩子与 `pnpm report:run-timings`，在开发/参考环境实测典型用户旅程（冷启动进项目空间、`GET /tasks`、单轮 400 chunk 流式对话、外部模型多步工具调用、管理端首屏与局部保存）的**实际 SQL 语句数、连接池排队耗时、主线程事件循环延迟（Event Loop Lag）与首屏加载耗时**，以实测前后对比衡量以下各阶段收益。
 
 ### 阶段一：低风险快赢（直击日常高频开销；改变可观察行为的项单独标注）
 
+> **按阶段零实测的实施顺序**：① 停止运行期成功审计（需确认，见下文第 2 项最后一条；收益最大、改动最小）；② 连接池可配置与超时；③ `GET /tasks` 摘要分页（阶段二第 1 项，因单个请求即占满连接池而提前）；④ 其余快赢。流式 delta 窗口合并与前端 `requestAnimationFrame` 批处理在当前 DSH 下收益很小，推迟到 DSH 改为逐 Token 流式时再做；删除重复索引、跳过 delta 写后复查仍可顺手完成。
+
 1. **流式事件与 SSE 去轮询化**：
    - 在 [run-event-recorder.ts](../../server/src/modules/run/orchestration/run-event-recorder.ts#L100) 对无后续分支处理的纯流式/过程事件（如 `assistant.delta`）跳过写后 `isLateEvent` 复查（保留 `CONSEQUENTIAL_EVENTS` 与 `approval.resolved` 的复查语义不变）；
-   - 引入进程内按 `runId` / `workspaceId` 的 `EventEmitter` 实时唤醒活跃 SSE 连接，将 SSE 轮询降级为断线恢复与低频兜底；`EventEmitter` 只负责唤醒，事件仍从 `run_events` 读取，以保留 Last-Event-ID 断线续传、迟到事件过滤（[conversation-routes.ts](../../server/src/http/workbench/conversation-routes.ts#L614)）和每批写出前的授权复核（L611）；`assistant.delta` 落库改为 300～500ms 窗口合并（不采用“只在终态持久化”，否则断线续传无法定位）；删除 `run_events` 重复索引 `run_events_by_run_stream`。
+   - 引入进程内按 `runId` / `workspaceId` 的 `EventEmitter` 实时唤醒活跃 SSE 连接，将 SSE 轮询降级为断线恢复与低频兜底；`EventEmitter` 只负责唤醒，事件仍从 `run_events` 读取，以保留 Last-Event-ID 断线续传、迟到事件过滤（[conversation-routes.ts](../../server/src/http/workbench/conversation-routes.ts#L614)）和每批写出前的授权复核（L611）；`assistant.delta` 落库改为 300～500ms 窗口合并（条件性：当前每个 Run 只有 1～2 条 delta，待 DSH 逐 Token 流式时再做；不采用“只在终态持久化”，否则断线续传无法定位）；删除 `run_events` 重复索引 `run_events_by_run_stream`。
 2. **连接池扩容与鉴权/复权减负**：
    - 开放数据库连接池大小配置（默认提升至 `30`），开启 `prepare: true`，配置合理的 `statement_timeout` 与 `lock_timeout`；
    - 将 `UPDATE authentication_sessions` 节流为距上次更新 ≥ 5 分钟或 `authorization_version` 变化时才执行；通过会话 Token 前缀区分 `local` 与 `dingtalk` 消除双查；
@@ -270,7 +282,7 @@ flowchart TD
    - 为 `run_attempts` 增加 `purpose`、`agent_version_id` 普通索引列，重写 `getManagedWorkspaces`、`getSessions`（顺手修正 `'waiting'` 状态名与 `LEFT JOIN agent_versions`）、`getRuntimes`、`operational_events` 并用 `EXPLAIN` 核查优化 `getTimeline`；逐点核查 `workspaces` 父表行锁——仅同一事务内后续绝不更新 `workspaces` 行的路径降级为 `FOR SHARE`（不可用 `FOR KEY SHARE`），后续会更新 `team_auth_revision` 等列的事务继续保留 `FOR UPDATE`，并把磁盘读包移出持锁事务；
    - 将对话前 WeKnora 检索移入 `POST /runs` 返回 `202 Accepted` 之后的异步派发阶段；将二进制成果容器文本提取移至 `run.completed` 之后异步回填；将上传侧 PDF/Office 解析移出主线程（Worker Thread 或沙箱容器）；为 `run_events`、`audit_events`、`model_gateway_requests` 等高频大表制定保留策略后再分批清理：参照[功能规则 2.3](../development/feature-rules.md#23-内容生命周期logical-retention-v1) 先做 dry-run 清单、检查历史引用与保留锁、经审批后实施；`audit_events` 等审计数据须遵守第 5 节的审计不变量，不得单纯按时间删除。
 2. **前端渲染与网络优化**：
-   - `tasks.ts` 对 `assistant.delta` 增加 `requestAnimationFrame` 批处理并用 `Map` 索引替代线性 `find`；重构 `AssistantMessageContent.vue` 实现已完成块缓存与稳定 key，修复自动贴底监听与 `RunMessageList.vue` / `CollabGroupTimeline.vue` 内联新引用；
+   - （条件性，待 DSH 逐 Token 流式时再做）`tasks.ts` 对 `assistant.delta` 增加 `requestAnimationFrame` 批处理并用 `Map` 索引替代线性 `find`；重构 `AssistantMessageContent.vue` 实现已完成块缓存与稳定 key；（可顺手修）修复自动贴底监听与 `RunMessageList.vue` / `CollabGroupTimeline.vue` 内联新引用；
    - 配置 `ElementPlus` 按需自动引入与 Vite `manualChunks` 拆分基础库；移除 `WorkspaceDetailView` 挂载时的重复 `contentStore.refresh()` 与管理端局部操作触发的 15 接口全量重拉；按明确路由区分 `/runs/:runId` 与 `/sessions/:sessionId` 消除必败 404 请求。
 
 ### 阶段三：中长期架构解耦与工程工具链瘦身
