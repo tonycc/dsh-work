@@ -220,10 +220,10 @@ export class PostgresAuthorizationService {
            and agent_id = ${agent.agentId}
       `
       if (member?.status !== 'available') throw authorizationDenied('Agent 未加入或已停用该团队空间')
-      await this.requireWorkspaceCapabilities(input.workspaceId, 'agent', [{
-        reference: input.agentVersionId, versionId: input.agentVersionId,
-      }])
-      await this.requireWorkspaceCapabilities(input.workspaceId, 'skill', skillVersions)
+      await this.requireWorkspaceCapabilities(input.workspaceId, {
+        agent: [{ reference: input.agentVersionId, versionId: input.agentVersionId }],
+        skill: skillVersions,
+      })
     }
     return {
       userId: input.recipientUserId,
@@ -344,11 +344,10 @@ export class PostgresAuthorizationService {
     // Data collections enforce the scopes they actually require; built-in tools only touch
     // the Run workspace and are not role-gated.
     if (workspaceId && context.workspaceType === 'team') {
-      await this.requireWorkspaceCapabilities(workspaceId, 'agent', [{
-        reference: input.agentVersionId,
-        versionId: input.agentVersionId,
-      }])
-      await this.requireWorkspaceCapabilities(workspaceId, 'skill', skillVersions)
+      await this.requireWorkspaceCapabilities(workspaceId, {
+        agent: [{ reference: input.agentVersionId, versionId: input.agentVersionId }],
+        skill: skillVersions,
+      })
     }
 
     return {
@@ -1061,43 +1060,49 @@ export class PostgresAuthorizationService {
     return row
   }
 
+  /** 一次查询解析全部 Skill 引用；任一引用不可用时按引用顺序报告第一个。 */
   private async resolveSkillVersions(references: string[]): Promise<CapabilityVersion[]> {
-    const resolved: CapabilityVersion[] = []
-    for (const reference of unique(references)) {
-      const { id, version } = parseReference(reference, 'Skill')
-      const [row] = await this.database<{ versionId: string; toolReferences: string[] }[]>`
-        select sv.id as "versionId", sv.tool_refs as "toolReferences" from skills s
-        join skill_versions sv on sv.tenant_id = s.tenant_id and sv.skill_id = s.id
-         where s.tenant_id = ${tenantId} and s.id = ${id} and sv.version = ${version}
-           and s.status = 'published' and sv.status = 'published'
-      `
+    const parsed = unique(references).map(reference => ({ reference, ...parseReference(reference, 'Skill') }))
+    if (parsed.length === 0) return []
+    const rows = await this.database<{ skillId: string; version: string; versionId: string; toolReferences: string[] }[]>`
+      select s.id as "skillId", sv.version, sv.id as "versionId", sv.tool_refs as "toolReferences" from skills s
+      join skill_versions sv on sv.tenant_id = s.tenant_id and sv.skill_id = s.id
+       where s.tenant_id = ${tenantId}
+         and (s.id, sv.version) in (select * from unnest(${parsed.map(item => item.id)}::text[], ${parsed.map(item => item.version)}::text[]))
+         and s.status = 'published' and sv.status = 'published'
+    `
+    const byKey = new Map(rows.map(row => [`${row.skillId}\u0000${row.version}`, row]))
+    return parsed.map(({ reference, id, version }) => {
+      const row = byKey.get(`${id}\u0000${version}`)
       if (!row) throw authorizationDenied(`Skill 不存在、未发布或已停用：${reference}`, { status: 404, code: 'resource_not_found', suggestion: '返回列表确认对象仍存在，然后重新选择。' })
-      resolved.push({ reference, versionId: row.versionId, toolReferences: row.toolReferences })
-    }
-    return resolved
+      return { reference, versionId: row.versionId, toolReferences: row.toolReferences }
+    })
   }
 
+  /** 一次查询取空间的 Agent 与 Skill 授权，再按 Agent、Skill 顺序复核（拒绝文案不变）。 */
   private async requireWorkspaceCapabilities(
     workspaceId: string,
-    capabilityType: 'agent' | 'skill',
-    capabilities: CapabilityVersion[],
+    required: Partial<Record<'agent' | 'skill', CapabilityVersion[]>>,
   ) {
-    if (capabilities.length === 0) return
-    const rows = await this.database<{ capabilityVersionId: string }[]>`
-      select capability_version_id as "capabilityVersionId"
+    const types = (['agent', 'skill'] as const).filter(type => (required[type]?.length ?? 0) > 0)
+    if (types.length === 0) return
+    const rows = await this.database<{ capabilityType: 'agent' | 'skill'; capabilityVersionId: string }[]>`
+      select capability_type as "capabilityType", capability_version_id as "capabilityVersionId"
         from workspace_capability_grants
        where tenant_id = ${tenantId} and workspace_id = ${workspaceId}
-         and capability_type = ${capabilityType}
+         and capability_type = any(${types}::text[])
     `
-    if (rows.length === 0) {
-      // 5-T4 发现、父代理修复：「未配置…授权」不匹配任何一条授权正则，此前落 500；
-      // 语义上就是「该空间没有这项能力授权」，属授权拒绝，现类型化为 403。
-      throw authorizationDenied(`工作空间未配置${capabilityLabel(capabilityType)}授权`)
-    }
-    const allowed = new Set(rows.map(row => row.capabilityVersionId))
-    const denied = capabilities.filter(capability => !allowed.has(capability.versionId))
-    if (denied.length) {
-      throw authorizationDenied(`工作空间未授权${capabilityLabel(capabilityType)}：${denied.map(item => item.reference).join('、')}`)
+    for (const capabilityType of types) {
+      const allowed = new Set(rows.filter(row => row.capabilityType === capabilityType).map(row => row.capabilityVersionId))
+      if (allowed.size === 0) {
+        // 5-T4 发现、父代理修复：「未配置…授权」不匹配任何一条授权正则，此前落 500；
+        // 语义上就是「该空间没有这项能力授权」，属授权拒绝，现类型化为 403。
+        throw authorizationDenied(`工作空间未配置${capabilityLabel(capabilityType)}授权`)
+      }
+      const denied = required[capabilityType]!.filter(capability => !allowed.has(capability.versionId))
+      if (denied.length) {
+        throw authorizationDenied(`工作空间未授权${capabilityLabel(capabilityType)}：${denied.map(item => item.reference).join('、')}`)
+      }
     }
   }
 
