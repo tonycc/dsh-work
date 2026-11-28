@@ -2,6 +2,7 @@ import { ref } from 'vue'
 import { defineStore } from 'pinia'
 
 import { workbenchApi } from '../api/client'
+import { isAndroidAppContainer } from '../container/android'
 import { isDingTalkContainer } from '../container/dingtalk'
 import type { UiMode } from '../types/domain'
 
@@ -15,10 +16,10 @@ const cachePrefix = 'dsh-work:ui-mode:'
  * 工作模式）。切换等服务端保存成功后才生效，失败时保持原模式。
  *
  * 钉钉容器内一律使用协作模式（钉钉接入方案 DT25）：不读取、不修改员工保存的偏好，也不写本地缓存，
- * 回到桌面浏览器仍按偏好显示。
+ * 回到桌面浏览器仍按偏好显示。Android App 的 WebView 同样锁定协作模式（移动端方案 M0）。
  */
 export const useUiModeStore = defineStore('workbench-ui-mode', () => {
-  const containerLocked = isDingTalkContainer()
+  const containerLocked = isDingTalkContainer() || isAndroidAppContainer()
   const mode = ref<UiMode>(containerLocked ? 'collab' : 'work')
   const switching = ref(false)
   let userId: string | undefined

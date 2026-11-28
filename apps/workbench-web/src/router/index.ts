@@ -3,6 +3,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { pinia } from '@/stores'
 import { useAuthStore } from '@/stores/auth'
 import { setContainerTitle } from '@/container/dingtalk'
+import { handOffAuthExpired, handOffPasswordChange, isAndroidAppContainer } from '@/container/android'
 import { useUiModeStore } from '@/stores/ui-mode'
 import { locationForMode } from './mode-routes'
 
@@ -166,12 +167,17 @@ const router = createRouter({
 })
 
 router.beforeEach(async (to) => {
+  // Android App 内登录与改密都在原生页面完成（移动端方案 M0）。
+  if (isAndroidAppContainer() && (to.name === 'local-login' || to.name === 'change-password')) {
+    if (to.name === 'local-login' ? handOffAuthExpired() : handOffPasswordChange()) return false
+  }
   if (to.meta.public) return true
   const authStore = useAuthStore(pinia)
   try {
     await authStore.load()
   } catch (cause) {
     if (cause instanceof Error && 'code' in cause && cause.code === 'password_change_required') {
+      if (handOffPasswordChange()) return false
       return { name: 'change-password', query: { return_to: to.fullPath } }
     }
     const status = errorStatus(cause)

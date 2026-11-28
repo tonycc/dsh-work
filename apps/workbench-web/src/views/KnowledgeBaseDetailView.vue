@@ -11,6 +11,7 @@ import type { KnowledgeBase, KnowledgeDocument, KnowledgeDocumentStatus } from '
 import { notifyActionFailure } from '@/utils/feedback'
 import { useUiModeStore } from '@/stores/ui-mode'
 import { describeKnowledgeGrants, formatKnowledgeDate, formatKnowledgeDateTime } from '@/utils/knowledge'
+import { saveBlobAsFile } from '@/utils/save-file'
 
 /**
  * 知识库详情（功能规则第 11 节）：面包屑、“文档”页签与右侧“知识库信息”，与项目空间
@@ -186,12 +187,7 @@ async function download(document: KnowledgeDocument) {
   if (!base.value) return
   try {
     const blob = await workbenchApi.downloadKnowledgeDocument(base.value.id, document.id)
-    const url = URL.createObjectURL(blob)
-    const anchor = window.document.createElement('a')
-    anchor.href = url
-    anchor.download = document.fileName || document.title
-    anchor.click()
-    URL.revokeObjectURL(url)
+    await saveBlobAsFile(blob, document.fileName || document.title)
   } catch (cause) {
     notifyActionFailure('下载', document.fileName, cause, '请稍后重试。')
   }

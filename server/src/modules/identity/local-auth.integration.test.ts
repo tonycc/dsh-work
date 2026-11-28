@@ -420,3 +420,103 @@ test('read requests touch the session row at most once a minute unless the autho
   const [user] = await database.client<{ version: number }[]>`select local_authorization_version::integer as version from users where id = ${adminId}`
   assert.equal((await sessionRow()).version, user!.version)
 })
+
+async function readyEmployee(username: string) {
+  const userId = await employee(username)
+  await database.client`update local_user_credentials set must_change_password = false where user_id = ${userId}`
+  return userId
+}
+
+async function mobileLogin(username: string, deviceId = 'device-android-0001', extra: Record<string, unknown> = {}) {
+  return call('/auth/workbench/mobile/login', { body: { username, password, deviceId, deviceName: 'Pixel 8', ...extra } })
+}
+
+test('Android App login issues a mobile-app session that coexists with the browser session (mobile plan M0)', async () => {
+  const userId = await readyEmployee('mobile.coexist@example.invalid')
+  const desktop = await login('mobile.coexist@example.invalid', 'workbench')
+  assert.equal(desktop.response.status, 200)
+  const phone = await mobileLogin('mobile.coexist@example.invalid')
+  assert.equal(phone.response.status, 200)
+  assert.deepEqual(phone.body, { mustChangePassword: false, expiresInSeconds: 8 * 60 * 60 })
+  assert.match(phone.response.headers.get('set-cookie')!, /^dsh_work_local_session=[^;]+; Path=\/; HttpOnly; SameSite=Lax; Max-Age=\d+/)
+  const phoneSession = await call('/api/workbench/v1/session', { cookie: phone.cookie })
+  assert.equal(phoneSession.body.data.identityProvider, 'mobile-app')
+  assert.equal(phoneSession.body.data.userId, userId)
+  // 手机登录不撤销桌面会话；桌面重新登录也不撤销手机会话。
+  assert.equal((await call('/api/workbench/v1/session', { cookie: desktop.cookie })).response.status, 200)
+  const desktopAgain = await login('mobile.coexist@example.invalid', 'workbench')
+  assert.equal((await call('/api/workbench/v1/session', { cookie: desktop.cookie })).response.status, 401)
+  assert.equal((await call('/api/workbench/v1/session', { cookie: phone.cookie })).response.status, 200)
+  const [stored] = await database.client`
+    select device_id, device_name from authentication_sessions
+     where user_id = ${userId} and authentication_provider = 'mobile-app' and revoked_at is null`
+  assert.deepEqual({ ...stored }, { device_id: 'device-android-0001', device_name: 'Pixel 8' })
+  const [audit] = await database.client`
+    select safe_context from audit_events where actor_id = ${userId} and action = 'identity.login' and safe_context->>'provider' = 'mobile-app'`
+  assert.equal(audit!.safe_context.deviceId, 'device-android-0001')
+  // 桌面退出不影响手机。
+  assert.equal((await call('/auth/workbench/logout', { cookie: desktopAgain.cookie, body: {} })).response.status, 200)
+  assert.equal((await call('/api/workbench/v1/session', { cookie: phone.cookie })).response.status, 200)
+})
+
+test('App re-login replaces only the same device and App logout revokes only this phone', async () => {
+  await readyEmployee('mobile.devices@example.invalid')
+  const desktop = await login('mobile.devices@example.invalid', 'workbench')
+  const first = await mobileLogin('mobile.devices@example.invalid', 'device-android-aaaa')
+  const other = await mobileLogin('mobile.devices@example.invalid', 'device-android-bbbb')
+  const again = await mobileLogin('mobile.devices@example.invalid', 'device-android-aaaa')
+  assert.equal((await call('/api/workbench/v1/session', { cookie: first.cookie })).response.status, 401)
+  assert.equal((await call('/api/workbench/v1/session', { cookie: other.cookie })).response.status, 200)
+  assert.equal((await call('/api/workbench/v1/session', { cookie: again.cookie })).response.status, 200)
+  const loggedOut = await call('/auth/workbench/logout', { cookie: again.cookie, body: {} })
+  assert.equal(loggedOut.response.status, 200)
+  assert.match(loggedOut.response.headers.get('set-cookie')!, /Max-Age=0/)
+  assert.equal((await call('/api/workbench/v1/session', { cookie: again.cookie })).response.status, 401)
+  assert.equal((await call('/api/workbench/v1/session', { cookie: other.cookie })).response.status, 200)
+  assert.equal((await call('/api/workbench/v1/session', { cookie: desktop.cookie })).response.status, 200)
+})
+
+test('App login validates the device, origin and audience and reports a required password change', async () => {
+  const userId = await employee('mobile.first@example.invalid')
+  assert.equal((await mobileLogin('mobile.first@example.invalid', 'short')).response.status, 422)
+  assert.equal((await mobileLogin('mobile.first@example.invalid', 'bad device id!')).response.status, 422)
+  assert.equal((await call('/auth/workbench/mobile/login', { origin: 'https://evil.invalid', body: { username: 'mobile.first@example.invalid', password, deviceId: 'device-android-0001' } })).response.status, 403)
+  assert.equal((await call('/auth/admin/mobile/login', { body: { username: 'mobile.first@example.invalid', password, deviceId: 'device-android-0001' } })).response.status, 404)
+  assert.equal((await mobileLogin('mobile.first@example.invalid', 'device-android-0001', { password: 'wrong password' })).response.status, 401)
+  const first = await mobileLogin('mobile.first@example.invalid', 'device-android-0001', { deviceName: `\u0007${'名'.repeat(100)}` })
+  assert.equal(first.response.status, 200)
+  assert.equal(first.body.mustChangePassword, true)
+  assert.equal((await call('/api/workbench/v1/session', { cookie: first.cookie })).body.error.code, 'password_change_required')
+  const [stored] = await database.client`select device_name from authentication_sessions where user_id = ${userId} and revoked_at is null`
+  assert.equal(stored!.device_name, '名'.repeat(80))
+})
+
+test('changing the password in the App rotates the phone session and still revokes every other source', async () => {
+  const userId = await employee('mobile.change@example.invalid')
+  const desktop = await login('mobile.change@example.invalid', 'workbench')
+  const phone = await mobileLogin('mobile.change@example.invalid', 'device-android-cccc')
+  const changed = await call('/auth/workbench/password', { cookie: phone.cookie, body: { currentPassword: password, newPassword: 'Changed12' } })
+  assert.equal(changed.response.status, 200)
+  assert.ok(changed.cookie)
+  assert.equal((await call('/api/workbench/v1/session', { cookie: phone.cookie })).response.status, 401)
+  assert.equal((await call('/api/workbench/v1/session', { cookie: desktop.cookie })).response.status, 401)
+  const rotated = await call('/api/workbench/v1/session', { cookie: changed.cookie })
+  assert.equal(rotated.body.data.identityProvider, 'mobile-app')
+  const [stored] = await database.client`
+    select device_id from authentication_sessions where user_id = ${userId} and revoked_at is null`
+  assert.equal(stored!.device_id, 'device-android-cccc')
+  assert.equal((await call('/auth/workbench/password', { cookie: changed.cookie, body: { currentPassword: 'Changed12', newPassword: 'Changed123', dingtalkBindingToken: 'ticket' } })).response.status, 422)
+  // 管理员重置密码同样撤销 App 会话。
+  await auth.resetPassword(userId, 'Reset12345', adminId)
+  assert.equal((await call('/api/workbench/v1/session', { cookie: changed.cookie })).response.status, 401)
+})
+
+test('the database refuses mobile-app sessions without a device and browser sessions with one', async () => {
+  const userId = await readyEmployee('mobile.constraint@example.invalid')
+  await assert.rejects(database.client`
+    insert into authentication_sessions (session_hash, tenant_id, audience, user_id, authentication_provider, authorization_version, permissions_expires_at, expires_at)
+    values ('hash-mobile-no-device', 'tenant-dsh-work', 'workbench', ${userId}, 'mobile-app', 1, now() + interval '1 hour', now() + interval '1 hour')`, /authentication_session_credentials/)
+  await assert.rejects(database.client`
+    insert into authentication_sessions (session_hash, tenant_id, audience, user_id, authentication_provider, authorization_version, permissions_expires_at, expires_at, device_id)
+    values ('hash-browser-device', 'tenant-dsh-work', 'workbench', ${userId}, 'local-password', 1, now() + interval '1 hour', now() + interval '1 hour', 'device-android-0001')`, /authentication_session_credentials/)
+})

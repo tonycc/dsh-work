@@ -99,4 +99,19 @@ describe('CollabShell', () => {
     expect(wrapper.get('.menu').text()).toContain('打开管理后台')
     wrapper.unmount()
   })
+
+  it('renders no rail, tab bar, logout or admin entry inside the Android App (mobile plan M0)', async () => {
+    vi.stubGlobal('navigator', { userAgent: 'Mozilla/5.0 (Linux; Android 14; wv) Chrome/130 Mobile DshWorkAndroid/0.1.0' })
+    try {
+      const { wrapper } = await setup('platform_admin')
+      expect(wrapper.find('.collab-shell--app').exists()).toBe(true)
+      expect(wrapper.find('nav[aria-label="协作模式主导航"]').exists()).toBe(false)
+      expect(wrapper.text()).not.toContain('退出登录')
+      expect(wrapper.text()).not.toContain('打开管理后台')
+      expect(wrapper.text()).toContain('页面')
+      wrapper.unmount()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
 })

@@ -3,6 +3,7 @@ import { defineStore } from 'pinia'
 import { ElMessage } from 'element-plus'
 
 import { workbenchApi } from '../api/client'
+import { handOffAuthExpired, isAndroidAppContainer } from '../container/android'
 import { isDingTalkContainer } from '../container/dingtalk'
 import type { UserProfile, UserRole, WorkbenchSession } from '../types/domain'
 
@@ -31,8 +32,13 @@ export const useAuthStore = defineStore('workbench-auth', () => {
   const error = ref('')
   const identityProvider = ref<WorkbenchSession['identityProvider'] | null>(null)
   const user = computed(() => sessionUser.value ?? loadingUser)
+  /** Android App 内不提供管理后台入口与退出登录（移动端方案 M0：管理后台不进入移动端，退出由原生处理）。 */
+  const inAndroidApp = isAndroidAppContainer()
   const canAccessAdmin = computed(() =>
-    ['business_admin', 'platform_admin', 'auditor'].includes(user.value.role),
+    !inAndroidApp && ['business_admin', 'platform_admin', 'auditor'].includes(user.value.role),
+  )
+  const canLogout = computed(() =>
+    !inAndroidApp && identityProvider.value !== null && identityProvider.value !== 'prototype-sso',
   )
   let pendingLoad: Promise<void> | undefined
 
@@ -61,6 +67,7 @@ export const useAuthStore = defineStore('workbench-auth', () => {
   }
 
   function login(returnTo = currentReturnTo()) {
+    if (handOffAuthExpired()) return
     window.location.assign(`/auth/workbench/login?return_to=${encodeURIComponent(returnTo)}`)
   }
 
@@ -69,6 +76,7 @@ export const useAuthStore = defineStore('workbench-auth', () => {
   }
 
   async function logout() {
+    if (inAndroidApp) return
     // 钉钉会话与密码会话同为本地会话，退出登录撤销该账号全部来源的会话（钉钉接入方案 4.3）。
     try {
       const response = await fetch('/auth/workbench/logout', { method: 'POST', credentials: 'same-origin' })
@@ -83,6 +91,8 @@ export const useAuthStore = defineStore('workbench-auth', () => {
   return {
     user,
     canAccessAdmin,
+    canLogout,
+    inAndroidApp,
     initialized,
     loading,
     error,

@@ -81,8 +81,9 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="collab-shell">
-    <aside class="collab-rail">
+  <!-- Android App 内导航由原生提供（移动端方案 M0），不渲染图标栏、顶栏与底部标签栏。 -->
+  <div class="collab-shell" :class="{ 'collab-shell--app': authStore.inAndroidApp }">
+    <aside v-if="!authStore.inAndroidApp" class="collab-rail">
       <div class="collab-rail__logo">
         <ModeSwitchMenu placement="right-start">
           <AppLogo compact />
@@ -137,7 +138,7 @@ onMounted(() => {
                 打开管理后台
               </el-dropdown-item>
               <el-dropdown-item
-                v-if="authStore.identityProvider !== null && authStore.identityProvider !== 'prototype-sso'"
+                v-if="authStore.canLogout"
                 divided
                 command="logout"
               >
@@ -269,7 +270,15 @@ onMounted(() => {
 
 :global(.role-menu__heading) { padding: 8px 16px 6px; color: #8a94a5; font-size: var(--dsh-font-size-caption); font-weight: 650; }
 
+.collab-shell--app .collab-main { margin-left: 0; }
+
 @media (max-width: 820px) {
+  .collab-shell--app .collab-main {
+    --dsh-page-topbar-offset: 0px;
+    padding-top: 0;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
   .collab-rail {
     inset: 0 0 auto 0;
     width: auto;

@@ -27,7 +27,7 @@ interface ValidatedSession {
   userId: string
   subject: string
   mustChangePassword: boolean
-  provider: 'local-password' | 'dingtalk'
+  provider: 'local-password' | 'dingtalk' | 'mobile-app'
   /** 会话行上记录的授权版本；与当前版本不同时立即回写。 */
   sessionAuthorizationVersion: number
   /** `last_seen_at` 已超过节流间隔，需要回写。 */
@@ -52,6 +52,23 @@ export interface LocalAccountInput {
   /** 新建账号时从部门树选择的部门，成为该员工的主部门；不再接受自由填写的部门文字。 */
   departmentId?: string | null
   email?: string | null
+}
+
+/** Android App 登录时上报的设备（移动端规划 M0）：只用于按设备替换会话与管理端展示，不作为安全依据。 */
+export interface MobileDevice {
+  id: string
+  name: string | null
+}
+
+const deviceIdPattern = /^[A-Za-z0-9._:-]{8,128}$/
+
+/** 校验 App 上报的设备标识与名称；不合规时 422。 */
+export function parseMobileDevice(input: { deviceId?: unknown; deviceName?: unknown }): MobileDevice {
+  if (typeof input.deviceId !== 'string' || !deviceIdPattern.test(input.deviceId)) {
+    throw new IdentityAccessError(422, 'invalid_device', '设备标识必须为 8–128 位字母、数字或 ._:- 字符')
+  }
+  const name = typeof input.deviceName === 'string' ? [...input.deviceName].filter(char => char >= ' ' && char !== '\u007f').join('').trim().slice(0, 80) : ''
+  return { id: input.deviceId, name: name || null }
 }
 
 /** 钉钉内登录即绑定的结果（4.2 方式一）；未带待绑定凭证时为 undefined。 */
@@ -102,11 +119,15 @@ export class LocalAuthService {
    * 账号密码登录。带 `dingtalkTicket`（钉钉内待绑定凭证）时即 `bind-login`：在同一事务中锁定账号与凭据、
    * 校验密码与 audience、消费凭证、写入绑定并签发 dingtalk 会话（4.2 方式一）。
    */
-  async login(request: IncomingMessage, audience: ApiAudience, input: { username: unknown; password: unknown; returnTo?: string }, options: { dingtalkTicket?: string } = {}) {
+  async login(request: IncomingMessage, audience: ApiAudience, input: { username: unknown; password: unknown; returnTo?: string }, options: { dingtalkTicket?: string; device?: MobileDevice } = {}) {
     const settings = this.configuration.audiences[audience]
     validateRequestOrigin(request, settings)
     const origin = resolveRequestOrigin(request, settings)
     const ticket = options.dingtalkTicket
+    const device = options.device
+    if (device && (audience !== 'workbench' || ticket !== undefined)) {
+      throw new IdentityAccessError(422, 'invalid_request', 'App 登录只用于员工端账号密码登录')
+    }
     const dingtalkConfiguration = ticket !== undefined ? await this.dingtalk?.current() ?? null : null
     if (ticket !== undefined && (audience !== 'workbench' || !dingtalkConfiguration)) {
       throw new IdentityAccessError(503, 'dingtalk_not_configured', '钉钉登录未启用')
@@ -158,6 +179,11 @@ export class LocalAuthService {
           }
         }
       }
+      if (device) {
+        await this.insertMobileSession(transaction, credential.userId, sessionHash, authorization.authorizationVersion, device)
+        await localAudit(transaction, credential.userId, 'identity.login', 'success', { audience, deviceId: device.id }, 'mobile-app')
+        return { mustChangePassword: credential.mustChangePassword, binding }
+      }
       await this.insertPasswordSession(transaction, credential.userId, audience, sessionHash, authorization.authorizationVersion)
       await localAudit(transaction, credential.userId, 'identity.login', 'success', { audience })
       return { mustChangePassword: credential.mustChangePassword, binding }
@@ -174,6 +200,8 @@ export class LocalAuthService {
     const ttl = result.binding?.status === 'bound' ? dingtalkConfiguration!.sessionTtlSeconds : this.sessionTtl()
     return {
       location,
+      mustChangePassword: result.mustChangePassword,
+      expiresInSeconds: ttl,
       sessionCookie: serializeCookie(settings.sessionCookieName, sessionToken, ttl, this.configuration.cookieSecure),
       ...(result.binding ? { dingtalkBinding: result.binding } : {}),
     }
@@ -201,13 +229,13 @@ export class LocalAuthService {
     return { status: 'bound' }
   }
 
-  /** 密码登录只撤销此前的密码会话，不撤销钉钉会话（按来源撤销，4.3）。 */
+  /** 浏览器密码登录只撤销此前的浏览器密码会话，不撤销钉钉与 App 会话（按来源撤销，4.3；移动端规划 M0）。 */
   private async insertPasswordSession(transaction: DatabaseTransaction, userId: string, audience: ApiAudience, sessionHash: string, authorizationVersion: number) {
     const expiresAt = new Date(Date.now() + this.sessionTtl() * 1000)
     await transaction`
       update authentication_sessions set revoked_at = now()
        where tenant_id = ${tenantId} and user_id = ${userId}
-         and audience = ${audience} and revoked_at is null and authentication_provider <> 'dingtalk'
+         and audience = ${audience} and revoked_at is null and authentication_provider = 'local-password'
     `
     await transaction`
       insert into authentication_sessions (
@@ -216,6 +244,25 @@ export class LocalAuthService {
       ) values (
         ${sessionHash}, ${tenantId}, ${audience}, ${userId}, 'local-password',
         ${authorizationVersion}, ${expiresAt}, ${expiresAt}
+      )
+    `
+  }
+
+  /** App 登录：只替换同一台手机上的旧 App 会话，与浏览器、钉钉及其他手机的会话并存。 */
+  private async insertMobileSession(transaction: DatabaseTransaction, userId: string, sessionHash: string, authorizationVersion: number, device: MobileDevice) {
+    const expiresAt = new Date(Date.now() + this.sessionTtl() * 1000)
+    await transaction`
+      update authentication_sessions set revoked_at = now()
+       where tenant_id = ${tenantId} and user_id = ${userId} and audience = 'workbench'
+         and authentication_provider = 'mobile-app' and device_id = ${device.id} and revoked_at is null
+    `
+    await transaction`
+      insert into authentication_sessions (
+        session_hash, tenant_id, audience, user_id, authentication_provider,
+        authorization_version, permissions_expires_at, expires_at, device_id, device_name
+      ) values (
+        ${sessionHash}, ${tenantId}, 'workbench', ${userId}, 'mobile-app',
+        ${authorizationVersion}, ${expiresAt}, ${expiresAt}, ${device.id}, ${device.name}
       )
     `
   }
@@ -252,6 +299,7 @@ export class LocalAuthService {
   /**
    * 一条查询校验两类会话（钉钉接入方案 4.3）：
    * - local-password：账号为本地账号且有效，并有密码凭据；
+   * - mobile-app（仅员工端，Android App）：与 local-password 相同，要求本地账号有效并有密码凭据；
    * - dingtalk（仅员工端）：会话上的 binding_id 对应的绑定仍有效且属于该账号，不要求密码凭据；
    *   must_change_password 为真时同样拒绝（绑定前已要求先改密，此处兜底）。
    * 按会话行上的 authentication_provider 分支，避免钉钉会话先白跑一遍本地会话查询。
@@ -275,13 +323,17 @@ export class LocalAuthService {
          and u.status = 'active' and u.business_user and t.status = 'active' and u.identity_provider = 'local'
          and (
            (s.authentication_provider = 'local-password' and c.user_id is not null)
+           or (s.authentication_provider = 'mobile-app' and s.audience = 'workbench' and c.user_id is not null)
            or (s.authentication_provider = 'dingtalk' and s.audience = 'workbench' and b.id is not null)
          )
     `
     return session ?? null
   }
 
-  /** 退出登录撤销该账号在此 audience 的全部来源会话（4.3：手机钉钉与桌面浏览器会话都结束）。 */
+  /**
+   * 退出登录（4.3）：浏览器或钉钉内退出撤销该账号在此 audience 的浏览器与钉钉会话；App 会话不受影响。
+   * App 内退出只撤销本机这一条会话（移动端规划 M0）。
+   */
   async logout(request: IncomingMessage, audience: ApiAudience) {
     const settings = this.configuration.audiences[audience]
     validateRequestOrigin(request, settings)
@@ -300,6 +352,9 @@ export class LocalAuthService {
     const settings = this.configuration.audiences[audience]
     const origin = resolveRequestOrigin(request, settings)
     const ticket = typeof input.dingtalkTicket === 'string' && input.dingtalkTicket ? input.dingtalkTicket : undefined
+    if (ticket !== undefined && identity.identityProvider === 'mobile-app') {
+      throw new IdentityAccessError(422, 'invalid_request', 'App 内修改密码不能绑定钉钉')
+    }
     const dingtalkConfiguration = ticket !== undefined ? await this.dingtalk?.current() ?? null : null
     if (ticket !== undefined && (audience !== 'workbench' || !dingtalkConfiguration)) {
       throw new IdentityAccessError(503, 'dingtalk_not_configured', '钉钉登录未启用')
@@ -327,11 +382,12 @@ export class LocalAuthService {
          where c.tenant_id = ${tenantId} and c.user_id = ${identity.userId} and u.identity_provider = 'local'
          for update of u, c
       `
-      const [session] = await transaction`
-        select session_hash from authentication_sessions
+      const [session] = await transaction<{ provider: 'local-password' | 'mobile-app'; deviceId: string | null; deviceName: string | null }[]>`
+        select authentication_provider as provider, device_id as "deviceId", device_name as "deviceName"
+          from authentication_sessions
          where tenant_id = ${tenantId} and user_id = ${identity.userId}
            and session_hash = ${identity.sessionHash} and audience = ${audience}
-           and authentication_provider = 'local-password' and revoked_at is null and expires_at > now() for update
+           and authentication_provider in ('local-password', 'mobile-app') and revoked_at is null and expires_at > now() for update
       `
       if (!session || !credential?.active || !currentValid || credential.passwordHash !== current?.passwordHash) {
         await localAudit(transaction, identity.userId, 'identity.password.change', 'failed')
@@ -352,6 +408,11 @@ export class LocalAuthService {
         if (!binding) await localAudit(transaction, identity.userId, 'identity.dingtalk.bind', 'failed', { reason: 'ticket_invalid' }, 'dingtalk')
         await this.insertPasswordSession(transaction, identity.userId, audience, sessionHash, authorization.authorizationVersion)
         return { binding: binding ?? ({ status: 'refused', reason: 'ticket_invalid' } satisfies DingTalkLoginBinding) }
+      }
+      if (session.provider === 'mobile-app' && session.deviceId) {
+        // App 内改密：全部来源仍被撤销，本机换发新的 App 会话。
+        await this.insertMobileSession(transaction, identity.userId, sessionHash, authorization.authorizationVersion, { id: session.deviceId, name: session.deviceName })
+        return { binding: undefined }
       }
       await this.insertPasswordSession(transaction, identity.userId, audience, sessionHash, authorization.authorizationVersion)
       return { binding: undefined }

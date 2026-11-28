@@ -1,4 +1,5 @@
 import { errorReporter } from '@dsh-work/ui-core'
+import { handOffAuthExpired } from '../container/android'
 import type {
   NewSpaceDisclosureImpact,
   PersonalFile,
@@ -148,6 +149,8 @@ async function requestBlob(path: string) {
 
 function redirectToLogin() {
   if (typeof window === 'undefined') return
+  // Android App 内由原生回到登录页（移动端方案 M0），WebView 不进入网页登录。
+  if (handOffAuthExpired()) return
   const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`
   window.location.assign(`/auth/workbench/login?return_to=${encodeURIComponent(returnTo)}`)
 }

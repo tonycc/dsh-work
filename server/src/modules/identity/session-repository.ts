@@ -89,7 +89,8 @@ export class IdentitySessionRepository {
   }
 
   /**
-   * `allSources`：员工主动退出登录时撤销该账号在此 audience 的全部来源会话（密码与钉钉，钉钉接入方案 4.3）；
+   * `allSources`：员工在浏览器或钉钉内主动退出登录时撤销该账号在此 audience 的浏览器密码与钉钉会话（钉钉接入方案 4.3）；
+   * Android App 会话不在其中，App 内退出也只撤销本机会话（移动端规划 M0）。
    * 切换登录方式时只清理当前 Cookie 对应的会话。
    */
   async logoutSession(sessionHash: string, audience: ApiAudience, options: { allSources?: boolean } = {}) {
@@ -101,11 +102,11 @@ export class IdentitySessionRepository {
         returning user_id as "userId", authentication_provider as provider
       `
       if (!session) return false
-      if (options.allSources) {
+      if (options.allSources && session.provider !== 'mobile-app') {
         await transaction`
           update authentication_sessions set revoked_at = now()
            where tenant_id = ${tenantId} and user_id = ${session.userId}
-             and audience = ${audience} and revoked_at is null
+             and audience = ${audience} and revoked_at is null and authentication_provider <> 'mobile-app'
         `
       }
       await appendIdentityAudit(transaction, {

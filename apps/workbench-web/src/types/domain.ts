@@ -959,7 +959,7 @@ export type ConversationLocation =
 
 export interface WorkbenchSession {
   user: UserProfile
-  identityProvider: 'prototype-sso' | 'local-password' | 'dingtalk'
+  identityProvider: 'prototype-sso' | 'local-password' | 'dingtalk' | 'mobile-app'
   apiAudience: 'workbench'
 }
 

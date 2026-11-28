@@ -4,6 +4,7 @@ import { errorReporter } from '@dsh-work/ui-core'
 
 import { workbenchApi } from '@/api/client'
 import type { Artifact } from '@/types/domain'
+import { saveBlobAsFile } from '@/utils/save-file'
 
 interface StructuredFailure extends Error {
   object?: string
@@ -33,12 +34,7 @@ export function notifyActionFailure(
 export async function downloadArtifactFile(artifact: Pick<Artifact, 'id' | 'version' | 'name'>) {
   try {
     const blob = await workbenchApi.downloadArtifact(artifact.id, artifact.version)
-    const url = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = artifact.name
-    anchor.click()
-    URL.revokeObjectURL(url)
+    await saveBlobAsFile(blob, artifact.name)
     ElMessage.success(`已下载“${artifact.name}”`)
   } catch (cause) {
     notifyActionFailure('成果下载', `成果“${artifact.name}”V${artifact.version}`, cause, '返回成果列表刷新版本；若仍失败，请联系工作空间管理员。')
