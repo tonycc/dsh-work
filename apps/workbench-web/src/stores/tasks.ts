@@ -44,6 +44,7 @@ export const useTaskStore = defineStore('tasks', () => {
     sessionStreams.clear()
     runtimeEventQueues.clear()
     sessionActivity.value = {}
+    workspaceActivity.value = {}
     tasks.value = []; loading.value = false; initialized.value = false
   }
   function requireGeneration(value: number) {
@@ -54,6 +55,11 @@ export const useTaskStore = defineStore('tasks', () => {
    * 视图监听自己关心的 sessionId，标记一变即重新拉取线程/Run/列表。
    */
   const sessionActivity = ref<Record<string, string>>({})
+  /**
+   * workspaceId → 该空间活动流最近一次事件（含重连 resync）的标记。只关心“本空间有没有变化”的
+   * 视图（群聊时间线、空间对话列表）监听这里，其他空间的事件不会触发它们重取。
+   */
+  const workspaceActivity = ref<Record<string, string>>({})
 
   const activeTasks = computed(() =>
     tasks.value.filter((task) => ['queued', 'running', 'awaiting_approval'].includes(task.status)),
@@ -357,6 +363,7 @@ export const useTaskStore = defineStore('tasks', () => {
       // 视图的 watch 不会触发、刷新会被静默丢弃。
       sessionEventSeq += 1
       sessionActivity.value = { ...sessionActivity.value, [sessionId]: `${kind}:${sessionEventSeq}` }
+      workspaceActivity.value = { ...workspaceActivity.value, [workspaceId]: `${kind}:${sessionEventSeq}` }
     }
     const parseMarker = (message: Event) => {
       try {
@@ -549,7 +556,7 @@ export const useTaskStore = defineStore('tasks', () => {
   }
 
   return {
-    tasks, loading, initialized, activeTasks, recentTasks, sessionActivity, reset, load, getTask, loadTask,
+    tasks, loading, initialized, activeTasks, recentTasks, sessionActivity, workspaceActivity, reset, load, getTask, loadTask,
     createTask, sendMessage, postSessionMessage, loadSessionThread, loadEarlierThreadMessages, uploadSessionFiles,
     startRunWithSessionFiles, cancelTask, retryTask, deleteConversation, refreshRun,
     upsert, subscribe, subscribeWorkspaceSessions, unsubscribeWorkspaceSessions,
