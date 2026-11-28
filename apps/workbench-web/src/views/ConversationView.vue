@@ -1034,6 +1034,15 @@ watch(
     if (!showJumpToLatest.value) scrollToBottom('smooth')
   },
 )
+// 流式回答在同一条消息上追加文本（条数不变），也要跟随到底部；连续增长用瞬时滚动，避免平滑动画互相打断。
+watch(
+  () => task.value?.messages.at(-1)?.content.length,
+  async (length, previous) => {
+    if (!length || !previous || length <= previous) return
+    await nextTick()
+    if (!showJumpToLatest.value) scrollToBottom('auto')
+  },
+)
 </script>
 
 <template>

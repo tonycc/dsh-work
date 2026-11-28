@@ -21,7 +21,20 @@ type Block =
   | ListBlock
 
 const props = defineProps<{ text: string }>()
-const blocks = computed(() => parseBlocks(props.text))
+/*
+ * 流式回答每到一段文本都会整篇重解析。源文本没变的块沿用上一次的对象，子组件（列表等）的
+ * props 引用不变就不会重渲染；key 带上块类型，块从段落长成表格等时整块重建而不是错位复用。
+ */
+let previousBlocks: ParsedBlock[] = []
+const blocks = computed(() => {
+  const parsed = parseBlocks(props.text).map((block, index) => {
+    const previous = previousBlocks[index]
+    return previous && previous.source === block.source ? previous : block
+  })
+  previousBlocks = parsed
+  return parsed.map(item => item.block)
+})
+const blockKeys = computed(() => blocks.value.map((block, index) => `${index}:${block.type}`))
 /** 每个表格是回答中的第几个表格（从 1 起），用于下载文件名；与其他内容块的位置无关。 */
 const tableNumbers = computed(() => {
   const numbers = new Map<number, number>()
@@ -127,13 +140,19 @@ const MarkdownList = defineComponent({
   },
 })
 
-function parseBlocks(value: string): Block[] {
-  const result: Block[] = []
+interface ParsedBlock { block: Block; source: string }
+
+function parseBlocks(value: string): ParsedBlock[] {
   const lines = value.replaceAll('\r\n', '\n').split('\n').map(line => line.trimEnd())
+  const result: ParsedBlock[] = []
+  const pushBlock = (block: Block, start: number, end: number) => {
+    result.push({ block, source: lines.slice(start, end).join('\n') })
+  }
   let index = 0
   while (index < lines.length) {
     const line = lines[index]!
     if (!line.trim()) { index++; continue }
+    const start = index
     const fence = line.trim().match(/^```([\w.+-]*)\s*$/)
     if (fence) {
       const codeLines: string[] = []
@@ -143,27 +162,28 @@ function parseBlocks(value: string): Block[] {
         codeLines.push(lines[index]!)
         index++
       }
+      // 未闭合的代码块（还在流式输出）源文本末尾不含结束围栏，闭合后源文本变化，块会更新。
       if (index < lines.length) index++
-      result.push({ type: 'code', language, text: codeLines.join('\n') })
+      pushBlock({ type: 'code', language, text: codeLines.join('\n') }, start, index)
       continue
     }
     const heading = line.match(/^\s*(#{1,3})\s+(.+)$/)
     if (heading) {
-      result.push({ type: 'heading', level: heading[1]!.length, text: heading[2]! })
       index++
+      pushBlock({ type: 'heading', level: heading[1]!.length, text: heading[2]! }, start, index)
       continue
     }
     const table = parseTable(lines, index)
     if (table) {
-      result.push(table.block)
       index = table.next
+      pushBlock(table.block, start, index)
       continue
     }
     const list = listLine(line)
     if (list) {
       const parsed = parseList(lines, index, list.indent, list.type)
-      result.push(parsed.block)
       index = parsed.next
+      pushBlock(parsed.block, start, index)
       continue
     }
     const paragraph: string[] = []
@@ -173,7 +193,7 @@ function parseBlocks(value: string): Block[] {
       paragraph.push(candidate.trim())
       index++
     }
-    result.push({ type: 'paragraph', lines: paragraph })
+    pushBlock({ type: 'paragraph', lines: paragraph }, start, index)
   }
   return result
 }
@@ -293,7 +313,7 @@ function inlineNodes(value: string): VNodeChild[] {
 
 <template>
   <div class="assistant-message-content">
-    <template v-for="(block, index) in blocks" :key="index">
+    <template v-for="(block, index) in blocks" :key="blockKeys[index]">
       <h3 v-if="block.type === 'heading' && block.level === 1"><InlineMarkdown :text="block.text" /></h3>
       <h4 v-else-if="block.type === 'heading'"><InlineMarkdown :text="block.text" /></h4>
       <div v-else-if="block.type === 'code'" class="assistant-code-block">
