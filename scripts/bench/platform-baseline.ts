@@ -155,6 +155,8 @@ async function main() {
     await record('authenticateApi（本地账号会话，GET）', '每个 API 请求一次', () => auth.authenticateApi(fakeRequest('GET', cookie), 'workbench'))
     await record('authorizeWorkbench（个人空间）', '多数业务路由再调一次；个人 SSE 有新事件时也调', () =>
       authorization.authorizeWorkbench({ userId, workspaceId: seeded.workspaceId, allowArchived: true }))
+    await record('authorizeRuntime（个人空间）', 'Run 受理与执行期复权，生产约 30 次/Run', () =>
+      authorization.authorizeRuntime({ userId, workspaceId: seeded.workspaceId, agentVersionId }))
     await record(`listTasks（${seeded.runCount} 个 Run，${options.sessions} 个会话×${options.runsPerSession} 轮）`, 'GET /tasks 的仓储部分，不含路由层 attachListRoles', () =>
       conversations.listTasks(userId))
     const runId = 'bench-run-0-0'

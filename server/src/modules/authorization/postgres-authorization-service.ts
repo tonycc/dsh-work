@@ -184,9 +184,10 @@ export class PostgresAuthorizationService {
     scopeCeiling?: RuntimeScopeCeiling
   }): Promise<RuntimeAuthorizationDecision> {
     try {
-      const decision = await this.authorizeRuntimeDecision(input)
-      await this.recordDecision(input.userId, input.agentVersionId, 'authorization.runtime', 'success')
-      return decision
+      // 授权通过不再逐次写 success 审计：一个 Run 受理到执行会复权约 30 次，
+      // 这类行曾占 audit_events 的 76%。通过的证据由 run.create 审计与 Manifest
+      // 中的授权快照承担；这里只记录被拦截的决策。
+      return await this.authorizeRuntimeDecision(input)
     } catch (error) {
       await this.recordDecision(input.userId, input.agentVersionId, 'authorization.runtime', 'blocked', error)
       throw error
@@ -288,8 +289,7 @@ export class PostgresAuthorizationService {
 
   /**
    * Runtime 授权决策本体，不直接写决策审计。团队执行复核需要把成员/Agent
-   * 关联检查并入同一条 authorization.runtime 决策，不能先记 success 再补
-   * 一条 blocked。
+   * 关联检查并入同一次 authorization.runtime 决策，拦截时只记一条 blocked。
    */
   private async authorizeRuntimeDecision(input: {
     userId: string
@@ -420,7 +420,7 @@ export class PostgresAuthorizationService {
       } else if (agentMember.status !== 'available') {
         throw authorizationDenied('Agent 成员已停用或已移出该团队空间，不能继续执行任务')
       }
-      await this.recordDecision(input.userId, input.agentVersionId, 'authorization.runtime', 'success')
+      // 与 authorizeRuntime 一致：通过不写 success 审计，只记录拦截。
       return decision
     } catch (error) {
       await this.recordDecision(input.userId, input.agentVersionId, 'authorization.runtime', 'blocked', error)
@@ -1105,10 +1105,10 @@ export class PostgresAuthorizationService {
     actorId: string,
     objectId: string,
     action: string,
-    result: 'success' | 'blocked',
-    error?: unknown,
+    result: 'blocked',
+    error: unknown,
   ) {
-    const detail = error instanceof Error ? error.message : error ? String(error) : '授权通过'
+    const detail = error instanceof Error ? error.message : String(error)
     await this.database`
       insert into audit_events (
         id, tenant_id, actor_type, actor_id, action, object_type, object_id,
