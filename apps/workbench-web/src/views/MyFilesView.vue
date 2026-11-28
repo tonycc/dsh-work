@@ -11,6 +11,7 @@ import type { Artifact, PersonalFile } from '@/types/domain'
 import { personalFilePreview } from '@/utils/artifact-preview'
 import { fileRemovalNotice } from '@/utils/content-lifecycle'
 import { notifyActionFailure } from '@/utils/feedback'
+import { saveBlobAsFile } from '@/utils/save-file'
 let mounted = true
 onBeforeUnmount(() => { mounted = false })
 const route = useRoute(), router = useRouter(), auth = useAuthStore()
@@ -39,8 +40,7 @@ async function download(file: PersonalFile) {
     const actor = auth.user.id
     const blob = await workbenchApi.downloadPersonalFile(file.id)
     if (!mounted || actor !== auth.user.id) return
-    const url = URL.createObjectURL(blob), anchor = document.createElement('a')
-    anchor.href = url; anchor.download = file.name; anchor.click(); URL.revokeObjectURL(url)
+    await saveBlobAsFile(blob, file.name)
   } catch(cause) { notifyActionFailure('下载文件', file.name, cause) }
   finally { busy.value = '' }
 }

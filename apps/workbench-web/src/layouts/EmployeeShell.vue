@@ -33,6 +33,7 @@ import type { TaskRun } from '@/types/domain'
 import { isTaskInArchivedWorkspace } from '@/utils/archived-workspaces'
 import { conversationRemovalNotice } from '@/utils/content-lifecycle'
 import { notifyActionFailure } from '@/utils/feedback'
+import { saveBlobAsFile } from '@/utils/save-file'
 
 const route = useRoute()
 const router = useRouter()
@@ -97,13 +98,7 @@ function exportConversation(task: TaskRun) {
     .map((message) => `${message.role === 'user' ? '我' : 'dsh-work'}：${message.content}`)
     .join('\n\n')
   const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = `${task.title}-对话记录.txt`
-  anchor.click()
-  URL.revokeObjectURL(url)
-  ElMessage.success('对话记录已导出')
+  void saveBlobAsFile(blob, `${task.title}-对话记录.txt`).then(() => ElMessage.success('对话记录已导出'))
 }
 
 async function deleteConversation(task: TaskRun) {
@@ -280,7 +275,7 @@ useWorkbenchBootstrap()
                 <el-icon><Monitor /></el-icon>
                 打开管理后台
               </el-dropdown-item>
-              <el-dropdown-item v-if="authStore.identityProvider !== null && authStore.identityProvider !== 'prototype-sso'" divided command="logout">
+              <el-dropdown-item v-if="authStore.canLogout" divided command="logout">
                 <el-icon><SwitchButton /></el-icon>
                 退出登录
               </el-dropdown-item>

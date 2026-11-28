@@ -625,3 +625,36 @@ test('MODE-E2E-17: an @ mention shows in both modes and clears when the group is
   await expect(list.getByTestId('conversation-mention')).toHaveCount(0)
   await expect(navigation.getByRole('button', { name: '对话', exact: true })).toBeVisible()
 })
+
+test('MODE-E2E-19: inside the Android App the WebView is locked to collaboration mode and hands login back to native', async ({ browser, baseURL }) => {
+  const context = await browser.newContext({
+    baseURL,
+    viewport: { width: 390, height: 800 },
+    userAgent: 'Mozilla/5.0 (Linux; Android 14; wv) AppleWebKit/537.36 Chrome/130 Mobile Safari/537.36 DshWorkAndroid/0.1.0',
+  })
+  await context.addInitScript(() => {
+    const calls: string[] = []
+    Object.assign(window, {
+      __nativeCalls: calls,
+      dshAndroid: {
+        onAuthExpired: () => calls.push('auth'),
+        onPasswordChangeRequired: () => calls.push('password'),
+        saveFile: (name: string) => calls.push(`save:${name}`),
+      },
+    })
+  })
+  const page = await context.newPage()
+  await page.goto('/workbench')
+  await expect(page).toHaveURL(/\/c\/chats$/)
+  await expect(page.getByRole('navigation', { name: '协作模式主导航' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '打开用户菜单' })).toHaveCount(0)
+
+  await page.goto('/settings')
+  await expect(page.getByRole('heading', { name: '企业身份' })).toBeVisible()
+  await expect(page.getByRole('link', { name: '修改密码' })).toHaveCount(0)
+
+  await page.goto('/login')
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __nativeCalls: string[] }).__nativeCalls)).toContain('auth')
+  await expect(page.getByRole('button', { name: '登录' })).toHaveCount(0)
+  await context.close()
+})

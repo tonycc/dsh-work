@@ -34,3 +34,20 @@ describe('UI mode inside the DingTalk container', () => {
     expect(useUiModeStore().containerLocked).toBe(false)
   })
 })
+
+// 移动端方案 M0：Android App 的 WebView 与钉钉容器一样锁定协作模式。
+describe('UI mode inside the Android App', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('locks collaboration mode for the DshWorkAndroid user agent', async () => {
+    vi.stubGlobal('navigator', { userAgent: 'Mozilla/5.0 (Linux; Android 14; wv) Chrome/130 Mobile DshWorkAndroid/0.1.0' })
+    setActivePinia(createPinia())
+    api.getPreferences.mockReset()
+    api.getPreferences.mockResolvedValue({ uiMode: 'work', updatedAt: null })
+    const store = useUiModeStore()
+    expect(store.containerLocked).toBe(true)
+    await store.ensureLoaded('U1')
+    expect(store.mode).toBe('collab')
+    expect(api.getPreferences).not.toHaveBeenCalled()
+  })
+})

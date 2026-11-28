@@ -7,6 +7,7 @@ import { workbenchApi } from '@/api/client'
 import type { WorkspaceFileVersion } from '@/types/domain'
 import { notifyActionFailure } from '@/utils/feedback'
 import { canReferenceVersion, describeVersionParseStatus } from '@/utils/workspace-file-versions'
+import { saveBlobAsFile } from '@/utils/save-file'
 
 /**
  * 单个逻辑文件的版本列表（TW-07 / 3-T9）。
@@ -102,12 +103,7 @@ async function downloadVersion(version: WorkspaceFileVersion) {
       props.logicalFileId,
       version.versionNo,
     )
-    const url = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = version.name
-    anchor.click()
-    URL.revokeObjectURL(url)
+    await saveBlobAsFile(blob, version.name)
     ElMessage.success(`已下载“${version.name}”V${version.versionNo}`)
   } catch (cause) {
     notifyActionFailure(

@@ -27,7 +27,7 @@ onMounted(() => { void loadPolicy() })
           <span><el-icon><User /></el-icon></span>
           <div><h2>企业身份</h2><p>账号由管理员开通和维护</p></div>
         </div>
-        <el-button v-if="authStore.identityProvider === 'local-password'" tag="a" href="/change-password" type="primary" link>修改密码</el-button>
+        <el-button v-if="authStore.identityProvider === 'local-password' && !authStore.inAndroidApp" tag="a" href="/change-password" type="primary" link>修改密码</el-button>
         <dl class="identity-grid">
           <div><dt>姓名</dt><dd>{{ authStore.user.name }}</dd></div>
           <div><dt>员工编号</dt><dd class="mono">{{ authStore.user.id }}</dd></div>
@@ -37,7 +37,7 @@ onMounted(() => { void loadPolicy() })
         </dl>
       </section>
 
-      <DingTalkSettingsSection />
+      <DingTalkSettingsSection v-if="!authStore.inAndroidApp" />
 
       <section class="panel settings-section retention-notice">
         <h2>内容保留与账号停用</h2>
