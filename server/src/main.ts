@@ -58,7 +58,7 @@ import type { JsonObject } from './modules/run/run-types.ts'
 import { PostgresTaskRepository, platformToolOperationKey, taskOperationParameterDigest } from './modules/task/postgres-task-repository.ts'
 import { RunOrchestrationService } from './modules/run/run-orchestration-service.ts'
 import { RunRevocationSweep } from './modules/run/run-revocation-sweep.ts'
-import { PostgresPersistentWaitService } from './modules/run/postgres-persistent-wait-service.ts'
+import { PostgresPersistentWaitService, persistentApprovalsEnabled } from './modules/run/postgres-persistent-wait-service.ts'
 import { DshAcpRuntimeAdapter } from './modules/runtime/dsh-acp-runtime-adapter.ts'
 import { CapabilityGuardedRuntime, UnavailableRuntime, ExecutionCapabilityUnavailableError, probeExecutionCapability, type CapabilityState } from './modules/runtime/execution-capabilities.ts'
 import type { AgentRuntimePort } from './modules/runtime/runtime-types.ts'
@@ -641,7 +641,7 @@ async function start() {
   persistentWait = new PostgresPersistentWaitService(database, runs, {
     reauthorize: manifest => orchestration!.assertWaitingRunAuthorization(manifest),
     enqueue: (run, manifest) => orchestration!.enqueueResumedAttempt(run, manifest),
-  }, dsh.value?.version ?? 'unavailable')
+  }, dsh.value?.version ?? 'unavailable', { enabled: persistentApprovalsEnabled(process.env.DSH_WORK_PERSISTENT_APPROVALS) })
   persistentWaitRef.current = persistentWait
   orchestration.setPersistentWaitService(persistentWait)
   persistentWait.start()
