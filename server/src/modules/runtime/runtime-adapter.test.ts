@@ -672,7 +672,13 @@ describe('DSH ACP Runtime Adapter', () => {
     const containerPython = renderSystemPrompt(withPython, { executionWorkspace: '/data/dsh-attempts/t/run/attempt/workspace' })
     assert.match(containerPython, /# Python 脚本/)
     assert.match(containerPython, /DSH_SKILL_DIR、DSH_INPUT_DIR、DSH_OUTPUT_DIR/)
-    assert.match(containerPython, /工作区位于 \/data\/dsh-attempts\/t\/run\/attempt\/workspace/)
+    // 路径每次运行不同：系统提示只说明去本轮上下文找，路径本身放在用户消息里，保持缓存前缀稳定。
+    assert.doesNotMatch(containerPython, /\/data\/dsh-attempts/)
+    assert.match(containerPython, /工作区的绝对路径写在用户消息的“本轮上下文”中/)
+    const workspace = { executionWorkspace: '/data/dsh-attempts/t/run/attempt/workspace' }
+    assert.match(renderUserPrompt(withPython, workspace), /# 本次工作区\n工作区的绝对路径是 \/data\/dsh-attempts\/t\/run\/attempt\/workspace/)
+    assert.equal(renderSystemPrompt(withPython, workspace), renderSystemPrompt(withPython, { executionWorkspace: '/data/dsh-attempts/t/run/attempt-2/workspace' }))
+    assert.doesNotMatch(renderUserPrompt(withPython), /# 本次工作区/)
     assert.match(containerPython, /这些路径只用于脚本参数，不要写进给用户的回答/)
     assert.doesNotMatch(renderSystemPrompt(withPython), /# Python 脚本/, 'no workspace path, no Python section')
     assert.match(withBash, /中间文件放在工作区其他目录/)
