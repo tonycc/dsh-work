@@ -98,6 +98,28 @@ describe('CollabAgentChat (S5c 单聊)', () => {
     expect(wrapper.get('h1').text()).toBe('库存助手')
   })
 
+  it('reads the runs of a full page at most four at a time, newest first', async () => {
+    const items = Array.from({ length: 20 }, (_, index) =>
+      segment(`s-${index}`, `r-${index}`, `第 ${index} 段`, `2026-10-${String(22 - index).padStart(2, '0')}T09:00:00.000Z`))
+    api.getAgentConversation.mockResolvedValue(conversation({ items, continueSessionId: 's-0' }))
+    let inFlight = 0
+    let peak = 0
+    const order: string[] = []
+    api.getRun.mockImplementation(async (id: string) => {
+      order.push(id)
+      inFlight += 1
+      peak = Math.max(peak, inFlight)
+      await new Promise(resolve => setTimeout(resolve, 1))
+      inFlight -= 1
+      return run(id, id.replace('r-', 's-'), id)
+    })
+    const wrapper = await mountChat()
+    await vi.waitFor(() => expect(wrapper.findAll('.collab-segment')).toHaveLength(20))
+    await vi.waitFor(() => expect(order).toHaveLength(20))
+    expect(peak).toBeLessThanOrEqual(4)
+    expect(order.slice(0, 4)).toEqual(['r-0', 'r-1', 'r-2', 'r-3'])
+  })
+
   it('continues the latest session through the existing run entry', async () => {
     api.getAgentConversation.mockResolvedValue(conversation())
     const wrapper = await mountChat()
