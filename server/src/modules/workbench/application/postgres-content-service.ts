@@ -10,7 +10,7 @@ import type { FileMount, OriginalFileMount, RuntimeManifest } from '../../runtim
 import { isAdminRunPurpose } from '../../runtime/runtime-types.ts'
 import { insertTeamWorkspaceRows } from './team-workspace-rows.ts'
 import { BaselineFileSafetyScanner, type FileSafetyScannerPort } from './file-safety-scanner.ts'
-import { extractDocument } from './document-extractor.ts'
+import { extractDocumentOffThread } from './document-extraction-runner.ts'
 import {
   BINARY_TEXT_TYPES, CONTAINER_EXTRACTOR_VERSION,
   type ArtifactTextExtraction, type ArtifactTextExtractorPort, type BinaryTextType,
@@ -2273,7 +2273,7 @@ export class PostgresContentService {
   private async extractInto(fileId: string, name: string, bytes: Buffer, extension: string) {
     const extractionId = `extraction-${randomUUID()}`
     try {
-      const extraction = extractDocument(name, bytes)
+      const extraction = await extractDocumentOffThread(name, bytes)
       const textBytes = Buffer.from(extraction.text, 'utf8')
       const textSha256 = createHash('sha256').update(textBytes).digest('hex')
       const textStorageKey = join('extractions', fileId, 'm4-basic-v1.txt')
