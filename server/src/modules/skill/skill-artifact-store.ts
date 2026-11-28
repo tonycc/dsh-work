@@ -20,8 +20,20 @@ const REF_PATTERN = SKILL_ARTIFACT_REF_PATTERN
  * complete files that the next put of the same package fills in, and every read is checked
  * against the index (size and SHA-256) before use.
  */
+/**
+ * 已校验读取结果的短时缓存：一次 Run 启动会在授权依赖检查、Skill 解析与工作区物化中
+ * 连续读取同一 Skill 文件夹 3 次。文件夹按内容寻址、写后不变，缓存键包含引用、完整文件索引
+ * （含每个文件的 SHA-256）与说明摘要；有效期很短，过期后重新从磁盘读取并逐文件校验，
+ * 磁盘上的篡改仍会在下一次校验时被发现。
+ */
+const VERIFIED_READ_TTL_MS = 60_000
+const VERIFIED_READ_MAX_ENTRIES = 32
+
+type VerifiedRuntimeArtifact = { instructions: string; files: SkillPackage['files'] }
+
 export class SkillArtifactStore {
   private readonly storage: ObjectStorage
+  private readonly verifiedReads = new Map<string, { expiresAt: number; value: VerifiedRuntimeArtifact }>()
 
   constructor(storage: ObjectStorage) {
     this.storage = storage
@@ -67,7 +79,22 @@ export class SkillArtifactStore {
     }
   }
 
-  async readRuntimeArtifact(artifactRef: string, index: SkillPackageArtifact['files'], instructionsSha256: string) {
+  async readRuntimeArtifact(artifactRef: string, index: SkillPackageArtifact['files'], instructionsSha256: string): Promise<VerifiedRuntimeArtifact> {
+    const key = JSON.stringify([artifactRef, instructionsSha256, index.map(file => [file.path, file.size, file.sha256])])
+    const cached = this.verifiedReads.get(key)
+    if (cached && cached.expiresAt > Date.now()) return copyVerified(cached.value)
+    const value = await this.readAndVerifyRuntimeArtifact(artifactRef, index, instructionsSha256)
+    this.verifiedReads.delete(key)
+    this.verifiedReads.set(key, { expiresAt: Date.now() + VERIFIED_READ_TTL_MS, value: copyVerified(value) })
+    while (this.verifiedReads.size > VERIFIED_READ_MAX_ENTRIES) {
+      const oldest = this.verifiedReads.keys().next().value
+      if (oldest === undefined) break
+      this.verifiedReads.delete(oldest)
+    }
+    return value
+  }
+
+  private async readAndVerifyRuntimeArtifact(artifactRef: string, index: SkillPackageArtifact['files'], instructionsSha256: string): Promise<VerifiedRuntimeArtifact> {
     if (index.reduce((sum, file) => sum + file.size, 0) > MAX_SKILL_BYTES) throw invalidRequest('单个 Skill 资源合计超过 1 MB')
     const files: SkillPackage['files'] = []
     for (const indexed of index) {
@@ -99,4 +126,9 @@ export class SkillArtifactStore {
     }
     return `${reference}/${path}`
   }
+}
+
+/** 调用方可能修改返回的文件数组，缓存里只存独立副本。 */
+function copyVerified(value: VerifiedRuntimeArtifact): VerifiedRuntimeArtifact {
+  return { instructions: value.instructions, files: value.files.map(file => ({ ...file })) }
 }
