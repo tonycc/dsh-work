@@ -168,22 +168,37 @@ function segmentLabel(segment: AgentConversationSegment) {
   return `${segment.title} · ${time}`
 }
 
+/**
+ * 同时在途的 Run 详情请求上限。一页最多 20 段，全部并发会一次占满浏览器同源连接与服务端数据库
+ * 连接池（默认 10），挤住同页的实时流和其他请求；按新到旧限流读取，最新的几段最先就绪。
+ */
+const RUN_FETCH_CONCURRENCY = 4
+
 /** 读取分段最近一次执行；已缓存的终态执行不重复请求。 */
 async function ensureRuns(list: AgentConversationSegment[]) {
-  await Promise.all(list.map(async segment => {
+  const pending = list.filter((segment) => {
     const runId = segment.latestRun?.id
-    if (!runId) return
+    if (!runId) return false
     const cached = taskStore.getTask(runId)
-    if (cached && ['succeeded', 'failed', 'cancelled'].includes(cached.status)) return
-    try {
-      await taskStore.refreshRun(runId)
-      delete segmentErrors.value[segment.sessionId]
-    } catch (cause) {
-      if (!taskStore.getTask(runId)) {
-        segmentErrors.value[segment.sessionId] = cause instanceof Error ? cause.message : '这段对话暂时无法读取'
-      }
+    return !(cached && ['succeeded', 'failed', 'cancelled'].includes(cached.status))
+  })
+  let next = 0
+  const worker = async () => {
+    while (next < pending.length) await ensureRun(pending[next++]!)
+  }
+  await Promise.all(Array.from({ length: Math.min(RUN_FETCH_CONCURRENCY, pending.length) }, worker))
+}
+
+async function ensureRun(segment: AgentConversationSegment) {
+  const runId = segment.latestRun!.id
+  try {
+    await taskStore.refreshRun(runId)
+    delete segmentErrors.value[segment.sessionId]
+  } catch (cause) {
+    if (!taskStore.getTask(runId)) {
+      segmentErrors.value[segment.sessionId] = cause instanceof Error ? cause.message : '这段对话暂时无法读取'
     }
-  }))
+  }
 }
 
 async function load() {

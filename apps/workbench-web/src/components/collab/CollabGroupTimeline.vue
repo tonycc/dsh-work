@@ -67,7 +67,9 @@ const composerOptions = computed<MentionOption[]>(() => [
 const preselect = ref(true)
 watch(singleAgent, () => { preselect.value = true })
 
-type DisplayItem = WorkspaceTimelineItem & { divider?: string }
+type MessageItem = Extract<WorkspaceTimelineItem, { kind: 'message' }>
+/** 显示条目：消息带格式化好的时间，可直接作为消息组件的 props。 */
+type DisplayItem = (Exclude<WorkspaceTimelineItem, { kind: 'message' }> | (MessageItem & { createdAt: string })) & { divider?: string }
 type RunItem = Extract<WorkspaceTimelineItem, { kind: 'run' }>
 
 /** 已加载范围内有 Agent 回复的执行：执行记录由回复代表，不再单独显示。 */
@@ -75,14 +77,29 @@ const repliedRunIds = computed(() => new Set(items.value.flatMap(item =>
   item.kind === 'message' && item.role === 'assistant' && item.runId ? [item.runId] : [])))
 const runsById = computed(() => new Map(items.value.flatMap(item => item.kind === 'run' ? [[item.runId, item] as const] : [])))
 
+/**
+ * 显示对象按源条目缓存：源条目与分隔文字不变时返回同一个对象，消息子组件的 props 引用不变，
+ * 时间线里任一执行状态变化时历史消息不跟着重渲染（模板里不再内联构造新对象）。
+ */
+const displayCache = new WeakMap<WorkspaceTimelineItem, DisplayItem>()
+function displayItem(item: WorkspaceTimelineItem, divider: string | undefined): DisplayItem {
+  const cached = displayCache.get(item)
+  if (cached && cached.divider === divider) return cached
+  const next: DisplayItem = item.kind === 'message'
+    ? { ...item, divider, createdAt: formatTime(item.at) }
+    : divider ? { ...item, divider } : item
+  displayCache.set(item, next)
+  return next
+}
+
 /** 旧到新显示；讨论消息与执行换到另一段会话时插入“话题 · 时间”分隔。 */
 const displayItems = computed<DisplayItem[]>(() => {
   let session: string | undefined
   return [...items.value].reverse().filter(item => item.kind !== 'run' || !repliedRunIds.value.has(item.runId)).map(item => {
-    if (item.kind !== 'message' && item.kind !== 'run') return item
-    if (item.sessionId === session) return item
+    if (item.kind !== 'message' && item.kind !== 'run') return displayItem(item, undefined)
+    if (item.sessionId === session) return displayItem(item, undefined)
     session = item.sessionId
-    return { ...item, divider: `${item.sessionTitle} · ${formatTime(item.at)}` }
+    return displayItem(item, `${item.sessionTitle} · ${formatTime(item.at)}`)
   })
 })
 
@@ -238,8 +255,17 @@ async function reloadNewest() {
   const fresh = new Set(page.items.map(item => item.id))
   const oldestFresh = page.items.at(-1)
   const older = oldestFresh ? items.value.filter(item => !fresh.has(item.id) && item.at < oldestFresh.at) : []
-  items.value = [...page.items, ...older]
+  items.value = [...reuseUnchanged(page.items), ...older]
   if (!older.length) nextCursor.value = page.nextCursor
+}
+
+/** 实时刷新重取的最新一页里，内容没变的条目沿用已有对象，未变的消息不重渲染。 */
+function reuseUnchanged(fresh: WorkspaceTimelineItem[]) {
+  const known = new Map(items.value.map(item => [item.id, item]))
+  return fresh.map((item) => {
+    const previous = known.get(item.id)
+    return previous && JSON.stringify(previous) === JSON.stringify(item) ? previous : item
+  })
 }
 
 async function loadEarlier() {
@@ -324,14 +350,16 @@ async function submit(payload: { prompt: string; files: File[]; workspaceId: str
 
 // 实时更新：订阅空间会话活动流（与 A 的共享讨论同一条 SSE），任一讨论或执行变化时刷新最新一页，
 // 并刷新对话列表的预览与未读（打开中的群组随即由对话页标记已读，S5e）。
+// 只听本空间的标记（含重连 resync）：其他空间的事件不触发重取；切换群组由下面的监听整体重载。
 let refreshTimer: ReturnType<typeof setTimeout> | undefined
-watch(() => taskStore.sessionActivity, () => {
+watch(() => [props.workspaceId, taskStore.workspaceActivity[props.workspaceId]] as const, ([workspaceId, marker], [previousWorkspaceId]) => {
+  if (!marker || workspaceId !== previousWorkspaceId) return
   if (refreshTimer) clearTimeout(refreshTimer)
   refreshTimer = setTimeout(() => {
     void reloadNewest().catch(() => undefined)
     void conversations.refresh()
   }, 300)
-}, { deep: true })
+})
 
 watch(() => props.workspaceId, (workspaceId, previous) => {
   if (previous) taskStore.unsubscribeWorkspaceSessions(previous)
@@ -377,7 +405,7 @@ onBeforeUnmount(() => {
             </p>
 
             <div v-if="item.kind === 'message'" class="collab-group-timeline__message">
-              <ConversationMessageItem :message="{ ...item, createdAt: formatTime(item.at) }" :own="isOwnMessage(item)" :tag="messageTag(item)">
+              <ConversationMessageItem :message="item" :own="isOwnMessage(item)" :tag="messageTag(item)">
                 <button
                   v-if="item.runId"
                   type="button"

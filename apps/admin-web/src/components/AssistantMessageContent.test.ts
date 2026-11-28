@@ -43,6 +43,27 @@ describe('AssistantMessageContent', () => {
     expect(wrapper.get('pre code').text()).toBe('Error: tool is not authorized')
   })
 
+  it('keeps finished blocks untouched while a streaming answer grows, and rebuilds a block that changes kind', async () => {
+    const wrapper = mount(AssistantMessageContent, { props: { text: '- 第一项\n- 第二项\n\n| 列 A | 列 B |' } })
+    const list = wrapper.get('ul').element
+    expect(wrapper.find('table').exists()).toBe(false)
+    expect(wrapper.text()).toContain('| 列 A | 列 B |')
+
+    // 分隔行到达后，末尾的段落变成表格；前面已完成的列表沿用同一节点。
+    await wrapper.setProps({ text: '- 第一项\n- 第二项\n\n| 列 A | 列 B |\n|---|---|\n| 1 | 2 |' })
+    expect(wrapper.get('ul').element).toBe(list)
+    expect(wrapper.findAll('th').map(item => item.text())).toEqual(['列 A', '列 B'])
+    expect(wrapper.text()).not.toContain('| 列 A | 列 B |')
+
+    // 未闭合的代码块随新内容更新，闭合后仍是同一段代码。
+    await wrapper.setProps({ text: '- 第一项\n- 第二项\n\n```ts\nconst a = 1' })
+    expect(wrapper.get('ul').element).toBe(list)
+    expect(wrapper.get('pre').text()).toBe('const a = 1')
+    await wrapper.setProps({ text: '- 第一项\n- 第二项\n\n```ts\nconst a = 1\nconst b = 2\n```' })
+    expect(wrapper.get('pre').text()).toBe('const a = 1\nconst b = 2')
+    expect(wrapper.find('table').exists()).toBe(false)
+  })
+
   it('renders a table by the header column count when the delimiter row has more or fewer cells', () => {
     const wrapper = mount(AssistantMessageContent, { props: { text: [
       '| 部门 | 9月 | 10月 | 合计 | 笔数 |',

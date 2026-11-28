@@ -603,6 +603,9 @@ describe('task store', () => {
 
     FakeEventSource.instances[0]?.emit('session.archived', { session_id: 's-2' })
     expect(store.sessionActivity['s-2']).toMatch(/^archived:/)
+    // 空间级标记只记在事件所属的空间上，其他空间的视图不被惊动。
+    expect(store.workspaceActivity['ws-team']).toBe(store.sessionActivity['s-2'])
+    expect(store.workspaceActivity['ws-other']).toBeUndefined()
 
     // 引用计数归零才关闭连接。
     store.unsubscribeWorkspaceSessions('ws-team')

@@ -8,6 +8,7 @@ import { useTaskStore } from '@/stores/tasks'
 import type { TaskRun, WorkspaceFile, WorkspaceTimelineItem } from '@/types/domain'
 import { TaskComposer } from '@dsh-work/workbench-components'
 import CollabGroupTimeline from './CollabGroupTimeline.vue'
+import ConversationMessageItem from '@/components/conversation/ConversationMessageItem.vue'
 
 const router = vi.hoisted(() => ({ push: vi.fn() }))
 const api = vi.hoisted(() => ({
@@ -97,6 +98,25 @@ describe('CollabGroupTimeline (S5d 群聊)', () => {
     expect(cards[1]!.text()).toContain('经助手分配的周报')
     expect(cards[2]!.text()).toContain('林岚 创建了任务')
     expect(cards[2]!.text()).toContain('执行规则 · 手动')
+  })
+
+  it('refreshes only on its own group activity and keeps unchanged messages as the same props', async () => {
+    const wrapper = await mountTimeline()
+    const store = useTaskStore()
+    const before = wrapper.findAllComponents(ConversationMessageItem).map(item => item.props('message'))
+    expect(api.getWorkspaceTimeline).toHaveBeenCalledTimes(1)
+
+    store.workspaceActivity = { ...store.workspaceActivity, 'ws-other': 'updated:1' }
+    await new Promise(resolve => setTimeout(resolve, 350))
+    expect(api.getWorkspaceTimeline).toHaveBeenCalledTimes(1)
+
+    api.getWorkspaceTimeline.mockResolvedValue({ workspaceId: 'ws-1', items: structuredClone(items), nextCursor: null })
+    store.workspaceActivity = { ...store.workspaceActivity, 'ws-1': 'updated:2' }
+    await vi.waitFor(() => expect(api.getWorkspaceTimeline).toHaveBeenCalledTimes(2))
+    await flushPromises()
+    const after = wrapper.findAllComponents(ConversationMessageItem).map(item => item.props('message'))
+    expect(after).toHaveLength(before.length)
+    after.forEach((message, index) => expect(message).toBe(before[index]))
   })
 
   it('S6：经 Agent 的改派与编辑卡片列出改动，不显示为完成说明', async () => {

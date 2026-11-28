@@ -249,8 +249,10 @@ watch(() => props.workspaceId, (workspaceId, previous) => {
  * 后台刷新失败保留旧列表，不打扰用户。
  */
 watch(
-  () => taskStore.sessionActivity,
-  () => {
+  // 只听本空间的活动流：其他空间（如另开的群聊）的事件不触发重取；切换空间由上面的监听负责重取。
+  () => [props.workspaceId, taskStore.workspaceActivity[props.workspaceId]] as const,
+  ([workspaceId, marker], [previousWorkspaceId]) => {
+    if (!marker || workspaceId !== previousWorkspaceId) return
     // 不在 initialized 前跳过（四审）：服务端基线握手/截断 resync 可能先于
     // 首屏响应到达——此时必须再发一次 load()，loadToken 会让旧的慢响应作废，
     // 保证「旧请求不覆盖新状态」。
