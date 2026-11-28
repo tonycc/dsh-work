@@ -116,6 +116,9 @@ async function verifyPortalCacheHeaders() {
     // Server level only: an add_header inside a location would drop the inherited security headers.
     assert.match(portal, /\n {2}add_header Cache-Control \$dsh_work_static_cache_control;\n/)
     assert.doesNotMatch(portal, /\n {4,}add_header /, 'add_header inside a location drops the server-level security headers')
+    // Live-update streams (one SSE per running task and per open team space) must share one
+    // HTTP/2 connection; over HTTP/1.1 they exhaust the browser's six connections per host.
+    assert.match(portal, /\n {2}http2 on;\n/, 'portals must serve HTTP/2 so SSE streams do not exhaust browser connections')
   }
 }
 
