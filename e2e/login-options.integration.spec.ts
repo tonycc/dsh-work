@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 
-const adminUrl = `http://localhost:${process.env.DSH_WORK_LOCAL_AUTH_ADMIN_PORT ?? '4780'}`
-const workbenchUrl = `http://localhost:${process.env.DSH_WORK_LOCAL_AUTH_WORKBENCH_PORT ?? '4774'}`
+const adminUrl = `http://localhost:${process.env.DSH_WORK_LOGIN_OPTIONS_ADMIN_PORT ?? '4780'}`
+const workbenchUrl = `http://localhost:${process.env.DSH_WORK_LOGIN_OPTIONS_WORKBENCH_PORT ?? '4774'}`
 async function login(page: Page, username = 'browser.admin@example.invalid', password = 'AdminPass123') {
   await page.goto(`${adminUrl}/identity`)
   await page.getByLabel('登录账号', { exact: true }).fill(username)

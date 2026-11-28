@@ -29,7 +29,7 @@ import { buildSkillInstallationPlan } from '../../server/src/modules/skill/skill
 
 const tenantId = 'tenant-dsh-work'
 const EMPLOYEE = 'U00001'
-const port = Number(process.env.DSH_WORK_SKILL_REVIEW_SERVER_PORT ?? 4394)
+const port = Number(process.env.DSH_WORK_SKILL_REVIEW_SERVER_PORT ?? 4395)
 const database = await createThrowawayDatabase({ namePrefix: 'dsh_skc02_browser', maxConnections: 4 })
 const scratch = await mkdtemp(join(tmpdir(), 'skc02-browser-'))
 const artifactStore = new SkillArtifactStore(new LocalObjectStorage(join(scratch, 'skills')))
