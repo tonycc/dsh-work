@@ -111,9 +111,10 @@ jobs:
         run: pnpm test:integration --shard=${{ matrix.shard }}
 
   # P0 冒烟（内存夹具，套件内串行）按测试文件用 Playwright --shard 分到两台机器，每台各起一份冒烟服务与 Vite；
-  # 11 个 P1 套件在第三台机器上并行（每套各自的服务与可丢弃数据库）。
+  # 11 个 P1 套件按耗时分成员工端（3 套）与身份/管理端（8 套）两组，各一台机器，组内套件并行
+  # （每套各自的服务与可丢弃数据库）。两组合起来等于 test:e2e:p1。
   browser:
-    name: Browser tests (${{ matrix.suite }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }})
+    name: Browser tests (${{ matrix.suite }} ${{ matrix.shard || matrix.group }})
     strategy:
       fail-fast: false
       matrix:
@@ -123,6 +124,9 @@ jobs:
           - suite: p0
             shard: 2/2
           - suite: p1
+            group: workbench
+          - suite: p1
+            group: admin
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -165,9 +169,13 @@ jobs:
         if: matrix.suite == 'p0'
         run: pnpm test:e2e --shard=${{ matrix.shard }}
 
-      - name: Run P1 browser journeys
-        if: matrix.suite == 'p1'
-        run: pnpm test:e2e:p1
+      - name: Run P1 browser journeys (workbench)
+        if: matrix.suite == 'p1' && matrix.group == 'workbench'
+        run: pnpm test:e2e:p1:workbench
+
+      - name: Run P1 browser journeys (identity and admin)
+        if: matrix.suite == 'p1' && matrix.group == 'admin'
+        run: pnpm test:e2e:p1:admin
 
       # 任一浏览器套件失败时上传 Playwright 结果，便于事后定位偶发失败：只为失败的用例保留 trace 与截图，
       # HTML 报告包含这台机器上运行的全部套件。内容均为测试夹具的合成数据与 CI 专用身份。
@@ -175,7 +183,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: browser-test-results-${{ matrix.suite }}${{ matrix.shard && format('-{0}', strategy.job-index) || '' }}-${{ github.run_attempt }}
+          name: browser-test-results-${{ matrix.suite }}-${{ matrix.group || strategy.job-index }}-${{ github.run_attempt }}
           path: |
             test-results/
             playwright-report/
