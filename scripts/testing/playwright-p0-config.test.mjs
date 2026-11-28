@@ -5,7 +5,7 @@ import test from 'node:test'
 const configUrl = new URL('../../playwright.config.ts', import.meta.url)
 const portVariables = ['DSH_WORK_WORKBENCH_PORT', 'DSH_WORK_ADMIN_PORT', 'DSH_WORK_SERVER_PORT']
 
-function loadConfig(ports = {}) {
+function loadConfig(ports = {}, args = ['--project=p0']) {
   const env = {
     ...process.env,
     NODE_ENV: 'production',
@@ -20,13 +20,15 @@ function loadConfig(ports = {}) {
   Object.assign(env, ports)
   const result = spawnSync(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', `
     const { default: config } = await import(${JSON.stringify(configUrl.href)})
+    const p0 = config.projects.find(project => project.name === 'p0')
     console.log(JSON.stringify({
-      baseURL: config.use.baseURL,
-      testIgnore: config.testIgnore,
+      baseURL: p0.use.baseURL,
+      testIgnore: p0.testIgnore,
       webServer: config.webServer,
+      projects: config.projects.map(project => ({ name: project.name, workers: project.workers, baseURL: project.use.baseURL })),
       workerPorts: ${JSON.stringify(portVariables)}.map(key => process.env[key]),
     }))
-  `], { env, encoding: 'utf8' })
+  `, "--", ...args], { env, encoding: 'utf8' })
   assert.equal(result.status, 0, result.stderr)
   return JSON.parse(result.stdout)
 }
@@ -74,4 +76,31 @@ test('custom P0 ports stay consistent across readiness checks, proxies, links an
     assert.equal(server.env.VITE_ADMIN_URL, 'http://localhost:5280')
     assert.equal(server.reuseExistingServer, false)
   }
+})
+
+test('the full browser run starts every suite on its own ports and keeps each suite serial', () => {
+  const config = loadConfig({}, [])
+  const names = config.projects.map(project => project.name)
+  assert.equal(names[0], 'p0')
+  assert.equal(new Set(names).size, names.length)
+  // Suites share fixtures only within themselves, so each project runs on one worker.
+  assert.ok(config.projects.every(project => project.workers === 1))
+  const ports = config.webServer.map(server => new URL(server.url).port)
+  assert.equal(new Set(ports).size, ports.length, `duplicate webServer ports: ${ports.join(', ')}`)
+  for (const project of config.projects) {
+    assert.ok(ports.includes(new URL(project.baseURL).port), `${project.name} baseURL has no webServer`)
+  }
+  // Same-app Vite servers run at the same time, so each suite gets its own dependency cache.
+  const viteCaches = config.webServer.map(server => server.env.DSH_WORK_VITE_CACHE_DIR).filter(Boolean)
+  assert.equal(viteCaches.length, config.webServer.length - config.projects.length)
+})
+
+test('selecting projects on the command line starts only their servers', () => {
+  const one = loadConfig({}, ['--project=dingtalk'])
+  assert.deepEqual(one.webServer.map(server => new URL(server.url).port), ['4691', '4681', '4675'])
+  const several = loadConfig({}, ['--project', 'agent-*', 'p0'])
+  assert.deepEqual(several.webServer.map(server => new URL(server.url).port),
+    ['4290', '4274', '4280', '4396', '4381', '4397', '4382', '4398', '4383'])
+  // The project list itself never changes, so test workers see the same projects as the runner.
+  assert.deepEqual(one.projects.map(project => project.name), several.projects.map(project => project.name))
 })

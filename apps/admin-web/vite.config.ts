@@ -42,6 +42,8 @@ function manualChunks(id: string) {
 }
 
 export default defineConfig({
+  // 浏览器测试会同时启动多个同一应用的 Vite，各用各的依赖预构建缓存，避免并发写同一目录（见 playwright.config.ts）。
+  ...(process.env.DSH_WORK_VITE_CACHE_DIR ? { cacheDir: process.env.DSH_WORK_VITE_CACHE_DIR } : {}),
   plugins: [
     vue(),
     // Element Plus 按需引入：模板里的 el-* 组件与 v-loading 指令按用到的引入；样式仍由 main.ts 整体引入，保证 base.css 的覆盖顺序不变。
