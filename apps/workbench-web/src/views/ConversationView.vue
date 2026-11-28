@@ -894,6 +894,14 @@ async function loadConversationTarget(id: string): Promise<SessionThread | null>
   contentSyncedAt.value = new Date().toISOString()
   let runError: unknown
   try {
+    // 会话 ID 以 session- 开头（服务端统一生成）：先按 Session 加载，省掉一次注定 404 的
+    // GET /runs/:sessionId。Session 不存在时仍回落到下面的 Run 解析，保持原有判定。
+    if (id.startsWith('session-')) {
+      const thread = await loadSessionMode(id)
+      if (thread) return thread
+      threadMissing.value = false
+      targetUnavailable.value = false
+    }
     const run = await taskStore.refreshRun(id).catch((error: unknown) => { runError = error; return null }) ?? taskStore.getTask(id) ?? null
     if (run) return null
     // 不是 Run 时按 Session 加载；Run 接口暂时不可用时同样先试 Session，两者都没能确认才判定。

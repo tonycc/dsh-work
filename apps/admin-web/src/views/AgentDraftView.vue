@@ -105,7 +105,7 @@ async function loadAccessSnapshot(): Promise<boolean> {
 
 function onAccessUpdated(value: AgentAccess) {
   accessSnapshot.value = value
-  void contentStore.load(true)
+  void contentStore.reloadAgents()
 }
 
 /**
@@ -165,7 +165,7 @@ async function reloadAgent() {
 }
 
 function onAccessDrawerClosed() {
-  void contentStore.load(true)
+  void contentStore.reloadAgents()
   void loadAccessSnapshot()
   releasePanel.value?.reload()
 }
@@ -304,7 +304,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', warnBeforeUnloa
 
       <el-drawer v-model="accessDrawerOpen" title="岗位权限" size="min(720px, 100vw)" append-to-body @closed="onAccessDrawerClosed">
         <p class="drawer-intro">属于 Agent 而非版本，保存后立即生效，不需要重新验证；关闭后验证前检查会重新读取。</p>
-        <AgentAccessPanel v-if="accessDrawerOpen" :agent-id="agent.id" :can-manage="canManage" @updated="contentStore.load(true)" />
+        <AgentAccessPanel v-if="accessDrawerOpen" :agent-id="agent.id" :can-manage="canManage" @updated="contentStore.reloadAgents()" />
       </el-drawer>
     </template>
   </div>

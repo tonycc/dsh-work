@@ -63,6 +63,8 @@ async function mountView(
   const contentStore = useContentStore(pinia)
   contentStore.workspaces.splice(0, contentStore.workspaces.length, ...seed)
   // onMounted 会 refresh；测试固定注入的空间对象，避免覆盖为 mock 返回值。
+  // 页面挂载走 sync()：转到被替身的 refresh()，保持原有请求计数口径。
+  vi.spyOn(contentStore, 'sync').mockImplementation(() => contentStore.refresh())
   vi.spyOn(contentStore, 'refresh').mockResolvedValue(undefined)
   const wrapper = mount(WorkspacesView, { global: { plugins: [pinia, ElementPlus] } })
   await flushPromises()

@@ -245,7 +245,7 @@ async function startValidation() {
   busy.value = 'start'
   try {
     applyOverview(await adminApi.startAgentValidation(agentId.value))
-    await contentStore.load(true)
+    await contentStore.reloadAgents()
     ElMessage.success('验证已开始，案例在后台运行')
   } catch (cause) {
     showError(cause, '验证启动失败')
@@ -305,7 +305,7 @@ async function publish() {
     publishedVersion.value = current.version
     publishNote.value = ''
     applyOverview(next)
-    await contentStore.load(true)
+    await contentStore.reloadAgents()
     emit('published', current.version)
   } catch (cause) {
     showError(cause, '发布失败')

@@ -92,6 +92,8 @@ async function mountWith(workspaces: Workspace[], routeId?: string) {
   setActivePinia(pinia)
   const contentStore = useContentStore(pinia)
   contentStore.workspaces.splice(0, contentStore.workspaces.length, ...workspaces)
+  // 页面挂载走 sync()：转到被替身的 refresh()，保持原有请求计数口径。
+  vi.spyOn(contentStore, 'sync').mockImplementation(() => contentStore.refresh())
   vi.spyOn(contentStore, 'refresh').mockResolvedValue(undefined)
   const authStore = useAuthStore(pinia)
   vi.spyOn(authStore, 'user', 'get').mockReturnValue({

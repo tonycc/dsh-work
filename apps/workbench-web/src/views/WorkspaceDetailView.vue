@@ -869,7 +869,8 @@ function onProjectContentStale() {
 }
 
 onMounted(() => {
-  void contentStore.refresh()
+  // 与壳层冷启动的 load() 合并为一轮请求；已初始化时照常重新拉取，保证进入空间看到最新状态。
+  void contentStore.sync()
 })
 
 /**

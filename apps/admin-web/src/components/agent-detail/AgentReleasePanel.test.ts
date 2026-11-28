@@ -84,6 +84,7 @@ async function mountView() {
   const content = useContentStore()
   content.$patch({ agents: [agent] })
   vi.spyOn(content, 'load').mockResolvedValue(undefined)
+  vi.spyOn(content, 'reloadAgents').mockResolvedValue(undefined)
   const wrapper = mount(AgentReleasePanel, {
     props: { agentId },
     global: { plugins: [pinia, ElementPlus], stubs: { teleport: true } },

@@ -21,11 +21,32 @@ export const useContentStore = defineStore('workbench-content', () => {
 
   async function load() {
     if (initialized.value) return
-    await refresh()
+    await sync()
   }
 
-  async function refresh() {
+  /** 最近一轮在途的全量刷新。 */
+  let inFlight: { generation: number; promise: Promise<void> } | null = null
+
+  /** 全量刷新：总是发起新一轮请求（写操作后需要服务端最新状态时用）。 */
+  function refresh(): Promise<void> {
     const current = generation
+    const promise = fetchAll(current).finally(() => {
+      if (inFlight?.promise === promise) inFlight = null
+    })
+    inFlight = { generation: current, promise }
+    return promise
+  }
+
+  /**
+   * 进入页面时的同步：已有一轮在途刷新就复用它。冷启动时空间详情页挂载（子组件
+   * onMounted 先于壳层）与壳层 load() 同时发生，合并为一轮请求，不再把三个全量接口各拉两遍。
+   */
+  function sync(): Promise<void> {
+    if (inFlight && inFlight.generation === generation) return inFlight.promise
+    return refresh()
+  }
+
+  async function fetchAll(current: number) {
     loading.value = true
     try {
       const [workspaceData, artifactData, agentData] = await Promise.all([
@@ -102,6 +123,7 @@ export const useContentStore = defineStore('workbench-content', () => {
     initialized,
     load,
     refresh,
+    sync,
     createTeamWorkspace,
     uploadWorkspaceFile,
     refreshArtifacts,
