@@ -12,6 +12,12 @@ const CONSEQUENTIAL_EVENTS = new Set([
 ])
 
 /**
+ * 落库后还有后续处理分支的事件：上面的终态/状态事件，加上会写审计的 approval.resolved。
+ * 其余纯展示事件（assistant.delta、工具过程等）落库即结束，不需要写后复查 getRun。
+ */
+const EVENTS_WITH_SIDE_EFFECTS = new Set([...CONSEQUENTIAL_EVENTS, 'approval.resolved'])
+
+/**
  * Persists Runtime events first, then applies their consequences: Run/Attempt state,
  * assistant messages with citations, budget settlement, model usage, and audit. Events of one Run are written strictly in order.
  */
@@ -96,7 +102,7 @@ export class RunEventRecorder {
     // A late event has no consequences: no answer appended to the conversation, no budget
     // settlement, no state change. Checked again after the write: the Attempt may have
     // ended meanwhile, and then the stored event is marked late too.
-    if (markedLate) return
+    if (markedLate || !EVENTS_WITH_SIDE_EFFECTS.has(event.event_type)) return
     if (await this.isLateEvent(run, event)) {
       if (CONSEQUENTIAL_EVENTS.has(event.event_type)) await this.deps.runs.markEventLate(tenantId, appended.id)
       return
