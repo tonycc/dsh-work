@@ -222,7 +222,8 @@ test('authorization is fail-closed and compiles the effective identity into Runt
      where tenant_id = 'tenant-dsh-work' and object_type = 'authorization'
   `
   assert.ok((audit?.blocked ?? 0) >= 3)
-  assert.ok((audit?.success ?? 0) >= 1)
+  // 授权通过不写 success 审计，只记录被拦截的决策。
+  assert.equal(audit?.success ?? 0, 0)
 })
 
 test('personal Skill sessions use a compatible stable default Agent and reject an incompatible fixed pairing before persistence', async () => {
