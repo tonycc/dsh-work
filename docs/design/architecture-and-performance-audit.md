@@ -1,6 +1,6 @@
 # dsh-work 架构合理性、过度设计与性能全面审核报告
 
-**状态：** 已逐项对照源码核实；第 1 节靶点与 2.0 速览表已按阶段零第一批实测（2026-11-28）校准，执行计划与浏览器侧指标待补测<br>
+**状态：** 已逐项对照源码核实；第 1 节靶点与 2.0 速览表已按阶段零第一批实测（2026-11-28）校准；处理进度见[第 0 节](#0-处理进度截至-2026-11-28)（对照 `main` `4481392`，45 项中已修复 28 项）<br>
 **审核日期：** 2026-11-27（对照 `main` 分支 `13382749`，含 `RP-S2` #180 / `RP-S3` #181）<br>
 **审查范围：** 全仓源码与迁移文件、138 个 PostgreSQL 迁移文件（0039 有两个）、约 12 万行非测试业务代码、双端构建产物（`dist/`）及 CI / 脚本工具链<br>
 **关联文档：** [架构总览](../development/overview.md)、[Runtime 执行架构渐进优化方案](runtime-execution-optimization-plan.md)、[数据模型](data-model.md)、[开发与测试](../development/development.md)
@@ -11,6 +11,99 @@
 > 2. 文中涉及的调用次数与 SQL 条数（如“单请求 500+ SQL”、“每秒 ~20～24 SQL”）均为**按代码分支推算的静态上限，尚未经过真实负载压测**。
 > 3. 鉴于目标部署形态为**单企业内网、单台 Mac mini**，并发度远低于公网 SaaS，立项改造前应先通过 [database.ts](../../server/src/infrastructure/postgres/database.ts#L15) 的 `debug` 查询计数钩子与 `pnpm report:run-timings` 采集真实基线，按实测收益排定优先级，不做无数据支撑的重构。
 > 4. 阶段零第一批实测见[本机实测基线](architecture-audit-baseline-2026-11-28.md)：当前 DSH 每个 Run 只有 1～2 条 `assistant.delta`（按整段提交、非逐 Token），据此调整了第 1 节、2.0 速览表与各条目的“阶段零实测”注记；第 2 节正文保留原推算以便对照。
+
+---
+
+## 0. 处理进度（截至 2026-11-28）
+
+对照 `main` `4481392`（含 #185～#198）逐项核对。报告正文拆成 45 项（拆分粒度为核对时自定），状态分为：已修复、实测低优、不做、暂缓、未处理。2026-11-28 起“工程减负”（可维护性、CI、架构简化）也纳入目标，原暂缓的阶段三减负项因此大多转为未处理。正文保留原始分析，已处理的条目另加“已处理”注记。
+
+| 状态 | 数量 | 编号 |
+| :--- | ---: | :--- |
+| 已修复 | 28 | 1～22、32、36～40 |
+| 实测低优 | 4 | 23～26 |
+| 不做 | 1 | 27 |
+| 暂缓 | 2 项 + 35 的一部分 | 28、34、35（管理助手账本与低收益账本） |
+| 未处理：工程减负 | 4 项 + 35 的一部分 | 33、31、29、30、35（撤权轮询） |
+| 未处理：性能与数据 | 5 | 41～45 |
+
+### 0.1 已修复（28 项）
+
+| # | 问题（报告章节） | PR |
+| ---: | :--- | :--- |
+| 1 | 连接池写死 10 条、关闭预编译、无超时（2.1-1） | #190 |
+| 2 | 每次请求写一次会话表，钉钉会话查两遍（2.1-2） | #190 |
+| 3 | `GET /tasks` N+1，501 条 SQL（2.1-4） | #185（501→11 条，360→110 ms） |
+| 4 | 运行期复权每次写 `success` 审计（2.4-2） | #187（只记拒绝） |
+| 5 | 运行期复权逐个 Skill 查库（2.4-2） | #190 |
+| 6 | `run_events` 重复索引、delta 写后复查（2.2-1） | #190 |
+| 7 | 运行流 SSE 每 250ms 轮询数据库（2.2-2） | #190（进程内唤醒，兜底轮询 1s） |
+| 8 | 团队会话流 500ms 轮询、缺索引（2.2-2） | #188（索引 + 间隔 2s，复测 1042→45 ms/s） |
+| 9 | 网关每个流式帧多一次 `JSON.parse`（2.3-1） | #189 |
+| 10 | 同一 Skill 包一次启动读盘算哈希 3 次（2.4-1） | #190 |
+| 11 | 只读 `rg` 也在宿主机扫工作区（2.4-3） | #190 |
+| 12 | 上传 PDF/Office 在主线程解析（2.3-4） | #190 |
+| 13 | `getManagedWorkspaces` / `getSessions` / `getRuntimes` 笛卡尔乘积，等待态计数恒为 0（2.5-1） | #190 |
+| 14 | 审计搜索整视图扫两遍（2.5-1） | #190 |
+| 15 | `GET /workspaces` 每次写 `workspace_members`（2.5-1） | #190 |
+| 16 | 统计查询逐行解压 `manifest`（2.5-2） | #190（生成列） |
+| 17 | 首屏 JS 1.1 MB（2.6-4） | #186（1104→401 KB / 1079→338 KB） |
+| 18 | 空间页重拉、必败 404、管理端重拉 15 个接口、管理助手后台轮询（2.6-3、3-3） | #190 |
+| 19 | 多路 `EventSource` 占满浏览器 6 条连接（2.6-3） | #193（nginx HTTP/2；**生产需用新模板重启 nginx 才生效**） |
+| 20 | 页面访问上报逐条开事务（3-4） | #190 |
+| 21 | 持久化审批未开放却空转（4-1） | #190（`DSH_WORK_PERSISTENT_APPROVALS` 默认关闭） |
+| 22 | CI 串行冷启动 12 套 Playwright（4-4） | #194、#195（墙钟 7m35s→4m20s） |
+| 32 | 18,691 行手写 OpenAPI（4-4） | #196：接口不对外、H5 无外部开发方，删除 4 份手写 JSON 与管理端两页，原覆盖测试改为 `route-registration.test.ts`；不做 Schema 自动生成 |
+| 36 | 发消息时知识检索在 202 前同步执行（2.4-4） | #198 |
+| 37 | 202 前空查结果证据表、检索成功每次写连接表（2.4-4） | #198（连接表每分钟最多写一次） |
+| 38 | `AssistantMessageContent` 块 `:key="index"`，贴底不跟随流式内容（2.6-1） | #197 |
+| 39 | 群聊时间线内联新对象、对全局 `sessionActivity` 深度监听（2.6-2、2.6-3） | #197（按空间 `workspaceActivity`） |
+| 40 | 单聊一次并发 1+20 个请求（2.6-3） | #197（限 4 路并发） |
+
+### 0.2 实测低优（4 项）与不做（1 项）
+
+| # | 问题 | 依据 |
+| ---: | :--- | :--- |
+| 23 | delta 逐条落库，改窗口合并（2.2-1） | 当前每个 Run 只有 1～2 条 delta；DSH 改为逐 Token 流式时再做 |
+| 24 | 前端流式重解析与 rAF 批处理（2.6-1） | 同上 |
+| 25 | 网关请求体解析两遍，DLP 词表、正则、密钥派生、凭据、默认路由无缓存（2.3） | 真实对话实测（用户 Mac）：事件循环延迟 p99 1.58 ms，DLP 同步段 p50 1.6 ms、最大 5.1 ms，不是瓶颈 |
+| 26 | `run.completed` 前同步等成果解析（2.4-4） | 成果收集 p95 0.6 秒 |
+| 27 | DSH 预热池（2.4-1、阶段三）：**不做** | 冷启动约占端到端 5%，用户决定不做 |
+
+### 0.3 暂缓
+
+| # | 问题 | 原因 |
+| ---: | :--- | :--- |
+| 28 | 任务列表改摘要分页（阶段二） | #185 后只剩 11 条 SQL，收益小；属性能项，不在减负范围 |
+| 34 | 删僵尸表、`agent_versions` 双存（4-1） | 生产库删表不可撤回，需先确认无旧数据依赖；可先只出核查清单 |
+| 35（部分） | 管理助手提案账本、低收益账本（4-2） | 涉及审计与重启恢复的安全语义，需单独论证 |
+
+### 0.4 未处理
+
+工程减负（建议按此顺序）：
+
+| # | 问题 | 说明 |
+| ---: | :--- | :--- |
+| 33 | 清理批次脚本与脆弱字面量检查（4-4） | 根 `package.json` 120 条、服务端 86 条脚本，各约 50 条是评审批次 / 里程碑脚本；`validate-ui-contract.mjs`、`team-workspace-1a.mjs` 仍按字面量锁源码。改动最小，是 30 的前置 |
+| 31 | `packages` 收拢、抽双端共享 HTTP 客户端（4-3） | 两端 `client.ts` 共 1,366 行重复，`domain.ts` 共 2,589 行；前后端类型可在此一并处理 |
+| 29 | `main.ts` 7 个 `Ref` 盒子改事件总线（3-1） | 只改装配，靠集成测试验证初始化顺序 |
+| 30 | 拆两千行级组件与 Service（3-3） | 33 之后逐文件分批拆 |
+| 35（部分） | 撤权每 2s 轮询改进程内触发（4-2） | 须保留时间到期类撤权的兜底 |
+
+性能与数据：
+
+| # | 问题 | 收益判断 |
+| ---: | :--- | :--- |
+| 41 | 高频大表无保留清理（3-4） | 中长期值得做，每月 GB 级、不紧急；需先定保留策略并审批 |
+| 42 | 路由层重复鉴权、团队流探测 SQL 偏重（2.1-3） | 小，每请求省 2～3 条 SQL |
+| 43 | `getTimeline` 七路 `UNION`、usage 概览重复 CTE、启动迁移 TOAST 扫描（2.5） | 需真实数据 `EXPLAIN`，数据量不大时收益小 |
+| 44 | `workspaces` 父表 `FOR UPDATE`、持锁读盘与调子进程（3-2） | 有并发收益但改动有风险，低并发下不急 |
+| 45 | `manifest` 编译两次、`session.jsonl` 读两遍、错误上报全局锁（2.4-1、2.4-4、3-4） | 很小，顺手修 |
+
+### 0.5 报告外的补充结论
+
+- **历史跨轮提示缓存改造：经实验不做。** 直连 DeepSeek 实测，前缀缓存只复用“先前某条完整请求”或“两条请求已分叉过的位置”，不截取单条旧请求的中间一段。现行“历史放进单条用户消息”的做法已能滞后一轮命中，恢复 DSH 会话每轮只多省几百到两千 Token。系统提示稳定化（#191）与停止注入仓库 `AGENTS.md`（#192）已合并，Attempt 首次请求命中率 8.3%→39.8%。
+- **待运维操作：** 生产服务器需用新模板重启 nginx，#193 的 HTTP/2 才生效；#194、#195 改了 CI 检查名，分支保护的必需检查需同步改为新名称。
 
 ---
 
@@ -29,6 +122,8 @@
 2. 运行期每 2s 复权并向 `audit_events` 写 `success`：实测占审计表 **76%**、按已完成 Run 计约 **31 行/Run**（按全部 Run 约 29 行），是审计表增长的主因；
 3. 每个打开的运行流 SSE 每 250ms 轮询（约 8 条 SQL/秒/流）+ 每次 API 请求无节流 `UPDATE authentication_sessions`（每请求 3 条 SQL）；
 4. 双端首屏 **1.1 MB JS 包** + 外部模型网关请求体双重解析与 DLP 零缓存 + WeKnora 检索同步阻塞 `POST /runs` 202 返回（这三项的实际耗时待浏览器与真实运行补测）。
+
+> **已处理（2026-11-28）**：以上 4 处均已处理：① #185；② #187；③ #190（进程内唤醒、会话写节流）；④ 首屏包 #186、知识检索 #198，网关与 DLP 经真实对话实测为低优（逐帧多余解析由 #189 去掉）。
 
 流式 `assistant.delta` 逐片段落库与前端逐 delta 重解析 Markdown 在当前 DSH 下不成立（每个 Run 只有 1～2 条整段 delta），降为**条件性风险**：DSH 改为逐 Token 流式时再处理。
 
@@ -65,20 +160,20 @@ flowchart TD
 
 ### 2.0 关键瓶颈速览表（按阶段零实测校准，2026-11-28）
 
-| 优先级 | 领域 | 问题简述 | 量级（实测 / 推算） |
-| :--- | :--- | :--- | :--- |
-| **高优** | 数据库连接池与 N+1 | 连接池固定 `max: 10`（实际可用 9 个）且 `prepare: false`；`GET /tasks` 50 条并发 `mapTask` | **实测** 仓储层 `listTasks` 50 个 Run = **501 条 SQL**（不含路由层逐 Run 复权），单个请求占满 9 条连接；连接池 9 条时并发 5 个约 0.5 秒 |
-| **高优** | 运行期复权与审计膨胀 | 运行中每 2s 轮询 + 工具调用前后双查，每次 12～16 条 SQL 并向 `audit_events` 插入 `success` | **实测** 成功审计占 `audit_events` **76%**、按已完成 Run 计约 **31 行/Run**；**推算** 每天 1,000 个 Run 时审计表约 1 GB/月 |
-| **高优** | 前端包体积 | 双端全量打包 Element Plus，未配置按需加载与 `manualChunks` | **实测** 双端首屏单 JS chunk 均为 **1.1 MB**（另加 **380+ KB** CSS）；首屏加载耗时待浏览器补测 |
-| **中优** | SSE 轮询与鉴权写放大 | 无内存 PubSub，SSE 每 250ms 轮询 PG；每次只读 API 请求均无节流 `UPDATE authentication_sessions` | **实测** 单次轮询 2 条 SQL、`authenticateApi` 3 条 SQL；**推算** 约 8 条 SQL/秒/运行流（原推算 20～24）；团队空间会话流待补测 |
-| **高优（待补测）** | 模型网关与 DLP | 请求体双倍 `JSON.parse`、SSE 每帧多余 `JSON.parse`；外部路由每步在主线程无缓存编译词表跑最多 16 个全局正则 | 主线程耗时待真实运行补测，补测前维持原优先级；**实测** 本机每个 Attempt 输入 Token p50 / p95 为 9,160 / 22,505（见基线 2.7） |
-| **中优** | 同步阻塞：知识库检索 | `POST /runs` 返回 202 前同步等待 WeKnora 检索（含 fallback） | 个人对话带知识库时最坏 **2 次检索超时（单次默认 10s，合计 20s）**；实际耗时待补测 |
-| **中优** | 慢查询与大 JSONB 解压 | 多处多表笛卡尔乘积；`operational_events` 全量并入 `run_events` 做文本 `ilike`；统计逐行解压 `manifest` JSONB | **实测** `manifest` p50 5.2 KB、p95 13 KB；执行计划待一次性库造量后 `EXPLAIN` |
-| **低优** | 首字延迟（TTFT） | 每轮冷启动 DSH 子进程；同一 Skill 包读盘算哈希 3 次 | **实测** 冷启动 p50 约 1.2 秒，约占端到端 p50（23.7 秒）的 5%；按基线维持阶段三按需评估。Skill 包重复读取未单独测量 |
-| **中优（待补测）** | 容器扫盘 | 每条容器命令前/中/后在宿主递归 `lstat` 工作区（上限 50,000 条目） | 未测量；大工作区高频命令时的线程池占用待补测 |
-| **低优** | 同步阻塞：成果解析 | `run.completed` 前同步等成果解析容器 | **实测** 成果收集 p95 0.6 秒、最大 0.9 秒（60 秒是超时上限） |
-| **条件性** | 流式事件持久化 | `assistant.delta` 逐条 `INSERT run_events`，写后复查每条执行 `SELECT runs`；`run_events` 重复索引 | **实测** 每个 Run 仅 1～2 条 delta（p95 2、最大 7）；DSH 改为逐 Token 流式时才会放大。重复索引仍建议删除 |
-| **条件性** | 前端流式渲染 | 每个 delta 触发全量 Markdown 重解析与历史消息重渲染 | 同上：每个回答 1～2 次重解析，当前无掉帧依据 |
+| 优先级 | 领域 | 问题简述 | 量级（实测 / 推算） | 处理状态（2026-11-28） |
+| :--- | :--- | :--- | :--- | :--- |
+| **高优** | 数据库连接池与 N+1 | 连接池固定 `max: 10`（实际可用 9 个）且 `prepare: false`；`GET /tasks` 50 条并发 `mapTask` | **实测** 仓储层 `listTasks` 50 个 Run = **501 条 SQL**（不含路由层逐 Run 复权），单个请求占满 9 条连接；连接池 9 条时并发 5 个约 0.5 秒 | 已修复：连接池 #190，`GET /tasks` #185（501→11 条 SQL） |
+| **高优** | 运行期复权与审计膨胀 | 运行中每 2s 轮询 + 工具调用前后双查，每次 12～16 条 SQL 并向 `audit_events` 插入 `success` | **实测** 成功审计占 `audit_events` **76%**、按已完成 Run 计约 **31 行/Run**；**推算** 每天 1,000 个 Run 时审计表约 1 GB/月 | 已修复：#187 只记拒绝，#190 批量查 Skill |
+| **高优** | 前端包体积 | 双端全量打包 Element Plus，未配置按需加载与 `manualChunks` | **实测** 双端首屏单 JS chunk 均为 **1.1 MB**（另加 **380+ KB** CSS）；首屏加载耗时待浏览器补测 | 已修复：#186（首屏 JS 1104→401 KB / 1079→338 KB） |
+| **中优** | SSE 轮询与鉴权写放大 | 无内存 PubSub，SSE 每 250ms 轮询 PG；每次只读 API 请求均无节流 `UPDATE authentication_sessions` | **实测** 单次轮询 2 条 SQL、`authenticateApi` 3 条 SQL；**推算** 约 8 条 SQL/秒/运行流（原推算 20～24）；团队空间会话流待补测 | 已修复：#190 进程内唤醒 + 会话写节流，团队会话流 #188 |
+| **高优（待补测）** | 模型网关与 DLP | 请求体双倍 `JSON.parse`、SSE 每帧多余 `JSON.parse`；外部路由每步在主线程无缓存编译词表跑最多 16 个全局正则 | 主线程耗时待真实运行补测，补测前维持原优先级；**实测** 本机每个 Attempt 输入 Token p50 / p95 为 9,160 / 22,505（见基线 2.7） | 实测低优；逐帧多余解析已由 #189 去掉 |
+| **中优** | 同步阻塞：知识库检索 | `POST /runs` 返回 202 前同步等待 WeKnora 检索（含 fallback） | 个人对话带知识库时最坏 **2 次检索超时（单次默认 10s，合计 20s）**；实际耗时待补测 | 已修复：#198 检索移到 202 之后 |
+| **中优** | 慢查询与大 JSONB 解压 | 多处多表笛卡尔乘积；`operational_events` 全量并入 `run_events` 做文本 `ilike`；统计逐行解压 `manifest` JSONB | **实测** `manifest` p50 5.2 KB、p95 13 KB；执行计划待一次性库造量后 `EXPLAIN` | 部分修复：#190 去乘积、生成列；`getTimeline` 等待 `EXPLAIN`（第 43 项） |
+| **低优** | 首字延迟（TTFT） | 每轮冷启动 DSH 子进程；同一 Skill 包读盘算哈希 3 次 | **实测** 冷启动 p50 约 1.2 秒，约占端到端 p50（23.7 秒）的 5%；按基线维持阶段三按需评估。Skill 包重复读取未单独测量 | Skill 重复读盘 #190 已修；预热池不做 |
+| **中优（待补测）** | 容器扫盘 | 每条容器命令前/中/后在宿主递归 `lstat` 工作区（上限 50,000 条目） | 未测量；大工作区高频命令时的线程池占用待补测 | 已修复：#190 只读 `rg` 不再扫盘 |
+| **低优** | 同步阻塞：成果解析 | `run.completed` 前同步等成果解析容器 | **实测** 成果收集 p95 0.6 秒、最大 0.9 秒（60 秒是超时上限） | 低优，不处理 |
+| **条件性** | 流式事件持久化 | `assistant.delta` 逐条 `INSERT run_events`，写后复查每条执行 `SELECT runs`；`run_events` 重复索引 | **实测** 每个 Run 仅 1～2 条 delta（p95 2、最大 7）；DSH 改为逐 Token 流式时才会放大。重复索引仍建议删除 | 重复索引与写后复查 #190 已修；窗口合并为条件性 |
+| **条件性** | 前端流式渲染 | 每个 delta 触发全量 Markdown 重解析与历史消息重渲染 | 同上：每个回答 1～2 次重解析，当前无掉帧依据 | 块复用与贴底 #197 已修；rAF 批处理为条件性 |
 
 ---
 
@@ -186,19 +281,23 @@ flowchart TD
 
 1. **流式 `assistant.delta` 无帧合并 + 手写 Markdown `$O(N^2)$` 重解析与全树抖动**
    > **阶段零实测**：每个回答只有 1～2 条 delta，重解析次数很少，降为条件性风险；`:key="index"` 与贴底监听问题仍可顺手修。
+   > **已处理（2026-11-28，#197）**：内容块按源文本复用、key 带块类型；贴底监听最后一条消息的文本长度。rAF 批处理仍为条件性。
    - **代码位置**：[tasks.ts](../../apps/workbench-web/src/stores/tasks.ts#L316-L325)（及 L417、L462-489）、[AssistantMessageContent.vue](../../packages/ui-core/src/components/AssistantMessageContent.vue#L24)（及 L130-179、L296）
    - **机制分析**：每个 SSE `assistant.delta` 都在微任务中同步标脏响应式状态（无 `requestAnimationFrame` 合并），每次线性 `find` 扫描全量 `tasks`、`messages` 并无条件遍历 `task.steps`（L485-487 扫完才在 L489 丢弃）；`AssistantMessageContent.vue` 每次对整篇累积长文本从第 0 行重新 `split('\n')` 解析全部块且 `:key="index"` 传入全新块引用，使前序已完成的代码块、列表、表格随每一个新 Token 全量重渲染。此外 [ConversationView.vue](../../apps/workbench-web/src/views/ConversationView.vue#L1019-L1028) 的自动贴底 `watch` 只监听了 `messages.length` 而漏监听流式 `content` 增长。
 
 2. **列表模板内联新数组/新对象击穿全部历史消息缓存**
+   > **已处理（2026-11-28，#197）**：群聊时间线的显示对象按源条目缓存，内容未变的条目沿用旧对象。
    - **代码位置**：[RunMessageList.vue](../../apps/workbench-web/src/components/conversation/RunMessageList.vue#L165-L204)、[CollabGroupTimeline.vue](../../apps/workbench-web/src/components/collab/CollabGroupTimeline.vue#L380)、[ConversationView.vue](../../apps/workbench-web/src/views/ConversationView.vue#L1326)
    - **机制分析**：在 `v-for` 内直接调用 `.filter(...)` 返回新数组或构造 `:message="{ ...item }"`，导致当前 Run 任一状态微变时，整段会话所有历史消息子组件 Props 引用全部失效而重渲染。
 
 3. **前后端配合产生前端请求风暴与同源连接池耗尽风险**
+   > **已处理（2026-11-28）**：空间页重拉、必败 404、管理端全量重拉与管理助手后台轮询（#190）；群聊只监听本空间 `workspaceActivity`、单聊限 4 路并发（#197）；门户开启 HTTP/2（#193，生产需重启 nginx）。
    - **员工端重复全量拉取**：壳层 `useWorkbenchBootstrap` 启动无分页全量拉取 `/tasks`、`/workspaces`、`/artifacts`、`/agents`；而进入 [WorkspaceDetailView.vue](../../apps/workbench-web/src/views/WorkspaceDetailView.vue#L871-L873) 时 `onMounted` 无条件再次调用 `contentStore.refresh()` 把全量接口重拉一遍，冷启动进项目空间瞬间触发 **18～19+ 个请求**；B 模式单聊 [CollabAgentChat.vue](../../apps/workbench-web/src/components/collab/CollabAgentChat.vue#L198-L203) 打开一页 20 段对话即并发发出 `1 + 20` 个请求；群聊 [CollabGroupTimeline.vue](../../apps/workbench-web/src/components/collab/CollabGroupTimeline.vue#L328-L334) 对全局 `sessionActivity` 做未按空间过滤的 `{ deep: true }` 监听；
    - **多路独立 `EventSource`**：[tasks.ts](../../apps/workbench-web/src/stores/tasks.ts#L79-L81) 对每条活跃/排队任务建立独立 SSE 连接，在 HTTP/1.1 同源 6 连接限制下极易占满浏览器连接池；收到终态后还硬延迟 100ms 并以 250ms 间隔最多轮询 20 次 `GET /runs/:id`（L513-530）；
    - **管理端全量重拉与轮询**：[content.ts](../../apps/admin-web/src/stores/content.ts#L82-L138) 首屏及 14 处局部保存/刷新按钮都调用 `contentStore.load(true)` 重拉 **15 个全平台接口**；[AdminAssistantView.vue](../../apps/admin-web/src/views/AdminAssistantView.vue#L59) 不用平台现成 SSE，改用 1.5s 定时器拉取完整会话快照且切后台不暂停。
 
 4. **双端全量打包 Element Plus，首屏单 JS Chunk 均达 1.1 MB**
+   > **已处理（2026-11-28，#186）**：按需引入 + `vendor-vue` 分包，首屏 JS 员工端 1104→401 KB、管理端 1079→338 KB。
    - **代码位置**：员工端 [main.ts](../../apps/workbench-web/src/main.ts#L2-L3) 与 [vite.config.ts](../../apps/workbench-web/vite.config.ts#L11-L24)、管理端 [main.ts](../../apps/admin-web/src/main.ts#L2-L3) 与 [vite.config.ts](../../apps/admin-web/vite.config.ts#L34-L45)
    - **实测数据**：双端均全量 `app.use(ElementPlus)` 且未配置按需加载或 `manualChunks`，构建产物中双端入口 JS 均为 **1.1 MB**、入口 CSS 约 **380～386 KB**；管理端 `ApiDocsView.vue`（2026-11-28 已删除）还静态打包了 3,109 行 OpenAPI JSON 并单页渲染数十个重型 `el-table`。
 
@@ -241,7 +340,7 @@ flowchart TD
 
 4. **18,691 行手写 OpenAPI JSON、201 条 npm scripts 与 12 套串行冷启动 E2E**
    - **手写 OpenAPI 投入产出倒挂**：`docs/development/openapi-*.json` 合计 **18,691 行手写 JSON**（其中 `openapi-mobile-h5.json` 还是 `openapi-workbench.json` 的手工拷贝子集），但 `openapi-coverage.test.ts`（2026-11-28 已随手写文档删除） **只核对 HTTP Method 与擦除参数名后的路径，完全不校验实际请求/响应 Schema**，也未用于生成前端类型；
-   - **CI 浏览器任务 12 次重复冷启动**：[ci.yml](../../.github/workflows/ci.yml#L147-L182) 在单个 Job 中串行运行 12 个 `playwright*.config.ts`（其中 `agent-capabilities`、`agent-principal`、`agent-routines` 3 个 7 行配置文件完全复用同一后端与 Vite，只改了 `testMatch`），单次 CI 串行启停销毁 **12 次后端 + 16 次 Vite Dev Server**；同时在 `server/src/testing/p0-smoke/` 平行维护了 4,718 行内存版业务后端；
+   - **CI 浏览器任务 12 次重复冷启动**（已处理，2026-11-28：#194 合并为一份 Playwright 配置并行运行，#195 把 P0 冒烟、P1 与集成测试各分两台机器，CI 墙钟 7m35s→4m20s）：[ci.yml](../../.github/workflows/ci.yml#L147-L182) 在单个 Job 中串行运行 12 个 `playwright*.config.ts`（其中 `agent-capabilities`、`agent-principal`、`agent-routines` 3 个 7 行配置文件完全复用同一后端与 Vite，只改了 `testMatch`），单次 CI 串行启停销毁 **12 次后端 + 16 次 Vite Dev Server**；同时在 `server/src/testing/p0-smoke/` 平行维护了 4,718 行内存版业务后端；
    - **脚本堆砌与脆弱字面量门禁**：根 [package.json](../../package.json)（115 条）与服务端 `package.json`（86 条）残留大量历史里程碑与评审批次脚本（`test:review:batch02`、`test:review:8b` 等）；管理端 [validate-ui-contract.mjs](../../apps/admin-web/scripts/validate-ui-contract.mjs) 与 [team-workspace-1a.mjs](../../scripts/checks/team-workspace-1a.mjs) 通过 `String.includes` 锁死源码内部函数名与中文文案，阻碍正常的组件拆分与重构。
 
 ---
@@ -294,6 +393,6 @@ flowchart TD
 
 ### 阶段三：中长期架构解耦与工程工具链瘦身
 
-1. **DSH Worker 预热池与工作区配额优化**：按实测 TTFT 占比评估小规模预热 Worker 进程池；容器命令配额检查避开只读 `rg` 或改用轻量目录配额策略替代宿主主进程全目录 `lstat`。
+1. **DSH Worker 预热池与工作区配额优化**（预热池：用户决定不做；只读 `rg` 扫盘已由 #190 处理）：按实测 TTFT 占比评估小规模预热 Worker 进程池；容器命令配额检查避开只读 `rg` 或改用轻量目录配额策略替代宿主主进程全目录 `lstat`。
 2. **模块装配与组件树收敛**：用领域事件总线替代 `main.ts` 中的 7 个可变 `Ref` 盒子与 8 处延迟 Setter；拆分两千行级的 Vue 视图与后端大 Service；将零跨端复用的 `admin-components`、`workbench-components`、`design-tokens` 收拢回对应应用与 `ui-core`，抽取双端共享的轻量 HTTP 客户端。
-3. **契约与测试基建减负**：引入基于路由 Schema（如 Zod）自动生成 OpenAPI 与前端 TS 类型，终结 18,691 行 JSON 手写同步；合并复用同构后端的 Playwright 配置文件以减少 CI 重复冷启动；清理过期的批次脚本与锁死源码标识符的脆弱静态检查，归档删除废弃僵尸数据库表（删 `system_settings` 时同步清理兼容测试）。
+3. **契约与测试基建减负**：~~引入基于路由 Schema（如 Zod）自动生成 OpenAPI 与前端 TS 类型~~（不做：接口不对外，#196 已直接删除手写 OpenAPI）；合并复用同构后端的 Playwright 配置文件以减少 CI 重复冷启动（#194 已完成）；清理过期的批次脚本与锁死源码标识符的脆弱静态检查，归档删除废弃僵尸数据库表（删 `system_settings` 时同步清理兼容测试）。
