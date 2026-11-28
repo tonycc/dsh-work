@@ -67,7 +67,7 @@ export function parseMobileDevice(input: { deviceId?: unknown; deviceName?: unkn
   if (typeof input.deviceId !== 'string' || !deviceIdPattern.test(input.deviceId)) {
     throw new IdentityAccessError(422, 'invalid_device', '设备标识必须为 8–128 位字母、数字或 ._:- 字符')
   }
-  const name = typeof input.deviceName === 'string' ? input.deviceName.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 80) : ''
+  const name = typeof input.deviceName === 'string' ? [...input.deviceName].filter(char => char >= ' ' && char !== '\u007f').join('').trim().slice(0, 80) : ''
   return { id: input.deviceId, name: name || null }
 }
 
