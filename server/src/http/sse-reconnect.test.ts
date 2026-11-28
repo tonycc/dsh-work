@@ -4,6 +4,7 @@ import { test } from 'node:test'
 
 import { authorizationDenied } from '../domain/authorization-errors.ts'
 import type { StoredRunEvent } from '../modules/run/run-types.ts'
+import { notifyRunEvent, runEventWaiterCount } from '../modules/run/run-event-notifier.ts'
 import { streamRunEvents, streamWorkspaceSessionEvents } from './workbench/conversation-routes.ts'
 
 test('SSE reconnect forwards Last-Event-ID and emits only later persisted events', async () => {
@@ -366,4 +367,42 @@ test('workspace session stream stops before delivering after read access is revo
   // 读轨从第一轮起即失权：包括无内容的基线握手在内一条事件都不写。
   assert.equal(response.body, '')
   assert.equal(response.ended, true)
+})
+
+test('a persisted-event signal wakes the run stream without waiting for the fallback poll', { timeout: 3000 }, async () => {
+  const response = new MemorySseResponse()
+  let reads = 0
+  let pending: StoredRunEvent[] = []
+  let status: 'running' | 'succeeded' = 'running'
+  const runs = {
+    async readEventsAfterEvent() {
+      reads++
+      const events = pending
+      pending = []
+      return events
+    },
+    async getRun() {
+      return {
+        id: 'run-wake', tenantId: 'tenant-dsh-work', taskId: 'task-wake', sessionId: 'session-wake',
+        requestedBy: 'U00001', idempotencyKey: 'idempotency-wake', status,
+        currentAttemptId: 'attempt-wake', createdAt: '2026-08-30T00:00:00.000Z', updatedAt: '2026-08-30T00:00:00.000Z',
+      }
+    },
+  }
+  // 兜底轮询设为 60 秒：只有信号能让流在测试超时前读到新事件。
+  const streaming = streamRunEvents(response, undefined, 'run-wake', runs, 60_000, 600_000)
+  while (runEventWaiterCount('run-wake') === 0) await new Promise(resolve => setImmediate(resolve))
+  assert.equal(reads, 1)
+  pending = [{
+    id: 'event-wake', tenantId: 'tenant-dsh-work', runId: 'run-wake', attemptId: 'attempt-wake', sequence: 1,
+    eventType: 'run.completed', displayMessage: '完成', safeMetadata: {}, traceId: 'trace-wake', occurredAt: '2026-08-30T00:00:01.000Z',
+  }]
+  status = 'succeeded'
+  notifyRunEvent('run-wake')
+  while (!response.body.includes('id: event-wake')) await new Promise(resolve => setImmediate(resolve))
+  assert.equal(reads, 2)
+  // 客户端断开：等待立即结束，不留下监听。
+  response.emit('close')
+  await streaming
+  assert.equal(runEventWaiterCount('run-wake'), 0)
 })

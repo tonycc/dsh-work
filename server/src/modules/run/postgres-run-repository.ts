@@ -19,6 +19,7 @@ import { TaskBudgetExceededError } from '../task/task-budget-types.ts'
 import { RequestError, accessDenied, notFound, stateConflict } from '../../domain/request-errors.ts'
 import { backgroundLaneMaxConcurrent, backgroundPurposes, isBackgroundLanePurpose, isBackgroundPurpose, type BackgroundLanePurpose } from '../../domain/background-lanes.ts'
 import { recordAutomationOutcomeNotification } from '../notification/user-notification-writer.ts'
+import { notifyRunEvent } from './run-event-notifier.ts'
 
 interface RunRow {
   id: string
@@ -694,7 +695,9 @@ export class PostgresRunRepository implements RunRepository {
     let sequence = event.sequence
     for (let attempt = 0; attempt < SEQUENCE_CONFLICT_RETRIES; attempt += 1) {
       try {
-        return await this.insertEvent({ ...event, sequence })
+        const stored = await this.insertEvent({ ...event, sequence })
+        notifyRunEvent(stored.runId)
+        return stored
       } catch (error) {
         if (!isSequenceConflict(error) || attempt === SEQUENCE_CONFLICT_RETRIES - 1) throw error
         const current = await this.maxSequenceForAttempt(event.tenantId, event.attemptId)
@@ -758,7 +761,7 @@ export class PostgresRunRepository implements RunRepository {
   async appendSystemEvent(input: AppendSystemEventInput): Promise<StoredRunEvent> {
     for (let attempt = 0; attempt < SEQUENCE_CONFLICT_RETRIES; attempt += 1) {
       try {
-        return await this.database.begin(async (transaction) => {
+        const stored = await this.database.begin(async (transaction) => {
           const [existing] = await transaction<EventRow[]>`
             select id, tenant_id as "tenantId", run_id as "runId", attempt_id as "attemptId",
                    sequence, event_type as "eventType", display_message as "displayMessage",
@@ -792,6 +795,8 @@ export class PostgresRunRepository implements RunRepository {
           if (!created) throw new Error('系统事件写入失败')
           return mapEvent(created)
         })
+        notifyRunEvent(stored.runId)
+        return stored
       } catch (error) {
         if (!isSequenceConflict(error) || attempt === SEQUENCE_CONFLICT_RETRIES - 1) throw error
       }
