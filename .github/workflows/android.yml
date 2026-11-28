@@ -1,0 +1,97 @@
+name: Android
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - mobile/android/**
+      - .github/workflows/android.yml
+  pull_request:
+    paths:
+      - mobile/android/**
+      - .github/workflows/android.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+# 移动端方案 M0：Android 代码全部由 Agent 开发，单元测试（含 Robolectric）、lint 与 APK 构建都在这里跑。
+# 签名：仓库机密 ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD
+# 齐全时产出签名的 release APK；缺少时（含来自分叉的 PR）只产出 debug APK。
+# 默认服务器地址取仓库变量 DSH_ANDROID_BASE_URL（App 登录页仍可修改）。
+jobs:
+  build:
+    name: Test, lint and build APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: mobile/android
+    env:
+      DSH_ANDROID_BASE_URL: ${{ vars.DSH_ANDROID_BASE_URL }}
+      DSH_ANDROID_VERSION_CODE: ${{ github.run_number }}
+      DSH_ANDROID_VERSION_NAME: 0.0.${{ github.run_number }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+
+      - name: Unit tests
+        run: ./gradlew --no-daemon testDebugUnitTest
+
+      - name: Lint
+        run: ./gradlew --no-daemon lintDebug
+
+      - name: Build debug APK
+        run: ./gradlew --no-daemon assembleDebug
+
+      - name: Build signed release APK
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          DSH_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          DSH_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          DSH_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "未配置签名机密，跳过 release APK。"
+            exit 0
+          fi
+          keystore="$RUNNER_TEMP/release.jks"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          DSH_ANDROID_KEYSTORE_PATH="$keystore" ./gradlew --no-daemon assembleRelease
+          rm -f "$keystore"
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dsh-work-android-${{ github.run_number }}
+          path: |
+            mobile/android/app/build/outputs/apk/debug/*.apk
+            mobile/android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload test and lint reports
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-reports-${{ github.run_number }}-${{ github.run_attempt }}
+          path: |
+            mobile/android/app/build/reports/
+            mobile/android/app/build/test-results/
+          retention-days: 14

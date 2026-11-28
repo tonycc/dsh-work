@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  只允许 HTTPS，信任系统证书。内网自签根证书需要先安装到手机的“用户证书”时，再按部署情况增加
+  <certificates src="user" />；不在默认配置中放开。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
