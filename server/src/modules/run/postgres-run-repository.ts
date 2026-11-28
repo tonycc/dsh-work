@@ -291,8 +291,9 @@ export class PostgresRunRepository implements RunRepository {
         requestedBy: string
         taskId: string
         budgetScopeTaskId: string
+        currentAttemptId: string | null
       }[]>`
-        select r.status, r.session_id as "sessionId", t.workspace_id as "workspaceId",
+        select r.status, r.session_id as "sessionId", t.workspace_id as "workspaceId", r.current_attempt_id as "currentAttemptId",
                r.requested_by as "requestedBy", r.task_id as "taskId",
                t.budget_scope_task_id as "budgetScopeTaskId"
           from runs r
@@ -305,6 +306,9 @@ export class PostgresRunRepository implements RunRepository {
       if (!run) throw notFound(`Run 不存在或所属 Session 已归档：${input.runId}`)
       if (!['queued', 'waiting', 'failed', 'cancelled'].includes(run.status)) {
         throw stateConflict(`Run 当前状态不能创建 Attempt：${run.status}`)
+      }
+      if (input.requireUndispatched && (run.status !== 'queued' || run.currentAttemptId !== null)) {
+        throw stateConflict(`Run 已不在等待派发的状态：${run.status}`)
       }
       // 管理侧与自动任务运行同一 Run 只允许一个活动 Attempt；自动化重放必须
       // 复用已持久化 Attempt（恢复入队），不能在此静默产生第二个（AG-03）。
@@ -913,8 +917,20 @@ export class PostgresRunRepository implements RunRepository {
          order by a.created_at asc
          for update of a, r
       `
+      // 员工对话的 Attempt 在进程内准备（含返回 202 后的后台知识检索，审核报告 2.4.4）；进程中断时
+      // Run 会停在“无 Attempt 的 queued”，重启后没有谁再派发它，收敛为失败。自动任务与主动任务
+      // 由各自的受理记录收敛，这里只处理会话来源的 Run。
+      const undispatched = await transaction<{ id: string }[]>`
+        update runs r set status = 'failed', updated_at = now()
+          from tasks t
+         where r.tenant_id = ${tenantId} and t.tenant_id = r.tenant_id and t.id = r.task_id
+           and t.source_type = 'session' and r.session_id is not null
+           and r.status = 'queued' and r.current_attempt_id is null
+        returning r.id
+      `
       return {
         failed,
+        undispatched: undispatched.map(row => row.id),
         queued: queuedRows.map(row => ({
           run: mapRun({
             id: row.runId,

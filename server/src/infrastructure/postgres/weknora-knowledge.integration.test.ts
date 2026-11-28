@@ -579,6 +579,103 @@ test('知识检索工具被取消后不写入引用与审计（评审 PR 118）'
   assert.equal(rows?.count, 0)
 })
 
+async function attemptsOf(runId: string) {
+  return database<{ id: string; manifest: RuntimeManifest }[]>`
+    select id, manifest from run_attempts where tenant_id = ${tenantId} and run_id = ${runId}
+  `
+}
+
+async function runStatus(runId: string) {
+  const [row] = await database<{ status: string }[]>`select status from runs where tenant_id = ${tenantId} and id = ${runId}`
+  return row?.status
+}
+
+test('发消息先受理、再检索知识：检索期间 Run 还没有 Attempt，检索结果仍进入 Manifest 与引用（审核报告 2.4.4）', async () => {
+  double.delayMs = 200
+  const sessionId = await session(['kb-supply'])
+  const idempotencyKey = randomUUID()
+  const run = (await orchestration.startRun({ userId: EMPLOYEE, sessionId, prompt: '安全库存怎么算？', idempotencyKey }))!
+  assert.equal(run.status, 'queued')
+  assert.equal(run.currentAttemptId, null)
+  assert.equal((await attemptsOf(run.id)).length, 0)
+  // 原请求还在后台检索时重放同一请求：返回同一个 Run，不再派发第二次。
+  const replay = (await orchestration.startRun({ userId: EMPLOYEE, sessionId, prompt: '安全库存怎么算？', idempotencyKey }))!
+  assert.equal(replay.id, run.id)
+  assert.equal('justAccepted' in replay, false)
+  // 刚受理的 Run 详情不查结果证据表，形状与有证据时一致。
+  const accepted = await conversations.getTask(run.id, EMPLOYEE, { justAccepted: true })
+  assert.equal(accepted?.status, 'queued')
+  assert.deepEqual(accepted?.steps.map(step => step.id), [`${run.id}-queued`])
+
+  const task = await waitForTask(run.id)
+  const attempts = await attemptsOf(run.id)
+  assert.equal(attempts.length, 1)
+  assert.equal(searches().length, 1)
+  assert.equal(attempts[0]!.manifest.knowledge_status, 'ok')
+  assert.deepEqual(attempts[0]!.manifest.knowledge_context.map(document => document.documentId), ['weknora:doc-safety'])
+  assert.ok(attempts[0]!.manifest.tools.some(tool => tool.id === 'knowledge_search'))
+  assert.deepEqual(task.result.sources.map(source => source.title), ['库存安全水位规范'])
+})
+
+test('后台检索期间员工停止执行：Run 保持已取消，不再创建 Attempt（审核报告 2.4.4）', async () => {
+  double.delayMs = 200
+  const sessionId = await session(['kb-supply'])
+  const run = (await orchestration.startRun({ userId: EMPLOYEE, sessionId, prompt: '安全库存怎么算？', idempotencyKey: randomUUID() }))!
+  const cancelled = await orchestration.cancel(run.id, EMPLOYEE)
+  assert.equal(cancelled?.status, 'cancelled')
+  await orchestration.settleBackgroundDispatches()
+  assert.equal(await runStatus(run.id), 'cancelled')
+  assert.equal((await attemptsOf(run.id)).length, 0)
+})
+
+test('后台准备执行失败时 Run 收敛为失败并记审计（审核报告 2.4.4）', async () => {
+  double.delayMs = 200
+  const sessionId = await session(['kb-supply'])
+  const run = (await orchestration.startRun({ userId: EMPLOYEE, sessionId, prompt: '安全库存怎么算？', idempotencyKey: randomUUID() }))!
+  // 检索期间会话被归档：创建 Attempt 时被拒绝。
+  await database`update sessions set status = 'archived' where tenant_id = ${tenantId} and id = ${sessionId}`
+  await orchestration.settleBackgroundDispatches()
+  assert.equal(await runStatus(run.id), 'failed')
+  assert.equal((await attemptsOf(run.id)).length, 0)
+  const [audit] = await database<{ result: string }[]>`
+    select result from audit_events where tenant_id = ${tenantId} and action = 'run.dispatch.failed' and object_id = ${run.id}
+  `
+  assert.equal(audit?.result, 'failed')
+})
+
+test('服务重启时停在“无 Attempt 的 queued”的会话 Run 收敛为失败，后台派发不会再把它拉起（审核报告 2.4.4）', async () => {
+  double.delayMs = 200
+  const sessionId = await session(['kb-supply'])
+  const run = (await orchestration.startRun({ userId: EMPLOYEE, sessionId, prompt: '安全库存怎么算？', idempotencyKey: randomUUID() }))!
+  const recovery = await new PostgresRunRepository(database).recoverAfterRestart(tenantId, 'runtime-local-01')
+  assert.ok(recovery.undispatched?.includes(run.id))
+  await orchestration.settleBackgroundDispatches()
+  assert.equal(await runStatus(run.id), 'failed')
+  assert.equal((await attemptsOf(run.id)).length, 0)
+})
+
+test('连续检索成功一分钟内只写一次连接的最近成功时间；失败后的第一次成功立即写入（审核报告 2.4.4）', async () => {
+  const lastSuccess = async () => {
+    const [row] = await database<{ at: Date | null }[]>`
+      select last_success_at as at from external_knowledge_connections where tenant_id = ${tenantId}
+    `
+    return row?.at?.getTime() ?? null
+  }
+  const sessionId = await session(['kb-supply'])
+  await ask(sessionId, '安全库存怎么算？')
+  const first = await lastSuccess()
+  assert.ok(first)
+  await ask(sessionId, '安全库存按几天算？')
+  assert.equal(await lastSuccess(), first)
+
+  double.failWith = 503
+  await ask(sessionId, '安全库存预警怎么处理？')
+  double.failWith = null
+  await new Promise(resolve => setTimeout(resolve, 5))
+  await ask(sessionId, '安全库存怎么算？')
+  assert.ok((await lastSuccess())! > first!)
+})
+
 async function waitForTask(runId: string) {
   const deadline = Date.now() + 5000
   while (Date.now() < deadline) {

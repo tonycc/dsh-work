@@ -40,11 +40,16 @@ interface SelectedBaseRow {
  * 检索范围 = 会话所选知识库 ∩ 当前可见知识库（5.7）；返回结果再按本次传入的知识库校验一次
  * （4.4 第 4 步）。员工与 Agent 都须具备查看级别（5.1、WK14）。
  */
+/** 连续检索成功时，最多每隔这么久改写一次连接行的 last_success_at。 */
+const successRecordIntervalMs = 60_000
+
 export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
   readonly connectionId: string
   private readonly database: DatabaseClient
   private readonly connection: PostgresKnowledgeConnection
   private readonly audit: AuditTrail | undefined
+  /** 本进程最近一次写入连接行的检索成功（见 recordSuccess）。 */
+  private lastRecordedSuccess: { at: number; rerankOutcome: string | null } | null = null
 
   constructor(database: DatabaseClient, connection: PostgresKnowledgeConnection, audit?: AuditTrail) {
     this.database = database
@@ -398,6 +403,12 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
 
   /** 记录成功与本次重排序结果（功能规则第 11 节）：WeKnora 重排序降级时检索照常返回，只能靠这里让管理员看到。 */
   private async recordSuccess(rerankOutcome: string | null) {
+    // 审核报告 2.4.4：检索成功不必每次都改写连接行。管理端只用它显示“最近成功”与“暂不可用”是否已恢复，
+    // 一分钟内重复成功、重排序结果也没变时跳过；本进程记过失败后的第一次成功照常立即写入。
+    const now = Date.now()
+    const last = this.lastRecordedSuccess
+    if (last && now - last.at < successRecordIntervalMs && (rerankOutcome === null || rerankOutcome === last.rerankOutcome)) return
+    this.lastRecordedSuccess = { at: now, rerankOutcome: rerankOutcome ?? last?.rerankOutcome ?? null }
     await this.database`
       update external_knowledge_connections
          set last_success_at = now(),
@@ -409,6 +420,7 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
 
   private async recordFailure(reason: WeKnoraFailureReason) {
     console.warn(`WeKnora unavailable: ${reason}`)
+    this.lastRecordedSuccess = null
     await this.database`
       update external_knowledge_connections set last_failure_at = now(), last_failure_reason = ${reason}
        where tenant_id = ${tenantId} and id = ${this.connectionId}
