@@ -245,6 +245,8 @@ flowchart TD
 
 ### 阶段零：采集实测运行基线（立项前置条件）
 
+> 第一批结果见[本机实测基线（2026-11-28）](architecture-audit-baseline-2026-11-28.md)，其中对本文优先级的调整建议待确认后再写回本文。
+
 - 利用 [database.ts](../../server/src/infrastructure/postgres/database.ts#L15) 的 `debug` 钩子与 `pnpm report:run-timings`，在开发/参考环境实测典型用户旅程（冷启动进项目空间、`GET /tasks`、单轮 400 chunk 流式对话、外部模型多步工具调用、管理端首屏与局部保存）的**实际 SQL 语句数、连接池排队耗时、主线程事件循环延迟（Event Loop Lag）与首屏加载耗时**，以实测前后对比衡量以下各阶段收益。
 
 ### 阶段一：低风险快赢（直击日常高频开销；改变可观察行为的项单独标注）
