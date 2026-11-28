@@ -56,14 +56,14 @@ export class PostgresAgentRunHistory {
     const size = Number.isInteger(limit) ? Math.min(Math.max(limit, 1), MAX_LIMIT) : 20
     const rows = await this.database<Row[]>`
       select r.id as "runId", r.status, t.source_type as "sourceType",
-             a.manifest->>'purpose' as purpose, av.version,
+             a.manifest_purpose as purpose, av.version,
              coalesce(u.display_name, r.requested_by) as "requestedBy",
              s.title as "sessionTitle", a.error_code as "errorCode",
              r.created_at as "createdAt", a.started_at as "startedAt", a.ended_at as "endedAt"
         from tasks t
         join runs r on r.tenant_id = t.tenant_id and r.task_id = t.id
         left join run_attempts a on a.tenant_id = r.tenant_id and a.id = r.current_attempt_id
-        left join agent_versions av on av.tenant_id = r.tenant_id and av.id = a.manifest->>'agent_version_id'
+        left join agent_versions av on av.tenant_id = r.tenant_id and av.id = a.manifest_agent_version_id
         left join sessions s on s.tenant_id = r.tenant_id and s.id = r.session_id
         left join users u on u.tenant_id = r.tenant_id and u.id = r.requested_by
        where t.tenant_id = ${tenantId} and t.executed_as_principal_id = ${principal.id}

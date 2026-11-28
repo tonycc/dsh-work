@@ -480,7 +480,7 @@ export class PostgresRunRepository implements RunRepository {
       `
       if (!runtime || runtime.schedulingStatus !== 'accepting') return false
       const [pending] = await transaction<{ purpose: string | null }[]>`
-        select manifest->>'purpose' as purpose
+        select manifest_purpose as purpose
           from run_attempts
          where tenant_id = ${tenantId} and id = ${attemptId} and status = 'queued'
       `
@@ -503,7 +503,7 @@ export class PostgresRunRepository implements RunRepository {
             select count(*)::integer as active from run_attempts
              where tenant_id = ${tenantId} and runtime_id = ${runtimeId}
                and status in ('running', 'cancel_requested')
-               and manifest->>'purpose' = 'automation'
+               and manifest_purpose = 'automation'
           `
           if ((lane?.active ?? 0) >= laneLimit) return false
         }
@@ -515,7 +515,7 @@ export class PostgresRunRepository implements RunRepository {
           select count(*)::integer as active from run_attempts
            where tenant_id = ${tenantId} and runtime_id = ${runtimeId}
              and status in ('running', 'cancel_requested')
-             and manifest->>'purpose' = ${pending.purpose}
+             and manifest_purpose = ${pending.purpose}
         `
         if ((lane?.active ?? 0) >= laneLimit) return false
       }
@@ -525,7 +525,7 @@ export class PostgresRunRepository implements RunRepository {
           select count(*)::integer as active from run_attempts
            where tenant_id = ${tenantId} and runtime_id = ${runtimeId}
              and status in ('running', 'cancel_requested')
-             and manifest->>'purpose' in ${transaction(backgroundPurposes)}
+             and manifest_purpose in ${transaction(backgroundPurposes)}
         `
         if ((background?.active ?? 0) >= runtime.capacity - 1) return false
       }
@@ -570,11 +570,11 @@ export class PostgresRunRepository implements RunRepository {
              (select count(*)::integer from run_attempts a
                where a.tenant_id = r.tenant_id and a.runtime_id = r.id
                  and a.status in ('running', 'cancel_requested')
-                 and a.manifest->>'purpose' = ${purpose}) as running,
+                 and a.manifest_purpose = ${purpose}) as running,
              (select count(*)::integer from run_attempts a
                where a.tenant_id = r.tenant_id and a.runtime_id = r.id
                  and a.status in ('running', 'cancel_requested')
-                 and a.manifest->>'purpose' in ${this.database(backgroundPurposes)}) as background
+                 and a.manifest_purpose in ${this.database(backgroundPurposes)}) as background
         from runtimes r
        where r.tenant_id = ${tenantId} and r.id = ${runtimeId}
     `
@@ -968,7 +968,7 @@ export class PostgresRunRepository implements RunRepository {
         join agent_versions av on av.tenant_id = wam.tenant_id and av.agent_id = wam.agent_id
        where r.tenant_id = ${tenantId}
          and t.workspace_id = ${workspaceId}
-         and av.id = coalesce(s.agent_version_id, ra.manifest->>'agent_version_id')
+         and av.id = coalesce(s.agent_version_id, ra.manifest_agent_version_id)
          and r.status in ('queued', 'running', 'waiting', 'cancel_requested')
        order by r.created_at asc
     `
@@ -981,7 +981,7 @@ export class PostgresRunRepository implements RunRepository {
              r.requested_by as "requestedBy", r.idempotency_key as "idempotencyKey",
              r.status, r.current_attempt_id as "currentAttemptId",
              r.created_at as "createdAt", r.updated_at as "updatedAt",
-             coalesce(s.agent_version_id, ra.manifest->>'agent_version_id') as "agentVersionId",
+             coalesce(s.agent_version_id, ra.manifest_agent_version_id) as "agentVersionId",
              coalesce(ra.manifest->'data_scopes', '[]'::jsonb) as "dataScopes"
         from runs r
         join tasks t on t.tenant_id = r.tenant_id and t.id = r.task_id
@@ -989,7 +989,7 @@ export class PostgresRunRepository implements RunRepository {
         left join run_attempts ra on ra.tenant_id = r.tenant_id and ra.id = r.current_attempt_id
        where r.tenant_id = ${tenantId}
          and t.workspace_id = ${workspaceId}
-         and coalesce(s.agent_version_id, ra.manifest->>'agent_version_id') is not null
+         and coalesce(s.agent_version_id, ra.manifest_agent_version_id) is not null
          and r.status in ('queued', 'running', 'waiting', 'cancel_requested')
        order by r.created_at asc
     `

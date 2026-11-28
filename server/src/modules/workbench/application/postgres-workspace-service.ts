@@ -19,6 +19,24 @@ export class PostgresWorkspaceService {
   }
 
   async ensurePersonalWorkspace(userId: string): Promise<AccessibleWorkspace> {
+    // 快路径：账号有效、个人空间与 owner 成员行都已就绪时只读一次，不再每次 GET /workspaces
+    // 都插入空间并 DO UPDATE 成员行（这会把只读请求变成写事务）。缺任何一项才走下面的补齐。
+    const [ready] = await this.database<{ id: string }[]>`
+      select w.id
+        from users u
+        join tenants t on t.id = u.tenant_id and t.status = 'active'
+        join lateral (
+          select id from workspaces
+           where tenant_id = u.tenant_id and workspace_type = 'personal'
+             and created_by = u.id and status = 'active'
+           order by created_at asc
+           limit 1
+        ) w on true
+        join workspace_members m on m.tenant_id = u.tenant_id and m.workspace_id = w.id
+         and m.user_id = u.id and m.member_role = 'owner'
+       where u.tenant_id = ${tenantId} and u.id = ${userId} and u.status = 'active'
+    `
+    if (ready) return { id: ready.id, type: 'personal' }
     // An already-provisioned workspace does not override account/tenant revocation.
     const [actor] = await this.database`select u.id from users u join tenants t on t.id = u.tenant_id
       where u.tenant_id = ${tenantId} and u.id = ${userId} and u.status = 'active' and t.status = 'active'`

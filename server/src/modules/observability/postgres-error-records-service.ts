@@ -316,7 +316,7 @@ export class PostgresErrorRecordsService implements ErrorRecordsQueryPort {
         left join run_attempts ra on ra.tenant_id = r.tenant_id and ra.id = r.current_attempt_id
         left join sessions s on s.tenant_id = r.tenant_id and s.id = r.session_id
         left join agent_versions av on av.tenant_id = r.tenant_id
-               and av.id = coalesce(ra.manifest->>'agent_version_id', s.agent_version_id)
+               and av.id = coalesce(ra.manifest_agent_version_id, s.agent_version_id)
         left join agents ag on ag.tenant_id = av.tenant_id and ag.id = av.agent_id
         left join users u on u.tenant_id = r.tenant_id and u.id = r.requested_by
        where r.tenant_id = ${tenantId} and r.id = any(${runIds})

@@ -628,7 +628,7 @@ export class AdminAssistantService {
 
   private async requireRun(userId: string, runId: string) {
     const [row] = await this.database<{ sessionId: string; purpose: RuntimeManifest['purpose'] }[]>`
-      select r.session_id as "sessionId", ra.manifest->>'purpose' as purpose
+      select r.session_id as "sessionId", ra.manifest_purpose as purpose
         from runs r
         join sessions s on s.tenant_id = r.tenant_id and s.id = r.session_id
         left join run_attempts ra on ra.tenant_id = r.tenant_id and ra.id = r.current_attempt_id
@@ -647,7 +647,7 @@ export class AdminAssistantService {
        where r.tenant_id = ${tenantId} and r.id = ${manifest.run_id} and r.current_attempt_id = ${manifest.attempt_id}
          and r.requested_by = ${manifest.user_context.user_id} and r.status = 'running'
          and s.id = ${manifest.session_id} and s.created_by = r.requested_by and s.audience = 'admin' and s.status = 'active'
-         and a.status = 'running' and a.manifest->>'purpose' = ${manifest.purpose ?? ''}
+         and a.status = 'running' and a.manifest_purpose = ${manifest.purpose ?? ''}
       ${lock ? sql`for update of r` : sql``}
     `
     if (!row) throw authorizationDenied('Attempt 已结束、取消或被新 Attempt 替代')
@@ -655,7 +655,7 @@ export class AdminAssistantService {
 
   private async assertConfirmationBoundary(action: ActionRow) {
     const [run] = await this.database<{ attemptId: string; purpose: RuntimeManifest['purpose'] }[]>`
-      select r.current_attempt_id as "attemptId", a.manifest->>'purpose' as purpose
+      select r.current_attempt_id as "attemptId", a.manifest_purpose as purpose
         from runs r join run_attempts a on a.tenant_id = r.tenant_id and a.id = r.current_attempt_id and a.run_id = r.id
        where r.tenant_id = ${tenantId} and r.id = ${action.runId} and r.session_id = ${action.sessionId}
          and r.requested_by = ${action.createdBy} and r.status = 'succeeded' and a.status = 'succeeded'

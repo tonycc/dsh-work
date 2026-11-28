@@ -75,8 +75,8 @@ export class PostgresOperationsService {
       select r.id, r.node_name as "nodeName", r.runtime_version as "runtimeVersion",
              r.health_status as "healthStatus", r.scheduling_status as "schedulingStatus",
              r.capacity, r.last_heartbeat_at as "lastHeartbeatAt",
-             count(a.id) filter (where a.status = 'running')::integer as "activeWorkers",
-             count(a.id) filter (where a.status = 'queued')::integer as "queuedRuns",
+             coalesce(a.running, 0)::integer as "activeWorkers",
+             coalesce(a.queued, 0)::integer as "queuedRuns",
              coalesce((select timeout_seconds from runtime_configurations c
                         where c.tenant_id = r.tenant_id and c.runtime_id = r.id
                         order by revision desc limit 1), 300)::integer as "timeoutSeconds",
@@ -87,9 +87,14 @@ export class PostgresOperationsService {
                         where c.tenant_id = r.tenant_id and c.runtime_id = r.id
                         order by revision desc limit 1), '[]'::jsonb) as "disabledBuiltinSkills"
         from runtimes r
-        left join run_attempts a on a.tenant_id = r.tenant_id and a.runtime_id = r.id
+        -- 只数进行中的 Attempt，不再把全部历史 Attempt 连进来再分组。
+        left join lateral (
+          select count(*) filter (where status = 'running') as running,
+                 count(*) filter (where status = 'queued') as queued
+            from run_attempts
+           where tenant_id = r.tenant_id and runtime_id = r.id and status in ('running', 'queued')
+        ) a on true
        where r.tenant_id = ${tenantId}
-       group by r.id
        order by r.id
     `
     return rows.map((row) => ({
@@ -404,17 +409,23 @@ export class PostgresOperationsService {
       id: string; name: string; description: string; creator: string; memberCount: number;
       sessionCount: number; artifactCount: number; fileCount: number; createdAt: Date; updatedAt: Date
     }[]>`
+      -- 成员、会话、成果、文件各自计数：同级 left join 四张一对多表会产生乘积后再 count(distinct)。
       select w.id, w.name, w.description, u.display_name as creator,
-             count(distinct wm.user_id)::integer as "memberCount", count(distinct s.id)::integer as "sessionCount",
-             count(distinct a.id)::integer as "artifactCount", count(distinct f.id)::integer as "fileCount",
-             w.created_at as "createdAt", greatest(w.created_at, coalesce(max(s.last_active_at), w.created_at)) as "updatedAt"
+             (select count(distinct wm.user_id) from workspace_members wm
+               where wm.tenant_id = w.tenant_id and wm.workspace_id = w.id)::integer as "memberCount",
+             coalesce(s.count, 0)::integer as "sessionCount",
+             (select count(*) from artifacts a
+               where a.tenant_id = w.tenant_id and a.workspace_id = w.id)::integer as "artifactCount",
+             (select count(*) from file_objects f
+               where f.tenant_id = w.tenant_id and f.workspace_id = w.id and f.session_id is null)::integer as "fileCount",
+             w.created_at as "createdAt", greatest(w.created_at, coalesce(s.last_active_at, w.created_at)) as "updatedAt"
         from workspaces w join users u on u.tenant_id = w.tenant_id and u.id = w.created_by
-        left join workspace_members wm on wm.tenant_id = w.tenant_id and wm.workspace_id = w.id
-        left join sessions s on s.tenant_id = w.tenant_id and s.workspace_id = w.id
-        left join artifacts a on a.tenant_id = w.tenant_id and a.workspace_id = w.id
-        left join file_objects f on f.tenant_id = w.tenant_id and f.workspace_id = w.id and f.session_id is null
+        left join lateral (
+          select count(*) as count, max(last_active_at) as last_active_at from sessions
+           where tenant_id = w.tenant_id and workspace_id = w.id
+        ) s on true
        where w.tenant_id = ${tenantId} and w.workspace_type = 'team'
-       group by w.id, u.display_name order by w.created_at desc
+       order by w.created_at desc
     `
     return rows.map((row) => ({
       id: row.id, name: row.name, description: row.description, type: 'team',
@@ -473,8 +484,8 @@ export class PostgresOperationsService {
     const offset = (page - 1) * pageSize
     const like = `%${query}%`
     return this.database.begin(async (transaction) => {
-      const [count] = await transaction<{ total: number }[]>`
-        select count(*)::integer as total
+      const filtered = (columns: ReturnType<typeof transaction>) => transaction`
+        select ${columns}
           from operational_events oe
           left join users u on u.tenant_id = oe.tenant_id and u.id = oe.actor_id
          where oe.tenant_id = ${tenantId}
@@ -489,32 +500,24 @@ export class PostgresOperationsService {
                 or coalesce(oe.attempt_id, '') ilike ${like}
                 or oe.safe_context::text ilike ${like})
       `
+      // 总数随本页一起用窗口函数取回：带搜索词时整视图的文本扫描只做一遍，不再计数、取页各扫一遍。
       const rows = await transaction<{
         id: string; occurredAt: Date; actor: string; category: AuditEvent['category']; action: string;
         objectType: string; objectId: string; result: AuditEvent['status']; traceId: string;
-        runId: string | null; attemptId: string | null; safeContext: Record<string, unknown>
+        runId: string | null; attemptId: string | null; safeContext: Record<string, unknown>; total: number
       }[]>`
-        select oe.id, oe.occurred_at as "occurredAt",
+        ${filtered(transaction`oe.id, oe.occurred_at as "occurredAt",
                case when oe.actor_id = 'system' then '系统' else coalesce(u.display_name, oe.actor_id) end as actor,
                oe.category, oe.action, oe.object_type as "objectType", oe.object_id as "objectId", oe.result,
                oe.trace_id as "traceId", oe.run_id as "runId", oe.attempt_id as "attemptId",
-               oe.safe_context as "safeContext"
-          from operational_events oe
-          left join users u on u.tenant_id = oe.tenant_id and u.id = oe.actor_id
-         where oe.tenant_id = ${tenantId}
-           and (${runId ?? null}::text is null or oe.run_id = ${runId ?? null})
-           and (${status} = '' or oe.result = ${status})
-           and (${category} = '' or oe.category = ${category})
-           and (${query} = '' or
-                (case when oe.actor_id = 'system' then '系统' else coalesce(u.display_name, oe.actor_id) end) ilike ${like}
-                or (oe.object_type || ' · ' || oe.object_id) ilike ${like}
-                or oe.trace_id ilike ${like}
-                or coalesce(oe.run_id, '') ilike ${like}
-                or coalesce(oe.attempt_id, '') ilike ${like}
-                or oe.safe_context::text ilike ${like})
+               oe.safe_context as "safeContext", (count(*) over ())::integer as total`)}
          order by oe.occurred_at desc
          limit ${pageSize} offset ${offset}
       `
+      // 翻过最后一页时本页为空、拿不到窗口总数，才单独计数一次。
+      const total = rows[0]?.total ?? (page > 1
+        ? (await transaction<{ total: number }[]>`${filtered(transaction`count(*)::integer as total`)}`)[0]?.total ?? 0
+        : 0)
       return {
         items: rows.map((row) => ({
           id: row.id, time: formatDateTime(row.occurredAt), actor: row.actor, department: 'dsh-work',
@@ -523,7 +526,7 @@ export class PostgresOperationsService {
           traceId: row.traceId, runId: row.runId, attemptId: row.attemptId,
           detail: JSON.stringify(sanitizeSafeMetadata(row.safeContext)),
         })),
-        total: count?.total ?? 0,
+        total,
         page,
         pageSize,
       }

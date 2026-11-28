@@ -549,7 +549,7 @@ export class PostgresContentService {
         left join runs r on r.tenant_id = av.tenant_id and r.id = av.source_run_id
         left join users ru on ru.tenant_id = r.tenant_id and ru.id = r.requested_by
         left join run_attempts ra on ra.tenant_id = r.tenant_id and ra.id = r.current_attempt_id
-        left join agent_versions agv on agv.tenant_id = ra.tenant_id and agv.id = ra.manifest->>'agent_version_id'
+        left join agent_versions agv on agv.tenant_id = ra.tenant_id and agv.id = ra.manifest_agent_version_id
        where a.tenant_id = ${tenantId}
          -- TW-10：团队会话成果对空间成员可见（下方 canReadWorkspaceObject 复核
          -- 移出/归档口径）；个人会话仍限创建者。

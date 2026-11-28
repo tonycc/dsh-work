@@ -346,10 +346,10 @@ export class PostgresUsageAnalyticsService implements UsageAnalyticsQueryPort {
           left join sessions s on s.tenant_id = r.tenant_id and s.id = r.session_id
           left join workspaces w on w.tenant_id = s.tenant_id and w.id = s.workspace_id
           left join agent_versions av on av.tenant_id = r.tenant_id
-                 and av.id = coalesce(ra.manifest->>'agent_version_id', s.agent_version_id)
+                 and av.id = coalesce(ra.manifest_agent_version_id, s.agent_version_id)
           left join agents ag on ag.tenant_id = av.tenant_id and ag.id = av.agent_id
          where r.tenant_id = ${tenantId} and r.created_at  ${inWindow}
-           and coalesce(ra.manifest->>'purpose', '') <> ${RELEASE_TRIAL_PURPOSE}
+           and coalesce(ra.manifest_purpose, '') <> ${RELEASE_TRIAL_PURPOSE}
            and (s.audience = 'workbench' or t.source_type in ('automation', 'agent_routine'))
       ),
       employee_sessions as (
@@ -359,7 +359,7 @@ export class PostgresUsageAnalyticsService implements UsageAnalyticsQueryPort {
            -- 发布试运行的会话不是员工对话。
            and not exists (
              select 1 from runs tr join run_attempts ta on ta.tenant_id = tr.tenant_id and ta.run_id = tr.id
-              where tr.tenant_id = s.tenant_id and tr.session_id = s.id and ta.manifest->>'purpose' = ${RELEASE_TRIAL_PURPOSE}
+              where tr.tenant_id = s.tenant_id and tr.session_id = s.id and ta.manifest_purpose = ${RELEASE_TRIAL_PURPOSE}
            )
       ),
       employee_views as (
