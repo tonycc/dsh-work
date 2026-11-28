@@ -50,6 +50,7 @@
     "test:m5:members:integration": "pnpm --filter @dsh-work/server test:m5:members:integration",
     "test:e2e": "playwright test --project=p0",
     "test:e2e:all": "playwright test",
+    "test:e2e:p1": "playwright test --project=local-auth --project=login-options --project=dingtalk --project=personal --project=project-space --project=mcp-admin --project=skill-review --project=automation --project=agent-principal --project=agent-capabilities --project=agent-routines",
     "check:secrets": "node scripts/check-secrets.mjs",
     "verify": "node scripts/verify.mjs",
     "probe": "node --env-file-if-exists=.env --experimental-strip-types scripts/runtime/probe.ts",

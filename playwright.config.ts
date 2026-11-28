@@ -3,7 +3,8 @@ import { defineConfig, devices, type PlaywrightTestConfig } from '@playwright/te
 // 全部浏览器套件共用这一份配置，每个套件是一个 Playwright project：
 //   pnpm test:e2e                  P0 冒烟（project p0，不连接数据库）
 //   pnpm test:e2e:<套件>           单个 P1 套件，例如 pnpm test:e2e:dingtalk
-//   pnpm test:e2e:all              全部套件一次运行（CI），各套件在不同 worker 上并行
+//   pnpm test:e2e:p1               全部 P1 套件，各套件在不同 worker 上并行（CI 与 P0 分两台机器跑）
+//   pnpm test:e2e:all              全部套件一次运行
 // 每个套件有自己的后端进程、Vite 与可丢弃数据库（P0 是内存夹具），端口互不重叠，所以套件之间可以并行；
 // 套件内部仍按原来的方式串行（project 级 workers: 1），共享同一份夹具数据的用例不会互相干扰。
 // 只启动被选中套件的服务：按命令行的 --project 过滤，没有 --project 时启动全部。
@@ -242,8 +243,9 @@ export default defineConfig({
   testDir: './e2e',
   fullyParallel: false,
   retries: 0,
-  // 每个套件 1 个 worker（见 projects[].workers），多个套件同时运行。CI 机器 4 核。
-  workers: process.env.CI ? 4 : '50%',
+  // 每个套件 1 个 worker（见 projects[].workers），多个套件同时运行。CI 机器 4 核：同时运行的套件
+  // 越多，各自的 Vite 冷编译越抢 CPU，长用例会逼近超时，所以 CI 最多 3 个套件同时运行。
+  workers: process.env.CI ? 3 : '50%',
   reporter: process.env.CI ? [['github'], ['html', { open: 'never' }]] : 'list',
   use: {
     trace: 'retain-on-failure',

@@ -105,8 +105,13 @@ jobs:
       - name: Run all server integration suites
         run: pnpm test:integration
 
+  # P0 冒烟（内存夹具，套件内串行）单独一台机器；11 个 P1 套件在另一台机器上并行（每套各自的服务与可丢弃数据库）。
   browser:
-    name: Browser tests
+    name: Browser tests (${{ matrix.suite }})
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [p0, p1]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -144,18 +149,22 @@ jobs:
       - name: Install Playwright Chromium
         run: pnpm exec playwright install --with-deps chromium
 
-      # 一份 playwright.config.ts 包含 P0 冒烟与全部 P1 套件（每个套件一个 project，各自的服务与可丢弃数据库），
-      # 套件之间在不同 worker 上并行，套件内串行。钉钉套件使用假钉钉开放平台，不是真实钉钉验收。
-      - name: Run all browser suites (P0 smoke and P1 journeys)
-        run: pnpm test:e2e:all
+      # 全部套件写在一份 playwright.config.ts 里，每个套件一个 project。钉钉套件使用假钉钉开放平台，不是真实钉钉验收。
+      - name: Run P0 browser smoke tests
+        if: matrix.suite == 'p0'
+        run: pnpm test:e2e
+
+      - name: Run P1 browser journeys
+        if: matrix.suite == 'p1'
+        run: pnpm test:e2e:p1
 
       # 任一浏览器套件失败时上传 Playwright 结果，便于事后定位偶发失败：只为失败的用例保留 trace 与截图，
-      # HTML 报告包含全部套件。内容均为测试夹具的合成数据与 CI 专用身份。
+      # HTML 报告包含这台机器上运行的全部套件。内容均为测试夹具的合成数据与 CI 专用身份。
       - name: Upload Playwright results on failure
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: browser-test-results-${{ github.run_attempt }}
+          name: browser-test-results-${{ matrix.suite }}-${{ github.run_attempt }}
           path: |
             test-results/
             playwright-report/

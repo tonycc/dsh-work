@@ -6,7 +6,7 @@ import { uncoveredConfigFiles } from '../release/release-bundle.mjs'
 // CI runs server tests by file name (scripts/testing/run-server-tests.mjs), so wiring is checked
 // at the level of these entry points rather than per suite.
 const qualityScripts = ['verify', 'check:secrets', 'typecheck', 'lint', 'build', 'test:scripts', 'test:unit', 'test:m5:frontend']
-const ciScripts = ['ci:static', 'ci:unit', 'test:integration', 'test:e2e:all']
+const ciScripts = ['ci:static', 'ci:unit', 'test:integration', 'test:e2e', 'test:e2e:p1']
 
 /** pnpm commands a script runs, following nested pnpm scripts. */
 function expandScripts(scripts, name, seen = new Set()) {
@@ -48,15 +48,26 @@ export function checkProject(check) {
     check.assert(typeof scripts[name] === 'string', `package.json 缺少 ${name}`)
     check.assert(quality.has(name), `${name} 未接入 ci:check`)
   }
-  // 浏览器套件都是 playwright.config.ts 的 project：CI 不带 --project 跑整份配置时，
-  // 单套件命令（playwright test --project=<套件>）算作已接入，但套件名必须真实存在于配置中。
+  // 浏览器套件都是 playwright.config.ts 的 project。一条 test:e2e* 命令选中的套件只要都在 CI 运行的
+  // playwright 命令里（或 CI 不带 --project 跑整份配置），就算已接入；引用的套件名必须真实存在于配置中。
   const playwrightConfig = check.read('playwright.config.ts')
-  const ciRunsAllProjects = ciCommands.some(name => /^playwright test(?!.*--project)/.test(scripts[name] ?? ''))
+  const configProjects = [...playwrightConfig.matchAll(/(?:\bname: |adminMcpSuite\()'([\w-]+)'/g)].map(match => match[1])
+  const playwrightProjects = command => /^playwright test\b/.test(command ?? '')
+    ? [...command.matchAll(/--project=([\w-]+)/g)].map(match => match[1])
+    : undefined
+  const selected = command => {
+    const projects = playwrightProjects(command)
+    return projects && !projects.length ? configProjects : projects
+  }
+  const ciProjects = new Set(ciCommands.flatMap(name => selected(scripts[name]) ?? []))
   for (const name of [...ciScripts, ...Object.keys(scripts).filter(key => key.startsWith('test:e2e'))]) {
     check.assert(typeof scripts[name] === 'string', `package.json 缺少 ${name}`)
-    const project = (scripts[name] ?? '').match(/^playwright test --project=([\w-]+)$/)?.[1]
-    if (project) check.assert(playwrightConfig.includes(`'${project}'`), `${name} 引用的浏览器套件 ${project} 不在 playwright.config.ts 中`)
-    check.assert(ciCommands.includes(name) || (project && ciRunsAllProjects), `${name} 未接入 GitHub CI`)
+    const projects = selected(scripts[name])
+    for (const project of projects ?? []) {
+      check.assert(configProjects.includes(project), `${name} 引用的浏览器套件 ${project} 不在 playwright.config.ts 中`)
+    }
+    const covered = projects?.length && projects.every(project => ciProjects.has(project))
+    check.assert(ciCommands.includes(name) || covered, `${name} 未接入 GitHub CI`)
   }
   for (const name of [...quality, ...ci]) {
     if (['install', 'exec'].includes(name)) continue
