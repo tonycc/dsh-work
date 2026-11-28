@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import type { AgentRecommendationView, ChatMessage, RunStep, SkillDraftView, TaskRun, TaskRunError } from '../../../domain/types.ts'
 import { deriveTaskResult, type TaskResult, type TaskResultEvidence, type TaskResultOutcome } from '../../../domain/task-result.ts'
 import type { DatabaseClient, DatabaseTransaction } from '../../../infrastructure/postgres/database.ts'
+import type postgres from 'postgres'
 import type { JsonObject, RunState } from '../../../domain/run-state.ts'
 import { PostgresWorkspaceService, readableWorkspacePredicate } from './postgres-workspace-service.ts'
 import { authorizationDenied, requestInvalid } from '../../../domain/authorization-errors.ts'
@@ -973,7 +974,7 @@ export class PostgresConversationRepository {
        order by r.created_at desc
        limit 50
     `
-    return Promise.all(rows.map((row) => this.mapTask(row)))
+    return this.mapTasks(rows)
   }
 
   /**
@@ -1023,7 +1024,7 @@ export class PostgresConversationRepository {
 
   async getTask(runId: string, userId: string): Promise<TaskRun | null> {
     const row = await this.findTaskRow(runId, userId)
-    return row ? this.mapTask(row, userId) : null
+    return row ? (await this.mapTasks([row], userId))[0] ?? null : null
   }
 
   /** A retry must not repeat an external action that is unreconciled or reconciled as already applied. */
@@ -1183,8 +1184,30 @@ export class PostgresConversationRepository {
       if (!boundary) throw requestInvalid('无效的消息分页游标')
       beforeValid = true
     }
-    const rows = await this.database<MessageRow[]>`
+    const rows = await this.queryMessageRows(
+      this.database`m.session_id = ${sessionId}
+         and ${options.runId ? this.database`m.run_id = ${options.runId}` : this.database`true`}
+         and ${beforeValid
+           ? this.database`(m.created_at, m.id) < (
+               select b.created_at, b.id from messages b
+                where b.tenant_id = ${tenantId} and b.session_id = ${sessionId}
+                  and b.id = ${options.beforeMessageId}
+             )`
+           : this.database`true`}`,
+      this.database`order by m.created_at desc, m.id desc
+       ${options.limit ? this.database`limit ${options.limit}` : this.database``}`,
+    )
+    return rows.reverse()
+  }
+
+  /**
+   * 消息行的统一查询（作者、触发 Run 发起人与执行 Agent 归因），供单会话分页与
+   * 任务列表批量装载共用；where 只追加过滤条件，租户与角色边界固定在这里。
+   */
+  private queryMessageRows(where: postgres.Fragment, tail: postgres.Fragment) {
+    return this.database<Array<MessageRow & { sessionId: string }>>`
       select m.id, m.role, m.content, m.created_at as "createdAt", m.run_id as "runId",
+             m.session_id as "sessionId",
              m.not_sent_to_model as "notSentToModel",
              coalesce(m.sender_user_id, r.requested_by) as "senderId",
              su.display_name as "senderName",
@@ -1203,20 +1226,33 @@ export class PostgresConversationRepository {
         left join agent_versions av on av.tenant_id = m.tenant_id
           and av.id = coalesce(ra.manifest ->> 'agent_version_id', ms.agent_version_id)
         left join agents ag on ag.tenant_id = av.tenant_id and ag.id = av.agent_id
-       where m.tenant_id = ${tenantId} and m.session_id = ${sessionId}
+       where m.tenant_id = ${tenantId}
          and m.role in ('user', 'assistant')
-         and ${options.runId ? this.database`m.run_id = ${options.runId}` : this.database`true`}
-         and ${beforeValid
-           ? this.database`(m.created_at, m.id) < (
-               select b.created_at, b.id from messages b
-                where b.tenant_id = ${tenantId} and b.session_id = ${sessionId}
-                  and b.id = ${options.beforeMessageId}
-             )`
-           : this.database`true`}
-       order by m.created_at desc, m.id desc
-       ${options.limit ? this.database`limit ${options.limit}` : this.database``}
+         and ${where}
+       ${tail}
     `
-    return rows.reverse()
+  }
+
+  /**
+   * 任务列表/详情的消息批量装载：个人 Run 取所属会话的完整多轮消息（AC-23），
+   * 团队 Run 只取该 Run 的消息（评审 M8）。一次查询覆盖全部行，按 (created_at, id) 升序。
+   */
+  private async loadTaskMessages(rows: TaskRow[]): Promise<Map<string, MessageRow[]>> {
+    const byRun = new Map<string, MessageRow[]>()
+    if (!rows.length) return byRun
+    const personalSessionIds = [...new Set(rows.filter(row => row.workspaceType !== 'team').map(row => row.sessionId))]
+    const teamRunIds = rows.filter(row => row.workspaceType === 'team').map(row => row.id)
+    const messages = await this.queryMessageRows(
+      this.database`(${personalSessionIds.length ? this.database`m.session_id = any(${personalSessionIds})` : this.database`false`}
+         or ${teamRunIds.length ? this.database`m.run_id = any(${teamRunIds})` : this.database`false`})`,
+      this.database`order by m.created_at asc, m.id asc`,
+    )
+    for (const row of rows) {
+      byRun.set(row.id, row.workspaceType === 'team'
+        ? messages.filter(message => message.sessionId === row.sessionId && message.runId === row.id)
+        : messages.filter(message => message.sessionId === row.sessionId))
+    }
+    return byRun
   }
 
   /**
@@ -1425,94 +1461,134 @@ export class PostgresConversationRepository {
     row: TaskRow,
     committedMessageIds: ReadonlySet<string>,
   ): Promise<TaskResultEvidence> {
-    const events = row.currentAttemptId
-      ? await this.database<EventRow[]>`
+    const evidence = await this.loadTaskResultEvidenceBatch([row], new Map([[row.id, committedMessageIds]]))
+    return evidence.get(row.id)!
+  }
+
+  /**
+   * loadTaskResultEvidence 的批量形态（任务列表 N+1 治理）：各类证据按
+   * run_id / attempt_id = any(...) 一次取回，再按 Run 与其当前 Attempt 分组，
+   * 口径与单条完全一致——只认当前 Attempt 的事件、成果、引用与操作。
+   */
+  private async loadTaskResultEvidenceBatch(
+    rows: TaskRow[],
+    committedByRun: ReadonlyMap<string, ReadonlySet<string>>,
+  ): Promise<Map<string, TaskResultEvidence>> {
+    const withAttempt = rows.filter((row): row is TaskRow & { currentAttemptId: string } => row.currentAttemptId !== null)
+    const runIds = withAttempt.map(row => row.id)
+    const attemptIds = withAttempt.map(row => row.currentAttemptId)
+    const events = attemptIds.length
+      ? await this.database<Array<EventRow & { attemptId: string }>>`
           select id, event_type as "eventType", display_message as "displayMessage",
-                 safe_metadata as "safeMetadata", occurred_at as "occurredAt"
+                 safe_metadata as "safeMetadata", occurred_at as "occurredAt", attempt_id as "attemptId"
             from run_events
-           where tenant_id = ${tenantId} and attempt_id = ${row.currentAttemptId}
+           where tenant_id = ${tenantId} and attempt_id = any(${attemptIds})
              and safe_metadata->>'late' is distinct from 'true'
-           order by sequence asc
+           order by attempt_id asc, sequence asc
         `
       : []
-    const artifacts = row.currentAttemptId
-      ? await this.database<ArtifactRow[]>`
+    const artifacts = runIds.length
+      ? await this.database<Array<ArtifactRow & { sourceRunId: string; sourceAttemptId: string }>>`
           select a.id, av.id as "artifactVersionId", a.name, a.artifact_type as "artifactType", av.version_no as version,
                  f.size_bytes as "sizeBytes", av.created_at as "createdAt", a.workspace_id as "workspaceId",
                  f.id as "fileId",
-                 ${this.canReferenceSql()} as "canReference", ${artifactTextPreviewColumns(this.database)}
+                 ${this.canReferenceSql()} as "canReference", ${artifactTextPreviewColumns(this.database)},
+                 av.source_run_id as "sourceRunId", av.source_attempt_id as "sourceAttemptId"
             from artifact_versions av
             join artifacts a on a.tenant_id = av.tenant_id and a.id = av.artifact_id
             join file_objects f on f.tenant_id = av.tenant_id and f.id = av.file_object_id
-           where av.tenant_id = ${tenantId} and av.source_run_id = ${row.id}
-             and av.source_attempt_id = ${row.currentAttemptId}
+           where av.tenant_id = ${tenantId} and av.source_run_id = any(${runIds})
+             and av.source_attempt_id = any(${attemptIds})
            order by av.version_no desc
         `
       : []
-    const sources = row.currentAttemptId
-      ? await this.database<SourceRow[]>`
+    const sources = runIds.length
+      ? await this.database<Array<SourceRow & { runId: string; attemptId: string }>>`
           select id, title, file_name as "fileName", knowledge_base_name as "knowledgeBaseName",
-                 document_updated_at as "updatedAt", excerpt
+                 document_updated_at as "updatedAt", excerpt, run_id as "runId", attempt_id as "attemptId"
             from run_knowledge_citations
-           where tenant_id = ${tenantId} and run_id = ${row.id}
-             and attempt_id = ${row.currentAttemptId}
+           where tenant_id = ${tenantId} and run_id = any(${runIds})
+             and attempt_id = any(${attemptIds})
            order by ordinal
         `
       : []
-    const toolAudits = row.currentAttemptId
-      ? await this.database<ToolAuditRow[]>`
-          select id, parameter_summary as "parameterSummary", result, occurred_at as "occurredAt"
+    const toolAudits = attemptIds.length
+      ? await this.database<Array<ToolAuditRow & { attemptId: string }>>`
+          select id, parameter_summary as "parameterSummary", result, occurred_at as "occurredAt",
+                 attempt_id as "attemptId"
             from tool_audit_logs
-           where tenant_id = ${tenantId} and attempt_id = ${row.currentAttemptId}
+           where tenant_id = ${tenantId} and attempt_id = any(${attemptIds})
            order by occurred_at asc
         `
       : []
-    const unknownOperations = row.currentAttemptId
-      ? await this.database<Array<{ id: string; actionRef: string }>>`
-          select id, action_ref as "actionRef" from task_operations
-           where tenant_id = ${tenantId} and run_id = ${row.id}
-             and attempt_id = ${row.currentAttemptId} and status = 'unknown'
+    const unknownOperations = runIds.length
+      ? await this.database<Array<{ id: string; actionRef: string; runId: string; attemptId: string }>>`
+          select id, action_ref as "actionRef", run_id as "runId", attempt_id as "attemptId" from task_operations
+           where tenant_id = ${tenantId} and run_id = any(${runIds})
+             and attempt_id = any(${attemptIds}) and status = 'unknown'
           union all
-          select id, concat('MCP ', capability_name, ' (', connector_id, ')') as "actionRef"
+          select id, concat('MCP ', capability_name, ' (', connector_id, ')') as "actionRef",
+                 run_id as "runId", attempt_id as "attemptId"
             from mcp_invocation_audits
-           where tenant_id = ${tenantId} and run_id = ${row.id}
-             and attempt_id = ${row.currentAttemptId} and result = 'unknown' and resolved_result is null
+           where tenant_id = ${tenantId} and run_id = any(${runIds})
+             and attempt_id = any(${attemptIds}) and result = 'unknown' and resolved_result is null
         `
       : []
-    const appliedOperations = row.currentAttemptId
-      ? await this.database<Array<{ id: string; actionRef: string }>>`
-          select id, concat('MCP ', capability_name, ' (', connector_id, ')') as "actionRef"
+    const appliedOperations = runIds.length
+      ? await this.database<Array<{ id: string; actionRef: string; runId: string; attemptId: string }>>`
+          select id, concat('MCP ', capability_name, ' (', connector_id, ')') as "actionRef",
+                 run_id as "runId", attempt_id as "attemptId"
             from mcp_invocation_audits
-           where tenant_id = ${tenantId} and run_id = ${row.id}
-             and attempt_id = ${row.currentAttemptId} and result = 'unknown' and resolved_result = 'success'
+           where tenant_id = ${tenantId} and run_id = any(${runIds})
+             and attempt_id = any(${attemptIds}) and result = 'unknown' and resolved_result = 'success'
         `
       : []
-    return {
-      run: { id: row.id, status: row.status, updatedAt: row.updatedAt },
-      attemptId: row.currentAttemptId,
-      events,
-      committedMessageIds,
-      artifacts: artifacts.map(artifact => mapArtifactEvidenceRow(artifact, row.id)),
-      unknownOperations,
-      appliedOperations,
-      sources: sources.map(source => ({
-        id: source.id,
-        type: 'knowledge' as const,
-        title: source.title,
-        description: source.excerpt,
-        // 引用快照（功能规则第 11 节）：WeKnora 文档没有版本号与数据范围。
-        fileName: source.fileName || undefined,
-        knowledgeBaseName: source.knowledgeBaseName,
-        updatedAt: formatDate(source.updatedAt),
-      })),
-      toolAudits: toolAudits.map(mapToolAuditRow),
-      runError: row.status === 'failed' ? toRunError(row.id, row.errorCode) : null,
+    const result = new Map<string, TaskResultEvidence>()
+    for (const row of rows) {
+      const attemptId = row.currentAttemptId
+      const ofRun = <T extends { runId: string; attemptId: string }>(items: T[]) =>
+        attemptId ? items.filter(item => item.runId === row.id && item.attemptId === attemptId) : []
+      result.set(row.id, {
+        run: { id: row.id, status: row.status, updatedAt: row.updatedAt },
+        attemptId,
+        events: attemptId
+          ? events.filter(event => event.attemptId === attemptId).map(({ attemptId: _attemptId, ...event }) => event)
+          : [],
+        committedMessageIds: committedByRun.get(row.id) ?? new Set(),
+        artifacts: attemptId
+          ? artifacts
+              .filter(artifact => artifact.sourceRunId === row.id && artifact.sourceAttemptId === attemptId)
+              .map(artifact => mapArtifactEvidenceRow(artifact, row.id))
+          : [],
+        unknownOperations: ofRun(unknownOperations).map(({ id, actionRef }) => ({ id, actionRef })),
+        appliedOperations: ofRun(appliedOperations).map(({ id, actionRef }) => ({ id, actionRef })),
+        sources: ofRun(sources).map(source => ({
+          id: source.id,
+          type: 'knowledge' as const,
+          title: source.title,
+          description: source.excerpt,
+          // 引用快照（功能规则第 11 节）：WeKnora 文档没有版本号与数据范围。
+          fileName: source.fileName || undefined,
+          knowledgeBaseName: source.knowledgeBaseName,
+          updatedAt: formatDate(source.updatedAt),
+        })),
+        toolAudits: attemptId
+          ? toolAudits.filter(audit => audit.attemptId === attemptId).map(mapToolAuditRow)
+          : [],
+        runError: row.status === 'failed' ? toRunError(row.id, row.errorCode) : null,
+      })
     }
+    return result
   }
 
 
   /** 会话内各 Run 的状态与归因（按创建时间），共享线程的执行记录与个人多轮详情的历史轮次共用。 */
   private async loadSessionRuns(sessionId: string) {
+    return this.loadRunsForSessions([sessionId])
+  }
+
+  private async loadRunsForSessions(sessionIds: string[]) {
+    if (!sessionIds.length) return []
     return this.database<{
       id: string
       status: RunState
@@ -1520,14 +1596,15 @@ export class PostgresConversationRepository {
       requesterName: string
       stoppedByName: string | null
       createdAt: Date
+      sessionId: string
     }[]>`
-      select r.id, r.status, r.requested_by as "requestedBy",
+      select r.id, r.status, r.requested_by as "requestedBy", r.session_id as "sessionId",
              ru.display_name as "requesterName", r.created_at as "createdAt",
              case when r.status = 'cancelled' then stopper.display_name end as "stoppedByName"
         from runs r
         join users ru on ru.tenant_id = r.tenant_id and ru.id = r.requested_by
         left join users stopper on stopper.tenant_id = r.tenant_id and stopper.id = r.cancel_requested_by
-       where r.tenant_id = ${tenantId} and r.session_id = ${sessionId}
+       where r.tenant_id = ${tenantId} and r.session_id = any(${sessionIds})
        order by r.created_at asc
     `
   }
@@ -1583,30 +1660,76 @@ export class PostgresConversationRepository {
     return byRun
   }
 
-  private async mapTask(row: TaskRow, viewerUserId?: string): Promise<TaskRun> {
+  /**
+   * 任务装配（列表与详情共用）：消息、证据、成果、附件、历史轮次状态全部按
+   * 整批 Run 一次装载后在内存分组，SQL 条数不随 Run 数增长（GET /tasks N+1 治理）。
+   */
+  private async mapTasks(rows: TaskRow[], viewerUserId?: string): Promise<TaskRun[]> {
+    if (!rows.length) return []
     // 团队 Run 详情只取该 Run 的消息（评审 M8）：共享会话里全会话加载会把
     // 几百条无关讨论一并载入。个人 Run 详情保持 AC-23 原契约——返回会话的
     // 完整多轮消息历史，不按 Run 收窄（评审中3）。
-    const messages = row.workspaceType === 'team'
-      ? await this.loadSessionMessages(row.sessionId, { runId: row.id })
-      : await this.loadSessionMessages(row.sessionId)
-    const runMessages = messages.filter((message) => message.runId === row.id)
-    const committedMessageIds = new Set(
-      runMessages.filter(message => message.role === 'assistant').map(message => message.id),
-    )
-    const evidence = await this.loadTaskResultEvidence(row, committedMessageIds)
-    const threadRunIds = [...new Set(
-      messages.map(message => message.runId).filter((id): id is string => Boolean(id)),
-    )]
+    const messagesByRun = await this.loadTaskMessages(rows)
+    const contexts = rows.map((row) => {
+      const messages = messagesByRun.get(row.id) ?? []
+      const runMessages = messages.filter((message) => message.runId === row.id)
+      const threadRunIds = [...new Set(
+        messages.map(message => message.runId).filter((id): id is string => Boolean(id)),
+      )]
+      const multiTurnPersonal = row.workspaceType === 'personal' && threadRunIds.length > 1
+      return { row, messages, runMessages, threadRunIds, multiTurnPersonal }
+    })
+    const evidenceByRun = await this.loadTaskResultEvidenceBatch(rows, new Map(contexts.map(context => [
+      context.row.id,
+      new Set(context.runMessages.filter(message => message.role === 'assistant').map(message => message.id)),
+    ])))
     // 个人会话详情含整段多轮消息：装载各 Run 当前 Attempt 的成果，供前端按 runId 挂卡。
     // 本轮核验仍只用 evidence → result.artifacts。团队详情消息已按 Run 收窄，与本轮一致。
-    const threadArtifacts = row.workspaceType === 'personal' && threadRunIds.length > 1
-      ? (await this.loadThreadArtifactsForRuns(threadRunIds)).map(artifact => mapArtifactRow(artifact, artifact.sourceRunId))
-      : evidence.artifacts.map(item => item.artifact)
-    const attachmentsByRun = await this.loadRunAttachments([...new Set([row.id, ...threadRunIds])])
+    const threadArtifactRows = await this.loadThreadArtifactsForRuns([...new Set(
+      contexts.filter(context => context.multiTurnPersonal).flatMap(context => context.threadRunIds),
+    )])
+    const attachmentsByRun = await this.loadRunAttachments([...new Set(
+      contexts.flatMap(context => [context.row.id, ...context.threadRunIds]),
+    )])
     // 个人多轮详情：各轮的执行状态，停止或失败且没有回复的历史轮次在其问题下标出，不随新一轮消失。
-    const threadRuns = row.workspaceType === 'personal' && threadRunIds.length > 1
-      ? (await this.loadSessionRuns(row.sessionId)).map(run => ({ runId: run.id, status: mapStatus(run.status), stoppedBy: run.stoppedByName }))
+    const sessionRuns = await this.loadRunsForSessions([...new Set(
+      contexts.filter(context => context.multiTurnPersonal).map(context => context.row.sessionId),
+    )])
+    return Promise.all(contexts.map(context => this.assembleTask(context, {
+      evidence: evidenceByRun.get(context.row.id)!,
+      threadArtifactRows,
+      attachmentsByRun,
+      sessionRuns,
+    }, viewerUserId)))
+  }
+
+  private async assembleTask(
+    { row, messages, runMessages, threadRunIds, multiTurnPersonal }: {
+      row: TaskRow
+      messages: MessageRow[]
+      runMessages: MessageRow[]
+      threadRunIds: string[]
+      multiTurnPersonal: boolean
+    },
+    loaded: {
+      evidence: TaskResultEvidence
+      threadArtifactRows: Array<ArtifactRow & { sourceRunId: string }>
+      attachmentsByRun: Map<string, string[]>
+      sessionRuns: Awaited<ReturnType<PostgresConversationRepository['loadRunsForSessions']>>
+    },
+    viewerUserId?: string,
+  ): Promise<TaskRun> {
+    const { evidence, attachmentsByRun } = loaded
+    const threadRunIdSet = new Set(threadRunIds)
+    const threadArtifacts = multiTurnPersonal
+      ? loaded.threadArtifactRows
+          .filter(artifact => threadRunIdSet.has(artifact.sourceRunId))
+          .map(artifact => mapArtifactRow(artifact, artifact.sourceRunId))
+      : evidence.artifacts.map(item => item.artifact)
+    const threadRuns = multiTurnPersonal
+      ? loaded.sessionRuns
+          .filter(run => run.sessionId === row.sessionId)
+          .map(run => ({ runId: run.id, status: mapStatus(run.status), stoppedBy: run.stoppedByName }))
       : undefined
     // 推荐只在个人对话中装配；列表不装载，只有查看单个会话详情时按查看者当前可用同事计算。
     const recommendations = viewerUserId && this.recommendations && row.workspaceType === 'personal'
