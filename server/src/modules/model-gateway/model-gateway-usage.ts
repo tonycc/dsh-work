@@ -63,7 +63,8 @@ export class UsageAccumulator {
     const payload = line.slice(5).trim()
     const errorEvent = this.nextEventIsError
     this.nextEventIsError = false
-    if (!payload || payload === '[DONE]' || (!errorEvent && !payload.includes('usage') && !payload.includes('"error"'))) return
+    // 只有带用量对象的帧才需要解析：OpenAI 兼容流（含 DeepSeek）每帧都带 `"usage":null`，按子串判断会让每帧都 JSON.parse。
+    if (!payload || payload === '[DONE]' || (!errorEvent && !USAGE_OBJECT.test(payload) && !payload.includes('"error"'))) return
     let event: unknown
     try {
       event = JSON.parse(payload)
@@ -75,7 +76,7 @@ export class UsageAccumulator {
       this.streamError ??= streamErrorCode(event)
       return
     }
-    if (!payload.includes('usage')) return
+    if (!USAGE_OBJECT.test(payload)) return
     // Anthropic：message_start 带 message.usage，message_delta 带 usage（输出为累计值）。
     if (isRecord(event['message']) && isRecord(event['message']['usage'])) {
       this.acceptUsage(event['message']['usage'], 'anthropic')
@@ -109,6 +110,9 @@ export class UsageAccumulator {
     if (cacheRead !== undefined) this.usage.cacheReadTokens = cacheRead
   }
 }
+
+/** JSON 中取值为对象的 `usage` 键（`"usage":{`），不匹配 `"usage":null` 或正文里转义后的同名文字。 */
+const USAGE_OBJECT = /"usage"\s*:\s*\{/
 
 function streamErrorCode(event: Record<string, unknown>): string {
   const error = isRecord(event['error']) ? event['error'] : event
