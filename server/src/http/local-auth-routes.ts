@@ -1,7 +1,7 @@
 import type { IncomingMessage } from 'node:http'
 
 import { IdentityAccessError } from '../modules/identity/request-security.ts'
-import type { LocalAuthService, LocalAccountInput } from '../modules/identity/local-auth-service.ts'
+import { parseMobileDevice, type LocalAuthService, type LocalAccountInput } from '../modules/identity/local-auth-service.ts'
 import { envelope, readJsonBody, requireRequestIdentity, type Router } from './router.ts'
 
 export function registerLocalAuthRoutes(router: Router, authentication: LocalAuthService) {
@@ -33,6 +33,16 @@ export function registerLocalAuthRoutes(router: Router, authentication: LocalAut
       return result.dingtalkBinding ? { location: result.location, binding: result.dingtalkBinding } : { location: result.location }
     })
   }
+
+  // Android App 登录（移动端规划 M0）：签发与浏览器并存的 App 会话。返回 JSON 而不是跳转地址，
+  // Cookie 仍由 Set-Cookie 下发，App 原样写入 WebView 的 Cookie 存储，不解析 Cookie 名称。
+  router.post('/auth/workbench/mobile/login', async (request, _context, response) => {
+    const input = await readLocalBody<{ username: unknown; password: unknown; deviceId?: unknown; deviceName?: unknown }>(request)
+    const device = parseMobileDevice(input)
+    const result = await authentication.login(request, 'workbench', { username: input.username, password: input.password }, { device })
+    response.setHeader('Set-Cookie', result.sessionCookie)
+    return { mustChangePassword: result.mustChangePassword, expiresInSeconds: result.expiresInSeconds }
+  })
 
   const base = '/api/admin/v1/identity/users'
   router.post('/api/admin/v1/identity/login-account/check', async (request, context) => {

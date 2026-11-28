@@ -43,13 +43,14 @@ DSH_WORK_COOKIE_SECURE=false
 - 首次登录（含管理员重置后）完成改密后，员工端和管理端均直接返回原访问页面，无需再次登录。改密与会话轮换在同一事务内完成：撤销所有旧会话，只为当前门户签发新会话；失败时不签发会话、不跳转。
 - 每次 API 请求重新读取当前账号状态及本地授权。停用、密码变更和会话撤销立即阻止旧 Session；撤权不等待会话自然到期。
 - **钉钉会话来源（钉钉接入方案 4.3，DT-S1）：** 在钉钉容器内免登签发的是同一独立账号的会话，来源记为 `dingtalk`（`RequestIdentity.identityProvider`），会话上保存 `binding_id`，校验时要求该绑定仍有效、账号有效，不要求密码凭据；默认 12 小时（平台管理员在管理端“平台配置 › 登录与钉钉”中调整），过期后在钉钉内自动重新免登。钉钉会话不能用于修改密码。沿用员工端会话 Cookie 名。
-- **按来源撤销：** 钉钉免登只撤销该账号此前的 `dingtalk` 会话；密码登录不撤销 `dingtalk` 会话，手机钉钉与桌面浏览器的会话并存。退出登录、解绑、改绑、停用、员工改密与管理员重置密码撤销全部来源的会话；管理员重置密码与停用账号同时使钉钉绑定失效，员工自己改密时绑定保留。钉钉内首次登录即绑定的流程与拒绝情形见[钉钉接入方案](../design/dingtalk-integration-plan.md) 4.2；同一账号在钉钉内的尝试另按钉钉 `userid` 限流（15 分钟 30 次）。
+- **Android App 会话来源（[移动端方案](../design/android-app-plan.md) M0）：** App 经 `POST /auth/workbench/mobile/login`（账号、密码、`deviceId`、可选 `deviceName`）登录，只用于员工端，来源记为 `mobile-app`，会话上保存设备标识与名称；返回 `{ mustChangePassword, expiresInSeconds }`，Cookie 与网页相同由 `Set-Cookie` 下发（App 原样写入 WebView，不依赖 Cookie 名）。校验规则与密码会话相同；有效期暂用“登录会话有效期”。App 内可修改密码，改密后为本机换发新的 App 会话。
+- **按来源撤销：** 钉钉免登只撤销该账号此前的 `dingtalk` 会话；浏览器密码登录只撤销此前的浏览器密码会话，手机钉钉、App 与桌面浏览器的会话并存。App 重新登录只替换同一 `deviceId` 的旧 App 会话；App 内退出只撤销本机会话；浏览器或钉钉内退出撤销浏览器与钉钉会话，不撤销 App 会话。解绑、改绑、停用、员工改密与管理员重置密码撤销全部来源的会话；管理员重置密码与停用账号同时使钉钉绑定失效，员工自己改密时绑定保留。钉钉内首次登录即绑定的流程与拒绝情形见[钉钉接入方案](../design/dingtalk-integration-plan.md) 4.2；同一账号在钉钉内的尝试另按钉钉 `userid` 限流（15 分钟 30 次）。
 - 最后一位有效且已开通独立登录的平台管理员不能被停用或撤去平台管理员角色。没有登录账号的种子账号不计入兜底管理员。
 - 本期忘记密码由另一位平台管理员重置，不包含邮箱找回、短信或 MFA。
 
 ## 接口和验证
 
-接口见 `server/src/http/local-auth-routes.ts`、`server/src/http/session-routes.ts` 与 `server/src/http/admin/`。独立认证沿用 `0077_local_identity.sql` 的凭据、初始化账本、限流表和会话提供方字段，`0078_local_login_accounts.sql` 扩展账号字段约束以支持邮箱与手机号，保留已有用户名、身份和授权；`0117_dingtalk_account_bindings.sql` 新增钉钉绑定、待绑定/代绑确认凭证与会话 `binding_id`，并把会话来源扩展为 `dingtalk`；`0129_remove_ai_hub_login.sql` 删除 AI Hub 会话来源、令牌列和相关表，`users.identity_provider` 只允许 `local`。
+接口见 `server/src/http/local-auth-routes.ts`、`server/src/http/session-routes.ts` 与 `server/src/http/admin/`。独立认证沿用 `0077_local_identity.sql` 的凭据、初始化账本、限流表和会话提供方字段，`0078_local_login_accounts.sql` 扩展账号字段约束以支持邮箱与手机号，保留已有用户名、身份和授权；`0117_dingtalk_account_bindings.sql` 新增钉钉绑定、待绑定/代绑确认凭证与会话 `binding_id`，并把会话来源扩展为 `dingtalk`；`0129_remove_ai_hub_login.sql` 删除 AI Hub 会话来源、令牌列和相关表，`users.identity_provider` 只允许 `local`。`0141_mobile_app_sessions.sql` 增加 `mobile-app` 会话来源与会话上的 `device_id`、`device_name`。
 
 ```bash
 pnpm test:local-auth

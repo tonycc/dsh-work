@@ -3,7 +3,7 @@ import type { IncomingMessage } from 'node:http'
 import type { UserProfile } from '../../domain/types.ts'
 
 export type ApiAudience = 'workbench' | 'admin'
-export type IdentityProvider = 'prototype-sso' | 'local-password' | 'dingtalk'
+export type IdentityProvider = 'prototype-sso' | 'local-password' | 'dingtalk' | 'mobile-app'
 
 /** Business permissions are defined and evaluated only by dsh-work. */
 export const LOCAL_PERMISSIONS = {

@@ -836,6 +836,9 @@ Nginx 示例（域名、证书路径与上游地址按实际替换；上游证�
 # 按客户端 IP；NAT 后多人共用，额度按办公室规模调整。
 limit_req_zone $binary_remote_addr zone=dsh_work_password:10m rate=60r/m;
 limit_req_zone $binary_remote_addr zone=dsh_work_dingtalk:10m rate=300r/m;
+limit_req_zone $binary_remote_addr zone=dsh_work_telemetry:10m rate=120r/m;
+# 每个客户端 IP 的并发连接上限：事件流是长连接，按办公室规模留余量。
+limit_conn_zone $binary_remote_addr zone=dsh_work_conn:10m;
 
 upstream dsh_work_workbench {
   server 192.168.1.99:4174;
@@ -852,15 +855,19 @@ server {
   add_header X-Content-Type-Options "nosniff" always;
   add_header Referrer-Policy "same-origin" always;
   client_max_body_size 50m;
+  limit_conn dsh_work_conn 200;
 
   proxy_ssl_trusted_certificate /etc/nginx/tls/dsh-work-root-ca.crt;
   proxy_ssl_verify on;
   proxy_ssl_name m.example.com;   # 内网证书已含该 DNS SAN（14.2 第 3 项）
   proxy_ssl_server_name on;
 
-  # 认证：只放行登录、钉钉免登、绑定登录、改密、退出与配置查询。
+  # 认证：只放行登录、App 登录、钉钉免登、绑定登录、改密、退出、配置查询，以及页面访问与前端错误上报。
   location = /auth/workbench/configuration       { proxy_pass https://dsh_work_workbench; include /etc/nginx/dsh-work-public-proxy; }
   location = /auth/workbench/login               { limit_req zone=dsh_work_password burst=30 nodelay; proxy_pass https://dsh_work_workbench; include /etc/nginx/dsh-work-public-proxy; }
+  location = /auth/workbench/mobile/login        { limit_req zone=dsh_work_password burst=30 nodelay; proxy_pass https://dsh_work_workbench; include /etc/nginx/dsh-work-public-proxy; }
+  location = /auth/workbench/page-views          { limit_req zone=dsh_work_telemetry burst=60 nodelay; proxy_pass https://dsh_work_workbench; include /etc/nginx/dsh-work-public-proxy; }
+  location = /auth/workbench/client-errors       { limit_req zone=dsh_work_telemetry burst=60 nodelay; proxy_pass https://dsh_work_workbench; include /etc/nginx/dsh-work-public-proxy; }
   location = /auth/workbench/dingtalk/login      { limit_req zone=dsh_work_dingtalk burst=100 nodelay; proxy_pass https://dsh_work_workbench; include /etc/nginx/dsh-work-public-proxy; }
   location = /auth/workbench/dingtalk/bind-login { limit_req zone=dsh_work_password burst=30 nodelay; proxy_pass https://dsh_work_workbench; include /etc/nginx/dsh-work-public-proxy; }
   location = /auth/workbench/password            { limit_req zone=dsh_work_password burst=30 nodelay; proxy_pass https://dsh_work_workbench; include /etc/nginx/dsh-work-public-proxy; }
@@ -891,7 +898,7 @@ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 proxy_set_header Connection "";
 ```
 
-切换账号不在公网白名单内；钉钉内只用账号密码与钉钉免登。示例已在固定版本的 Nginx 镜像中做过语法检查与路径白名单探测（允许的路径带原始 Host 转发、其余返回 404、登录接口超限返回 503）；实际网关上线前仍须按 14.5 验证。
+切换账号不在公网白名单内；钉钉内只用账号密码与钉钉免登。Android App 用 `/auth/workbench/mobile/login` 登录（[移动端方案](../design/android-app-plan.md)），其余接口与网页相同；`page-views`、`client-errors` 是员工端页面访问统计与前端错误上报，未放行时公网用户的错误记录会缺失。示例（App 登录、上报接口与 `limit_conn` 加入前的版本）已在固定版本的 Nginx 镜像中做过语法检查与路径白名单探测（允许的路径带原始 Host 转发、其余返回 404、登录接口超限返回 503）；实际网关上线前仍须按 14.5 验证。
 
 ### 14.4 钉钉企业内部应用与服务端配置
 
