@@ -433,7 +433,7 @@ export function registerConversationRoutes(
     const sinceRaw = context.url.searchParams.get('since')
     const sinceParsed = sinceRaw ? Date.parse(sinceRaw) : Number.NaN
     const clientSince = Number.isNaN(sinceParsed) || sinceParsed > Date.now() ? null : new Date(sinceParsed)
-    await streamWorkspaceSessionEvents(response, workspaceId, sharedSessionActivitySource(conversations), 500, 15_000,
+    await streamWorkspaceSessionEvents(response, workspaceId, sharedSessionActivitySource(conversations), WORKSPACE_SESSION_POLL_INTERVAL_MS, 15_000,
       { workspaceId, userId, authorization }, clientSince)
   })
 }
@@ -701,12 +701,22 @@ interface WorkspaceSessionActivitySource {
 }
 
 /**
- * 同一空间的活动查询在多个 SSE 订阅者之间共享：250ms 窗口内的轮询命中
- * 同一份快照、并发在途查询合并为一次——订阅者数量不再线性放大 DB 压力。
- * 只缩短「变化可见」时效到亚秒级，不改变逐批复权口径（每个订阅者仍独立
- * 做读轨检查）。快照行只读，跨订阅者复用安全。
+ * 空间会话活动流的轮询间隔。没有任何变化时每个被打开的团队空间也按此频率
+ * 查活动集，常驻成本≈被打开的空间数 × 活动查询单价（实测见
+ * docs/design/architecture-audit-baseline-2026-11-28.md「团队空间会话流」）。
+ * 2s 下单人订阅的变化可见时延 ≤2s，多人订阅叠加快照年龄 ≤3s。
  */
-const SESSION_ACTIVITY_SNAPSHOT_TTL_MS = 250
+const WORKSPACE_SESSION_POLL_INTERVAL_MS = 2_000
+
+/**
+ * 同一空间的活动查询在多个 SSE 订阅者之间共享：TTL 窗口内的轮询命中
+ * 同一份快照、并发在途查询合并为一次——订阅者数量不再线性放大 DB 压力。
+ * TTL 必须随轮询间隔同步放大：间隔变长而 TTL 不变时，人多的空间里错峰
+ * 的订阅者各自错过快照，每空间刷新频率仍逼近 1/TTL，拉长间隔几乎不省。
+ * 取间隔的一半，把每空间刷新上限压到 1 次/秒，快照年龄不超过半个间隔。
+ * 不改变逐批复权口径（每个订阅者仍独立做读轨检查）。快照行只读，跨订阅者复用安全。
+ */
+const SESSION_ACTIVITY_SNAPSHOT_TTL_MS = WORKSPACE_SESSION_POLL_INTERVAL_MS / 2
 const sessionActivitySnapshots = new Map<string, {
   at: number
   rows?: WorkspaceSessionActivityPage
@@ -769,7 +779,7 @@ export async function streamWorkspaceSessionEvents(
   response: RunEventStreamResponse,
   workspaceId: string,
   conversations: WorkspaceSessionActivitySource,
-  pollIntervalMs = 500,
+  pollIntervalMs = WORKSPACE_SESSION_POLL_INTERVAL_MS,
   heartbeatIntervalMs = 15_000,
   teamAccess?: TeamStreamAccess,
   /**
