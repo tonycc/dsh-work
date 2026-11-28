@@ -484,6 +484,28 @@ describe('用量解析', () => {
     assert.deepEqual(usage.finish(), { inputTokens: 100, outputTokens: 5, cacheReadTokens: 64, cacheWriteTokens: null })
   })
 
+  it('DeepSeek 每帧带 "usage":null 时只解析带用量对象的帧', () => {
+    const usage = new UsageAccumulator()
+    const parse = JSON.parse
+    let parsed = 0
+    JSON.parse = ((text: string, reviver?: Parameters<typeof JSON.parse>[1]) => { parsed += 1; return parse(text, reviver) }) as typeof JSON.parse
+    try {
+      for (let index = 0; index < 50; index += 1) usage.acceptSseChunk(`data: {"choices":[{"index":0,"delta":{"content":"usage"}}],"usage":null}\n\n`)
+      usage.acceptSseChunk('data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":50,"prompt_cache_hit_tokens":64}}\n\ndata: [DONE]\n\n')
+    } finally {
+      JSON.parse = parse
+    }
+    assert.equal(parsed, 1)
+    assert.deepEqual(usage.finish(), { inputTokens: 100, outputTokens: 50, cacheReadTokens: 64, cacheWriteTokens: null })
+  })
+
+  it('Anthropic 流的 message_start 与 message_delta 用量仍被读取', () => {
+    const usage = new UsageAccumulator()
+    usage.acceptSseChunk('event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":9,"cache_read_input_tokens":3,"output_tokens":1}}}\n\n')
+    usage.acceptSseChunk('event: message_delta\ndata: {"type":"message_delta","usage": {"output_tokens":6}}\n\n')
+    assert.deepEqual(usage.finish(), { inputTokens: 12, outputTokens: 6, cacheReadTokens: 3, cacheWriteTokens: null })
+  })
+
   it('没有用量时全部为 null', () => {
     const usage = new UsageAccumulator()
     usage.acceptSseChunk('data: {"choices":[]}\n\ndata: [DONE]\n')

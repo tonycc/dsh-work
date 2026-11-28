@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 
 import { DataProtectionService, MemoryDataProtectionStore } from '../data-protection/data-protection-service.ts'
 import { ModelGateway } from './model-gateway.ts'
+import { SseResponseRestorer } from './model-gateway-redaction.ts'
+import { PlaceholderRestorer } from '../data-protection/data-protection-masking.ts'
 import { MemoryModelGatewayRequestLog } from './model-gateway-request-log.ts'
 import type { ModelGatewayBinding } from './model-gateway-types.ts'
 
@@ -249,5 +251,27 @@ describe('模型网关数据防护（DLP-S2）', () => {
     store.recordGatewayEvent = async () => { throw new Error('db down') }
     assert.equal((await chat([{ role: 'user', content: '你好' }])).status, 200)
     assert.equal(upstream.length, 1)
+  })
+})
+
+describe('流式还原逐帧处理', () => {
+  const placeholder = '{{PERSONAL_abcdefghij}}'
+  const restorer = () => new SseResponseRestorer(encode => new PlaceholderRestorer(new Map([[placeholder, '13800138000']]), encode))
+  const frame = (content: string, finish: string | null = null) =>
+    `data: {"id":"x","choices":[{"index":0,"delta":{"content":${JSON.stringify(content)}},"finish_reason":${JSON.stringify(finish)}}],"usage":null}\n\n`
+
+  it('不含占位符的帧逐字节原样放行', () => {
+    const sse = restorer()
+    const raw = frame('普通文字') + frame('第二段 {单个花括号}')
+    assert.equal(sse.push(raw), raw)
+  })
+
+  it('占位符跨帧拆开时扣住尾部并在后续帧还原', () => {
+    const sse = restorer()
+    const output = sse.push(frame('电话 {')) + sse.push(frame('{PERSONAL_abc')) + sse.push(frame('defghij}} 已记录', 'stop')) + sse.finish()
+    const text = [...output.matchAll(/^data: (.*)$/gm)].map(match => JSON.parse(match[1]!) as { choices: { delta: { content: string } }[] })
+      .map(event => event.choices[0]!.delta.content).join('')
+    assert.equal(text, '电话 13800138000 已记录')
+    assert.ok(!output.includes('PERSONAL_'))
   })
 })

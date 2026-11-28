@@ -166,6 +166,8 @@ export class SseResponseRestorer {
   private readonly createRestorer: CreateRestorer
   private readonly slots = new Map<string, Slot>()
   private pending = ''
+  /** 当前事件的文本字段是否被改写（还原或扣住尾部）。 */
+  private changed = false
 
   constructor(createRestorer: CreateRestorer) {
     this.createRestorer = createRestorer
@@ -228,11 +230,18 @@ export class SseResponseRestorer {
       return raw
     }
     if (!isRecord(event)) return raw
+    // 还原时记下是否改写过文本字段：没改过就原样放行，不必为比较再解析、序列化一遍（每帧都会走到这里）。
+    this.changed = false
     const before = Array.isArray(event['choices']) ? this.restoreChatEvent(event) : this.restoreAnthropicEvent(event)
-    const updated = JSON.stringify(event)
-    if (updated === JSON.stringify(JSON.parse(payload))) return before + raw
+    if (!this.changed) return before + raw
     const others = lines.filter(line => !line.startsWith('data:'))
-    return `${before}${[...others, `data: ${updated}`].join('\n')}\n\n`
+    return `${before}${[...others, `data: ${JSON.stringify(event)}`].join('\n')}\n\n`
+  }
+
+  private assign(target: Record<string, unknown>, key: string, value: string): void {
+    if (target[key] === value) return
+    target[key] = value
+    this.changed = true
   }
 
   private restoreChatEvent(event: Record<string, unknown>): string {
@@ -249,7 +258,7 @@ export class SseResponseRestorer {
         if (typeof delta['content'] === 'string') {
           const key = `${index}:content`
           const slot = this.slot(key, undefined, tail => synthetic({ content: tail }))
-          delta['content'] = slot.restorer.push(delta['content']) + (finishing ? this.takeTail(key) : '')
+          this.assign(delta, 'content', slot.restorer.push(delta['content']) + (finishing ? this.takeTail(key) : ''))
         }
         for (const call of Array.isArray(delta['tool_calls']) ? delta['tool_calls'] : []) {
           const fn = isRecord(call) ? call['function'] : undefined
@@ -257,7 +266,7 @@ export class SseResponseRestorer {
           const callIndex = call['index'] ?? 0
           const key = `${index}:tool:${callIndex}`
           const slot = this.slot(key, jsonEscape, tail => synthetic({ tool_calls: [{ index: callIndex, function: { arguments: tail } }] }))
-          fn['arguments'] = slot.restorer.push(fn['arguments']) + (finishing ? this.takeTail(key) : '')
+          this.assign(fn, 'arguments', slot.restorer.push(fn['arguments']) + (finishing ? this.takeTail(key) : ''))
         }
       }
       if (finishing) before += this.flushSlots(key => key.startsWith(`${index}:`))
@@ -275,7 +284,7 @@ export class SseResponseRestorer {
     const type = delta['type']
     const slot = this.slot(`block:${index}`, field === 'text' ? undefined : jsonEscape, tail =>
       `event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index, delta: { type, [field]: tail } })}\n\n`)
-    delta[field] = slot.restorer.push(delta[field])
+    this.assign(delta, field, slot.restorer.push(delta[field]))
     return ''
   }
 }
