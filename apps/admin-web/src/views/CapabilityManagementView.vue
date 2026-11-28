@@ -245,7 +245,7 @@ function navigateTabs(event: KeyboardEvent) {
 }
 
 async function refreshInstalledSkills() {
-  await contentStore.load(true)
+  await contentStore.reloadSkills()
 }
 
 function inspectSkill(skill: SkillDefinition) {

@@ -27,7 +27,7 @@ const icons = {
 } as const
 
 async function refresh() {
-  await contentStore.load(true)
+  await contentStore.reloadHealth()
   ElMessage.success('系统状态已刷新')
 }
 

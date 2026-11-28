@@ -254,6 +254,9 @@ export class AttemptExecutionContainers {
     // A failed check does not block commands: the guard protects the volume, it is not an access control.
     const lowOnSpace = async () => (await this.usage.freeSpace(state.workspace).catch(() => null))?.low === true
     if (await lowOnSpace()) throw diskLowError()
+    // 只读命令（ripgrep，且不带会执行外部程序的 --pre）不会让工作区变大：不在宿主递归扫描工作区，
+    // 也不启动运行中的定时测量。其余命令照旧前/中/后测量。
+    if (isReadOnlyCommand(command)) return this.runReadOnly(state, command, signal)
     const before = await this.usage.measure(state.workspace).catch((): WorkspaceUsage => ({ bytes: 0, entries: 0, truncated: false }))
     const container = this.containerFor(state)
     const { keeperPid } = await container.ready
@@ -294,6 +297,20 @@ export class AttemptExecutionContainers {
     }
     if (failure !== undefined) throw failure
     return result!
+  }
+
+  private async runReadOnly(state: AttemptState, command: ContainerCommand, signal: AbortSignal): Promise<ContainerCommandResult> {
+    const container = this.containerFor(state)
+    const { keeperPid } = await container.ready
+    let result: ContainerCommandResult | undefined
+    try {
+      result = await this.backend.exec(container.name, command, signal)
+    } catch (error) {
+      await this.restoreQuiescence(state, container, keeperPid)
+      throw error
+    }
+    if (result.timedOut) await this.restoreQuiescence(state, container, keeperPid)
+    return result
   }
 
   /** Far over the cap: no further commands, and the container is removed (plan 4.7, decision 3). */
@@ -430,4 +447,10 @@ export function assertExclusiveToolScheduling(
     .filter(tool => tool.dshScheduling !== 'exclusive' && !(tool.dshScheduling === 'parallel' && PARALLEL_ALLOWED.has(tool.id)))
     .map(tool => `${tool.id}（${tool.dshScheduling ?? '未报告'}）`)
   if (violations.length) throw dependencyUnavailable(`DSH 工具调度不满足执行容器的静止保证：${violations.join('、')}`)
+}
+
+/** ripgrep 只读并退出；`--pre` / `--pre-glob` 会为每个文件执行外部程序，按普通命令处理。 */
+function isReadOnlyCommand(command: ContainerCommand): boolean {
+  return !command.mayLeaveProcesses && command.argv[0] === 'rg'
+    && !command.argv.slice(1).some(argument => argument === '--pre' || argument.startsWith('--pre=') || argument.startsWith('--pre-glob'))
 }

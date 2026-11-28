@@ -55,11 +55,19 @@ watch(conversationProgress, async (progress, previous) => {
   await scrollMessagesToLatest()
 }, { flush: 'post' })
 let timer: ReturnType<typeof setInterval> | undefined
+// 页面切到后台时不轮询；回到前台立即补一次，避免看到过期进度。
+function onVisibilityChange() {
+  if (!document.hidden && assistant.active) void assistant.refresh()
+}
 onMounted(() => {
-  timer = setInterval(() => { if (assistant.active) void assistant.refresh() }, 1500)
+  timer = setInterval(() => { if (assistant.active && !document.hidden) void assistant.refresh() }, 1500)
+  document.addEventListener('visibilitychange', onVisibilityChange)
   if (assistant.current.saved) void assistant.refresh()
 })
-onUnmounted(() => clearInterval(timer))
+onUnmounted(() => {
+  clearInterval(timer)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
+})
 async function prepare(text: string) {
   assistant.current.draft = text
   await nextTick()

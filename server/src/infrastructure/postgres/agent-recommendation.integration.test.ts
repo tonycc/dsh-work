@@ -179,9 +179,15 @@ test('会话详情只展示当前 Attempt 的推荐：重试后旧 Attempt 的�
   assert.equal((await recommendations.loadForRuns([runId], EMPLOYEE)).length, 1)
 
   const retryAttemptId = `attempt-${randomUUID()}`
+  // 复制当前 Attempt 行作为重试：生成列（manifest_purpose 等）由数据库计算，不能写入。
+  const columns = (await database<{ name: string }[]>`
+    select column_name as name from information_schema.columns
+     where table_schema = current_schema() and table_name = 'run_attempts' and is_generated = 'NEVER'
+     order by ordinal_position
+  `).map(column => column.name)
   await database`
-    insert into run_attempts
-    select * from jsonb_populate_record(null::run_attempts, (
+    insert into run_attempts (${database.unsafe(columns.map(name => `"${name}"`).join(', '))})
+    select ${database.unsafe(columns.map(name => `"${name}"`).join(', '))} from jsonb_populate_record(null::run_attempts, (
       select to_jsonb(ra) || jsonb_build_object('id', ${retryAttemptId}::text, 'attempt_no', ra.attempt_no + 1, 'status', 'queued')
         from run_attempts ra where ra.tenant_id = ${tenantId} and ra.id = ${manifest.attempt_id}
     ))

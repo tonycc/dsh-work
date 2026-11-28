@@ -130,13 +130,18 @@ export class WeKnoraClient {
     this.fetchImpl = config.fetch ?? fetch
   }
 
-  async search(input: { query: string; knowledgeBaseIds: string[]; matchCount: number }): Promise<WeKnoraSearchResponse> {
+  /** 检索请求的单次超时（毫秒），供调用方计算整体时限。 */
+  get searchTimeoutMs(): number {
+    return this.timeoutMs
+  }
+
+  async search(input: { query: string; knowledgeBaseIds: string[]; matchCount: number; deadline?: number }): Promise<WeKnoraSearchResponse> {
     // rerank 不传：沿用 WeKnora 工作空间默认的重排序配置（4.3）。
     const body = await this.request('POST', '/api/v1/knowledge-search', {
       query: input.query,
       knowledge_base_ids: input.knowledgeBaseIds,
       match_count: input.matchCount,
-    })
+    }, this.boundedTimeout(input.deadline))
     const data = arrayData(body)
     const outcome = ((body as { meta?: { rerank?: { outcome?: unknown } } }).meta?.rerank?.outcome)
     const rerankOutcome = typeof outcome === 'string' && /^[a-z0-9_]{1,40}$/.test(outcome) ? outcome : null
@@ -159,11 +164,11 @@ export class WeKnoraClient {
     return { results, rerankOutcome }
   }
 
-  async knowledgeBatch(ids: string[]): Promise<WeKnoraKnowledge[]> {
+  async knowledgeBatch(ids: string[], options: { deadline?: number } = {}): Promise<WeKnoraKnowledge[]> {
     if (!ids.length) return []
     const query = new URLSearchParams()
     for (const id of ids) query.append('ids', id)
-    const body = await this.request('GET', `/api/v1/knowledge/batch?${query.toString()}`)
+    const body = await this.request('GET', `/api/v1/knowledge/batch?${query.toString()}`, undefined, this.boundedTimeout(options.deadline))
     return arrayData(body).map(item => {
       const row = item as Record<string, unknown>
       if (typeof row.id !== 'string' || typeof row.knowledge_base_id !== 'string' || typeof row.updated_at !== 'string'
@@ -263,6 +268,14 @@ export class WeKnoraClient {
       bytes: Buffer.from(await response.arrayBuffer()),
       mimeType: response.headers.get('content-type') ?? 'application/octet-stream',
     }))
+  }
+
+  /** 单次超时与调用方整体时限（epoch 毫秒）取较小者；时限已到时按超时处理，不再发请求。 */
+  private boundedTimeout(deadline: number | undefined): number {
+    if (deadline === undefined) return this.timeoutMs
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) throw new WeKnoraUnavailableError('timeout', 'WeKnora 检索已超出本次时限')
+    return Math.min(this.timeoutMs, remaining)
   }
 
   private get timeoutMs(): number {

@@ -300,6 +300,8 @@ openssl x509 -in "${DWP_ROOT}/certs/server.crt" -noout -checkend 2592000
 | `DSH_WORK_POSTGRES_DB`、`DSH_WORK_POSTGRES_USER` | 两者均为 `dsh_work`，与同机其他应用的数据库独立 |
 | `DSH_WORK_POSTGRES_PASSWORD` | 新生成的独立随机密码，建议使用至少 32 随机字节的十六进制形式 |
 | `DSH_WORK_DATABASE_URL` | `postgres://dsh_work:<同一数据库密码>@127.0.0.1:5434/dsh_work` |
+| `DSH_WORK_DATABASE_POOL_SIZE`、`DSH_WORK_DATABASE_STATEMENT_TIMEOUT_MS`、`DSH_WORK_DATABASE_LOCK_TIMEOUT_MS`、`DSH_WORK_DATABASE_PREPARE` | 可选，通常不填。默认 30 条连接、语句超时 30 秒、等锁超时 10 秒、开启预编译语句；超时填 `0` 关闭。连接数须低于 PostgreSQL `max_connections`（默认 100）减去备份与运维连接 |
+| `DSH_WORK_PERSISTENT_APPROVALS` | 可选，默认关闭。Agent 审批开放前保持不填；开放时设为 `true`，恢复审批过期清扫和 Run 结束时的审批收尾 |
 | `DSH_WORK_DATA_ROOT` | `<dsh-work 根目录>/data`；`skills/` 保存不可变 Skill 文件夹，必须持久化并与数据库成组备份 |
 | `DSH_WORK_DSH_SESSIONS_ROOT` | `<dsh-work 根目录>/data/dsh-sessions`，保持在备份覆盖的数据目录内 |
 | `DSH_WORK_OFF_HOST_BACKUP_DIRECTORY` | 已确认的 dsh-work 异机备份目录 |

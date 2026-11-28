@@ -206,7 +206,7 @@ export class PostgresModelUsageService implements ModelUsageQueryPort {
                r.requested_by as employee_id,
                coalesce(u.display_name, r.requested_by) as employee_name,
                coalesce(nullif(btrim(u.department_id), ''), ${UNASSIGNED_DEPARTMENT}) as department,
-               case when ra.manifest->>'purpose' = ${RELEASE_TRIAL_PURPOSE} then 'validation'
+               case when ra.manifest_purpose = ${RELEASE_TRIAL_PURPOSE} then 'validation'
                     else coalesce(${sql.json(RUN_SOURCE_BY_TASK_TYPE)}::jsonb ->> t.source_type, 'system') end as source,
                ag.id as agent_id,
                coalesce(ag.name, ${SYSTEM_AGENT_LABEL}) as agent_name,
@@ -220,7 +220,7 @@ export class PostgresModelUsageService implements ModelUsageQueryPort {
           left join sessions s on s.tenant_id = r.tenant_id and s.id = r.session_id
           -- Agent 版本取自 Attempt Manifest；早期运行的 Manifest 没有该字段时，用会话固定的版本。
           left join agent_versions av on av.tenant_id = r.tenant_id
-                 and av.id = coalesce(ra.manifest->>'agent_version_id', s.agent_version_id)
+                 and av.id = coalesce(ra.manifest_agent_version_id, s.agent_version_id)
           left join agents ag on ag.tenant_id = av.tenant_id and ag.id = av.agent_id
           left join users u on u.tenant_id = r.tenant_id and u.id = r.requested_by
           left join model_providers mp on mp.tenant_id = mu.tenant_id and mp.key = mu.provider

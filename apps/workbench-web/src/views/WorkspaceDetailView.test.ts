@@ -143,6 +143,8 @@ async function mountView(
   contentStore.workspaces.splice(0, contentStore.workspaces.length, item)
   contentStore.artifacts.splice(0, contentStore.artifacts.length, ...(options.artifacts ?? []))
   // 组件 onMounted 会 refresh；测试固定注入的空间对象。
+  // 页面挂载走 sync()：转到被替身的 refresh()，保持原有请求计数口径。
+  vi.spyOn(contentStore, 'sync').mockImplementation(() => contentStore.refresh())
   vi.spyOn(contentStore, 'refresh').mockResolvedValue(undefined)
   const authStore = useAuthStore(pinia)
   vi.spyOn(authStore, 'user', 'get').mockReturnValue({

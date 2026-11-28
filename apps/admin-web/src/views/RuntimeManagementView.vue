@@ -210,7 +210,7 @@ async function saveConfiguration() {
 }
 
 async function refresh() {
-  await contentStore.load(true)
+  await contentStore.reloadRuntimes()
   ElMessage.success('Runtime 状态已刷新')
 }
 

@@ -65,7 +65,7 @@ async function enableFromPage(page: Page, name: string) {
 
 async function runNowFromPage(page: Page, name: string) {
   await taskCard(page, name).getByRole('button', { name: '立即运行', exact: true }).click()
-  await expect(page.getByText('立即运行成功，已受理', { exact: true })).toBeVisible()
+  await expect(page.getByText('立即运行成功，已受理', { exact: true }).last()).toBeVisible()
 }
 
 async function executions(request: APIRequestContext, automationId: string): Promise<ExecutionRow[]> {

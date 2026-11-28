@@ -93,3 +93,15 @@ test('400、404 等请求错误与不可用区分，错误信息不含 API Key',
   assert.equal(error.status, 400)
   assert.doesNotMatch(error.message, new RegExp(double.apiKey))
 })
+
+test('整体时限已到时不再发请求，按超时处理；未到时限照常检索', async () => {
+  double.requests.length = 0
+  await assert.rejects(
+    client(10_000).search({ query: 'q', knowledgeBaseIds: ['kb-1'], matchCount: 1, deadline: Date.now() - 1 }),
+    (error: unknown) => error instanceof WeKnoraUnavailableError && error.reason === 'timeout',
+  )
+  assert.equal(double.requests.length, 0)
+  const { results } = await client(10_000).search({ query: 'q', knowledgeBaseIds: ['kb-1'], matchCount: 1, deadline: Date.now() + 5_000 })
+  assert.equal(results.length, 1)
+  assert.equal(client(1234).searchTimeoutMs, 1234)
+})

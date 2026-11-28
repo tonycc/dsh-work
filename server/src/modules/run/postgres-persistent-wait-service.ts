@@ -65,6 +65,7 @@ export class PostgresPersistentWaitService {
   private readonly runs: PostgresRunRepository
   private readonly callbacks: PersistentWaitCallbacks
   private readonly runtimeVersion: string
+  private readonly enabled: boolean
   private sweepTimer?: NodeJS.Timeout
   private sweepRunning = false
 
@@ -73,15 +74,26 @@ export class PostgresPersistentWaitService {
     runs: PostgresRunRepository,
     callbacks: PersistentWaitCallbacks,
     runtimeVersion = 'unknown',
+    options: { enabled?: boolean } = {},
   ) {
     this.database = database
     this.runs = runs
     this.callbacks = callbacks
     this.runtimeVersion = runtimeVersion
+    this.enabled = options.enabled ?? true
+  }
+
+  /**
+   * 持久化审批尚未开放（Agent 审批模式固定为 never）时关闭：不跑 30 秒过期清扫，
+   * Attempt 终态也不再为不存在的 preparing 审批开事务。启动时的 reconcileOrphans
+   * 照常执行，清掉历史遗留。开放审批时设 DSH_WORK_PERSISTENT_APPROVALS=true 恢复。
+   */
+  get isEnabled(): boolean {
+    return this.enabled
   }
 
   start(): void {
-    if (this.sweepTimer) return
+    if (!this.enabled || this.sweepTimer) return
     void this.sweepExpiredApprovals()
     this.sweepTimer = setInterval(() => { void this.sweepExpiredApprovals() }, 30_000)
     this.sweepTimer.unref()
@@ -282,6 +294,7 @@ export class PostgresPersistentWaitService {
 
   /** Retires an approval that never reached run.waiting for its source Attempt. */
   async cancelPreparingForAttempt(input: { runId: string; attemptId: string }): Promise<number> {
+    if (!this.enabled) return 0
     return this.database.begin(async (transaction) => {
       await transaction`select id from runs where tenant_id = ${tenantId} and id = ${input.runId} for update`
       const approvals = await transaction<{ checkpointId: string }[]>`
@@ -684,4 +697,12 @@ function toRecord(row: ApprovalRow): PersistentApprovalRecord {
     resumedAttemptId: row.resumedAttemptId,
     actionConsumedAt: row.actionConsumedAtDate?.toISOString() ?? null,
   }
+}
+
+/** 默认关闭；只认 true/1/false/0/空，其它值启动即报错，避免拼错后静默关掉。 */
+export function persistentApprovalsEnabled(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase()
+  if (!normalized || normalized === 'false' || normalized === '0') return false
+  if (normalized === 'true' || normalized === '1') return true
+  throw new Error(`DSH_WORK_PERSISTENT_APPROVALS 只能是 true 或 false，收到 ${value}`)
 }

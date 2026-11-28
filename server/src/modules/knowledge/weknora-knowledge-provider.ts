@@ -133,6 +133,9 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
     const skips = { skippedBases, ...(movedBases.length ? { movedBases } : {}) }
     if (!scope.length) return { status: 'skipped', documents: [], citations: [], ...skips }
 
+    // 补充检索（带上一条提问）共用一次检索超时的整体时限：首次检索照旧，补充检索只用剩余时间，
+    // 发消息前最坏的同步等待不再叠加成两轮完整超时。
+    const fallbackDeadline = Date.now() + client.searchTimeoutMs
     let retrieved: Awaited<ReturnType<WeKnoraKnowledgeProvider['retrieve']>>
     try {
       retrieved = await this.retrieve(client, input.query, scope)
@@ -147,7 +150,7 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
     const fallbackQuery = input.fallbackQuery?.trim()
     if (!retrieved.documents.length && fallbackQuery && fallbackQuery !== input.query.trim()) {
       try {
-        const second = await this.retrieve(client, fallbackQuery, scope)
+        const second = await this.retrieve(client, fallbackQuery, scope, fallbackDeadline)
         if (second.documents.length) retrieved = second
         else retrieved = { ...retrieved, rerankOutcome: second.rerankOutcome ?? retrieved.rerankOutcome }
       } catch (error) {
@@ -318,7 +321,7 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
     return answer.trim() ? `${answer.trim()}\n\n${sections.join('\n\n')}` : sections.join('\n\n')
   }
 
-  private async retrieve(client: WeKnoraClient, query: string, scope: SelectedBaseRow[]): Promise<{
+  private async retrieve(client: WeKnoraClient, query: string, scope: SelectedBaseRow[], deadline?: number): Promise<{
     documents: RuntimeKnowledgeDocument[]
     citations: KnowledgeCitation[]
     rerankOutcome: string | null
@@ -328,6 +331,7 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
       query,
       knowledgeBaseIds: scope.map(base => base.externalId),
       matchCount: searchMatchCount,
+      ...(deadline === undefined ? {} : { deadline }),
     })
     // 4.4：去掉弱相关分段，每篇文档只留得分最高的分段；校验后取前 3 篇，被丢弃的由后面的候选补上。
     const best = new Map<string, typeof results[number]>()
@@ -340,7 +344,7 @@ export class WeKnoraKnowledgeProvider implements KnowledgeProvider {
       best.set(result.knowledge_id, result)
     }
     if (!best.size) return { documents: [], citations: [], rerankOutcome }
-    const metadata = new Map((await client.knowledgeBatch([...best.keys()])).map(item => [item.id, item]))
+    const metadata = new Map((await client.knowledgeBatch([...best.keys()], deadline === undefined ? {} : { deadline })).map(item => [item.id, item]))
     const documents: RuntimeKnowledgeDocument[] = []
     const citations: KnowledgeCitation[] = []
     for (const result of best.values()) {

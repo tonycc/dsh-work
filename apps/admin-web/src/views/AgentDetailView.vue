@@ -203,7 +203,7 @@ onMounted(async () => {
           <div class="content-panel detail-card">
             <section class="detail-section">
               <header class="detail-section__head"><div><h3>岗位权限</h3><p>谁可以向它请求工作、它持有哪些岗位角色、能接触哪些数据。属于 Agent 而非版本，修改立即生效并写审计，不需要重新验证。</p></div></header>
-              <AgentAccessPanel :agent-id="agent.id" :can-manage="canManage" @updated="contentStore.load(true)" />
+              <AgentAccessPanel :agent-id="agent.id" :can-manage="canManage" @updated="contentStore.reloadAgents()" />
             </section>
           </div>
           <AgentWorkspaceGovernance :agent="agent" :can-manage="canManage" />

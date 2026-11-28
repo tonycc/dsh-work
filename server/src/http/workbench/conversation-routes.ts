@@ -24,6 +24,7 @@ import {
   type Router,
 } from '../router.ts'
 import { invalidRequest } from '../../domain/request-errors.ts'
+import { waitForRunEvent } from '../../modules/run/run-event-notifier.ts'
 
 const basePath = '/api/workbench/v1'
 const tenantId = 'tenant-dsh-work'
@@ -385,7 +386,7 @@ export function registerConversationRoutes(
         if (!(await canReadWorkspaceObject(authorization, task.workspaceId, userId))) {
           throw routePermissionDenied('当前用户不能读取该团队空间运行')
         }
-        await streamRunEvents(response, request.headers['last-event-id'], runId, runs, 250, 15_000, {
+        await streamRunEvents(response, request.headers['last-event-id'], runId, runs, RUN_STREAM_FALLBACK_POLL_MS, 15_000, {
           workspaceId: task.workspaceId,
           userId,
           authorization,
@@ -397,7 +398,7 @@ export function registerConversationRoutes(
       if (workspaceType === null) {
         throw routePermissionDenied('该工作空间不存在或已归档')
       }
-      await streamRunEvents(response, request.headers['last-event-id'], runId, runs, 250, 15_000, undefined, async () => {
+      await streamRunEvents(response, request.headers['last-event-id'], runId, runs, RUN_STREAM_FALLBACK_POLL_MS, 15_000, undefined, async () => {
         // Do not reuse the role snapshot from the request that opened the stream.
         await authorization.authorizeWorkbench({ userId, workspaceId: task.workspaceId, allowArchived: true })
         return true
@@ -566,6 +567,12 @@ export interface TeamStreamAccess {
 }
 
 /**
+ * 运行流的兜底轮询间隔：新事件落库后由进程内信号立即唤醒（run-event-notifier），
+ * 这里只覆盖漏信号的写入路径（重启恢复、审批终态等）与终态判定，原为每 250ms 一次。
+ */
+const RUN_STREAM_FALLBACK_POLL_MS = 1_000
+
+/**
  * SSE delivery loop. The team branch (1A-T5) re-verifies the viewer's read
  * access before each batch write AND before the heartbeat: the authorization
  * cache is keyed by (workspace, team_auth_revision) with a short TTL, so a
@@ -580,7 +587,7 @@ export async function streamRunEvents(
   lastEventHeader: string | string[] | undefined,
   runId: string,
   runs: Pick<RunRepository, 'readEventsAfterEvent' | 'getRun'>,
-  pollIntervalMs = 250,
+  pollIntervalMs = RUN_STREAM_FALLBACK_POLL_MS,
   heartbeatIntervalMs = 15_000,
   teamAccess?: TeamStreamAccess,
   personalAccess?: () => Promise<boolean>,
@@ -594,7 +601,8 @@ export async function streamRunEvents(
   response.flushHeaders()
   let cursor = Array.isArray(lastEventHeader) ? lastEventHeader[0] : lastEventHeader
   let closed = false
-  response.on('close', () => { closed = true })
+  const closeSignal = new AbortController()
+  response.on('close', () => { closed = true; closeSignal.abort() })
   let emptyTerminalPolls = 0
   let heartbeatAt = Date.now()
   const canDeliver = async () => {
@@ -641,7 +649,8 @@ export async function streamRunEvents(
       response.write(`: heartbeat ${Date.now()}\n\n`)
       heartbeatAt = Date.now()
     }
-    await wait(pollIntervalMs)
+    // 新事件落库后立即被唤醒；pollIntervalMs 只是漏信号时的兜底轮询间隔。
+    await waitForRunEvent(runId, pollIntervalMs, closeSignal.signal)
   }
   if (!closed) response.end()
 }

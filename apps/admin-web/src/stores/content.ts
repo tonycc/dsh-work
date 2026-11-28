@@ -127,6 +127,47 @@ export const useContentStore = defineStore('admin-content', () => {
     adminInitialized.value = true
   }
 
+  /**
+   * 局部刷新：保存或刷新某一块后只重拉这一块，不再走 load(true) 重拉十几个全平台接口。
+   * 无权限的模块保持原样（与 loadAdminData 的权限口径一致）。
+   */
+  async function reloadAgents() {
+    if (!authStore.canRead('agent')) return
+    const [agentData, agentVersionData] = await Promise.all([adminApi.getAgents(), adminApi.getAgentVersions()])
+    agents.value = agentData
+    agentVersions.value = agentVersionData
+  }
+
+  async function reloadSkills() {
+    const [skillData, skillVersionData, skillReleaseData, builtinSkillData] = await Promise.all([
+      when(authStore.canRead('skill') || authStore.canWrite('agent'), adminApi.getSkills, skills.value),
+      when(authStore.canRead('skill'), adminApi.getSkillVersions, skillVersions.value),
+      when(authStore.canRead('skill'), adminApi.getSkillReleaseRecords, skillReleaseRecords.value),
+      when(authStore.canRead('skill') || authStore.canWrite('agent'), adminApi.getBuiltinSkills, builtinSkills.value),
+    ])
+    skills.value = skillData
+    skillVersions.value = skillVersionData
+    skillReleaseRecords.value = skillReleaseData
+    builtinSkills.value = builtinSkillData
+  }
+
+  async function reloadHealth() {
+    const [healthData, statusData] = await Promise.all([
+      adminApi.getHealth(),
+      when(authStore.canRead('ops'), adminApi.getPlatformStatus, platformStatus.value),
+    ])
+    health.value = healthData
+    platformStatus.value = statusData
+  }
+
+  async function reloadRuntimes() {
+    const [runtimeData] = await Promise.all([
+      when(authStore.canRead('connector'), adminApi.getRuntimes, runtimes.value),
+      reloadHealth(),
+    ])
+    runtimes.value = runtimeData
+  }
+
   async function loadAuditData() {
     const [auditData, operationsSummaryData] = await Promise.all([
       adminApi.getAuditEvents({ page: 1, pageSize: 20 }),
@@ -358,6 +399,10 @@ export const useContentStore = defineStore('admin-content', () => {
     error,
     initialized,
     load,
+    reloadAgents,
+    reloadSkills,
+    reloadHealth,
+    reloadRuntimes,
     createAgentDraft,
     updateAgentDraft,
     setAgentStatus,
