@@ -841,7 +841,7 @@ export class DshAcpRuntimeAdapter implements AgentRuntimePort {
       })
 
       record.promptStartMono = performance.now()
-      const response = await client.prompt(record.acpSessionId, renderUserPrompt(record.manifest))
+      const response = await client.prompt(record.acpSessionId, renderUserPrompt(record.manifest, remoteExecution ? { executionWorkspace: workspaceDirectory } : {}))
       const promptDoneMono = performance.now()
       if (record.terminal) return
       await this.verifyExecutionAuthorization(record)
@@ -1578,10 +1578,10 @@ export function parsePsTime(value: string): number | null {
   return Math.round(((Number(days ?? 0) * 24 + Number(hours ?? 0)) * 60 + Number(minutes)) * 60_000 + Number(seconds) * 1000)
 }
 
-export function renderUserPrompt(manifest: RuntimeManifest) {
+export function renderUserPrompt(manifest: RuntimeManifest, options: TurnContextOptions = {}) {
   const history = manifest.input.conversation_history
   // 本轮上下文紧挨在当前消息之前：前面的说明、摘要与历史在多轮之间只追加，保持可缓存的相同前缀。
-  const context = renderTurnContext(manifest)
+  const context = renderTurnContext(manifest, options)
   const current = context ? [context, '', `当前消息：\n${manifest.input.message}`] : [manifest.input.message]
   if (!history?.length) return current.join('\n')
   const summary = manifest.input.conversation_summary
@@ -1697,7 +1697,7 @@ export function renderSystemPrompt(manifest: RuntimeManifest, options: { executi
   if (options.executionWorkspace && manifest.tools.some(tool => tool.id === 'python_execute')) {
     sections.push([
       '# Python 脚本',
-      `python_execute 在本次运行的执行容器中运行已激活 Skill 登记的脚本：工作目录是该 Skill 的目录，环境变量 DSH_SKILL_DIR、DSH_INPUT_DIR、DSH_OUTPUT_DIR 给出 Skill 目录、输入目录与输出目录（即工作区的 output/）的绝对路径。给脚本传文件参数时使用绝对路径，工作区位于 ${options.executionWorkspace}。脚本写入输出目录的文件按成果规则登记。这些路径只用于脚本参数，不要写进给用户的回答。`,
+      `python_execute 在本次运行的执行容器中运行已激活 Skill 登记的脚本：工作目录是该 Skill 的目录，环境变量 DSH_SKILL_DIR、DSH_INPUT_DIR、DSH_OUTPUT_DIR 给出 Skill 目录、输入目录与输出目录（即工作区的 output/）的绝对路径。给脚本传文件参数时使用绝对路径，工作区的绝对路径写在用户消息的“本轮上下文”中（每次运行不同）。脚本写入输出目录的文件按成果规则登记。这些路径只用于脚本参数，不要写进给用户的回答。`,
     ].join('\n'))
   }
   if (manifest.agent_configuration.skill_instructions.length > 0) {
@@ -1771,16 +1771,23 @@ export function renderSystemPrompt(manifest: RuntimeManifest, options: { executi
   return sections.join('\n\n')
 }
 
+/** `executionWorkspace`: the Attempt workspace's absolute path in execution container mode (see renderSystemPrompt). */
+export interface TurnContextOptions { executionWorkspace?: string }
+
 /**
  * 每轮都会变化的上下文（执行时间、输入文件、恢复检查点、执行前检索的知识片段、记忆）。
  * 放在用户消息里、历史之后，系统提示与工具定义才能在多轮之间保持相同前缀、命中厂商的提示缓存；
  * 使用这些内容的规则仍在系统提示中（renderSystemPrompt）。
  */
-export function renderTurnContext(manifest: RuntimeManifest): string {
+export function renderTurnContext(manifest: RuntimeManifest, options: TurnContextOptions = {}): string {
   const sections: string[] = []
   const knowledgeTool = manifest.tools.some(tool => tool.id === 'knowledge_search')
   if (manifest.timezone) {
     sections.push(`# 当前时间\n本次执行开始于 ${formatExecutionTime(manifest.created_at, manifest.timezone)}。`)
+  }
+  // 与系统提示“Python 脚本”一节同一装配条件；路径含 Attempt 标识，放在系统提示里会让每轮的缓存前缀失效。
+  if (options.executionWorkspace && manifest.tools.some(tool => tool.id === 'python_execute')) {
+    sections.push(`# 本次工作区\n工作区的绝对路径是 ${options.executionWorkspace}，给 python_execute 运行的脚本传文件参数时以它拼成绝对路径。`)
   }
   if (manifest.resume) {
     sections.push([

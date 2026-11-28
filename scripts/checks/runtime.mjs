@@ -36,6 +36,8 @@ export function checkRuntime(check) {
   for (const suffix of ['', '.legacy']) {
     check.includes(`server/config/dsh/acp-managed-credentials${suffix}.cordis.yml`, ['DSH_AGENT_SYSTEM_PROMPT'])
   }
+  // 工作区指令发现会把仓库或上传的 AGENTS.md 注入员工对话（见该文件注释）。
+  check.includes('server/config/dsh/acp-managed-credentials.cordis.yml', ['- id: agent-instructions\n  disabled: true'])
   const scripts = check.json('package.json')?.scripts ?? {}
   for (const mode of ['handshake', 'model', 'tool', 'artifact', 'cancel', 'concurrency']) {
     check.assert(scripts[`probe:${mode}`] === `pnpm probe -- ${mode}`, `缺少 probe:${mode} 探针入口`)
