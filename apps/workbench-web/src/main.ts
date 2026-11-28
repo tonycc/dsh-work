@@ -1,5 +1,5 @@
 import { createApp } from 'vue'
-import ElementPlus from 'element-plus'
+// Element Plus 组件按需引入（见 vite.config.ts）；样式整体引入并排在设计令牌与 base.css 之前，覆盖顺序不变。
 import 'element-plus/dist/index.css'
 
 import App from './App.vue'
@@ -24,6 +24,6 @@ reporter.install(app)
 reporter.trackRouter(router)
 // 升级后旧标签页懒加载上一版代码块失败（Nginx 对缺失的 /assets/ 返回 404）：整页打开目标页面一次换上新版。
 installChunkReloadRecovery(router)
-app.use(pinia).use(router).use(ElementPlus).mount('#app')
+app.use(pinia).use(router).mount('#app')
 // index.html 中的启动检查据此判断应用已挂载（未挂载时上报白屏）。
 ;(window as Window & { __DSH_APP_MOUNTED__?: boolean }).__DSH_APP_MOUNTED__ = true

@@ -3,19 +3,38 @@ import { fileURLToPath, URL } from 'node:url'
 
 import vue from '@vitejs/plugin-vue'
 import { defineConfig } from 'vite'
+import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
+import Components from 'unplugin-vue-components/vite'
 
 const serverPackage = JSON.parse(readFileSync(new URL('../../server/package.json', import.meta.url), 'utf8')) as { releaseVersion?: string }
 const workbenchPort = Number(process.env.DSH_WORK_WORKBENCH_PORT ?? 4174)
 const serverPort = Number(process.env.DSH_WORK_SERVER_PORT ?? 4190)
 
+// 首包分包（前端首包体积优化）：Vue 运行时（vue / vue-router / pinia）拆成独立的长期缓存块，业务代码升级不使其失效。
+// Element Plus 与图标库刻意不进手动分包：它们经 barrel 文件导出，整组分包会让 Rollup 把整库都打进来；
+// 交给 Rollup 自动拆分后，只有实际用到的组件进入首屏或对应路由的代码块。
+function manualChunks(id: string) {
+  if (/[\\/]node_modules[\\/](@vue|vue|vue-router|pinia)[\\/]/.test(id)) return 'vendor-vue'
+  return undefined
+}
+
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [
+    vue(),
+    // Element Plus 按需引入：模板里的 el-* 组件与 v-loading 指令按用到的引入；样式仍由 main.ts 整体引入，保证 base.css 的覆盖顺序不变。
+    Components({
+      dirs: [],
+      dts: false,
+      include: [/\.vue$/, /\.vue\?vue/],
+      resolvers: [ElementPlusResolver({ importStyle: false })],
+    }),
+  ],
   define: {
     // 错误记录样本的版本号（与管理端相同来源）。
     __DSH_WORK_RELEASE_VERSION__: JSON.stringify(serverPackage.releaseVersion ?? '开发构建'),
   },
   // 源码映射只供服务端还原错误堆栈：不在产物中引用，发布时移出前端目录（错误记录方案 6.4）。
-  build: { sourcemap: 'hidden' },
+  build: { sourcemap: 'hidden', rollupOptions: { output: { manualChunks } } },
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

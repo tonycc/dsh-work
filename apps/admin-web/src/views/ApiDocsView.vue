@@ -1,16 +1,17 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, shallowRef } from 'vue'
 import { Download } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 
-import mobileSpecJson from '../../../../docs/development/openapi-mobile-h5.json'
 import { collectDoc, type DocField, type DocOperation, type OpenApiDocument } from '../utils/openapi-doc'
 
 // 本页面向独立开发的移动端 H5 项目：只渲染移动端实际调用的 Workbench API 子集，
 // 不展示完整员工端/管理端契约；文件同时供页面渲染与下载导出。
-const mobileSpec = mobileSpecJson as OpenApiDocument
-const docTags = computed(() => collectDoc(mobileSpec))
-const serverUrl = computed(() => mobileSpec.servers?.[0]?.url ?? '')
+// 契约 JSON 体积较大，进入本页后再按需加载成独立代码块，不随页面代码一起下载。
+const mobileSpec = shallowRef<OpenApiDocument | null>(null)
+const loadError = shallowRef(false)
+const docTags = computed(() => (mobileSpec.value ? collectDoc(mobileSpec.value) : []))
+const serverUrl = computed(() => mobileSpec.value?.servers?.[0]?.url ?? '')
 const operationCount = computed(() => docTags.value.reduce((sum, tag) => sum + tag.operations.length, 0))
 
 function metaRows(op: DocOperation) {
@@ -32,8 +33,18 @@ function requiredText(field: DocField) {
   return field.required ? '是' : '否'
 }
 
+onMounted(async () => {
+  try {
+    const module = await import('../../../../docs/development/openapi-mobile-h5.json')
+    mobileSpec.value = module.default as OpenApiDocument
+  } catch {
+    loadError.value = true
+  }
+})
+
 function downloadSpec() {
-  const content = JSON.stringify(mobileSpec, null, 2)
+  if (!mobileSpec.value) return
+  const content = JSON.stringify(mobileSpec.value, null, 2)
   const url = URL.createObjectURL(new Blob([content], { type: 'application/json;charset=utf-8' }))
   try {
     const anchor = document.createElement('a')
@@ -54,14 +65,15 @@ function downloadSpec() {
         <p class="docs-eyebrow">开发接入</p>
         <div class="page-title" role="heading" aria-level="1">接口文档</div>
         <p class="page-subtitle">
-          {{ mobileSpec.info.title }} · 共 {{ operationCount }} 个接口，仅收录移动端实际调用的端点；
+          {{ mobileSpec?.info.title ?? '移动端 H5 API' }} · 共 {{ operationCount }} 个接口，仅收录移动端实际调用的端点；
           契约文件 docs/development/openapi-mobile-h5.json。
         </p>
       </div>
-      <el-button :icon="Download" data-testid="download-spec" @click="downloadSpec">下载移动端 H5 API OpenAPI</el-button>
+      <el-button :icon="Download" data-testid="download-spec" :disabled="!mobileSpec" @click="downloadSpec">下载移动端 H5 API OpenAPI</el-button>
     </section>
 
-    <div id="api-docs-panel" class="api-docs-layout" data-testid="api-docs-panel">
+    <el-alert v-if="loadError" type="error" :closable="false" show-icon title="接口契约加载失败，请刷新页面重试" />
+    <div v-else id="api-docs-panel" v-loading="!mobileSpec" class="api-docs-layout" data-testid="api-docs-panel">
       <aside class="api-docs-nav" aria-label="接口目录">
         <nav v-for="tag in docTags" :key="tag.name" class="api-docs-nav__group">
           <div class="api-docs-nav__tag">{{ tag.name }}</div>
