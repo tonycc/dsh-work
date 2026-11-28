@@ -58,24 +58,29 @@ export class PostgresUsageAnalyticsService implements UsageAnalyticsQueryPort {
 
   /** 记录页面访问；同一员工同一端同一页面 30 分钟内只记一次。 */
   async recordPageViews(userId: string, app: 'workbench' | 'admin', views: readonly PageViewInput[]): Promise<number> {
-    let recorded = 0
-    for (const view of views) {
-      // 按“员工 + 端 + 页面”加事务锁再判断，两个标签页同时上报也只记一次（PR #172 评审）。
-      const result = await this.database.begin(async sql => {
+    // 同一批上报合并为一个事务（原先每个页面各开一个事务）；同批重复的页面只看第一条。
+    const unique = [...new Map(views.map(view => [view.page, view])).values()]
+      // 按页面排序依次加锁，两个标签页同时上报也不会互相死锁。
+      .sort((left, right) => (left.page < right.page ? -1 : left.page > right.page ? 1 : 0))
+    if (!unique.length) return 0
+    return this.database.begin(async sql => {
+      let recorded = 0
+      for (const view of unique) {
+        // 按“员工 + 端 + 页面”加事务锁再判断，两个标签页同时上报也只记一次（PR #172 评审）。
         await sql`select pg_advisory_xact_lock(hashtext(${`page-view:${tenantId}:${userId}:${app}:${view.page}`}))`
-        return sql`
-        insert into product_events (tenant_id, user_id, app, page, in_dingtalk)
-        select ${tenantId}, ${userId}, ${app}, ${view.page}, ${view.inDingtalk}
-         where not exists (
-           select 1 from product_events
-            where tenant_id = ${tenantId} and user_id = ${userId} and app = ${app} and page = ${view.page}
-              and occurred_at > now() - make_interval(mins => ${PAGE_VIEW_DEDUPE_MINUTES})
-         )
-      `
-      })
-      recorded += result.count
-    }
-    return recorded
+        const result = await sql`
+          insert into product_events (tenant_id, user_id, app, page, in_dingtalk)
+          select ${tenantId}, ${userId}, ${app}, ${view.page}, ${view.inDingtalk}
+           where not exists (
+             select 1 from product_events
+              where tenant_id = ${tenantId} and user_id = ${userId} and app = ${app} and page = ${view.page}
+                and occurred_at > now() - make_interval(mins => ${PAGE_VIEW_DEDUPE_MINUTES})
+           )
+        `
+        recorded += result.count
+      }
+      return recorded
+    })
   }
 
   /** 删除保留期（运行参数 `page_views.retention_days`，默认 180 天）之前的页面访问。 */
