@@ -289,13 +289,15 @@ export class PostgresOperationsService {
     const pageSize = clampInteger(input.pageSize, 1, 500, 10)
     const offset = (page - 1) * pageSize
     const like = `%${query}%`
+    // 接口沿用 awaiting_approval，库里的等待态是 'waiting'（0061 迁移约束），此前该计数与筛选恒为 0。
+    const dbStatus = status === 'awaiting_approval' ? 'waiting' : status
     return this.database.begin(async (transaction) => {
       const [summary] = await transaction<{
         total: number; active: number; awaitingApproval: number; failed: number
       }[]>`
         select count(*)::integer as total,
                count(*) filter (where coalesce(latest.status, 'queued') in ('queued', 'running'))::integer as active,
-               count(*) filter (where coalesce(latest.status, 'queued') = 'awaiting_approval')::integer as "awaitingApproval",
+               count(*) filter (where coalesce(latest.status, 'queued') = 'waiting')::integer as "awaitingApproval",
                count(*) filter (where coalesce(latest.status, 'queued') = 'failed')::integer as failed
           from sessions s
           left join lateral (select id, status from runs where tenant_id = s.tenant_id and session_id = s.id order by created_at desc limit 1) latest on true
@@ -307,40 +309,44 @@ export class PostgresOperationsService {
             select s.id
               from sessions s
               join users u on u.tenant_id = s.tenant_id and u.id = s.created_by
-              join agent_versions av on av.tenant_id = s.tenant_id and av.id = s.agent_version_id
-              join agents a on a.tenant_id = av.tenant_id and a.id = av.agent_id
+              left join agent_versions av on av.tenant_id = s.tenant_id and av.id = s.agent_version_id
+              left join agents a on a.tenant_id = av.tenant_id and a.id = av.agent_id
+              join workspaces w on w.tenant_id = s.tenant_id and w.id = s.workspace_id
               left join lateral (select id, status from runs where tenant_id = s.tenant_id and session_id = s.id order by created_at desc limit 1) latest on true
               left join lateral (select trace_id from run_events where tenant_id = s.tenant_id and run_id = latest.id order by stream_position desc limit 1) ev on true
              where s.tenant_id = ${tenantId}
                and (${workspace} = '' or s.workspace_id = ${workspace})
-               and (${status} = '' or coalesce(latest.status, 'queued') = ${status})
+               and (${dbStatus} = '' or coalesce(latest.status, 'queued') = ${dbStatus})
                and (${query} = '' or s.title ilike ${like} or s.id ilike ${like}
                     or u.display_name ilike ${like} or a.name ilike ${like}
                     or latest.id ilike ${like} or ev.trace_id ilike ${like})
-             group by s.id
           ) filtered
       `
       const rows = await transaction<{
         id: string; title: string; user: string; workspaceId: string; workspaceName: string;
-        agentId: string; agentName: string; agentVersion: string; runId: string | null; status: SessionDefinition['status'] | null;
+        agentId: string | null; agentName: string | null; agentVersion: string | null; runId: string | null; status: SessionDefinition['status'] | 'waiting' | null;
         runCount: number; messageCount: number; tokenUsage: number; createdAt: Date; updatedAt: Date;
         traceId: string | null
       }[]>`
         select s.id, s.title, u.display_name as "user", s.workspace_id as "workspaceId",
                w.name as "workspaceName",
                a.id as "agentId", a.name as "agentName", av.version as "agentVersion",
-               latest.id as "runId", latest.status, count(distinct r.id)::integer as "runCount",
-               count(distinct m.id)::integer as "messageCount",
+               latest.id as "runId", latest.status, counts.runs as "runCount",
+               counts.messages as "messageCount",
                coalesce(usage.tokens, 0)::integer as "tokenUsage",
                s.created_at as "createdAt", s.last_active_at as "updatedAt", ev.trace_id as "traceId"
           from sessions s
           join users u on u.tenant_id = s.tenant_id and u.id = s.created_by
-          join agent_versions av on av.tenant_id = s.tenant_id and av.id = s.agent_version_id
-          join agents a on a.tenant_id = av.tenant_id and a.id = av.agent_id
+          -- 未绑默认 Agent 的团队会话也要列出（原内连接会漏掉）。
+          left join agent_versions av on av.tenant_id = s.tenant_id and av.id = s.agent_version_id
+          left join agents a on a.tenant_id = av.tenant_id and a.id = av.agent_id
           join workspaces w on w.tenant_id = s.tenant_id and w.id = s.workspace_id
           left join lateral (select id, status, current_attempt_id from runs where tenant_id = s.tenant_id and session_id = s.id order by created_at desc limit 1) latest on true
-          left join runs r on r.tenant_id = s.tenant_id and r.session_id = s.id
-          left join messages m on m.tenant_id = s.tenant_id and m.session_id = s.id
+          -- Run 数与消息数各自计数，避免 runs × messages 的乘积再 count(distinct)。
+          left join lateral (
+            select (select count(*) from runs r where r.tenant_id = s.tenant_id and r.session_id = s.id)::integer as runs,
+                   (select count(*) from messages m where m.tenant_id = s.tenant_id and m.session_id = s.id)::integer as messages
+          ) counts on true
           -- 会话 Token 合计单独汇总：与 runs/messages 的连接会把用量行重复，sum(distinct) 又会吞掉数值相同的行。
           left join lateral (
             select sum(mu.input_tokens + mu.output_tokens) as tokens
@@ -351,11 +357,10 @@ export class PostgresOperationsService {
           left join lateral (select trace_id from run_events where tenant_id = s.tenant_id and run_id = latest.id order by stream_position desc limit 1) ev on true
          where s.tenant_id = ${tenantId}
            and (${workspace} = '' or s.workspace_id = ${workspace})
-           and (${status} = '' or coalesce(latest.status, 'queued') = ${status})
+           and (${dbStatus} = '' or coalesce(latest.status, 'queued') = ${dbStatus})
            and (${query} = '' or s.title ilike ${like} or s.id ilike ${like}
                 or u.display_name ilike ${like} or a.name ilike ${like}
                 or latest.id ilike ${like} or ev.trace_id ilike ${like})
-         group by s.id, u.display_name, w.name, a.id, a.name, av.version, latest.id, latest.status, ev.trace_id, usage.tokens
          order by s.last_active_at desc
          limit ${pageSize} offset ${offset}
       `
@@ -373,11 +378,11 @@ export class PostgresOperationsService {
           user: row.user,
           workspaceId: row.workspaceId,
           workspaceName: row.workspaceName,
-          agentId: row.agentId,
-          agentName: row.agentName,
-          agentVersion: row.agentVersion,
+          agentId: row.agentId ?? '',
+          agentName: row.agentName ?? '未绑定 Agent',
+          agentVersion: row.agentVersion ?? '—',
           runId: row.runId ?? '—',
-          status: row.status ?? 'queued',
+          status: row.status === 'waiting' ? 'awaiting_approval' : row.status ?? 'queued',
           runCount: row.runCount,
           messageCount: row.messageCount,
           tokenUsage: row.tokenUsage,
