@@ -35,8 +35,8 @@ function parseOptions(argv: string[]): Options {
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index + 1]
     switch (argv[index]) {
-      case '--sessions': options.sessions = Number(value); index += 1; break
-      case '--runs-per-session': options.runsPerSession = Number(value); index += 1; break
+      case '--sessions': options.sessions = positiveInteger('--sessions', value); index += 1; break
+      case '--runs-per-session': options.runsPerSession = positiveInteger('--runs-per-session', value); index += 1; break
       case '--out': options.out = value ?? null; index += 1; break
       case '--': break
       default: throw new Error(`未知参数：${argv[index]}`)
@@ -45,10 +45,18 @@ function parseOptions(argv: string[]): Options {
   return options
 }
 
+function positiveInteger(name: string, value: string | undefined): number {
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed < 1) throw new Error(`${name} 必须是正整数：${value}`)
+  return parsed
+}
+
+const countingConnections = 4
+
 /** 计数客户端：每条语句执行前回调一次。 */
 function countingClient(url: string) {
   let count = 0
-  const client = createDatabase({ url, maxConnections: 4, debug: () => { count += 1 } })
+  const client = createDatabase({ url, maxConnections: countingConnections, debug: () => { count += 1 } })
   return {
     client,
     async measure<T>(run: () => Promise<T>): Promise<{ queries: number; ms: number; value: T }> {
@@ -94,7 +102,7 @@ async function seedRuns(database: DatabaseClient, userId: string, options: Optio
         values (${`${runId}-u`}, ${tenantId}, ${sessionId}, ${runId}, 'user', ${`第 ${turn} 轮提问`}, ${userId}),
                (${`${runId}-a`}, ${tenantId}, ${sessionId}, ${runId}, 'assistant', ${'回答'.repeat(200)}, null)
       `
-      // 与本机实测一致：每个 Run 约 7 个事件（p50），含 1 个 assistant.delta。
+      // 接近本机实测（每个 Run 约 7 个事件，p50）：6 个事件，含 1 个 assistant.delta。
       const types = ['run.started', 'tool.started', 'tool.completed', 'assistant.delta', 'assistant.completed', 'run.completed']
       for (const [sequence, eventType] of types.entries()) {
         await database`
@@ -135,7 +143,9 @@ async function main() {
     const conversations = new PostgresConversationRepository(counter.client)
     const runs = new PostgresRunRepository(counter.client)
 
-    // 预热一次，排除连接建立与首次解析。
+    // 预热：先打开计数客户端的全部连接。驱动每建一条新连接会执行内部类型查询，
+    // 不预热时 listTasks 并发打开连接会把这些查询计入结果。
+    await Promise.all(Array.from({ length: countingConnections }, () => counter.client`select pg_sleep(0.05)`))
     await auth.authenticateApi(fakeRequest('GET', cookie), 'workbench')
 
     const record = async (path: string, note: string, run: () => Promise<unknown>) => {
@@ -152,7 +162,7 @@ async function main() {
       await runs.readEventsAfterEvent(tenantId, runId, `${runId}-e5`)
       await runs.getRun(tenantId, runId)
     })
-    await record('getTask（单个 Run 详情）', 'POST /runs 返回 202 前也调一次', () => conversations.getTask(runId, userId))
+    await record('getTask（单个 Run 详情）', 'POST /runs 返回 202 前也调一次；未接推荐与 Skill 草稿读取，生产个人会话至少再多 2 条', () => conversations.getTask(runId, userId))
 
     // 并发：生产连接池 max 10、调度锁常驻占 1 条，实际可用 9 条。
     const pooled = createDatabase({ url: throwaway.url, maxConnections: 9 })
