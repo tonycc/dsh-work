@@ -25,8 +25,8 @@
 3. **工程护栏异化为高昂的“手工同步税”**：手写 18,691 行 OpenAPI JSON（却既不校验 Schema 也不生成客户端类型）、维护 4,000+ 行平行内存假后端、零跨端复用的前端强行拆包、CI 单任务串行冷启动 12 套 E2E 环境，显著拉高了日常需求改动的摩擦成本。
 
 在单机 Mac mini 场景下，按阶段零实测，**真正影响日常体感与稳定性的高价值靶点集中在 4 处**：
-1. `GET /tasks` 50 个 Run 实测 **501 条 SQL**，单个请求即占满仅有的 **9 条可用连接**，同时刻的其他请求、SSE 轮询与事件落库只能排队；
-2. 运行期每 2s 复权并向 `audit_events` 写 `success`：实测占审计表 **76%**、约 **31 行/Run**，是审计表增长的主因；
+1. `GET /tasks` 的仓储层 `listTasks` 在 50 个 Run 时实测 **501 条 SQL**（不含路由层 `attachListRoles` 对每个 Run 的空间读权限复核，整个接口更多），单个请求即占满仅有的 **9 条可用连接**，同时刻的其他请求、SSE 轮询与事件落库只能排队；
+2. 运行期每 2s 复权并向 `audit_events` 写 `success`：实测占审计表 **76%**、按已完成 Run 计约 **31 行/Run**（按全部 Run 约 29 行），是审计表增长的主因；
 3. 每个打开的运行流 SSE 每 250ms 轮询（约 8 条 SQL/秒/流）+ 每次 API 请求无节流 `UPDATE authentication_sessions`（每请求 3 条 SQL）；
 4. 双端首屏 **1.1 MB JS 包** + 外部模型网关请求体双重解析与 DLP 零缓存 + WeKnora 检索同步阻塞 `POST /runs` 202 返回（这三项的实际耗时待浏览器与真实运行补测）。
 
@@ -67,17 +67,19 @@ flowchart TD
 
 | 优先级 | 领域 | 问题简述 | 量级（实测 / 推算） |
 | :--- | :--- | :--- | :--- |
-| **高优** | 数据库连接池与 N+1 | 连接池固定 `max: 10`（实际可用 9 个）且 `prepare: false`；`GET /tasks` 50 条并发 `mapTask` | **实测** 50 个 Run = **501 条 SQL**，单个请求占满 9 条连接；连接池 9 条时并发 5 个约 0.5 秒 |
-| **高优** | 运行期复权与审计膨胀 | 运行中每 2s 轮询 + 工具调用前后双查，每次 12～16 条 SQL 并向 `audit_events` 插入 `success` | **实测** 成功审计占 `audit_events` **76%**、约 **31 行/Run**；**推算** 每天 1,000 个 Run 时审计表约 1 GB/月 |
+| **高优** | 数据库连接池与 N+1 | 连接池固定 `max: 10`（实际可用 9 个）且 `prepare: false`；`GET /tasks` 50 条并发 `mapTask` | **实测** 仓储层 `listTasks` 50 个 Run = **501 条 SQL**（不含路由层逐 Run 复权），单个请求占满 9 条连接；连接池 9 条时并发 5 个约 0.5 秒 |
+| **高优** | 运行期复权与审计膨胀 | 运行中每 2s 轮询 + 工具调用前后双查，每次 12～16 条 SQL 并向 `audit_events` 插入 `success` | **实测** 成功审计占 `audit_events` **76%**、按已完成 Run 计约 **31 行/Run**；**推算** 每天 1,000 个 Run 时审计表约 1 GB/月 |
 | **高优** | 前端包体积 | 双端全量打包 Element Plus，未配置按需加载与 `manualChunks` | **实测** 双端首屏单 JS chunk 均为 **1.1 MB**（另加 **380+ KB** CSS）；首屏加载耗时待浏览器补测 |
 | **中优** | SSE 轮询与鉴权写放大 | 无内存 PubSub，SSE 每 250ms 轮询 PG；每次只读 API 请求均无节流 `UPDATE authentication_sessions` | **实测** 单次轮询 2 条 SQL、`authenticateApi` 3 条 SQL；**推算** 约 8 条 SQL/秒/运行流（原推算 20～24）；团队空间会话流待补测 |
-| **中优** | 模型网关与 DLP | 请求体双倍 `JSON.parse`、SSE 每帧多余 `JSON.parse`；外部路由每步在主线程无缓存编译词表跑最多 16 个全局正则 | 主线程耗时待真实运行补测；本机输入 Token p50 / p95 为 9,160 / 22,505 |
+| **高优（待补测）** | 模型网关与 DLP | 请求体双倍 `JSON.parse`、SSE 每帧多余 `JSON.parse`；外部路由每步在主线程无缓存编译词表跑最多 16 个全局正则 | 主线程耗时待真实运行补测，补测前维持原优先级；**实测** 本机每个 Attempt 输入 Token p50 / p95 为 9,160 / 22,505（见基线 2.7） |
 | **中优** | 同步阻塞：知识库检索 | `POST /runs` 返回 202 前同步等待 WeKnora 检索（含 fallback） | 个人对话带知识库时最坏 **2 次检索超时（单次默认 10s，合计 20s）**；实际耗时待补测 |
 | **中优** | 慢查询与大 JSONB 解压 | 多处多表笛卡尔乘积；`operational_events` 全量并入 `run_events` 做文本 `ilike`；统计逐行解压 `manifest` JSONB | **实测** `manifest` p50 5.2 KB、p95 13 KB；执行计划待一次性库造量后 `EXPLAIN` |
-| **低优** | 首字延迟（TTFT）与容器扫盘 | 每轮冷启动 DSH 子进程；同一 Skill 包读盘算哈希 3 次；每条容器命令前/中/后递归 `lstat` 工作区 | **实测** 冷启动 p50 约 1.2 秒，约占端到端 p50（23.7 秒）的 5% |
+| **低优** | 首字延迟（TTFT） | 每轮冷启动 DSH 子进程；同一 Skill 包读盘算哈希 3 次 | **实测** 冷启动 p50 约 1.2 秒，约占端到端 p50（23.7 秒）的 5%；按基线维持阶段三按需评估。Skill 包重复读取未单独测量 |
+| **中优（待补测）** | 容器扫盘 | 每条容器命令前/中/后在宿主递归 `lstat` 工作区（上限 50,000 条目） | 未测量；大工作区高频命令时的线程池占用待补测 |
 | **低优** | 同步阻塞：成果解析 | `run.completed` 前同步等成果解析容器 | **实测** 成果收集 p95 0.6 秒、最大 0.9 秒（60 秒是超时上限） |
 | **条件性** | 流式事件持久化 | `assistant.delta` 逐条 `INSERT run_events`，写后复查每条执行 `SELECT runs`；`run_events` 重复索引 | **实测** 每个 Run 仅 1～2 条 delta（p95 2、最大 7）；DSH 改为逐 Token 流式时才会放大。重复索引仍建议删除 |
 | **条件性** | 前端流式渲染 | 每个 delta 触发全量 Markdown 重解析与历史消息重渲染 | 同上：每个回答 1～2 次重解析，当前无掉帧依据 |
+
 ---
 
 ### 2.1 数据库连接池、鉴权写放大与超级 N+1
@@ -87,6 +89,7 @@ flowchart TD
    - **机制分析**：`createDatabase()` 默认 `max: configuration.maxConnections ?? 10`、`prepare: false`（禁用 PostgreSQL Prepared Statement 执行计划缓存），且未设置 `statement_timeout` 或 `lock_timeout`；`main.ts` 调用时未接入任何环境变量或配置项。同时 `AutomationTriggerSweep.start()` 通过 `database.reserve()` 永久借走 1 条连接持有会话级 `pg_try_advisory_lock`，导致全进程所有 HTTP 请求、SSE 轮询、流式落库与后台清扫共同争抢仅剩的 **9 条连接**。
 
 2. **每次 API 请求零缓存查库 + 100% 无节流同步 `UPDATE authentication_sessions`**
+   > **阶段零实测**：本地账号会话 `authenticateApi` = 3 条 SQL（含 1 条 `UPDATE`），单次约 2～9 ms；钉钉会话多 1 条为推算，未实测。
    - **代码位置**：[local-auth-service.ts](../../server/src/modules/identity/local-auth-service.ts#L213-L273)、[session-repository.ts](../../server/src/modules/identity/session-repository.ts#L27-L89)
    - **机制分析**：
      - 钉钉免登员工每次请求执行 `await this.findLocalSession(...) ?? await this.findDingTalkSession(...)`（L223），每次先白跑一遍本地账号 4 表 JOIN 落空，再跑 5 表 JOIN；
@@ -94,13 +97,14 @@ flowchart TD
      - L234 **无任何时间间隔或版本号节流**，同步执行 `UPDATE authentication_sessions SET authorization_version = ..., last_seen_at = now()`。所有纯只读 `GET` 请求全部变成写事务，页面首屏并发请求时在同一行 `session_hash` 上争抢行锁，并持续产生 MVCC 死元组与 WAL 刷盘。
 
 3. **路由层重复鉴权与团队 SSE 前置探测 SQL 开销**
+   > **阶段零实测**：个人空间 `authorizeWorkbench` = 3 条 SQL（下文“4 条”为原推算）；团队路由前置调用次数未实测。
    - **代码位置**：[postgres-authorization-service.ts](../../server/src/modules/authorization/postgres-authorization-service.ts#L139-L168)（及 L495-551）
    - **机制分析**：
      - `Router` 刚完成 `authenticateApi`，进入业务路由后几乎每个接口又调用 `authorizeWorkbench(...)`，丢弃刚查出的权限再次串行跑 4 条 SQL（团队路由叠加 `readableWorkspaceTypeOf` / `requireTeamRole` 单请求前置达 9～11 次 DB 往返）；
      - 团队 SSE 专用的 `authorizeTeamReadAccess`（L508-548）设有 10 秒内存缓存 `teamReadAccessCache`，命中时可跳过 4 条 SQL 的 `authorizeWorkbench`；但为捕获用户停用、角色权限修改以及**时间触发的角色到期（`user_roles.valid_until > now()`，评审 M5 修复）**，每次读取缓存前仍需先执行 1 条关联 5 张表并计算 `string_agg` + 双重 `md5()` 的探测 SQL。由于时间到期不会产生进程内写事件，不能简单改为“纯内存写时失效”，但可通过简化探测查询或在缓存项内记录最早 `valid_until` 时间戳（配合用户停用/改权主动失效）来降低高频探测成本；无论哪种做法，都须保留现有全部判定：用户与租户仍有效、角色权限指纹、角色到期以及空间状态轨。
 
 4. **`GET /api/workbench/v1/tasks` 50 条并发 `mapTask` 超级 N+1**
-   > **阶段零实测**：50 个 Run 共 501 条 SQL（1 + 50 × 10）；`mapTask` 并行执行，单个请求即占满 9 条连接。
+   > **阶段零实测**：仓储层 `listTasks` 在 50 个 Run 时共 501 条 SQL（1 + 50 × 10），不含路由层 `attachListRoles` 的逐 Run 复权；`mapTask` 并行执行，单个请求即占满 9 条连接。
    - **代码位置**：[postgres-conversation-repository.ts](../../server/src/modules/workbench/application/postgres-conversation-repository.ts#L948-L977)（及 L1424-1511、L1586-1648）、[conversation-routes.ts](../../server/src/http/workbench/conversation-routes.ts#L510-L515)
    - **机制分析**：`listTasks()` 取出最近 50 条 `runs` 后直接 `Promise.all(rows.map(row => this.mapTask(row)))`。每个 `mapTask` 内部串行跑 8～9 条 SQL（含无 `limit` 拉取整段会话全部历史消息、全量 `run_events`、成果、引用、工具与 MCP 审计——若同一多轮会话有 10 个 Run，整段会话消息被重复查询拷贝 10 遍）；回到路由层 `attachListRoles` 又未按 `workspaceId` 去重并发复核 50 次空间读权限。
 
@@ -117,7 +121,7 @@ flowchart TD
      - `0003_m3_conversation_runtime.sql` 在 `run_events` 上同时创建了完全同列同序的 `run_events_stream_position_unique (tenant_id, run_id, stream_position)` 与 `run_events_by_run_stream (tenant_id, run_id, stream_position)`，每次流式插入白白双写两棵相同的 B-Tree。
 
 2. **SSE 推送无进程内通知，高频轮询数据库**
-   > **阶段零实测**：单次轮询 2 条 SQL、`authorizeWorkbench` 3 条 SQL；个人流只在有新事件的批次和每 15 秒心跳时复权，按每个 Run 约 7 个事件推算约 8 条 SQL/秒/流，下文“~20～24 SQL/s”为高估。
+   > **阶段零实测**：单次轮询 2 条 SQL、`authorizeWorkbench` 3 条 SQL；轮询本身即约 8 条 SQL/秒/流（每 250ms 2 条）；个人流只在有新事件的批次和每 15 秒心跳时额外复权，每个 Run 约 7 个事件，额外开销很小，下文“~20～24 SQL/s”为高估。
    - **代码位置**：[conversation-routes.ts](../../server/src/http/workbench/conversation-routes.ts#L388-L407)（及 L578-647、L739-743、L851-853）
    - **机制分析**：
      - `streamRunEvents` 不用进程内订阅，每个活跃 SSE 连接在 `while (!closed)` 中每 **250ms** 查一次 `readEventsAfterEvent` + 查一次 `getRun`；个人对话还在 L400-404 传入无缓存的 `personalAccess`（内部调用完整 `authorizeWorkbench`），流式输出期间每 250ms 都有新事件，触发每 250ms 额外执行 3～4 条权限 SQL；
@@ -144,7 +148,7 @@ flowchart TD
    - **机制分析**：DSH ACP Worker 无预热进程池，每轮问答都重新 `spawn` Node 子进程加载框架并串行等待 `initialize` + `newSession`；内容寻址且永不改变的 `SkillArtifactStore` 无内存缓存，单次启动在 `assertCapabilityReferences`（第 1 次）、`resolveRuntimeSkills(pinnedOnly / selected)`（第 2 次）、`DshAcpRuntimeAdapter.execute` 物化工作区调用 `loadSkillArtifact`（第 3 次，且 L372 额外重算一次 `instructions` 哈希）中把同一个 Skill 包从磁盘全量读取并计算 SHA-256 **连续执行 3 次**；`compileRuntimeManifest` 也在 `AttemptDispatcher.submit` 与 `DshAcpRuntimeAdapter.execute` 对同一对象重复编译两次。
 
 2. **运行期每 2 秒复权并向 `audit_events` 狂写 `success` 日志**
-   > **阶段零实测**：`authorization.runtime` / `success` 占 `audit_events` 76%，约 31 行/Run，升为高优。
+   > **阶段零实测**：`authorization.runtime` / `success` 占 `audit_events` 76%，按已完成 Run 计约 31 行/Run（按全部 Run 约 29 行），升为高优。
    - **代码位置**：[dsh-acp-runtime-adapter.ts](../../server/src/modules/runtime/dsh-acp-runtime-adapter.ts#L1248-L1256)、[platform-tool-bridge.ts](../../server/src/modules/runtime/platform-tool-bridge.ts#L176-L221)、[postgres-authorization-service.ts](../../server/src/modules/authorization/postgres-authorization-service.ts#L188)（及 L423、L1064-1078）
    - **机制分析**：每个运行中 Attempt 除了全局撤权扫描外，还自建 `2000ms` 定时器并在领取后、启动前、建会话后、每次平台工具调用**前和后各一次**调用 `assertCurrentRunAuthorization`（每次 12～16 条未缓存 SQL，其中 `resolveSkillVersions` 在 `for` 循环逐个查库），且直接复用了对外受理入口，导致每次正常探活通过都执行 `INSERT INTO audit_events (..., 'success')`。其中工具执行后的复核（[platform-tool-bridge.ts](../../server/src/modules/runtime/platform-tool-bridge.ts#L221-L225)）有实际作用：撤权后读到的结果不交给模型，写工具此时失败会把执行状态记为 `unknown`，防止被当作“未执行”重放——它可以降成本，不能删除。
 
@@ -171,6 +175,7 @@ flowchart TD
    - [postgres-content-service.ts](../../server/src/modules/workbench/application/postgres-content-service.ts#L265-L457) `listWorkspaces()`：每次 `GET /workspaces` 都先调 `ensurePersonalWorkspace` 无条件 `DO UPDATE` 写一次 `workspace_members`，再不分页拉取所有可见空间的全部成员与全部文件摘要。
 
 2. **统计与启动迁移逐行解压大体积 TOAST JSONB**
+   > **阶段零实测**：`run_attempts.manifest` p50 5.2 KB、p95 13 KB、最大 76 KB，“几十 KB”只是少数；查询代价待造量后 `EXPLAIN`。
    - [postgres-model-usage-service.ts](../../server/src/modules/admin/application/postgres-model-usage-service.ts#L57-L77) 与 [postgres-usage-analytics-service.ts](../../server/src/modules/observability/postgres-usage-analytics-service.ts#L106-L173)：因 `run_attempts` 未将 `purpose`、`agent_version_id` 存为普通索引列，统计查询对时间窗口内所有行做 7～10 表 JOIN 并逐行解压几十 KB 的 `ra.manifest` TOAST JSONB；`usage-analytics` 的 `overview` 单次请求并发 9 条 SQL，其中 7 条各自重复计算同一 `scope` CTE；
    - [skill-file-storage-migration.ts](../../server/src/modules/skill/skill-file-storage-migration.ts#L92-L97)（[main.ts](../../server/src/main.ts#L285)）：每次服务重启都同步对所有 `legacy_manifest_sha256 is null` 的新 Attempt 执行 `manifest::text like '%"instructions"%'` 全表 TOAST 转文本扫描。
 
@@ -212,6 +217,7 @@ flowchart TD
    - [WorkspaceDetailView.vue](../../apps/workbench-web/src/views/WorkspaceDetailView.vue)（**2,383 行**）、[ProjectTaskPanel.vue](../../apps/workbench-web/src/components/ProjectTaskPanel.vue)（**1,573 行**）、[CapabilityManagementView.vue](../../apps/admin-web/src/views/CapabilityManagementView.vue)（**1,271 行**）、[postgres-content-service.ts](../../server/src/modules/workbench/application/postgres-content-service.ts)（**2,600 行**）、[dsh-acp-runtime-adapter.ts](../../server/src/modules/runtime/dsh-acp-runtime-adapter.ts)（**2,526 行**）均已膨胀为职责过载的巨型单文件。
 
 4. **可观测性（OBS-S1/S2）热路径逐条开事务加全局锁，而真正的高频大表无清理机制**
+   > **阶段零实测**：每个 Run 约产生 33 KB `audit_events`、16 KB `run_events`（按全部 371 个 Run）；按每天 1,000 个 Run 推算约 1 GB/月与 0.5 GB/月，是月度 GB 级增长、不是紧急风险。
    - 页面访问上报（[postgres-usage-analytics-service.ts](../../server/src/modules/observability/postgres-usage-analytics-service.ts#L60-L79)）与错误上报（[postgres-error-records-service.ts](../../server/src/modules/observability/postgres-error-records-service.ts#L77-L131)）在请求热路径 `for` 循环中逐条开启独立事务；遇到新错误指纹时直接加 `pg_advisory_xact_lock` 锁死整个员工端命名空间并全表 `COUNT(*)`；
    - 反观写入量最大的 **`run_events`、`model_gateway_requests`、`data_protection_gateway_events`、`audit_events`、`tool_audit_logs`、`authentication_sessions`（过期/撤销记录）全部缺失过期清理机制**，长期运行表与索引将无限膨胀（引入清理须先定保留策略并走审批，见第 6 节阶段二）。
 
@@ -257,7 +263,7 @@ flowchart TD
 
 > 第一批结果见[本机实测基线（2026-11-28）](architecture-audit-baseline-2026-11-28.md)，其中的优先级调整已写回第 1 节、2.0 速览表、各条目“阶段零实测”注记与本节实施顺序。
 
-- 利用 [database.ts](../../server/src/infrastructure/postgres/database.ts#L15) 的 `debug` 钩子与 `pnpm report:run-timings`，在开发/参考环境实测典型用户旅程（冷启动进项目空间、`GET /tasks`、单轮 400 chunk 流式对话、外部模型多步工具调用、管理端首屏与局部保存）的**实际 SQL 语句数、连接池排队耗时、主线程事件循环延迟（Event Loop Lag）与首屏加载耗时**，以实测前后对比衡量以下各阶段收益。
+- 利用 [database.ts](../../server/src/infrastructure/postgres/database.ts#L15) 的 `debug` 钩子与 `pnpm report:run-timings`，在开发/参考环境实测典型用户旅程（冷启动进项目空间、`GET /tasks`、单轮流式对话（当前 DSH 按整段发送，每个 Run 约 1～2 条 delta）、外部模型多步工具调用、管理端首屏与局部保存）的**实际 SQL 语句数、连接池排队耗时、主线程事件循环延迟（Event Loop Lag）与首屏加载耗时**，以实测前后对比衡量以下各阶段收益。
 
 ### 阶段一：低风险快赢（直击日常高频开销；改变可观察行为的项单独标注）
 
